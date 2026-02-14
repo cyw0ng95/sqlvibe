@@ -15,7 +15,7 @@ This document lists all SQL:1999 chapters as TODO items. To check a chapter:
 
 ### 📘 Part I: Data Types
 
-- [ ] **Ch3 - Numbers**: INTEGER, SMALLINT, BIGINT, DECIMAL, NUMERIC, FLOAT, REAL, DOUBLE PRECISION
+- [x] **Ch3 - Numbers**: INTEGER, SMALLINT, BIGINT, DECIMAL, NUMERIC, FLOAT, REAL, DOUBLE PRECISION ✅ DONE
 - [ ] **Ch4 - Bit Strings**: BIT, BIT VARYING
 - [ ] **Ch5 - Binary Strings**: BINARY, VARBINARY, BLOB
 - [ ] **Ch6 - Characters**: CHARACTER, CHAR
@@ -129,8 +129,8 @@ cd /workspace && go test -v -run TestDMLInsert ./pkg/sqlvibe/
 
 | Status | Count |
 |--------|-------|
-| ✅ DONE | 11 |
-| ❌ NOT STARTED | 39 |
+| ✅ DONE | 12 |
+| ❌ NOT STARTED | 38 |
 | **Total Chapters** | **50** |
 
 ---

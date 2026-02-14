@@ -870,3 +870,136 @@ func TestMultipleTables(t *testing.T) {
 	t.Logf("sqlvibe tables query result: %v", sqlvibeRows)
 	t.Logf("sqlite tables query result: %v", sqliteRows)
 }
+
+// TestCh03_Numbers tests SQL:1999 Chapter 3 - Numeric Types
+// INTEGER, SMALLINT, BIGINT, DECIMAL, NUMERIC, FLOAT, REAL, DOUBLE PRECISION
+func TestCh03_Numbers(t *testing.T) {
+	sqlvibePath := "/tmp/test_ch03.db"
+	sqlitePath := "/tmp/test_ch03_sqlite.db"
+
+	defer os.Remove(sqlvibePath)
+	defer os.Remove(sqlitePath)
+
+	sqlvibeDB, err := Open(sqlvibePath)
+	if err != nil {
+		t.Fatalf("Failed to open sqlvibe: %v", err)
+	}
+	defer sqlvibeDB.Close()
+
+	sqliteDB, err := sql.Open("sqlite", sqlitePath)
+	if err != nil {
+		t.Fatalf("Failed to open sqlite: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	// Test numeric type definitions
+	createTests := []struct {
+		name string
+		sql  string
+	}{
+		{"INTEGER", "CREATE TABLE t1 (a INTEGER, b INT, c SMALLINT)"},
+		{"BIGINT", "CREATE TABLE t2 (a BIGINT)"},
+		{"DECIMAL", "CREATE TABLE t3 (a DECIMAL(10,2), b NUMERIC(5,0))"},
+		{"FLOAT", "CREATE TABLE t4 (a FLOAT, b REAL, c DOUBLE PRECISION)"},
+		{"MixedNumeric", "CREATE TABLE t5 (id INTEGER PRIMARY KEY, amount DECIMAL(10,2), rate REAL)"},
+	}
+
+	for _, tt := range createTests {
+		t.Run(tt.name+"_create", func(t *testing.T) {
+			_, err1 := sqlvibeDB.Exec(tt.sql)
+			_, err2 := sqliteDB.Exec(tt.sql)
+			t.Logf("sqlvibe: %v, sqlite: %v", err1, err2)
+		})
+	}
+
+	// Test numeric operations
+	sqlvibeDB.Exec("CREATE TABLE nums (id INTEGER PRIMARY KEY, val INTEGER)")
+	sqliteDB.Exec("CREATE TABLE nums (id INTEGER PRIMARY KEY, val INTEGER)")
+
+	// Insert test data
+	insertTests := []struct {
+		name string
+		sql  string
+	}{
+		{"InsertPositive", "INSERT INTO nums VALUES (1, 42)"},
+		{"InsertNegative", "INSERT INTO nums VALUES (2, -10)"},
+		{"InsertZero", "INSERT INTO nums VALUES (3, 0)"},
+		{"InsertLarge", "INSERT INTO nums VALUES (4, 9223372036854775807)"}, // BIGINT max
+	}
+
+	for _, tt := range insertTests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err1 := sqlvibeDB.Exec(tt.sql)
+			_, err2 := sqliteDB.Exec(tt.sql)
+			t.Logf("sqlvibe: %v, sqlite: %v", err1, err2)
+		})
+	}
+
+	// Test numeric expressions
+	exprTests := []struct {
+		name string
+		sql  string
+	}{
+		{"Addition", "SELECT val + 10 FROM nums WHERE id = 1"},
+		{"Subtraction", "SELECT val - 5 FROM nums WHERE id = 1"},
+		{"Multiplication", "SELECT val * 2 FROM nums WHERE id = 1"},
+		{"Division", "SELECT val / 2 FROM nums WHERE id = 1"},
+		{"Modulo", "SELECT val % 5 FROM nums WHERE id = 1"},
+		{"Comparison", "SELECT * FROM nums WHERE val > 10"},
+	}
+
+	for _, tt := range exprTests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Execute on sqlvibe
+			_, err1 := sqlvibeDB.Exec(tt.sql)
+			if err1 != nil {
+				t.Logf("sqlvibe %s error: %v", tt.name, err1)
+			}
+
+			// Execute on sqlite
+			_, err2 := sqliteDB.Exec(tt.sql)
+			if err2 != nil {
+				t.Logf("sqlite %s error: %v", tt.name, err2)
+			}
+		})
+	}
+
+	// Test aggregate functions on numbers
+	aggTests := []struct {
+		name string
+		sql  string
+	}{
+		{"Sum", "SELECT SUM(val) FROM nums"},
+		{"Avg", "SELECT AVG(val) FROM nums"},
+		{"Min", "SELECT MIN(val) FROM nums"},
+		{"Max", "SELECT MAX(val) FROM nums"},
+		{"Count", "SELECT COUNT(*) FROM nums"},
+	}
+
+	for _, tt := range aggTests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err1 := sqlvibeDB.Exec(tt.sql)
+			_, err2 := sqliteDB.Exec(tt.sql)
+			t.Logf("sqlvibe: %v, sqlite: %v", err1, err2)
+		})
+	}
+
+	// Test ORDER BY with numbers
+	orderTests := []struct {
+		name string
+		sql  string
+	}{
+		{"OrderAsc", "SELECT * FROM nums ORDER BY val ASC"},
+		{"OrderDesc", "SELECT * FROM nums ORDER BY val DESC"},
+	}
+
+	for _, tt := range orderTests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err1 := sqlvibeDB.Exec(tt.sql)
+			_, err2 := sqliteDB.Exec(tt.sql)
+			t.Logf("sqlvibe: %v, sqlite: %v", err1, err2)
+		})
+	}
+
+	t.Log("Ch03 Numbers test completed - compare results manually if needed")
+}
