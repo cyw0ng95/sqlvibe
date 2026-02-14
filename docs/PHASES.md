@@ -16,7 +16,7 @@
 |------|-------------|-------------|--------------|
 | T1.1.1 | Initialize Go module | `go.mod` with module path | `go build` passes |
 | T1.1.2 | Create directory structure | All directories per ARCHITECTURE.md | Directory tree matches spec |
-| T1.1.3 | Set up logging infrastructure | Logger in `internal/log/` | Basic logging works |
+| T1.1.3 | Set up logging infrastructure | Logger in `internal/sf/` | Basic logging works |
 | T1.1.4 | Create .gitignore | Standard Go .gitignore | No binaries in git |
 
 ### Phase 1.2: Platform Bridges (PB)
