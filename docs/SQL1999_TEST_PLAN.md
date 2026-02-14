@@ -1,5 +1,59 @@
 # SQL:1999 Test Plan for sqlvibe
 
+## TODO: Implementation Status by Chapter
+
+### ✅ IMPLEMENTED / TESTED
+
+| Chapter | Topic | Status | Notes |
+|---------|-------|--------|-------|
+| Ch3 | Numbers | ✅ DONE | INTEGER, REAL, TEXT in compat_test.go |
+| Ch6 | Characters | ✅ DONE | CHAR, VARCHAR, TEXT |
+| Ch7 | Character Strings | ✅ DONE | TEXT type |
+| Ch18 | Tables & Views | ✅ DONE | CREATE TABLE, DROP TABLE |
+| Ch20 | Constraints | ✅ DONE | PRIMARY KEY, NOT NULL |
+| Ch28 | SELECT fundamentals | ✅ DONE | Basic SELECT |
+| Ch29 | Search Conditions | ✅ DONE | WHERE, =, <>, >, <, LIKE, IN, BETWEEN |
+| Ch33 | Groups | ✅ DONE | GROUP BY, HAVING, COUNT, SUM, AVG, MIN, MAX |
+| Ch34 | Sorting | ✅ DONE | ORDER BY ASC/DESC |
+| Ch35 | INSERT/UPDATE/DELETE | ✅ DONE | DML operations |
+| Ch36 | Transactions | ✅ DONE | BEGIN, COMMIT, ROLLBACK |
+
+### ⚠️ PARTIALLY IMPLEMENTED
+
+| Chapter | Topic | Status | Notes |
+|---------|-------|--------|-------|
+| Ch8 | Temporal Values | ⚠️ PARTIAL | DATE/TIME/TIMESTAMP parsing only |
+| Ch30 | Joins | ⚠️ PARTIAL | Basic INNER JOIN, LEFT JOIN |
+| Ch31 | Subqueries | ⚠️ PARTIAL | Basic subqueries |
+| Ch37 | Concurrency | ⚠️ PARTIAL | Lock manager exists |
+
+### ❌ NOT IMPLEMENTED
+
+| Chapter | Topic | Status |
+|---------|-------|--------|
+| Ch4 | Bit Strings | ❌ NOT STARTED |
+| Ch5 | Binary Strings | ❌ NOT STARTED |
+| Ch9 | Boolean Values | ❌ NOT STARTED |
+| Ch10 | Collection Types | ❌ NOT STARTED |
+| Ch11 | Row Types | ❌ NOT STARTED |
+| Ch12 | Reference Types | ❌ NOT STARTED |
+| Ch17 | SQL Schema | ❌ NOT STARTED |
+| Ch19 | Domains | ❌ NOT STARTED |
+| Ch21 | Character Set | ❌ NOT STARTED |
+| Ch22 | Collation | ❌ NOT STARTED |
+| Ch23 | Translation | ❌ NOT STARTED |
+| Ch24 | Triggers | ❌ NOT STARTED |
+| Ch25-26 | SQL-invoked Routine | ❌ NOT STARTED |
+| Ch27 | User-defined Types | ❌ NOT STARTED |
+| Ch32 | Set Operators | ❌ NOT STARTED |
+| Ch15 | Authorization | ❌ NOT STARTED |
+| Ch38 | Sessions | ❌ NOT STARTED |
+| Ch39 | Embedded SQL | ❌ NOT STARTED |
+| Ch40-51 | SQL/CLI | ❌ NOT STARTED |
+| Ch52-53 | Module/Style | ❌ NOT STARTED |
+
+---
+
 ## Overview
 
 This document maps SQL:1999 standard chapters to test cases for sqlvibe SQLite-compatible database engine.
