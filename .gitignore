@@ -1,5 +1,5 @@
-# Binaries
-sqlvibe
+# Binaries (compiled)
+/sqlvibe
 sqlvibe.exe
 sqlvibe.exe~
 *.exe
