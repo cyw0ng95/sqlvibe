@@ -52,6 +52,9 @@ tmp/
 temp/
 *.tmp
 
+# Ralph loop
+.sisyphus/
+
 #备份文件
 *~
 *.bak
