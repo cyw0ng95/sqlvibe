@@ -12,7 +12,61 @@
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              User Interface Layer                            │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│  Library Binding (pkg/sql)  │  CLI Tool (cmd/sqlvibe)                       │
+│  Library Binding (pkg/sqlvibe)  │  CLI Tool (cmd/sqlvibe)                │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Core Subsystems                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌──────────────────────┐    ┌──────────────────────┐                     │
+│  │   Query Processing   │───▶│  Query Execution     │                     │
+│  │       (QP)           │    │       (QE)           │                     │
+│  │                      │    │                      │                     │
+│  │  - Tokenizer         │    │  - VM Executor       │                     │
+│  │  - Parser            │    │  - Operator Engine   │                     │
+│  │  - Planner           │    │  - Result Set       │                     │
+│  │  - Optimizer         │    │                      │                     │
+│  └──────────────────────┘    └──────────────────────┘                     │
+│              │                                  │                           │
+│              ▼                                  ▼                           │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │                     Transaction Monitor (TM)                    │       │
+│  │                                                                  │       │
+│  │  - ACID Transaction Management                                   │       │
+│  │  - Concurrency Control (Lock Manager)                            │       │
+│  │  - Write-Ahead Log (WAL)                                        │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│              │                                                          │
+│              ▼                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │                      Data Storage (DS)                          │       │
+│  │                                                                  │       │
+│  │  - B-Tree Storage Engine                                         │       │
+│  │  - Page Cache / Buffer Pool                                     │       │
+│  │  - Free List Manager                                             │       │
+│  │  - Database Header                                               │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│              │                                                          │
+│              ▼                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │                   Platform Bridges (PB)                         │       │
+│  │                                                                  │       │
+│  │  - OS File Operations Abstraction                               │       │
+│  │  - File Locking                                                 │       │
+│  │  - Memory Management (mmap)                                     │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                      │                                     │
+│                                      ▼                                     │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │                  System Framework (SF)                           │       │
+│  │                                                                  │       │
+│  │  - Logging Infrastructure                                        │       │
+│  │  - Error Handling                                               │       │
+│  │  - Configuration Management                                      │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
@@ -53,8 +107,16 @@
 │  │                   Platform Bridges (PB)                         │       │
 │  │                                                                  │       │
 │  │  - OS File Operations Abstraction                               │       │
-│  │  - Memory Management                                            │       │
-│  │  - I/O Scheduling                                               │       │
+│  │  - File Locking                                                 │       │
+│  │  - Memory Management (mmap)                                     │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                      │                                     │
+│                                      ▼                                     │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │                  System Framework (SF)                           │       │
+│  │                                                                  │       │
+│  │  - Logging Infrastructure                                        │       │
+│  │  - Error Handling                                               │       │
 │  └──────────────────────────────────────────────────────────────────┘       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -92,12 +154,47 @@ type File interface {
 
 **Key Design Decisions**:
 - Use OS-native file locking for database locking
-- Implement both mmap and direct I/O for flexibility
 - Support custom page sizes (power of 2: 512-65536 bytes)
 
 ---
 
-### 2.2 Data Storage (DS)
+### 2.2 System Framework (SF)
+
+**Purpose**: Core infrastructure and utilities for the database engine
+
+**Components**:
+
+| Component | Responsibility |
+|-----------|----------------|
+| `log.go` | Level-based logging (Debug, Info, Warn, Error, Fatal) |
+
+**Interface Design**:
+```go
+type Level int
+
+const (
+    LevelDebug Level = iota
+    LevelInfo
+    LevelWarn
+    LevelError
+    LevelFatal
+)
+
+func Debug(format string, args ...interface{})
+func Info(format string, args ...interface{})
+func Warn(format string, args ...interface{})
+func Error(format string, args ...interface{})
+func Fatal(format string, args ...interface{})
+func SetLevel(level Level)
+```
+
+**Key Design Decisions**:
+- Thread-safe implementation using mutex
+- Configurable log levels for different environments
+
+---
+
+### 2.3 Data Storage (DS)
 
 **Purpose**: Persistent data management using B-Tree structure
 
@@ -105,13 +202,12 @@ type File interface {
 
 | Component | Responsibility |
 |-----------|----------------|
-| `page.go` | Page structure definitions and operations |
+| `page.go` | Page structure definitions and SQLite header |
+| `manager.go` | Page I/O coordination and allocation |
 | `btree.go` | B-Tree implementation for tables/indexes |
-| `table.go` | Table-specific B-Tree operations |
-| `index.go` | Index management |
-| `freelist.go` | Free page management |
 | `cache.go` | Page cache / buffer pool |
-| `header.go` | Database file header parsing |
+| `table.go` | Table-specific B-Tree operations (TODO) |
+| `index.go` | Index management (TODO) |
 
 **Database File Format** (SQLite-compatible):
 
@@ -190,7 +286,7 @@ type Cell struct {
 
 ---
 
-### 2.3 Query Processing (QP)
+### 2.4 Query Processing (QP)
 
 **Purpose**: Parse and plan SQL queries
 
@@ -199,11 +295,10 @@ type Cell struct {
 | Component | Responsibility |
 |-----------|----------------|
 | `tokenizer.go` | Lexical analysis of SQL |
-| `parser.go` | SQL syntax parsing |
-| `ast.go` | Abstract Syntax Tree definitions |
-| `planner.go` | Query planning and optimization |
-| `resolver.go` | Schema resolution and binding |
-| `types.go` | Type system implementation |
+| `parser.go` | SQL syntax parsing and AST building |
+| `ast.go` | Abstract Syntax Tree node definitions |
+| `planner.go` | Query planning (TODO) |
+| `resolver.go` | Schema resolution (TODO) |
 
 **SQL Parsing Architecture**:
 
@@ -283,7 +378,7 @@ type DeleteStmt struct {
 
 ---
 
-### 2.4 Query Execution (QE)
+### 2.5 Query Execution (QE)
 
 **Purpose**: Execute query plans and produce results
 
@@ -377,7 +472,7 @@ type ExecutionPlan struct {
 
 ---
 
-### 2.5 Transaction Monitor (TM)
+### 2.6 Transaction Monitor (TM)
 
 **Purpose**: ACID transaction management and concurrency control
 
@@ -451,45 +546,51 @@ sqlvibe/
 │       └── main.go
 ├── pkg/
 │   └── sqlvibe/          # Public API
-│       ├── doc.go
-│       ├── sqlite.go
-│       └── value.go
+│       └── version.go
 ├── internal/
 │   ├── pb/                # Platform Bridges
 │   │   ├── file.go
-│   │   ├── mmap.go
-│   │   ├── os_unix.go
-│   │   └── os_windows.go
+│   │   └── file_test.go
 │   ├── ds/                # Data Storage
 │   │   ├── page.go
+│   │   ├── page_test.go
+│   │   ├── manager.go
+│   │   ├── manager_test.go
 │   │   ├── btree.go
-│   │   ├── table.go
-│   │   ├── index.go
-│   │   ├── freelist.go
-│   │   ├── cache.go
-│   │   └── header.go
+│   │   ├── btree_test.go
+│   │   └── cache.go
 │   ├── qp/                # Query Processing
 │   │   ├── tokenizer.go
-│   │   ├── parser.y
+│   │   ├── tokenizer_test.go
+│   │   ├── parser.go
 │   │   ├── ast.go
-│   │   ├── planner.go
-│   │   ├── resolver.go
-│   │   └── types.go
-│   ├── qe/                # Query Execution
-│   │   ├── vm.go
-│   │   ├── engine.go
-│   │   ├── operators.go
-│   │   ├── record.go
-│   │   └── expr.go
-│   └── tm/                # Transaction Monitor
-│       ├── transaction.go
-│       ├── lock.go
-│       ├── wal.go
-│       └── journal.go
+│   │   └── planner.go
+│   ├── qe/                # Query Execution (TODO)
+│   ├── tm/                # Transaction Monitor (TODO)
+│   └── sf/                 # System Framework
+│       └── log.go
 ├── test/
 │   └── sqllogictest/     # SQLite logic tests
 ├── docs/
 │   ├── ARCHITECTURE.md
+│   └── PHASES.md
+├── agents.md              # OpenCode agent guidance
+├── go.mod
+└── .gitignore
+```
+
+## 4. Subsystem Details
+
+### 4.1 System Framework (SF)
+
+**Purpose**: Core infrastructure and utilities
+
+**Components**:
+
+| Component | Responsibility |
+|-----------|----------------|
+| `log.go` | Level-based logging infrastructure |
+| | |
 │   └── PHASES.md
 ├── go.mod
 ├── go.sum
