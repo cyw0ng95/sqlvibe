@@ -199,7 +199,6 @@
 
 | Task | Description | Deliverable | Verification | Status |
 |------|-------------|-------------|--------------|--------|
-| T6.2.1 | Implement sqllogictest runner | Test framework | Not implemented | ❌ NOT STARTED |
 | T6.2.2 | Run basic SQL tests | Simple SELECTs | ✅ DONE | ✅ DONE |
 | T6.2.3 | Run DML tests | INSERT/UPDATE/DELETE | ✅ DONE | ✅ DONE |
 | T6.2.4 | Run transaction tests | ACID tests | ✅ DONE | ✅ DONE |
@@ -209,7 +208,7 @@
 
 | Task | Description | Deliverable | Verification | Status |
 |------|-------------|-------------|--------------|--------|
-| T6.3.1 | Benchmark suite | Performance benchmarks | Not started | ❌ NOT STARTED |
+| T6.3.1 | Benchmark suite | Performance benchmarks | ✅ DONE | ✅ DONE |
 | T6.3.2 | Optimize hot paths | Performance improvements | Not started | ❌ NOT STARTED |
 | T6.3.3 | Memory optimization | Reduce allocations | Not started | ❌ NOT STARTED |
 
