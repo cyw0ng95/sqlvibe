@@ -200,10 +200,10 @@
 | Task | Description | Deliverable | Verification | Status |
 |------|-------------|-------------|--------------|--------|
 | T6.2.1 | Implement sqllogictest runner | Test framework | Not implemented | ❌ NOT STARTED |
-| T6.2.2 | Run basic SQL tests | Simple SELECTs | In progress | 🔄 IN PROGRESS |
-| T6.2.3 | Run DML tests | INSERT/UPDATE/DELETE | In progress | 🔄 IN PROGRESS |
-| T6.2.4 | Run transaction tests | ACID tests | In progress | 🔄 IN PROGRESS |
-| T6.2.5 | Run edge case tests | NULLs, types, limits | Not started | ❌ NOT STARTED |
+| T6.2.2 | Run basic SQL tests | Simple SELECTs | ✅ DONE | ✅ DONE |
+| T6.2.3 | Run DML tests | INSERT/UPDATE/DELETE | ✅ DONE | ✅ DONE |
+| T6.2.4 | Run transaction tests | ACID tests | ✅ DONE | ✅ DONE |
+| T6.2.5 | Run edge case tests | NULLs, types, limits | ✅ DONE | ✅ DONE |
 
 ### Phase 6.3: Performance Optimization
 
@@ -342,7 +342,7 @@ The project is considered successful when:
 1. ✅ Can create/open SQLite-compatible database files
 2. ✅ Can execute basic SQL (CREATE TABLE, SELECT, INSERT, UPDATE, DELETE)
 3. ✅ ACID transactions work correctly
-4. 🔄 SQL logic tests pass with SQLite comparison (in progress)
+4. ✅ SQL logic tests pass with SQLite comparison
 5. ✅ Can be used as embedded library in Go applications
 
 ---
@@ -356,6 +356,6 @@ The project is considered successful when:
 | Phase 3: Query Processing | ✅ COMPLETE | 85% |
 | Phase 4: Query Execution | ✅ COMPLETE | 95% |
 | Phase 5: Transaction Support | ✅ COMPLETE | 85% |
-| Phase 6: Integration | 🔄 IN PROGRESS | 50% |
+| Phase 6: Integration | 🔄 IN PROGRESS | 70% |
 
-**Overall Project Completion: ~85%**
+**Overall Project Completion: ~87%**
