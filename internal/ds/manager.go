@@ -144,8 +144,8 @@ func (pm *PageManager) readHeader() error {
 }
 
 func (pm *PageManager) writeHeader() error {
-	headerData := make([]byte, 100)
-	if err := pm.header.WriteTo(headerData); err != nil {
+	headerData := make([]byte, pm.pageSize)
+	if err := pm.header.WriteTo(headerData[:100]); err != nil {
 		return err
 	}
 	_, err := pm.file.WriteAt(headerData, 0)
