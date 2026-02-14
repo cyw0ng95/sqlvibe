@@ -1,0 +1,315 @@
+# OpenCode Agents Guidance
+
+## Project: sqlvibe - SQLite-Compatible Database Engine in Go
+
+This document provides guidance for OpenCode agents working on the sqlvibe project.
+
+---
+
+## 1. Project Overview
+
+**Goal**: Implement a SQLite-compatible database engine in Go that achieves blackbox-level correctness compared to real SQLite.
+
+**Language**: Go (Golang)  
+**Architecture**: Modular subsystem design (PB, DS, QP, QE, TM)
+
+---
+
+## 2. Important Restrictions
+
+### 2.1 Git Operations
+
+- **NEVER use force push** (`git push --force`, `git push -f`)
+- Always create meaningful commit messages
+- Commit frequently to maintain clear history
+
+### 2.2 Bugfix Commits
+
+When fixing bugs, the commit message MUST include:
+- `#bugfix` tag at the beginning
+- Clear description of what was fixed
+
+**Format**:
+```
+#bugfix: Description of the fix
+
+- Root cause explanation
+- What was changed
+- How this fixes the issue
+```
+
+**Example**:
+```
+#bugfix: Fix page boundary check in B-Tree split
+
+- The split function was not correctly handling the case where
+  the left page would be exactly at capacity
+- Changed split logic to ensure both pages have minimum fill
+- Added test case for boundary condition
+```
+
+### 2.3 Code Quality
+
+- **NEVER** use type suppression (`as any`, `@ts-ignore`, `@ts-expect-error`)
+- **NEVER** leave empty catch blocks
+- **NEVER** delete failing tests to "pass"
+- Always fix root causes, not symptoms
+
+---
+
+## 3. Development Workflow
+
+### 3.1 Before Starting Work
+
+1. Read the relevant documentation in `docs/`
+2. Understand the current phase and task priorities
+3. Check existing tests to understand expected behavior
+
+### 3.2 Implementation Rules
+
+1. **Each Iteration Must Deliver Valid Results**
+   - Never implement partial features that cannot be tested
+   - Every change should result in a working system
+   - If blocked, ask for clarification
+
+2. **Test-Driven Development**
+   - Write tests before or alongside implementation
+   - Run SQLite comparison tests frequently
+   - Verify against real SQLite outputs
+
+3. **SQLite Compatibility**
+   - Run blackbox tests against real SQLite
+   - Document any intentional deviations
+   - Aim for 100% compatibility on covered features
+
+### 3.3 Verification Requirements
+
+Before marking a task complete, verify:
+
+- [ ] Unit tests pass
+- [ ] Integration tests pass  
+- [ ] SQLite comparison tests pass
+- [ ] No regressions in previous features
+- [ ] Code follows project conventions
+
+### 3.4 Commit When Task is Complete
+
+**When a task is complete, make and push commits in time:**
+
+1. After completing any task or subtask, commit immediately
+2. Run tests first to ensure everything works
+3. Create a meaningful commit message describing what was done
+4. Push to remote so progress is tracked
+
+```
+# Example workflow after completing a task
+go test ./...
+git add -A
+git commit -m "feat: Implement B-Tree search operation
+
+- Added search method to B-Tree structure
+- Handles both leaf and interior nodes
+- Added unit tests"
+git push
+```
+
+**Commit timing rules:**
+- Commit within the same session when task completes
+- Never leave completed work uncommitted
+- If working across multiple sessions, commit before stopping
+
+---
+
+## 4. Commit Guidelines
+
+### 4.1 When to Commit
+
+- After completing a task or subtask
+- After fixing a bug
+- After adding significant tests
+- Before starting risky refactoring
+
+### 4.2 Commit Message Format
+
+```
+<type>: <short description>
+
+<long description if needed>
+```
+
+**Types**:
+- `feat`: New feature
+- `fix`: Bugfix (use #bugfix prefix)
+- `refactor`: Code refactoring
+- `test`: Test additions/changes
+- `docs`: Documentation changes
+- `chore`: Build/tooling changes
+
+**Examples**:
+```
+feat: Implement B-Tree search operation
+
+- Added search method to B-Tree
+- Handles both leaf and interior nodes
+- Added unit tests for search
+
+#bugfix: Fix integer overflow in page number calculation
+
+- Changed uint32 to uint64 for large database support
+- Added boundary checks
+- Added test for edge case
+```
+
+### 4.3 Commit Size
+
+- Prefer smaller, focused commits over large changes
+- Each commit should be logically self-contained
+- If a change is large, consider splitting into multiple commits
+
+---
+
+## 5. Subsystem-Specific Guidance
+
+### 5.1 Platform Bridges (PB)
+
+- Keep OS-specific code isolated
+- Use interfaces for testability
+- Handle errors gracefully
+
+### 5.2 Data Storage (DS)
+
+- Follow SQLite file format exactly
+- Test with existing SQLite databases
+- Verify page-level operations with hex dumps
+
+### 5.3 Query Processing (QP)
+
+- Use goyacc for parser generation
+- Provide clear error messages with line/column numbers
+- Test error handling thoroughly
+
+### 5.4 Query Execution (QE)
+
+- Follow SQLite VM opcode semantics
+- Test edge cases (NULLs, type conversions)
+- Verify result correctness against SQLite
+
+### 5.5 Transaction Monitor (TM)
+
+- Test crash recovery scenarios
+- Verify ACID properties
+- Test concurrent access patterns
+
+---
+
+## 6. Testing Strategy
+
+### 6.1 Test Categories
+
+1. **Unit Tests**: Test individual components in isolation
+2. **Integration Tests**: Test subsystem interactions
+3. **SQLite Comparison Tests**: Run same SQL, compare results
+4. **Stress Tests**: Large data, concurrent operations
+
+### 6.2 SQLite Testing
+
+Run comparison tests frequently:
+
+```bash
+# Run SQLite compatibility tests
+go test ./test/sqllogictest/...
+
+# Compare specific SQL
+go test -run TestSQLiteComparison
+```
+
+### 6.3 Test Data
+
+- Use the test data in `test/` directory
+- Create edge case tests for NULLs, boundaries
+- Test with both small and large datasets
+
+---
+
+## 7. Documentation
+
+### 7.1 Code Documentation
+
+- Document public interfaces
+- Explain complex algorithms in comments
+- Use meaningful variable/function names
+
+### 7.2 Project Documentation
+
+- Update `docs/` when making architectural changes
+- Keep PHASES.md current with progress
+- Document any design decisions
+
+---
+
+## 8. File Structure
+
+```
+sqlvibe/
+├── cmd/              # CLI application
+├── pkg/              # Public API
+├── internal/         # Internal packages
+│   ├── pb/          # Platform Bridges
+│   ├── ds/          # Data Storage
+│   ├── qp/          # Query Processing
+│   ├── qe/          # Query Execution
+│   └── tm/          # Transaction Monitor
+├── test/            # Test files
+│   └── sqllogictest/
+├── docs/            # Documentation
+├── go.mod
+├── go.sum
+└── Makefile
+```
+
+---
+
+## 9. Build and Test Commands
+
+```bash
+# Build the project
+go build ./...
+
+# Run all tests
+go test ./...
+
+# Run SQLite comparison tests
+go test ./test/sqllogictest/...
+
+# Run specific test
+go test -run TestName ./...
+
+# Generate parser
+make parser
+
+# Format code
+go fmt ./...
+
+# Run linter
+go vet ./...
+```
+
+---
+
+## 10. Getting Help
+
+1. Read `docs/ARCHITECTURE.md` for system design
+2. Read `docs/PHASES.md` for implementation plan
+3. Check existing tests for expected behavior
+4. If stuck, consult with Oracle agent
+
+---
+
+## Summary
+
+- **No force push ever**
+- Use `#bugfix` prefix for bug fixes
+- Each iteration must deliver valid results
+- Test against SQLite frequently
+- Commit frequently with meaningful messages
+- Follow code quality standards

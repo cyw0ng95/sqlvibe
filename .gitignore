@@ -1,0 +1,57 @@
+# Binaries
+sqlvibe
+sqlvibe.exe
+sqlvibe.exe~
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database files (should not be committed)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Test output
+test_output/
+*.log
+
+# Build output
+/bin/
+/dist/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+#备份文件
+*~
+*.bak
