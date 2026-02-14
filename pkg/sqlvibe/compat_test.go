@@ -871,9 +871,9 @@ func TestMultipleTables(t *testing.T) {
 	t.Logf("sqlite tables query result: %v", sqliteRows)
 }
 
-// TestCh03_Numbers tests SQL:1999 Chapter 3 - Numeric Types
+// TestSQL1999_CH03_Numbers tests SQL:1999 Chapter 3 - Numeric Types
 // INTEGER, SMALLINT, BIGINT, DECIMAL, NUMERIC, FLOAT, REAL, DOUBLE PRECISION
-func TestCh03_Numbers(t *testing.T) {
+func TestSQL1999_CH03_Numbers(t *testing.T) {
 	sqlvibePath := "/tmp/test_ch03.db"
 	sqlitePath := "/tmp/test_ch03_sqlite.db"
 
