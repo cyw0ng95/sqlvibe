@@ -75,10 +75,10 @@ func TestBTreeSearch(t *testing.T) {
 
 	bt := NewBTree(pm, 0, true)
 
-	bt.Insert([]byte{0x01}, []byte("value1"))
-	bt.Insert([]byte{0x02}, []byte("value2"))
+	bt.Insert([]byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("value1"))
+	bt.Insert([]byte{0, 0, 0, 0, 0, 0, 0, 2}, []byte("value2"))
 
-	result, err := bt.Search([]byte{0x01})
+	result, err := bt.Search([]byte{0, 0, 0, 0, 0, 0, 0, 1})
 	if err != nil {
 		t.Fatalf("failed to search: %v", err)
 	}
@@ -104,8 +104,8 @@ func TestBTreeCursor(t *testing.T) {
 
 	bt := NewBTree(pm, 0, true)
 
-	bt.Insert([]byte{0x01}, []byte("value1"))
-	bt.Insert([]byte{0x02}, []byte("value2"))
+	bt.Insert([]byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("value1"))
+	bt.Insert([]byte{0, 0, 0, 0, 0, 0, 0, 2}, []byte("value2"))
 
 	cursor, err := bt.First()
 	if err != nil {
