@@ -964,7 +964,7 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			return math.Round(v*divisor) / divisor
 		}
 		return val
-	case "TYPEOF":
+	case "TYPEOF", "typeof":
 		if len(fc.Args) == 0 {
 			return "null"
 		}
