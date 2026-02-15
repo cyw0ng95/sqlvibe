@@ -296,8 +296,8 @@ graph TD
 - [x] E011-04: Arithmetic operators (unary minus, large numbers) work correctly
 - [x] E011-05: Comparison operators, ORDER BY expressions work correctly
 - [x] E011-05: NULL IS NULL / IS NOT NULL returns 0/1 (not NULL)
-- [ ] E011-06: Implicit numeric casting works correctly
-- [ ] F481: COALESCE returns first non-NULL argument
+- [x] E011-06: Implicit numeric casting works correctly
+- [x] F481: COALESCE returns first non-NULL argument
 
 ### Wave 2 (Parsers)
 - [ ] Index parser handles CREATE/DROP INDEX
