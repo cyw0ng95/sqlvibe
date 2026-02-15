@@ -409,6 +409,137 @@ go test -run TestSQLiteComparison
 - Create edge case tests for NULLs, boundaries
 - Test with both small and large datasets
 
+### 8.4 TS Test Suite Naming Convention
+
+All compatibility tests MUST follow the TS (Test Suite) naming convention to ensure proper grouping and identification.
+
+#### 8.4.1 Naming Format
+
+```
+Test<TestsuiteName>_F<FeatureNumber>_<TestCaseName>_L<Level>
+```
+
+**Components**:
+| Component | Description | Example |
+|-----------|-------------|---------|
+| `Test` | Go test prefix | `Test` |
+| `TestsuiteName` | Test suite identifier | `SQL1999`, `SQLite` |
+| `F<FeatureNumber>` | SQL Feature ID (3-digit zero-padded) | `F301`, `F302`, `F451` |
+| `TestCaseName` | Descriptive test case name | `NumericTypes`, `StringTypes` |
+| `L<Level>` | Test level | `L1`, `L2`, `L3` |
+
+**Example**:
+```go
+// SQL:1999 Feature F301 - Numeric Types
+func TestSQL1999_F301_NumericTypes_L1(t *testing.T) { ... }
+
+// SQL:1999 Feature F304 - Character Types  
+func TestSQL1999_F304_CharacterTypes_L1(t *testing.T) { ... }
+```
+
+#### 8.4.2 Test Levels
+
+| Level | Name | Storage Backend | Description |
+|-------|------|-----------------|-------------|
+| **L1** | Fundamental | `:memory:` | Basic functionality tests, no persistence required |
+| **L2** | FileBased | Temporary file | Tests requiring file storage, transactions |
+| **L3** | EdgeCases | `:memory:` or file | Boundary conditions, stress tests |
+
+**Rules**:
+- **L1 tests MUST use `:memory:` backend** - no file I/O
+- **L2 tests use temporary files** - must clean up after
+- **L3 tests can use either** - depending on edge case
+
+#### 8.4.3 SQL:1999 Feature IDs
+
+Reference from `docs/sql1999.reqs.md`:
+
+| Feature ID | Feature Name | Description |
+|------------|--------------|-------------|
+| F301 | Numeric Types | NUMERIC, DECIMAL, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, FLOAT |
+| F302 | Character Types | CHAR, VARCHAR, CLOB, NCHAR, NVARCHAR, NCLOB |
+| F303 | Date/Time Types | DATE, TIME, TIMESTAMP, INTERVAL |
+| F451 | Character Set | Character set support, collation |
+| ... | ... | See `docs/sql1999.reqs.md` for full list |
+
+#### 8.4.4 Test Structure
+
+```go
+// Level 1: Fundamental test with :memory:
+func TestSQL1999_F301_NumericTypes_L1(t *testing.T) {
+    sqlvibePath := ":memory:"
+    sqlitePath := ":memory:"
+    
+    tests := []struct {
+        name     string
+        sql      string
+        expected string
+    }{...}
+    
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Test sqlvibe vs SQLite
+        })
+    }
+}
+
+// Level 2: File-based test
+func TestSQL1999_F302_CharacterTypes_L2(t *testing.T) {
+    // Create temp file for both sqlvibe and SQLite
+    sqlvibeFile := tempFile(t)
+    sqliteFile := tempFile(t)
+    defer os.Remove(sqlvibeFile)
+    defer os.Remove(sqliteFile)
+    // ... test code
+}
+```
+
+#### 8.4.5 Migration of Existing Tests
+
+When renaming existing tests to TS convention:
+
+1. **Identify the test's feature** from `docs/sql1999.reqs.md`
+2. **Determine the appropriate level** (L1/L2/L3)
+3. **Rename following the format**: `Test<Testsuite>_F<Feature>_<Name>_L<Level>`
+4. **Update backend if needed**: L1 tests MUST use `:memory:`
+5. **Verify test still passes** before committing
+
+**Example migration**:
+```
+Before: TestSQL1999_CH03_Numbers
+After:  TestSQL1999_F301_NumericTypes_L1
+```
+
+#### 8.4.6 Test Organization
+
+- **Group by Testsuite**: All SQL1999 tests together, all SQLite tests together
+- **Group by Feature**: Within a testsuite, group by Feature ID (F301, F302, etc.)
+- **Group by Level**: L1 tests first, then L2, then L3
+
+```go
+// Group order in file:
+// 1. SQL1999 Feature F301 tests
+func TestSQL1999_F301_NumericTypes_L1(t *testing.T) { ... }
+func TestSQL1999_F301_NumericTypes_L2(t *testing.T) { ... }
+
+// 2. SQL1999 Feature F302 tests
+func TestSQL1999_F302_CharacterTypes_L1(t *testing.T) { ... }
+
+// 3. SQLite compatibility tests
+func TestSQLite_BasicSelect_L1(t *testing.T) { ... }
+```
+
+#### 8.4.7 Verification Checklist
+
+Before committing TS-named tests, verify:
+
+- [ ] Name follows format: `Test<Testuite>_F<Feature>_<Name>_L<Level>`
+- [ ] Feature ID matches SQL:1999 spec (check `docs/sql1999.reqs.md`)
+- [ ] L1 tests use `:memory:` backend
+- [ ] L2/L3 tests use appropriate storage
+- [ ] Test passes with sqlvibe vs SQLite comparison
+- [ ] No regressions in existing tests
+
 ---
 
 ## 9. Documentation
@@ -427,7 +558,7 @@ go test -run TestSQLiteComparison
 
 ---
 
-## 8. File Structure
+## 10. File Structure
 
 ```
 sqlvibe/
@@ -449,7 +580,7 @@ sqlvibe/
 
 ---
 
-## 9. Build and Test Commands
+## 11. Build and Test Commands
 
 ```bash
 # Build the project
@@ -476,7 +607,7 @@ go vet ./...
 
 ---
 
-## 10. Getting Help
+## 12. Getting Help
 
 1. Read `docs/ARCHITECTURE.md` for system design
 2. Read `docs/PHASES.md` for implementation plan
