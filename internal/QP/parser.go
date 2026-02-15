@@ -296,6 +296,22 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 
+	if p.current().Literal == "LIMIT" {
+		p.advance()
+		limit, err := p.parseExpr()
+		if err == nil {
+			stmt.Limit = limit
+		}
+	}
+
+	if p.current().Literal == "OFFSET" {
+		p.advance()
+		offset, err := p.parseExpr()
+		if err == nil {
+			stmt.Offset = offset
+		}
+	}
+
 	return stmt, nil
 }
 

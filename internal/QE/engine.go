@@ -496,18 +496,20 @@ func (p *Project) Close() error {
 }
 
 type Limit struct {
-	input  Operator
-	limit  int
-	offset int
-	count  int
+	input         Operator
+	limit         int
+	offset        int
+	offsetSkipped int
+	returned      int
 }
 
 func NewLimit(input Operator, limit, offset int) *Limit {
 	return &Limit{
-		input:  input,
-		limit:  limit,
-		offset: offset,
-		count:  0,
+		input:         input,
+		limit:         limit,
+		offset:        offset,
+		offsetSkipped: 0,
+		returned:      0,
 	}
 }
 
@@ -516,22 +518,19 @@ func (l *Limit) Init() error {
 }
 
 func (l *Limit) Next() (map[string]interface{}, error) {
-	if l.limit > 0 && l.count >= l.limit {
+	if l.limit > 0 && l.returned >= l.limit {
 		return nil, nil
 	}
 
-	for l.count < l.offset {
+	for l.offsetSkipped < l.offset {
 		_, err := l.input.Next()
 		if err != nil {
 			return nil, err
 		}
-		l.count++
-		if l.limit > 0 && l.count >= l.limit {
-			return nil, nil
-		}
+		l.offsetSkipped++
 	}
 
-	l.count++
+	l.returned++
 	return l.input.Next()
 }
 
