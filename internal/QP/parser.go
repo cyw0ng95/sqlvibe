@@ -119,7 +119,8 @@ type Literal struct {
 func (e *Literal) exprNode() {}
 
 type ColumnRef struct {
-	Name string
+	Table string // Optional table/alias qualifier (e.g., "e" in "e.dept_id")
+	Name  string
 }
 
 func (e *ColumnRef) exprNode() {}
@@ -132,7 +133,8 @@ type FuncCall struct {
 func (e *FuncCall) exprNode() {}
 
 type SubqueryExpr struct {
-	Select *SelectStmt
+	Select     *SelectStmt
+	OuterAlias string // Alias of the outer query's table for correlation resolution
 }
 
 func (e *SubqueryExpr) exprNode() {}
@@ -145,8 +147,9 @@ type AliasExpr struct {
 func (e *AliasExpr) exprNode() {}
 
 type Parser struct {
-	tokens []Token
-	pos    int
+	tokens     []Token
+	pos        int
+	outerAlias string // Track outer query's table alias for subquery correlation
 }
 
 func NewParser(tokens []Token) *Parser {
@@ -980,6 +983,16 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			return &Literal{Value: nil}, nil
 		}
 		p.advance()
+		// Check for table.column format (e.g., e.dept_id)
+		if p.current().Type == TokenDot {
+			p.advance()
+			if p.current().Type == TokenIdentifier {
+				tableAlias := tok.Literal
+				colName := p.current().Literal
+				p.advance()
+				return &ColumnRef{Table: tableAlias, Name: colName}, nil
+			}
+		}
 		return &ColumnRef{Name: tok.Literal}, nil
 	}
 

@@ -15,12 +15,13 @@ var (
 )
 
 type QueryEngine struct {
-	vm       *VM
-	pm       *DS.PageManager
-	tables   map[string]*TableReader
-	cursors  map[int]*Cursor
-	cursorID int
-	data     map[string][]map[string]interface{}
+	vm         *VM
+	pm         *DS.PageManager
+	tables     map[string]*TableReader
+	cursors    map[int]*Cursor
+	cursorID   int
+	data       map[string][]map[string]interface{}
+	outerAlias string // Current outer query's table alias for correlation
 }
 
 type TableReader struct {
@@ -44,13 +45,18 @@ type Cursor struct {
 
 func NewQueryEngine(pm *DS.PageManager, data map[string][]map[string]interface{}) *QueryEngine {
 	return &QueryEngine{
-		vm:       nil,
-		pm:       pm,
-		tables:   make(map[string]*TableReader),
-		cursors:  make(map[int]*Cursor),
-		cursorID: 0,
-		data:     data,
+		vm:         nil,
+		pm:         pm,
+		tables:     make(map[string]*TableReader),
+		cursors:    make(map[int]*Cursor),
+		cursorID:   0,
+		data:       data,
+		outerAlias: "",
 	}
+}
+
+func (qe *QueryEngine) SetOuterAlias(alias string) {
+	qe.outerAlias = alias
 }
 
 func (qe *QueryEngine) RegisterTable(name string, schema map[string]ColumnType) {
@@ -282,7 +288,7 @@ func (qe *QueryEngine) evalExpr(row map[string]interface{}, expr QP.Expr) bool {
 			return false
 		case QP.TokenExists:
 			subq := e.Left.(*QP.SubqueryExpr)
-			result := qe.evalSubquery(row, subq.Select)
+			result := qe.evalSubquery(row, qe.outerAlias, subq.Select)
 			if result.rows == nil {
 				return false
 			}
@@ -290,7 +296,7 @@ func (qe *QueryEngine) evalExpr(row map[string]interface{}, expr QP.Expr) bool {
 		case QP.TokenInSubquery:
 			leftVal := qe.evalValue(row, e.Left)
 			subq := e.Right.(*QP.SubqueryExpr)
-			result := qe.evalSubquery(row, subq.Select)
+			result := qe.evalSubquery(row, qe.outerAlias, subq.Select)
 			if result.rows == nil || len(result.rows) == 0 {
 				return false
 			}
@@ -304,7 +310,7 @@ func (qe *QueryEngine) evalExpr(row map[string]interface{}, expr QP.Expr) bool {
 		case QP.TokenAll:
 			rightExpr := e.Right.(*QP.BinaryExpr)
 			subq := rightExpr.Right.(*QP.SubqueryExpr)
-			result := qe.evalSubquery(row, subq.Select)
+			result := qe.evalSubquery(row, qe.outerAlias, subq.Select)
 			if result.rows == nil || len(result.rows) == 0 {
 				return false
 			}
@@ -322,7 +328,7 @@ func (qe *QueryEngine) evalExpr(row map[string]interface{}, expr QP.Expr) bool {
 		case QP.TokenAny:
 			rightExpr := e.Right.(*QP.BinaryExpr)
 			subq := rightExpr.Right.(*QP.SubqueryExpr)
-			result := qe.evalSubquery(row, subq.Select)
+			result := qe.evalSubquery(row, qe.outerAlias, subq.Select)
 			if result.rows == nil || len(result.rows) == 0 {
 				return false
 			}
@@ -350,7 +356,7 @@ func (qe *QueryEngine) evalExpr(row map[string]interface{}, expr QP.Expr) bool {
 			return true
 		}
 	case *QP.SubqueryExpr:
-		result := qe.evalSubquery(row, e.Select)
+		result := qe.evalSubquery(row, qe.outerAlias, e.Select)
 		if result.rows == nil {
 			return false
 		}
@@ -367,6 +373,14 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 	case *QP.Literal:
 		return e.Value
 	case *QP.ColumnRef:
+		// Handle table-qualified column references (e.g., e.dept_id)
+		if e.Table != "" {
+			// Try table.column format first
+			if val, ok := row[e.Table+"."+e.Name]; ok {
+				return val
+			}
+		}
+		// Fall back to unqualified column name
 		if val, ok := row[e.Name]; ok {
 			return val
 		}
@@ -404,7 +418,7 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 	case *QP.AliasExpr:
 		return qe.evalValue(row, e.Expr)
 	case *QP.SubqueryExpr:
-		result := qe.evalSubquery(row, e.Select)
+		result := qe.evalSubquery(row, qe.outerAlias, e.Select)
 		if result.rows == nil || len(result.rows) == 0 {
 			return nil
 		}
@@ -488,7 +502,7 @@ type subqueryResult struct {
 	rows []map[string]interface{}
 }
 
-func (qe *QueryEngine) evalSubquery(outerRow map[string]interface{}, sel *QP.SelectStmt) *subqueryResult {
+func (qe *QueryEngine) evalSubquery(outerRow map[string]interface{}, outerAlias string, sel *QP.SelectStmt) *subqueryResult {
 	if sel == nil || sel.From == nil {
 		return &subqueryResult{rows: nil}
 	}
@@ -499,18 +513,29 @@ func (qe *QueryEngine) evalSubquery(outerRow map[string]interface{}, sel *QP.Sel
 		return &subqueryResult{rows: nil}
 	}
 
+	innerAlias := sel.From.Alias
+
 	rows := []map[string]interface{}{}
 	for _, row := range tableData {
 		if sel.Where != nil {
 			merged := make(map[string]interface{})
-			// First copy outer row (correlation references)
-			for k, v := range outerRow {
-				merged[k] = v
+			// Add outer row with outer alias prefix
+			if outerAlias != "" {
+				for k, v := range outerRow {
+					merged[outerAlias+"."+k] = v
+					merged[k] = v
+				}
+			} else {
+				for k, v := range outerRow {
+					merged[k] = v
+				}
 			}
-			// Then copy inner row (overwrites outer for same columns)
-			// This allows e2.dept_id to reference inner row
+			// Add inner row values (overwrites for same columns, but alias-qualified takes precedence)
 			for k, v := range row {
 				merged[k] = v
+				if innerAlias != "" {
+					merged[innerAlias+"."+k] = v
+				}
 			}
 			if !qe.evalExpr(merged, sel.Where) {
 				continue

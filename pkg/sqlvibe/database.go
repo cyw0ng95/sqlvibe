@@ -319,7 +319,6 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		return nil, nil
 	}
 
-
 	if ast.NodeType() == "SelectStmt" {
 		stmt := ast.(*QP.SelectStmt)
 		if stmt.From == nil {
@@ -429,6 +428,13 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			} else {
 				expressions[i] = col
 			}
+		}
+
+		// Set outer alias for correlated subquery evaluation
+		if stmt.From != nil && stmt.From.Alias != "" {
+			db.engine.SetOuterAlias(stmt.From.Alias)
+		} else {
+			db.engine.SetOuterAlias("")
 		}
 
 		scan := QE.NewTableScan(db.engine, tableName)
