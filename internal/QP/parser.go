@@ -1,5 +1,9 @@
 package QP
 
+import (
+	"strconv"
+)
+
 type ASTNode interface {
 	NodeType() string
 }
@@ -558,7 +562,7 @@ func (p *Parser) parseMulExpr() (Expr, error) {
 		return nil, err
 	}
 
-	for p.current().Type == TokenAsterisk || p.current().Type == TokenSlash {
+	for p.current().Type == TokenAsterisk || p.current().Type == TokenSlash || p.current().Type == TokenPercent {
 		op := p.current().Type
 		p.advance()
 		right, err := p.parseUnaryExpr()
@@ -591,6 +595,12 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	switch tok.Type {
 	case TokenNumber:
 		p.advance()
+		if iv, err := strconv.ParseInt(tok.Literal, 10, 64); err == nil {
+			return &Literal{Value: iv}, nil
+		}
+		if fv, err := strconv.ParseFloat(tok.Literal, 64); err == nil {
+			return &Literal{Value: fv}, nil
+		}
 		return &Literal{Value: tok.Literal}, nil
 	case TokenString:
 		p.advance()

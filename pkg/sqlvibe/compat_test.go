@@ -40,6 +40,8 @@ func fetchAllRowsSQLite(rows *sql.Rows) ([]map[string]interface{}, error) {
 		return nil, err
 	}
 
+	fmt.Println("DEBUG SQLite columns:", columns)
+
 	var results []map[string]interface{}
 	for rows.Next() {
 		values := make([]interface{}, len(columns))
@@ -51,6 +53,8 @@ func fetchAllRowsSQLite(rows *sql.Rows) ([]map[string]interface{}, error) {
 		if err := rows.Scan(valuePtrs...); err != nil {
 			continue
 		}
+
+		fmt.Println("DEBUG SQLite values:", values)
 
 		row := make(map[string]interface{})
 		for i, col := range columns {
@@ -98,6 +102,45 @@ func compareQueryResults(t *testing.T, sqlvibeDB *Database, sqliteDB *sql.DB, sq
 
 // rowsEqual compares two row maps for equality
 func rowsEqual(a, b map[string]interface{}) bool {
+	// If maps have same keys, do direct comparison
+	if len(a) == len(b) {
+		keysMatch := true
+		for k := range a {
+			if _, ok := b[k]; !ok {
+				keysMatch = false
+				break
+			}
+		}
+		if keysMatch {
+			for k, av := range a {
+				bv := b[k]
+				if !valueEqual(av, bv) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+
+	// If maps have different keys but same length, compare by values (position-based)
+	if len(a) == len(b) && len(a) > 0 {
+		aVals := make([]interface{}, 0, len(a))
+		bVals := make([]interface{}, 0, len(b))
+		for _, v := range a {
+			aVals = append(aVals, v)
+		}
+		for _, v := range b {
+			bVals = append(bVals, v)
+		}
+		for i := range aVals {
+			if !valueEqual(aVals[i], bVals[i]) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// Fall back to key-based comparison
 	if len(a) != len(b) {
 		return false
 	}

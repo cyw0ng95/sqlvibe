@@ -68,6 +68,8 @@ func (e *ExprEvaluator) BinaryOp(op OpCode, a, b interface{}) (interface{}, erro
 		return e.mul(a, b), nil
 	case OpDivide:
 		return e.div(a, b), nil
+	case OpRemainder:
+		return e.mod(a, b), nil
 	case OpConcat:
 		return e.toString(a) + e.toString(b), nil
 	default:
@@ -103,6 +105,15 @@ func (e *ExprEvaluator) div(a, b interface{}) interface{} {
 		return nil
 	}
 	return av / bv
+}
+
+func (e *ExprEvaluator) mod(a, b interface{}) interface{} {
+	av := e.toFloat64(a)
+	bv := e.toFloat64(b)
+	if bv == 0 {
+		return nil
+	}
+	return int(av) % int(bv)
 }
 
 func (e *ExprEvaluator) toString(v interface{}) string {

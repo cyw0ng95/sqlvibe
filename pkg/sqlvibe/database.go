@@ -328,9 +328,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 		}
 
-		fmt.Printf("DEBUG Query: tableName=%s db.data=%v\n", tableName, db.data)
 		tableData, ok := db.data[tableName]
-		fmt.Printf("DEBUG Query: tableData=%v ok=%v\n", tableData, ok)
 		if !ok || tableData == nil {
 			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 		}
@@ -347,6 +345,8 @@ func (db *Database) Query(sql string) (*Rows, error) {
 				} else {
 					cols = []string{cr.Name}
 				}
+			} else {
+				cols = []string{"expr"}
 			}
 		} else {
 			for _, col := range stmt.Columns {
@@ -366,14 +366,22 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			}
 		}
 
+		expressions := make([]QP.Expr, len(stmt.Columns))
+		for i, col := range stmt.Columns {
+			if _, ok := col.(*QP.ColumnRef); ok {
+				expressions[i] = nil
+			} else {
+				expressions[i] = col
+			}
+		}
+
 		scan := QE.NewTableScan(db.engine, tableName)
 		scan.SetData(tableData)
-		fmt.Printf("DEBUG: scan.data = %v\n", scan.GetData())
 
 		predicate := db.engine.BuildPredicate(stmt.Where)
 		filter := QE.NewFilter(scan, predicate)
 
-		project := QE.NewProject(filter, cols)
+		project := db.engine.NewProjectWithExpr(filter, cols, expressions)
 
 		var limit, offset int
 		if stmt.Limit != nil {
@@ -397,12 +405,9 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return nil, err
 		}
 
-		fmt.Printf("DEBUG: Before loop, limited=%v\n", limited)
-
 		resultData := make([][]interface{}, 0)
 		for {
 			row, err := limited.Next()
-			fmt.Printf("DEBUG: row from Next: %v, err: %v\n", row, err)
 			if err != nil {
 				return nil, err
 			}
@@ -528,9 +533,30 @@ func (db *Database) extractValueTyped(expr QP.Expr, colType string) interface{} 
 		return val
 	case *QP.ColumnRef:
 		return e.Name
+	case *QP.UnaryExpr:
+		val := db.extractValueTyped(e.Expr, colType)
+		if e.Op == QP.TokenMinus {
+			return db.negateValue(val)
+		}
+		return val
 	default:
 		return nil
 	}
+}
+
+func (db *Database) negateValue(val interface{}) interface{} {
+	if val == nil {
+		return nil
+	}
+	switch v := val.(type) {
+	case int64:
+		return -v
+	case float64:
+		return -v
+	case int:
+		return -v
+	}
+	return val
 }
 
 func (db *Database) convertStringToType(val string, colType string) interface{} {
@@ -722,7 +748,7 @@ func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, col
 				if ob.Desc {
 					cmp = -cmp
 				}
-				if cmp < 0 {
+				if cmp > 0 {
 					sorted[i], sorted[j] = sorted[j], sorted[i]
 					break
 				}

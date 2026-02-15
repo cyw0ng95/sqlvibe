@@ -242,10 +242,23 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		case QP.TokenSlash:
 			result, _ := exprEval.BinaryOp(OpDivide, leftVal, rightVal)
 			return result
+		case QP.TokenPercent:
+			result, _ := exprEval.BinaryOp(OpRemainder, leftVal, rightVal)
+			return result
 		}
 		return nil
+	case *QP.UnaryExpr:
+		val := qe.evalValue(row, e.Expr)
+		if e.Op == QP.TokenMinus {
+			return qe.negate(val)
+		}
+		return val
 	}
 	return nil
+}
+
+func (qe *QueryEngine) EvalExpr(row map[string]interface{}, expr QP.Expr) interface{} {
+	return qe.evalValue(row, expr)
 }
 
 func (qe *QueryEngine) valuesEqual(a, b interface{}) bool {
@@ -272,12 +285,12 @@ func (qe *QueryEngine) valuesEqual(a, b interface{}) bool {
 	}
 	if aok {
 		var iv int64
-		fmt.Sscanf(bs, "%d", &iv)
+		fmt.Sscanf(fmt.Sprintf("%v", bs), "%d", &iv)
 		return av == iv
 	}
 	if bok {
 		var iv int64
-		fmt.Sscanf(as, "%d", &iv)
+		fmt.Sscanf(fmt.Sprintf("%v", as), "%d", &iv)
 		return iv == bv
 	}
 	return false
@@ -357,10 +370,6 @@ func (ts *TableScan) SetData(data []map[string]interface{}) {
 	ts.dataPos = 0
 }
 
-func (ts *TableScan) GetData() []map[string]interface{} {
-	return ts.data
-}
-
 func (ts *TableScan) Init() error {
 	if ts.data == nil {
 		cursorID, err := ts.qe.OpenCursor(ts.table)
@@ -373,19 +382,16 @@ func (ts *TableScan) Init() error {
 }
 
 func (ts *TableScan) Next() (map[string]interface{}, error) {
-	fmt.Printf("DEBUG TableScan.Next: eof=%v, data=%v, dataPos=%d\n", ts.eof, ts.data, ts.dataPos)
 	if ts.eof {
 		return nil, nil
 	}
 	if ts.data != nil {
-		fmt.Printf("DEBUG TableScan.Next: using data, len=%d\n", len(ts.data))
 		if ts.dataPos >= len(ts.data) {
 			ts.eof = true
 			return nil, nil
 		}
 		row := ts.data[ts.dataPos]
 		ts.dataPos++
-		fmt.Printf("DEBUG TableScan.Next: returning row=%v\n", row)
 		return row, nil
 	}
 	row, err := ts.qe.NextRow(ts.cursorID)
@@ -424,7 +430,6 @@ func (f *Filter) Init() error {
 func (f *Filter) Next() (map[string]interface{}, error) {
 	for {
 		row, err := f.input.Next()
-		fmt.Printf("DEBUG Filter.Next: input returned row=%v, err=%v\n", row, err)
 		if err != nil {
 			return nil, err
 		}
@@ -442,14 +447,26 @@ func (f *Filter) Close() error {
 }
 
 type Project struct {
-	input   Operator
-	columns []string
+	input       Operator
+	columns     []string
+	expressions []QP.Expr
+	qe          *QueryEngine
 }
 
 func NewProject(input Operator, columns []string) *Project {
 	return &Project{
-		input:   input,
-		columns: columns,
+		input:       input,
+		columns:     columns,
+		expressions: make([]QP.Expr, len(columns)),
+	}
+}
+
+func (qe *QueryEngine) NewProjectWithExpr(input Operator, columns []string, expressions []QP.Expr) *Project {
+	return &Project{
+		input:       input,
+		columns:     columns,
+		expressions: expressions,
+		qe:          qe,
 	}
 }
 
@@ -464,8 +481,12 @@ func (p *Project) Next() (map[string]interface{}, error) {
 	}
 
 	result := make(map[string]interface{})
-	for _, col := range p.columns {
-		result[col] = row[col]
+	for i, col := range p.columns {
+		if p.expressions != nil && i < len(p.expressions) && p.expressions[i] != nil {
+			result[col] = p.qe.EvalExpr(row, p.expressions[i])
+		} else {
+			result[col] = row[col]
+		}
 	}
 	return result, nil
 }
@@ -495,14 +516,11 @@ func (l *Limit) Init() error {
 }
 
 func (l *Limit) Next() (map[string]interface{}, error) {
-	fmt.Printf("DEBUG Limit.Next: limit=%d, offset=%d, count=%d\n", l.limit, l.offset, l.count)
 	if l.limit > 0 && l.count >= l.limit {
-		fmt.Println("DEBUG Limit.Next: returning nil due to limit")
 		return nil, nil
 	}
 
 	for l.count < l.offset {
-		fmt.Printf("DEBUG Limit.Next: skipping offset, count=%d\n", l.count)
 		_, err := l.input.Next()
 		if err != nil {
 			return nil, err
@@ -514,11 +532,24 @@ func (l *Limit) Next() (map[string]interface{}, error) {
 	}
 
 	l.count++
-	row, err := l.input.Next()
-	fmt.Printf("DEBUG Limit.Next: calling input.Next(), got row=%v, err=%v\n", row, err)
-	return row, err
+	return l.input.Next()
 }
 
 func (l *Limit) Close() error {
 	return l.input.Close()
+}
+
+func (qe *QueryEngine) negate(val interface{}) interface{} {
+	if val == nil {
+		return nil
+	}
+	switch v := val.(type) {
+	case int64:
+		return -v
+	case float64:
+		return -v
+	case int:
+		return -v
+	}
+	return val
 }
