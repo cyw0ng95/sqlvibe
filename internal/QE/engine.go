@@ -455,6 +455,18 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 				return int64(1)
 			}
 			return int64(0)
+		case QP.TokenIs:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return int64(1) // NULL IS NULL -> 1
+			}
+			return int64(0)
+		case QP.TokenIsNot:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return int64(0) // NULL IS NOT NULL -> 0
+			}
+			return int64(1)
 		}
 		return nil
 	case *QP.UnaryExpr:
