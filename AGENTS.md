@@ -179,366 +179,60 @@ Example: User adds "Feature X" mid-iteration
 4. Implement following DAG order
 ```
 
----
+#### 8.4.7 Regression Testsuite
 
-## 4. Iteration Planning
+The **Regression** testsuite is for capturing specific SQL patterns that have been identified as error-prone during development. When a bug is discovered or a specific SQL case causes issues, it should be added here to prevent future regressions.
 
-### 4.1 Creating a Plan
-
-When planning an iteration (unless user specifies a version):
-
-1. **Check HISTORY.md** for the last released version
-2. **Determine next version**: increment the minor version (e.g., v0.2.x → v0.3.x)
-3. **Gather requirements** from `docs/sqlite.reqs.md` and `docs/sql1999.reqs.md`
-4. **Rank requirements** by priority (HIGH → MEDIUM → LOW)
-5. **Create** `docs/plan-VERSION.md` with selected features
-
-### 4.2 Plan File Format
-
-```markdown
-# Plan v0.3.x
-
-## Goal
-Brief description of this iteration's goal.
-
-## Requirements
-
-### HIGH Priority
-- Feature A (from sqlite.reqs.md / sql1999.reqs.md)
-- Feature B
-
-### MEDIUM Priority
-- Feature C
-- Feature D
-
-### LOW Priority
-- Feature E
-
-## Implementation DAG
-
-```mermaid
-graph LR
-    A[Feature A] --> C[Feature C]
-    B[Feature B] --> C
-    C --> D[Feature D]
+**Naming Format**:
 ```
-
-## Detailed Design
-
-### Feature A
-- **Parser changes**: Describe what needs to be added to the parser
-- **Engine changes**: Describe what needs to be added to the execution engine
-- **Files affected**: List files to modify
-
-### Feature B
-- **Parser changes**: ...
-- **Engine changes**: ...
-- **Files affected**: ...
-
-## Success Criteria
-- [ ] Feature A implemented and tested
-- [ ] Feature B implemented and tested
-
-## Notes
-Any additional context or considerations.
+TestRegression_<Description>_<Level>
 ```
-
-### 4.3 Planning Process
-
-```
-1. Read docs/sqlite.reqs.md and docs/sql1999.reqs.md
-2. Filter by priority (HIGH first)
-3. Select feasible features for this iteration
-4. Analyze each feature:
-   - What parser changes needed?
-   - What engine changes needed?
-   - What are the dependencies between features?
-5. Create docs/plan-v0.3.x.md with detailed design and DAG (mermaid format)
-6. Commit and push the plan
-7. Get user approval before starting implementation
-```
-
----
-
-## 5. Release Process
-
-### 5.1 Version Tagging
-
-When a version is complete:
-
-1. Tag the release: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
-2. Push tag: `git push origin vX.Y.Z`
-3. Merge to main branch
-
-### 5.2 Release Notes
-
-After tagging, update `docs/HISTORY.md` with:
-
-```markdown
-## **vX.Y.Z** (YYYY-MM-DD)
-
-### Features
-- List new features
-
-### Known Issues
-- List known issues or leave empty
-
-### Fixed Bugs
-- Extract from git: `git log --oneline vX.Y.Z...HEAD --grep="#bugfix"`
-- List each bugfix commit
-
-### Tests
-- Update test count
-```
-
-### 5.3 Release Checklist
-
-- [ ] All tests pass
-- [ ] Tag created and pushed
-- [ ] Merged to main branch
-- [ ] HISTORY.md updated with release notes
-
----
-
-## 6. Commit Guidelines
-
-### 6.1 When to Commit
-
-- After completing a task or subtask
-- After fixing a bug
-- After adding significant tests
-- Before starting risky refactoring
-
-### 6.2 Commit Message Format
-
-```
-<type>: <short description>
-
-<long description if needed>
-```
-
-**Types**:
-- `feat`: New feature
-- `fix`: Bugfix (use #bugfix prefix)
-- `refactor`: Code refactoring
-- `test`: Test additions/changes
-- `docs`: Documentation changes
-- `chore`: Build/tooling changes
-
-**Examples**:
-```
-feat: Implement B-Tree search operation
-
-- Added search method to B-Tree
-- Handles both leaf and interior nodes
-- Added unit tests for search
-
-#bugfix: Fix integer overflow in page number calculation
-
-- Changed uint32 to uint64 for large database support
-- Added boundary checks
-- Added test for edge case
-```
-
-### 6.3 Commit Size
-
-- Prefer smaller, focused commits over large changes
-- Each commit should be logically self-contained
-- If a change is large, consider splitting into multiple commits
-
----
-
-## 7. Subsystem-Specific Guidance
-
-### 7.1 Platform Bridges (PB)
-
-- Keep OS-specific code isolated
-- Use interfaces for testability
-- Handle errors gracefully
-
-### 7.2 Data Storage (DS)
-
-- Follow SQLite file format exactly
-- Test with existing SQLite databases
-- Verify page-level operations with hex dumps
-
-### 7.3 Query Processing (QP)
-
-- Use goyacc for parser generation
-- Provide clear error messages with line/column numbers
-- Test error handling thoroughly
-
-### 7.4 Query Execution (QE)
-
-- Follow SQLite VM opcode semantics
-- Test edge cases (NULLs, type conversions)
-- Verify result correctness against SQLite
-
-### 7.5 Transaction Monitor (TM)
-
-- Test crash recovery scenarios
-- Verify ACID properties
-- Test concurrent access patterns
-
----
-
-## 8. Testing Strategy
-
-### 8.1 Test Categories
-
-1. **Unit Tests**: Test individual components in isolation
-2. **Integration Tests**: Test subsystem interactions
-3. **SQLite Comparison Tests**: Run same SQL, compare results
-4. **Stress Tests**: Large data, concurrent operations
-
-### 8.2 SQLite Testing
-
-Run comparison tests frequently:
-
-```bash
-# Run SQLite compatibility tests
-go test ./test/sqllogictest/...
-
-# Compare specific SQL
-go test -run TestSQLiteComparison
-```
-
-### 8.3 Test Data
-
-- Use the test data in `test/` directory
-- Create edge case tests for NULLs, boundaries
-- Test with both small and large datasets
-
-### 8.4 TS Test Suite Naming Convention
-
-All compatibility tests MUST follow the TS (Test Suite) naming convention to ensure proper grouping and identification.
-
-#### 8.4.1 Naming Format
-
-```
-Test<TestsuiteName>_F<FeatureNumber>_<TestCaseName>_L<Level>
-```
-
-**Components**:
-| Component | Description | Example |
-|-----------|-------------|---------|
-| `Test` | Go test prefix | `Test` |
-| `TestsuiteName` | Test suite identifier | `SQL1999`, `SQLite` |
-| `F<FeatureNumber>` | SQL Feature ID (3-digit zero-padded) | `F301`, `F302`, `F451` |
-| `TestCaseName` | Descriptive test case name | `NumericTypes`, `StringTypes` |
-| `L<Level>` | Test level | `L1`, `L2`, `L3` |
 
 **Example**:
 ```go
-// SQL:1999 Feature F301 - Numeric Types
-func TestSQL1999_F301_NumericTypes_L1(t *testing.T) { ... }
-
-// SQL:1999 Feature F304 - Character Types  
-func TestSQL1999_F304_CharacterTypes_L1(t *testing.T) { ... }
-```
-
-#### 8.4.2 Test Levels
-
-| Level | Name | Storage Backend | Description |
-|-------|------|-----------------|-------------|
-| **L1** | Fundamental | `:memory:` | Basic functionality tests, no persistence required |
-| **L2** | FileBased | Temporary file | Tests requiring file storage, transactions |
-| **L3** | EdgeCases | `:memory:` or file | Boundary conditions, stress tests |
-
-**Rules**:
-- **L1 tests MUST use `:memory:` backend** - no file I/O
-- **L2 tests use temporary files** - must clean up after
-- **L3 tests can use either** - depending on edge case
-
-#### 8.4.3 SQL:1999 Feature IDs
-
-Reference from `docs/sql1999.reqs.md`:
-
-| Feature ID | Feature Name | Description |
-|------------|--------------|-------------|
-| F301 | Numeric Types | NUMERIC, DECIMAL, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, FLOAT |
-| F302 | Character Types | CHAR, VARCHAR, CLOB, NCHAR, NVARCHAR, NCLOB |
-| F303 | Date/Time Types | DATE, TIME, TIMESTAMP, INTERVAL |
-| F451 | Character Set | Character set support, collation |
-| ... | ... | See `docs/sql1999.reqs.md` for full list |
-
-#### 8.4.4 Test Structure
-
-```go
-// Level 1: Fundamental test with :memory:
-func TestSQL1999_F301_NumericTypes_L1(t *testing.T) {
+// TestRegression_CoalesceNULL_L1 tests COALESCE with NULL values
+// Regression case for COALESCE function handling
+// Level: 1 (Fundamental - uses :memory: backend)
+func TestRegression_CoalesceNULL_L1(t *testing.T) {
     sqlvibePath := ":memory:"
     sqlitePath := ":memory:"
-    
-    tests := []struct {
-        name     string
-        sql      string
-        expected string
-    }{...}
-    
-    for _, tt := range tests {
-        t.Run(tt.name, func(t *testing.T) {
-            // Test sqlvibe vs SQLite
-        })
-    }
+    // ... test code
 }
 
-// Level 2: File-based test
-func TestSQL1999_F302_CharacterTypes_L2(t *testing.T) {
-    // Create temp file for both sqlvibe and SQLite
-    sqlvibeFile := tempFile(t)
-    sqliteFile := tempFile(t)
-    defer os.Remove(sqlvibeFile)
-    defer os.Remove(sqliteFile)
+// TestRegression_InsertMultiRow_L1 tests multi-row INSERT
+// Regression case for batch insert edge cases
+func TestRegression_InsertMultiRow_L1(t *testing.T) {
     // ... test code
 }
 ```
 
-#### 8.4.5 Migration of Existing Tests
+**When to Add Regression Tests**:
+- A specific SQL query is found to produce different results than SQLite
+- A particular edge case causes crashes or panics
+- A SQL pattern was previously buggy and has been fixed
+- Any specific scenario that needs to be guarded against future regressions
 
-When renaming existing tests to TS convention:
+**Regression Test Guidelines**:
+1. **Descriptive Name**: Use clear description of the specific case being tested
+2. **Minimal Reproduction**: Create the smallest possible test case that reproduces the issue
+3. **Document the Bug**: Add a comment explaining what bug this test prevents
+4. **Use L1 when possible**: Most regression tests can use `:memory:` backend unless they specifically test file/persistence behavior
+5. **Group by Feature**: If multiple regression tests exist for the same feature, group them together
 
-1. **Identify the test's feature** from `docs/sql1999.reqs.md`
-2. **Determine the appropriate level** (L1/L2/L3)
-3. **Rename following the format**: `Test<Testsuite>_F<Feature>_<Name>_L<Level>`
-4. **Update backend if needed**: L1 tests MUST use `:memory:`
-5. **Verify test still passes** before committing
+**Example - Adding a New Regression Test**:
 
-**Example migration**:
-```
-Before: TestSQL1999_CH03_Numbers
-After:  TestSQL1999_F301_NumericTypes_L1
-```
-
-#### 8.4.6 Test Organization
-
-- **Group by Testsuite**: All SQL1999 tests together, all SQLite tests together
-- **Group by Feature**: Within a testsuite, group by Feature ID (F301, F302, etc.)
-- **Group by Level**: L1 tests first, then L2, then L3
+When you discover a bug like "COALESCE with NULL returns wrong result":
 
 ```go
-// Group order in file:
-// 1. SQL1999 Feature F301 tests
-func TestSQL1999_F301_NumericTypes_L1(t *testing.T) { ... }
-func TestSQL1999_F301_NumericTypes_L2(t *testing.T) { ... }
-
-// 2. SQL1999 Feature F302 tests
-func TestSQL1999_F302_CharacterTypes_L1(t *testing.T) { ... }
-
-// 3. SQLite compatibility tests
-func TestSQLite_BasicSelect_L1(t *testing.T) { ... }
+// TestRegression_CoalesceNULL_L1 regression test for COALESCE function
+// Bug: COALESCE(NULL, 'default') was returning NULL instead of 'default'
+// Fixed in commit X - this test prevents future regression
+func TestRegression_CoalesceNULL_L1(t *testing.T) {
+    sqlvibePath := ":memory:"
+    sqlitePath := ":memory:"
+    // ... test code
+}
 ```
-
-#### 8.4.7 Verification Checklist
-
-Before committing TS-named tests, verify:
-
-- [ ] Name follows format: `Test<Testuite>_F<Feature>_<Name>_L<Level>`
-- [ ] Feature ID matches SQL:1999 spec (check `docs/sql1999.reqs.md`)
-- [ ] L1 tests use `:memory:` backend
-- [ ] L2/L3 tests use appropriate storage
-- [ ] Test passes with sqlvibe vs SQLite comparison
-- [ ] No regressions in existing tests
 
 ---
 
