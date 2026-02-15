@@ -406,6 +406,54 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		case QP.TokenPercent:
 			result, _ := exprEval.BinaryOp(OpRemainder, leftVal, rightVal)
 			return result
+		case QP.TokenEq:
+			if leftVal == nil || rightVal == nil {
+				return nil
+			}
+			if qe.valuesEqual(leftVal, rightVal) {
+				return int64(1)
+			}
+			return int64(0)
+		case QP.TokenNe:
+			if leftVal == nil || rightVal == nil {
+				return nil
+			}
+			if !qe.valuesEqual(leftVal, rightVal) {
+				return int64(1)
+			}
+			return int64(0)
+		case QP.TokenLt:
+			if leftVal == nil || rightVal == nil {
+				return nil
+			}
+			if qe.compareVals(leftVal, rightVal) < 0 {
+				return int64(1)
+			}
+			return int64(0)
+		case QP.TokenLe:
+			if leftVal == nil || rightVal == nil {
+				return nil
+			}
+			if qe.compareVals(leftVal, rightVal) <= 0 {
+				return int64(1)
+			}
+			return int64(0)
+		case QP.TokenGt:
+			if leftVal == nil || rightVal == nil {
+				return nil
+			}
+			if qe.compareVals(leftVal, rightVal) > 0 {
+				return int64(1)
+			}
+			return int64(0)
+		case QP.TokenGe:
+			if leftVal == nil || rightVal == nil {
+				return nil
+			}
+			if qe.compareVals(leftVal, rightVal) >= 0 {
+				return int64(1)
+			}
+			return int64(0)
 		}
 		return nil
 	case *QP.UnaryExpr:

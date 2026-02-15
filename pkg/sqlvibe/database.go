@@ -155,6 +155,49 @@ func (db *Database) getOrderedColumns(tableName string) []string {
 	return nil
 }
 
+func (db *Database) evalConstantExpression(stmt *QP.SelectStmt) (*Rows, error) {
+	if len(stmt.Columns) == 0 {
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+
+	var cols []string
+	var row []interface{}
+	emptyRow := make(map[string]interface{})
+
+	for _, col := range stmt.Columns {
+		var colName string
+		var colValue interface{}
+
+		switch c := col.(type) {
+		case *QP.AliasExpr:
+			colName = c.Alias
+			if c.Expr != nil {
+				colValue = db.engine.EvalExpr(emptyRow, c.Expr)
+			}
+		case *QP.BinaryExpr:
+			colName = "expr"
+			colValue = db.engine.EvalExpr(emptyRow, c)
+		case *QP.UnaryExpr:
+			colName = "expr"
+			colValue = db.engine.EvalExpr(emptyRow, c)
+		case *QP.Literal:
+			colName = "expr"
+			colValue = c.Value
+		case *QP.FuncCall:
+			colName = c.Name
+			colValue = db.engine.EvalExpr(emptyRow, c)
+		default:
+			colName = "expr"
+			colValue = db.engine.EvalExpr(emptyRow, c)
+		}
+
+		cols = append(cols, colName)
+		row = append(row, colValue)
+	}
+
+	return &Rows{Columns: cols, Data: [][]interface{}{row}}, nil
+}
+
 func (db *Database) Exec(sql string) (Result, error) {
 	tokenizer := QP.NewTokenizer(sql)
 	tokens, err := tokenizer.Tokenize()
@@ -322,7 +365,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 	if ast.NodeType() == "SelectStmt" {
 		stmt := ast.(*QP.SelectStmt)
 		if stmt.From == nil {
-			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+			return db.evalConstantExpression(stmt)
 		}
 
 		var tableName string
@@ -392,11 +435,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		if len(stmt.Columns) == 1 {
 			if cr, ok := stmt.Columns[0].(*QP.ColumnRef); ok {
 				if cr.Name == "*" {
-					if tableSchema, ok := db.tables[tableName]; ok {
-						for colName := range tableSchema {
-							cols = append(cols, colName)
-						}
-					}
+					cols = db.getOrderedColumns(tableName)
 				} else {
 					cols = []string{cr.Name}
 				}
@@ -438,11 +477,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		}
 
 		if len(cols) == 0 {
-			if tableSchema, ok := db.tables[tableName]; ok {
-				for colName := range tableSchema {
-					cols = append(cols, colName)
-				}
-			}
+			cols = db.getOrderedColumns(tableName)
 		}
 
 		expressions := make([]QP.Expr, len(stmt.Columns))

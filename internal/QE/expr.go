@@ -104,7 +104,21 @@ func (e *ExprEvaluator) div(a, b interface{}) interface{} {
 	if bv == 0 {
 		return nil
 	}
+	// SQLite does integer division when both operands are integers
+	aIsInt := isInteger(a)
+	bIsInt := isInteger(b)
+	if aIsInt && bIsInt {
+		return int64(int(av) / int(bv))
+	}
 	return av / bv
+}
+
+func isInteger(v interface{}) bool {
+	switch v.(type) {
+	case int, int8, int16, int32, int64:
+		return true
+	}
+	return false
 }
 
 func (e *ExprEvaluator) mod(a, b interface{}) interface{} {

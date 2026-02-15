@@ -182,7 +182,7 @@ All existing and new test cases must use this framework to group tests consisten
 - [x] ALL/ANY subquery
 - [x] Correlated subquery
 - [ ] :memory: database support
-- [ ] TS: Test Suites subsystem created
+- [x] TS: Test Suites subsystem created
 - [x] E011-01: INTEGER and SMALLINT test cases
 - [x] E011-02: REAL, DOUBLE PRECISION, FLOAT test cases
 - [x] E011-03: DECIMAL and NUMERIC test cases
