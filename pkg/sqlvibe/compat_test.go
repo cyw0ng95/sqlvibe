@@ -40,8 +40,6 @@ func fetchAllRowsSQLite(rows *sql.Rows) ([]map[string]interface{}, error) {
 		return nil, err
 	}
 
-	fmt.Println("DEBUG SQLite columns:", columns)
-
 	var results []map[string]interface{}
 	for rows.Next() {
 		values := make([]interface{}, len(columns))
@@ -53,8 +51,6 @@ func fetchAllRowsSQLite(rows *sql.Rows) ([]map[string]interface{}, error) {
 		if err := rows.Scan(valuePtrs...); err != nil {
 			continue
 		}
-
-		fmt.Println("DEBUG SQLite values:", values)
 
 		row := make(map[string]interface{})
 		for i, col := range columns {
@@ -556,11 +552,22 @@ func TestQuerySubqueries(t *testing.T) {
 	sqlvibePath := "/tmp/test_subqueries.db"
 	sqlitePath := "/tmp/test_subqueries_sqlite.db"
 
+	os.Remove(sqlvibePath)
+	os.Remove(sqlitePath)
 	defer os.Remove(sqlvibePath)
 	defer os.Remove(sqlitePath)
 
-	sqlvibeDB, _ := Open(sqlvibePath)
-	sqliteDB, _ := sql.Open("sqlite", sqlitePath)
+	sqlvibeDB, err := Open(sqlvibePath)
+	if err != nil {
+		t.Fatalf("failed to open sqlvibe DB: %v", err)
+	}
+	sqliteDB, err := sql.Open("sqlite", sqlitePath)
+	if err != nil {
+		t.Fatalf("failed to open sqlite DB: %v", err)
+	}
+	if err := sqliteDB.Ping(); err != nil {
+		t.Fatalf("failed to ping sqlite DB: %v", err)
+	}
 	defer sqlvibeDB.Close()
 	defer sqliteDB.Close()
 

@@ -240,7 +240,8 @@ func (qe *QueryEngine) evalExpr(row map[string]interface{}, expr QP.Expr) bool {
 			if leftVal == nil || rightVal == nil {
 				return false
 			}
-			return qe.compareVals(leftVal, rightVal) > 0
+			result := qe.compareVals(leftVal, rightVal) > 0
+			return result
 		case QP.TokenGe:
 			leftVal := qe.evalValue(row, e.Left)
 			rightVal := qe.evalValue(row, e.Right)
@@ -427,7 +428,6 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		}
 		// Check if this is an aggregate function
 		if fc, ok := e.Select.Columns[0].(*QP.FuncCall); ok {
-			// Evaluate aggregate across all rows
 			switch fc.Name {
 			case "MAX":
 				var maxVal interface{}
@@ -453,9 +453,11 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 				return minVal
 			case "SUM":
 				var sumVal float64
+				var count int
 				for _, r := range result.rows {
 					val := qe.evalValue(r, fc.Args[0])
 					if val != nil {
+						count++
 						switch v := val.(type) {
 						case int64:
 							sumVal += float64(v)
@@ -464,7 +466,10 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 						}
 					}
 				}
-				return sumVal
+				if count > 0 {
+					return sumVal
+				}
+				return nil
 			case "AVG":
 				var sumVal float64
 				var count int
@@ -481,15 +486,32 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 					}
 				}
 				if count > 0 {
-					return sumVal / float64(count)
+					avg := sumVal / float64(count)
+					return avg
 				}
 				return nil
 			case "COUNT":
-				return int64(len(result.rows))
+				count := 0
+				for _, r := range result.rows {
+					// COUNT(*) - check if Args is empty
+					if len(fc.Args) == 0 {
+						count++
+					} else {
+						val := qe.evalValue(r, fc.Args[0])
+						if val != nil {
+							count++
+						}
+					}
+				}
+				return int64(count)
 			}
+			// Fall through for non-aggregate: return first column of first row
 		}
-		// For non-aggregate, just return the first row's value
-		return qe.evalValue(result.rows[0], e.Select.Columns[0])
+		// For non-aggregate subqueries, return first column of first row
+		if len(result.rows) > 0 && len(e.Select.Columns) > 0 {
+			return qe.evalValue(result.rows[0], e.Select.Columns[0])
+		}
+		return nil
 	}
 	return nil
 }
@@ -664,6 +686,33 @@ func (qe *QueryEngine) compareVals(a, b interface{}) int {
 			return 1
 		}
 		return 0
+	}
+	// Handle mixed int64 and float64
+	avInt, aok := a.(int64)
+	if aok {
+		if bvFloat, bok := b.(float64); bok {
+			aFloat := float64(avInt)
+			if aFloat < bvFloat {
+				return -1
+			}
+			if aFloat > bvFloat {
+				return 1
+			}
+			return 0
+		}
+	}
+	bvInt, bok := b.(int64)
+	if bok {
+		if afFloat, aok := a.(float64); aok {
+			bFloat := float64(bvInt)
+			if afFloat < bFloat {
+				return -1
+			}
+			if afFloat > bFloat {
+				return 1
+			}
+			return 0
+		}
 	}
 	as, aok := a.(string)
 	bs, bok := b.(string)

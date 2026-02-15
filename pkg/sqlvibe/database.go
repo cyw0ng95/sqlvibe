@@ -401,13 +401,37 @@ func (db *Database) Query(sql string) (*Rows, error) {
 					cols = []string{cr.Name}
 				}
 			} else {
-				cols = []string{"expr"}
+				switch col := stmt.Columns[0].(type) {
+				case *QP.AliasExpr:
+					if col.Alias != "" {
+						cols = []string{col.Alias}
+					} else {
+						cols = []string{"expr"}
+					}
+				case *QP.FuncCall:
+					cols = []string{col.Name}
+				case *QP.SubqueryExpr:
+					cols = []string{"subquery"}
+				default:
+					cols = []string{"expr"}
+				}
 			}
 		} else {
 			for _, col := range stmt.Columns {
-				if cr, ok := col.(*QP.ColumnRef); ok {
-					cols = append(cols, cr.Name)
-				} else {
+				switch c := col.(type) {
+				case *QP.ColumnRef:
+					cols = append(cols, c.Name)
+				case *QP.AliasExpr:
+					if c.Alias != "" {
+						cols = append(cols, c.Alias)
+					} else {
+						cols = append(cols, "expr")
+					}
+				case *QP.FuncCall:
+					cols = append(cols, c.Name)
+				case *QP.SubqueryExpr:
+					cols = append(cols, "subquery")
+				default:
 					cols = append(cols, "expr")
 				}
 			}
