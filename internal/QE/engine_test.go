@@ -2,6 +2,9 @@ package QE
 
 import (
 	"testing"
+
+	"github.com/sqlvibe/sqlvibe/internal/DS"
+	"github.com/sqlvibe/sqlvibe/internal/PB"
 )
 
 func TestVMCreate(t *testing.T) {
@@ -103,7 +106,18 @@ func TestResultSet(t *testing.T) {
 }
 
 func TestQueryEngine(t *testing.T) {
-	qe := NewQueryEngine()
+	file, err := PB.OpenFile(":memory:", PB.O_CREATE|PB.O_RDWR)
+	if err != nil {
+		t.Fatalf("failed to open file: %v", err)
+	}
+	defer file.Close()
+
+	pm, err := DS.NewPageManager(file, 4096)
+	if err != nil {
+		t.Fatalf("failed to create page manager: %v", err)
+	}
+
+	qe := NewQueryEngine(pm)
 	qe.RegisterTable("users", map[string]ColumnType{
 		"id":   {Name: "id", Type: "INTEGER"},
 		"name": {Name: "name", Type: "TEXT"},

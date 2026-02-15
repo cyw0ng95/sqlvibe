@@ -2,6 +2,10 @@ package QE
 
 import (
 	"errors"
+	"fmt"
+
+	"github.com/sqlvibe/sqlvibe/internal/DS"
+	"github.com/sqlvibe/sqlvibe/internal/QP"
 )
 
 var (
@@ -12,6 +16,7 @@ var (
 
 type QueryEngine struct {
 	vm       *VM
+	pm       *DS.PageManager
 	tables   map[string]*TableReader
 	cursors  map[int]*Cursor
 	cursorID int
@@ -19,7 +24,7 @@ type QueryEngine struct {
 
 type TableReader struct {
 	Name   string
-	btree  interface{}
+	btree  *DS.BTree
 	schema map[string]ColumnType
 }
 
@@ -31,14 +36,15 @@ type ColumnType struct {
 type Cursor struct {
 	ID     int
 	Table  *TableReader
-	Page   interface{}
+	btree  *DS.BTreeCursor
 	Row    int
 	Closed bool
 }
 
-func NewQueryEngine() *QueryEngine {
+func NewQueryEngine(pm *DS.PageManager) *QueryEngine {
 	return &QueryEngine{
 		vm:       nil,
+		pm:       pm,
 		tables:   make(map[string]*TableReader),
 		cursors:  make(map[int]*Cursor),
 		cursorID: 0,
@@ -46,10 +52,32 @@ func NewQueryEngine() *QueryEngine {
 }
 
 func (qe *QueryEngine) RegisterTable(name string, schema map[string]ColumnType) {
+	btree := DS.NewBTree(qe.pm, 0, true)
 	qe.tables[name] = &TableReader{
 		Name:   name,
+		btree:  btree,
 		schema: schema,
 	}
+}
+
+func (qe *QueryEngine) Insert(tableName string, rowID uint64, data []byte) error {
+	table, ok := qe.tables[tableName]
+	if !ok {
+		return ErrNoTable
+	}
+	key := make([]byte, 8)
+	for i := 0; i < 8; i++ {
+		key[i] = byte(rowID >> (i * 8))
+	}
+	return table.btree.Insert(key, data)
+}
+
+func (qe *QueryEngine) GetTableBTree(tableName string) (*DS.BTree, error) {
+	table, ok := qe.tables[tableName]
+	if !ok {
+		return nil, ErrNoTable
+	}
+	return table.btree, nil
 }
 
 func (qe *QueryEngine) OpenCursor(tableName string) (int, error) {
@@ -59,9 +87,11 @@ func (qe *QueryEngine) OpenCursor(tableName string) (int, error) {
 	}
 
 	qe.cursorID++
+	btree, _ := table.btree.First()
 	cursor := &Cursor{
 		ID:     qe.cursorID,
 		Table:  table,
+		btree:  btree,
 		Row:    -1,
 		Closed: false,
 	}
@@ -92,6 +122,19 @@ func (qe *QueryEngine) NextRow(cursorID int) (map[string]interface{}, error) {
 	cursor, err := qe.GetCursor(cursorID)
 	if err != nil {
 		return nil, err
+	}
+
+	if cursor.btree != nil {
+		key, _, err := cursor.btree.Next()
+		if err != nil {
+			return nil, err
+		}
+		if key == nil {
+			return nil, nil
+		}
+		row := make(map[string]interface{})
+		row["_rowid"] = qe.bytesToUint64(key)
+		return row, nil
 	}
 
 	cursor.Row++
@@ -127,6 +170,165 @@ func (qe *QueryEngine) ColumnValue(cursorID int, colName string) (interface{}, e
 	}
 }
 
+func (qe *QueryEngine) bytesToUint64(b []byte) uint64 {
+	var result uint64
+	for i, v := range b {
+		result |= uint64(v) << (uint(i) * 8)
+	}
+	return result
+}
+
+func (qe *QueryEngine) BuildPredicate(where QP.Expr) func(map[string]interface{}) bool {
+	if where == nil {
+		return nil
+	}
+	return func(row map[string]interface{}) bool {
+		return qe.evalExpr(row, where)
+	}
+}
+
+func (qe *QueryEngine) evalExpr(row map[string]interface{}, expr QP.Expr) bool {
+	if expr == nil {
+		return true
+	}
+	switch e := expr.(type) {
+	case *QP.BinaryExpr:
+		leftVal := qe.evalValue(row, e.Left)
+		rightVal := qe.evalValue(row, e.Right)
+		switch e.Op {
+		case QP.TokenEq:
+			return qe.valuesEqual(leftVal, rightVal)
+		case QP.TokenNe:
+			return !qe.valuesEqual(leftVal, rightVal)
+		case QP.TokenLt:
+			return qe.compareVals(leftVal, rightVal) < 0
+		case QP.TokenLe:
+			return qe.compareVals(leftVal, rightVal) <= 0
+		case QP.TokenGt:
+			return qe.compareVals(leftVal, rightVal) > 0
+		case QP.TokenGe:
+			return qe.compareVals(leftVal, rightVal) >= 0
+		}
+	}
+	return true
+}
+
+func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) interface{} {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *QP.Literal:
+		return e.Value
+	case *QP.ColumnRef:
+		if val, ok := row[e.Name]; ok {
+			return val
+		}
+		return nil
+	case *QP.BinaryExpr:
+		leftVal := qe.evalValue(row, e.Left)
+		rightVal := qe.evalValue(row, e.Right)
+		exprEval := &ExprEvaluator{}
+		switch e.Op {
+		case QP.TokenPlus:
+			result, _ := exprEval.BinaryOp(OpAdd, leftVal, rightVal)
+			return result
+		case QP.TokenMinus:
+			result, _ := exprEval.BinaryOp(OpSubtract, leftVal, rightVal)
+			return result
+		case QP.TokenAsterisk:
+			result, _ := exprEval.BinaryOp(OpMultiply, leftVal, rightVal)
+			return result
+		case QP.TokenSlash:
+			result, _ := exprEval.BinaryOp(OpDivide, leftVal, rightVal)
+			return result
+		}
+		return nil
+	}
+	return nil
+}
+
+func (qe *QueryEngine) valuesEqual(a, b interface{}) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	av, aok := a.(int64)
+	bv, bok := b.(int64)
+	if aok && bok {
+		return av == bv
+	}
+	af, aok := a.(float64)
+	bf, bok := b.(float64)
+	if aok && bok {
+		return af == bf
+	}
+	as, aok := a.(string)
+	bs, bok := b.(string)
+	if aok && bok {
+		return as == bs
+	}
+	if aok {
+		var iv int64
+		fmt.Sscanf(bs, "%d", &iv)
+		return av == iv
+	}
+	if bok {
+		var iv int64
+		fmt.Sscanf(as, "%d", &iv)
+		return iv == bv
+	}
+	return false
+}
+
+func (qe *QueryEngine) compareVals(a, b interface{}) int {
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	av, aok := a.(int64)
+	bv, bok := b.(int64)
+	if aok && bok {
+		if av < bv {
+			return -1
+		}
+		if av > bv {
+			return 1
+		}
+		return 0
+	}
+	af, aok := a.(float64)
+	bf, bok := b.(float64)
+	if aok && bok {
+		if af < bf {
+			return -1
+		}
+		if af > bf {
+			return 1
+		}
+		return 0
+	}
+	as, aok := a.(string)
+	bs, bok := b.(string)
+	if aok && bok {
+		if as < bs {
+			return -1
+		}
+		if as > bs {
+			return 1
+		}
+		return 0
+	}
+	return 0
+}
+
 type Operator interface {
 	Init() error
 	Next() (map[string]interface{}, error)
@@ -138,6 +340,8 @@ type TableScan struct {
 	cursorID int
 	table    string
 	eof      bool
+	data     []map[string]interface{}
+	dataPos  int
 }
 
 func NewTableScan(qe *QueryEngine, table string) *TableScan {
@@ -148,18 +352,41 @@ func NewTableScan(qe *QueryEngine, table string) *TableScan {
 	}
 }
 
+func (ts *TableScan) SetData(data []map[string]interface{}) {
+	ts.data = data
+	ts.dataPos = 0
+}
+
+func (ts *TableScan) GetData() []map[string]interface{} {
+	return ts.data
+}
+
 func (ts *TableScan) Init() error {
-	cursorID, err := ts.qe.OpenCursor(ts.table)
-	if err != nil {
-		return err
+	if ts.data == nil {
+		cursorID, err := ts.qe.OpenCursor(ts.table)
+		if err != nil {
+			return err
+		}
+		ts.cursorID = cursorID
 	}
-	ts.cursorID = cursorID
 	return nil
 }
 
 func (ts *TableScan) Next() (map[string]interface{}, error) {
+	fmt.Printf("DEBUG TableScan.Next: eof=%v, data=%v, dataPos=%d\n", ts.eof, ts.data, ts.dataPos)
 	if ts.eof {
 		return nil, nil
+	}
+	if ts.data != nil {
+		fmt.Printf("DEBUG TableScan.Next: using data, len=%d\n", len(ts.data))
+		if ts.dataPos >= len(ts.data) {
+			ts.eof = true
+			return nil, nil
+		}
+		row := ts.data[ts.dataPos]
+		ts.dataPos++
+		fmt.Printf("DEBUG TableScan.Next: returning row=%v\n", row)
+		return row, nil
 	}
 	row, err := ts.qe.NextRow(ts.cursorID)
 	if err != nil {
@@ -172,7 +399,10 @@ func (ts *TableScan) Next() (map[string]interface{}, error) {
 }
 
 func (ts *TableScan) Close() error {
-	return ts.qe.CloseCursor(ts.cursorID)
+	if ts.data == nil && ts.cursorID > 0 {
+		return ts.qe.CloseCursor(ts.cursorID)
+	}
+	return nil
 }
 
 type Filter struct {
@@ -194,6 +424,7 @@ func (f *Filter) Init() error {
 func (f *Filter) Next() (map[string]interface{}, error) {
 	for {
 		row, err := f.input.Next()
+		fmt.Printf("DEBUG Filter.Next: input returned row=%v, err=%v\n", row, err)
 		if err != nil {
 			return nil, err
 		}
@@ -264,23 +495,28 @@ func (l *Limit) Init() error {
 }
 
 func (l *Limit) Next() (map[string]interface{}, error) {
-	if l.limit >= 0 && l.count >= l.limit {
+	fmt.Printf("DEBUG Limit.Next: limit=%d, offset=%d, count=%d\n", l.limit, l.offset, l.count)
+	if l.limit > 0 && l.count >= l.limit {
+		fmt.Println("DEBUG Limit.Next: returning nil due to limit")
 		return nil, nil
 	}
 
 	for l.count < l.offset {
+		fmt.Printf("DEBUG Limit.Next: skipping offset, count=%d\n", l.count)
 		_, err := l.input.Next()
 		if err != nil {
 			return nil, err
 		}
 		l.count++
-		if l.count >= l.limit {
+		if l.limit > 0 && l.count >= l.limit {
 			return nil, nil
 		}
 	}
 
 	l.count++
-	return l.input.Next()
+	row, err := l.input.Next()
+	fmt.Printf("DEBUG Limit.Next: calling input.Next(), got row=%v, err=%v\n", row, err)
+	return row, err
 }
 
 func (l *Limit) Close() error {

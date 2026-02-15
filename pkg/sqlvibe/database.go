@@ -10,12 +10,12 @@ import (
 )
 
 type Database struct {
-	pm     *DS.PageManager
-	engine *QE.QueryEngine
-	tx     *Transaction
-	// In-memory data storage for tables
+	pm          *DS.PageManager
+	engine      *QE.QueryEngine
+	tx          *Transaction
 	tables      map[string]map[string]string        // table name -> column name -> type
 	primaryKeys map[string][]string                 // table name -> primary key column names
+	columnOrder map[string][]string                 // table name -> ordered column names
 	data        map[string][]map[string]interface{} // table name -> rows -> column name -> value
 }
 
@@ -127,15 +127,30 @@ func Open(path string) (*Database, error) {
 		return nil, err
 	}
 
-	engine := QE.NewQueryEngine()
+	engine := QE.NewQueryEngine(pm)
 
 	return &Database{
 		pm:          pm,
 		engine:      engine,
 		tables:      make(map[string]map[string]string),
 		primaryKeys: make(map[string][]string),
+		columnOrder: make(map[string][]string),
 		data:        make(map[string][]map[string]interface{}),
 	}, nil
+}
+
+func (db *Database) getOrderedColumns(tableName string) []string {
+	if cols, ok := db.columnOrder[tableName]; ok {
+		return cols
+	}
+	if schema, ok := db.tables[tableName]; ok {
+		var cols []string
+		for col := range schema {
+			cols = append(cols, col)
+		}
+		return cols
+	}
+	return nil
 }
 
 func (db *Database) Exec(sql string) (Result, error) {
@@ -178,6 +193,11 @@ func (db *Database) Exec(sql string) (Result, error) {
 		}
 		db.engine.RegisterTable(stmt.Name, schema)
 		db.tables[stmt.Name] = colTypes
+		var colOrder []string
+		for _, col := range stmt.Columns {
+			colOrder = append(colOrder, col.Name)
+		}
+		db.columnOrder[stmt.Name] = colOrder
 		if len(pkCols) > 0 {
 			db.primaryKeys[stmt.Name] = pkCols
 		}
@@ -190,14 +210,12 @@ func (db *Database) Exec(sql string) (Result, error) {
 		tableSchema := db.tables[stmt.Table]
 		pkCols := db.primaryKeys[stmt.Table]
 
-		// Determine column names - use schema if not specified in INSERT
 		colNames := stmt.Columns
 		if len(colNames) == 0 && tableSchema != nil {
-			for colName := range tableSchema {
-				colNames = append(colNames, colName)
-			}
+			colNames = db.getOrderedColumns(stmt.Table)
 		}
 
+		rowID := int64(len(db.data[stmt.Table])) + 1
 		for _, rowExprs := range stmt.Values {
 			row := make(map[string]interface{})
 			for i, expr := range rowExprs {
@@ -222,6 +240,10 @@ func (db *Database) Exec(sql string) (Result, error) {
 				}
 			}
 			db.data[stmt.Table] = append(db.data[stmt.Table], row)
+
+			serialized := db.serializeRow(row)
+			db.engine.Insert(stmt.Table, uint64(rowID), serialized)
+			rowID++
 		}
 		return Result{RowsAffected: int64(len(stmt.Values))}, nil
 	case "UpdateStmt":
@@ -298,7 +320,6 @@ func (db *Database) Query(sql string) (*Rows, error) {
 	if ast.NodeType() == "SelectStmt" {
 		stmt := ast.(*QP.SelectStmt)
 
-		// Get table name
 		var tableName string
 		if stmt.From != nil {
 			tableName = stmt.From.Name
@@ -307,19 +328,17 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 		}
 
-		// Get stored data for the table
+		fmt.Printf("DEBUG Query: tableName=%s db.data=%v\n", tableName, db.data)
 		tableData, ok := db.data[tableName]
+		fmt.Printf("DEBUG Query: tableData=%v ok=%v\n", tableData, ok)
 		if !ok || tableData == nil {
 			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 		}
 
-		// Determine columns to return
 		var cols []string
 		if len(stmt.Columns) == 1 {
-			// Check for SELECT *
 			if cr, ok := stmt.Columns[0].(*QP.ColumnRef); ok {
 				if cr.Name == "*" {
-					// SELECT * - get all columns from table schema
 					if tableSchema, ok := db.tables[tableName]; ok {
 						for colName := range tableSchema {
 							cols = append(cols, colName)
@@ -330,7 +349,6 @@ func (db *Database) Query(sql string) (*Rows, error) {
 				}
 			}
 		} else {
-			// Specific columns
 			for _, col := range stmt.Columns {
 				if cr, ok := col.(*QP.ColumnRef); ok {
 					cols = append(cols, cr.Name)
@@ -340,7 +358,6 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			}
 		}
 
-		// If no columns specified, use all from schema
 		if len(cols) == 0 {
 			if tableSchema, ok := db.tables[tableName]; ok {
 				for colName := range tableSchema {
@@ -349,34 +366,57 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			}
 		}
 
-		// Apply WHERE clause filter
-		filteredData := tableData
-		// Apply WHERE clause filter
-		if stmt.Where != nil {
-			filteredData = make([]map[string]interface{}, 0)
-			for _, row := range tableData {
-				if db.evalWhere(row, stmt.Where) {
-					filteredData = append(filteredData, row)
+		scan := QE.NewTableScan(db.engine, tableName)
+		scan.SetData(tableData)
+		fmt.Printf("DEBUG: scan.data = %v\n", scan.GetData())
+
+		predicate := db.engine.BuildPredicate(stmt.Where)
+		filter := QE.NewFilter(scan, predicate)
+
+		project := QE.NewProject(filter, cols)
+
+		var limit, offset int
+		if stmt.Limit != nil {
+			if lit, ok := stmt.Limit.(*QP.Literal); ok {
+				if num, ok := lit.Value.(int64); ok {
+					limit = int(num)
 				}
 			}
 		}
-
-		// Filter data based on columns
-		resultData := make([][]interface{}, 0, len(filteredData))
-		for _, row := range filteredData {
-			resultRow := make([]interface{}, len(cols))
-			for colIdx := range cols {
-				colName := cols[colIdx]
-				if val, ok := row[colName]; ok {
-					resultRow[colIdx] = val
-				} else {
-					resultRow[colIdx] = nil
+		if stmt.Offset != nil {
+			if lit, ok := stmt.Offset.(*QP.Literal); ok {
+				if num, ok := lit.Value.(int64); ok {
+					offset = int(num)
 				}
+			}
+		}
+		limited := QE.NewLimit(project, limit, offset)
+
+		err = limited.Init()
+		if err != nil {
+			return nil, err
+		}
+
+		fmt.Printf("DEBUG: Before loop, limited=%v\n", limited)
+
+		resultData := make([][]interface{}, 0)
+		for {
+			row, err := limited.Next()
+			fmt.Printf("DEBUG: row from Next: %v, err: %v\n", row, err)
+			if err != nil {
+				return nil, err
+			}
+			if row == nil {
+				break
+			}
+			resultRow := make([]interface{}, len(cols))
+			for i, colName := range cols {
+				resultRow[i] = row[colName]
 			}
 			resultData = append(resultData, resultRow)
 		}
+		limited.Close()
 
-		// Apply ORDER BY if present
 		if len(stmt.OrderBy) > 0 {
 			resultData = db.applyOrderBy(resultData, stmt.OrderBy, cols)
 		}
@@ -690,4 +730,25 @@ func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, col
 		}
 	}
 	return sorted
+}
+
+func (db *Database) serializeRow(row map[string]interface{}) []byte {
+	result := make([]byte, 0)
+	for key, val := range row {
+		result = append(result, []byte(key)...)
+		result = append(result, '=')
+		switch v := val.(type) {
+		case int64:
+			result = append(result, []byte(fmt.Sprintf("%d", v))...)
+		case float64:
+			result = append(result, []byte(fmt.Sprintf("%f", v))...)
+		case string:
+			result = append(result, []byte(v)...)
+		case nil:
+		default:
+			result = append(result, []byte(fmt.Sprintf("%v", v))...)
+		}
+		result = append(result, ';')
+	}
+	return result
 }
