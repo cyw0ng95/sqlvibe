@@ -1,7 +1,7 @@
 # Plan v0.4.0
 
 ## Goal
-Implement index support (CREATE INDEX, DROP INDEX), PRAGMA statements, set operations (UNION, EXCEPT, INTERSECT), CASE WHEN expressions, string functions (E021-05, E021-07, E021-08, E021-09, E021-11), and Date/Time types for SQL:1999 Phase 2 compliance.
+Implement index support (CREATE INDEX, DROP INDEX), PRAGMA statements, set operations (UNION, EXCEPT, INTERSECT), CASE WHEN expressions, full E021 character data types support, and Date/Time types for SQL:1999 Phase 2 compliance.
 
 ## Requirements
 
@@ -18,12 +18,19 @@ Implement index support (CREATE INDEX, DROP INDEX), PRAGMA statements, set opera
 - LIMIT with OFFSET improvements (from sqlite.reqs.md)
 - Date/Time types (from sql1999.reqs.md F051)
 - Improved subquery support (ALL/ANY, EXISTS improvements)
-- E021 Character Functions:
+- E021 Character Data Types (ALL 12 sections):
+  - E021-01: CHARACTER (CHAR)
+  - E021-02: CHARACTER VARYING (VARCHAR)
+  - E021-03: Character literals
+  - E021-04: CHARACTER_LENGTH function
   - E021-05: OCTET_LENGTH function
+  - E021-06: SUBSTRING function
   - E021-07: Character concatenation (||)
   - E021-08: UPPER and LOWER functions
   - E021-09: TRIM function
+  - E021-10: Implicit casting among character types
   - E021-11: POSITION function
+  - E021-12: Character comparison
 
 ## Implementation DAG
 
@@ -44,12 +51,22 @@ graph LR
     
     SF --> SF_P[String Func Parser]
     SF_P --> SF_E[String Func Engine]
+    
+    SF_P --> E021_01[CHAR/VARCHAR Types]
+    E021_01 --> E021_03[Character Literals]
+    E021_03 --> E021_10[Character Casting]
+    E021_10 --> E021_04[CHAR_LENGTH/OCTET]
+    E021_04 --> E021_06[SUBSTRING]
+    E021_06 --> E021_07[Concatenation]
+    E021_07 --> E021_08[UPPER/LOWER]
+    E021_08 --> E021_09[TRIM]
+    E021_09 --> E021_11[POSITION]
 ```
 
 **Notes:**
 - Index support builds on existing DS (Data Storage) B-Tree
 - Set operations require query engine modifications
-- String functions (E021) depend on expression evaluator - can parallel with CASE
+- E021 has strict dependencies: Types → Literals → Casting → Basic Functions → Advanced Functions
 - Date/Time types require both storage and expression changes
 - Transaction management deferred to future version
 
@@ -137,32 +154,62 @@ CREATE [UNIQUE] INDEX [IF NOT EXISTS] index_name ON table_name (column_name [, .
 - **Parser changes**: Same as simple CASE
 - **Engine changes**: Evaluate each WHEN condition
 
-### 5. String Functions (E021 Character Functions)
+### 5. E021 Character Data Types (ALL 12 Sections)
 
-#### 5.1 OCTET_LENGTH (E021-05)
+#### 5.1 CHARACTER (CHAR) - E021-01
+- **Goal**: Support CHAR(n) fixed-length string type
+- **Files affected**: `internal/QP/parser.go`, `internal/QP/ast.go`, `internal/DS/page.go`
+
+#### 5.2 CHARACTER VARYING (VARCHAR) - E021-02
+- **Goal**: Support VARCHAR(n) variable-length string type
+- **Files affected**: `internal/QP/parser.go`, `internal/QP/ast.go`, `internal/DS/page.go`
+
+#### 5.3 Character Literals - E021-03
+- **Goal**: Support single-quoted string constants with escape sequences
+- **Files affected**: `internal/QP/tokenizer.go`, `internal/QP/parser.go`
+
+#### 5.4 CHARACTER_LENGTH - E021-04
+- **Goal**: Return character length of string
+- **Syntax**: `CHAR_LENGTH(string)` or `CHARACTER_LENGTH(string)`
+- **Files affected**: `internal/QP/parser.go`, `internal/QE/expr.go`
+
+#### 5.5 OCTET_LENGTH - E021-05
 - **Goal**: Return length of string in bytes
 - **Syntax**: `OCTET_LENGTH(string)`
 - **Files affected**: `internal/QP/parser.go`, `internal/QE/expr.go`
 
-#### 5.2 Character Concatenation (E021-07)
+#### 5.6 SUBSTRING - E021-06
+- **Goal**: Extract substring from string
+- **Syntax**: `SUBSTRING(string FROM start [FOR length])` or `SUBSTR(string, start, length)`
+- **Files affected**: `internal/QP/parser.go`, `internal/QE/expr.go`
+
+#### 5.7 Character Concatenation - E021-07
 - **Goal**: Concatenate strings using || operator
 - **Syntax**: `string1 || string2`
 - **Files affected**: `internal/QP/parser.go`, `internal/QE/expr.go`
 
-#### 5.3 UPPER and LOWER Functions (E021-08)
+#### 5.8 UPPER and LOWER Functions - E021-08
 - **Goal**: Convert string to upper/lower case
 - **Syntax**: `UPPER(string)`, `LOWER(string)`
 - **Files affected**: `internal/QP/parser.go`, `internal/QE/expr.go`
 
-#### 5.4 TRIM Function (E021-09)
+#### 5.9 TRIM Function - E021-09
 - **Goal**: Remove leading/trailing whitespace (or specified chars)
 - **Syntax**: `TRIM(string)`, `TRIM(LEADING 'x' FROM string)`, `TRIM(TRAILING string)`, `TRIM(BOTH string)`
 - **Files affected**: `internal/QP/parser.go`, `internal/QE/expr.go`
 
-#### 5.5 POSITION Function (E021-11)
+#### 5.10 Implicit Casting - E021-10
+- **Goal**: Support implicit casting between character types
+- **Files affected**: `internal/QP/ast.go`, `internal/QE/expr.go`
+
+#### 5.11 POSITION Function - E021-11
 - **Goal**: Find substring position in string
 - **Syntax**: `POSITION(substring IN string)`
 - **Files affected**: `internal/QP/parser.go`, `internal/QE/expr.go`
+
+#### 5.12 Character Comparison - E021-12
+- **Goal**: Support comparison operators on character strings
+- **Files affected**: `internal/QE/expr.go`
 
 ### 6. Date/Time Types (F051)
 
@@ -196,21 +243,29 @@ CREATE [UNIQUE] INDEX [IF NOT EXISTS] index_name ON table_name (column_name [, .
 - [ ] INTERSECT returns intersection of two result sets
 - [ ] Simple CASE expression works correctly
 - [ ] Searched CASE expression works correctly
-- [ ] OCTET_LENGTH function returns correct byte length
-- [ ] Character concatenation (||) works correctly
-- [ ] UPPER function converts to uppercase
-- [ ] LOWER function converts to lowercase
-- [ ] TRIM function removes leading/trailing characters
-- [ ] POSITION function returns substring index
+
+### E021 Success Criteria (ALL 12 Sections)
+
+- [ ] E021-01: CHARACTER (CHAR) type works correctly
+- [ ] E021-02: CHARACTER VARYING (VARCHAR) type works correctly
+- [ ] E021-03: Character literals with escape sequences work correctly
+- [ ] E021-04: CHARACTER_LENGTH function returns correct character count
+- [ ] E021-05: OCTET_LENGTH function returns correct byte length
+- [ ] E021-06: SUBSTRING function extracts substrings correctly
+- [ ] E021-07: Character concatenation (||) works correctly
+- [ ] E021-08: UPPER function converts to uppercase
+- [ ] E021-08: LOWER function converts to lowercase
+- [ ] E021-09: TRIM function removes leading/trailing characters
+- [ ] E021-10: Implicit casting among character types works correctly
+- [ ] E021-11: POSITION function returns substring index
+- [ ] E021-12: Character comparison works correctly
+
+### Date/Time Success Criteria
+
 - [ ] DATE type stores dates correctly
 - [ ] TIME type stores times correctly
 - [ ] TIMESTAMP type stores timestamps correctly
 - [ ] Datetime functions (CURRENT_DATE, etc.) work correctly
-- [ ] E021-05: OCTET_LENGTH test cases pass
-- [ ] E021-07: Character concatenation test cases pass
-- [ ] E021-08: UPPER/LOWER test cases pass
-- [ ] E021-09: TRIM test cases pass
-- [ ] E021-11: POSITION test cases pass
 
 ## Notes
 
@@ -218,7 +273,7 @@ CREATE [UNIQUE] INDEX [IF NOT EXISTS] index_name ON table_name (column_name [, .
 - PRAGMA: Test with `go test -run TestPragma ./pkg/sqlvibe`
 - Set Operations: Test with `go test -run TestSetOperations ./pkg/sqlvibe`
 - CASE: Test with `go test -run TestCaseExpression ./pkg/sqlvibe`
-- String Functions: Test with `go test -run TestE021 /internal/TS/SQL1999/E021/...`
+- E021 Tests: Test with `go test -run TestE021 /internal/TS/SQL1999/E021/...`
 - Date/Time: Test with `go test -run TestDateTime ./pkg/sqlvibe`
 - Index usage in queries requires planner modifications
 - Transaction management deferred to future version
