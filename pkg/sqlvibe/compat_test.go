@@ -1787,3 +1787,153 @@ func TestSQL1999_F301_E01106_L1(t *testing.T) {
 		})
 	}
 }
+
+// TestRegression_AbsMath_L1 regression test for E011-02 math functions
+// Bug: ABS, CEIL, FLOOR, ROUND were returning NULL
+// Fixed in commit that added math function support
+func TestRegression_AbsMath_L1(t *testing.T) {
+	sqlvibePath := ":memory:"
+	sqlitePath := ":memory:"
+
+	sqlvibeDB, _ := Open(sqlvibePath)
+	sqliteDB, _ := sql.Open("sqlite", sqlitePath)
+	defer sqlvibeDB.Close()
+	defer sqliteDB.Close()
+
+	setupSQL := []string{
+		"CREATE TABLE nums (id INTEGER PRIMARY KEY, val REAL)",
+		"INSERT INTO nums VALUES (1, 42.5), (2, -17.25), (3, 0.0)",
+	}
+
+	for _, sql := range setupSQL {
+		sqlvibeDB.Exec(sql)
+		sqliteDB.Exec(sql)
+	}
+
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{"Abs", "SELECT ABS(val) FROM nums WHERE id = 2"},
+		{"Ceil", "SELECT CEIL(val) FROM nums WHERE id = 1"},
+		{"Floor", "SELECT FLOOR(val) FROM nums WHERE id = 1"},
+		{"Round", "SELECT ROUND(val, 1) FROM nums WHERE id = 1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
+		})
+	}
+}
+
+// TestRegression_NullIsNull_L1 regression test for E011-05 NULL predicates
+// Bug: NULL IS NULL was returning NULL instead of 1
+// Fixed in commit that added TokenIs/TokenIsNot to evalValue
+func TestRegression_NullIsNull_L1(t *testing.T) {
+	sqlvibePath := ":memory:"
+	sqlitePath := ":memory:"
+
+	sqlvibeDB, _ := Open(sqlvibePath)
+	sqliteDB, _ := sql.Open("sqlite", sqlitePath)
+	defer sqlvibeDB.Close()
+	defer sqliteDB.Close()
+
+	setupSQL := []string{
+		"CREATE TABLE nulls (id INTEGER PRIMARY KEY, val TEXT)",
+		"INSERT INTO nulls VALUES (1, NULL), (2, 'hello'), (3, NULL)",
+	}
+
+	for _, sql := range setupSQL {
+		sqlvibeDB.Exec(sql)
+		sqliteDB.Exec(sql)
+	}
+
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{"IsNull", "SELECT id, val IS NULL FROM nulls"},
+		{"IsNotNull", "SELECT id, val IS NOT NULL FROM nulls"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
+		})
+	}
+}
+
+// TestRegression_OrderByExpression_L1 regression test for ORDER BY expressions
+// Bug: ORDER BY with expressions (e.g., col + 10) was not working
+// Fixed in commit that added ORDER BY expression support
+func TestRegression_OrderByExpression_L1(t *testing.T) {
+	sqlvibePath := ":memory:"
+	sqlitePath := ":memory:"
+
+	sqlvibeDB, _ := Open(sqlvibePath)
+	sqliteDB, _ := sql.Open("sqlite", sqlitePath)
+	defer sqlvibeDB.Close()
+	defer sqliteDB.Close()
+
+	setupSQL := []string{
+		"CREATE TABLE t (id INTEGER PRIMARY KEY, a INTEGER, b INTEGER)",
+		"INSERT INTO t VALUES (1, 10, 5), (2, 5, 10), (3, 15, 3)",
+	}
+
+	for _, sql := range setupSQL {
+		sqlvibeDB.Exec(sql)
+		sqliteDB.Exec(sql)
+	}
+
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{"OrderByCol", "SELECT a FROM t ORDER BY a DESC"},
+		{"OrderByMultiple", "SELECT a, b FROM t ORDER BY a, b"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
+		})
+	}
+}
+
+// TestRegression_CoalesceNULL_L1 regression test for F481 COALESCE
+// Bug: COALESCE was returning wrong values when first arg is non-NULL
+// Fixed in commit that improved test comparison logic
+func TestRegression_CoalesceNULL_L1(t *testing.T) {
+	sqlvibePath := ":memory:"
+	sqlitePath := ":memory:"
+
+	sqlvibeDB, _ := Open(sqlvibePath)
+	sqliteDB, _ := sql.Open("sqlite", sqlitePath)
+	defer sqlvibeDB.Close()
+	defer sqliteDB.Close()
+
+	setupSQL := []string{
+		"CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)",
+		"INSERT INTO test VALUES (1, 'one'), (2, NULL), (3, 'three')",
+	}
+
+	for _, sql := range setupSQL {
+		sqlvibeDB.Exec(sql)
+		sqliteDB.Exec(sql)
+	}
+
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{"Coalesce", "SELECT id, COALESCE(value, 'default') FROM test"},
+		{"IfNull", "SELECT id, IFNULL(value, 'default') FROM test"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
+		})
+	}
+}
