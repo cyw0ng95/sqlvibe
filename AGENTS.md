@@ -118,18 +118,198 @@ git push
 - Never leave completed work uncommitted
 - If working across multiple sessions, commit before stopping
 
+### 3.5 Track Progress Against Plan
+
+During development, always reference the current plan:
+
+1. **Read the plan** - Start each session by reading `docs/plan-VERSION.md`
+2. **Find next task** - Look for incomplete items in Success Criteria
+3. **Update status** - Mark tasks as completed in the plan after finishing:
+   ```markdown
+   ## Success Criteria
+   - [x] Feature A implemented and tested  ← completed
+   - [ ] Feature B implemented and tested  ← pending
+   ```
+4. **Commit and push EVERY time** - After marking tasks complete OR any plan change:
+   ```
+   git add -A
+   git commit -m "docs: Update plan-v0.3.x progress"
+   git push
+   ```
+5. **When all tasks complete** - It's time to release:
+   - Run full test suite
+   - Create tag and push
+   - Update HISTORY.md
+   - Merge to main
+
+### 3.6 Handling New Tasks
+
+When user adds new tasks during development:
+
+1. **Refine the DAG first** - Update the Implementation DAG to show dependencies
+2. **Analyze dependencies** - Determine what can run in parallel, what depends on what
+3. **Update Success Criteria** - Add new tasks with `[ ]` status
+4. **Commit and push immediately** - Never proceed without committing plan changes:
+   ```
+   git add -A
+   git commit -m "docs: Add new task to plan-v0.3.x"
+   git push
+   ```
+5. **Implement according to DAG** - Never start implementation without following the DAG order
+
+```
+Example: User adds "Feature X" mid-iteration
+
+1. Update DAG (mermaid format):
+   ```mermaid
+   graph LR
+       A[Feature A] --> B[Feature B]
+       B --> X[Feature X]
+       B --> C[Feature C]
+   ```
+
+2. Add to Success Criteria:
+   - [x] Feature A implemented
+   - [ ] Feature B implemented
+   - [ ] Feature X implemented  ← new
+   - [ ] Feature C implemented
+
+3. Commit and push plan changes immediately
+
+4. Implement following DAG order
+```
+
 ---
 
-## 4. Commit Guidelines
+## 4. Iteration Planning
 
-### 4.1 When to Commit
+### 4.1 Creating a Plan
+
+When planning an iteration (unless user specifies a version):
+
+1. **Check HISTORY.md** for the last released version
+2. **Determine next version**: increment the minor version (e.g., v0.2.x → v0.3.x)
+3. **Gather requirements** from `docs/sqlite.reqs.md` and `docs/sql1999.reqs.md`
+4. **Rank requirements** by priority (HIGH → MEDIUM → LOW)
+5. **Create** `docs/plan-VERSION.md` with selected features
+
+### 4.2 Plan File Format
+
+```markdown
+# Plan v0.3.x
+
+## Goal
+Brief description of this iteration's goal.
+
+## Requirements
+
+### HIGH Priority
+- Feature A (from sqlite.reqs.md / sql1999.reqs.md)
+- Feature B
+
+### MEDIUM Priority
+- Feature C
+- Feature D
+
+### LOW Priority
+- Feature E
+
+## Implementation DAG
+
+```mermaid
+graph LR
+    A[Feature A] --> C[Feature C]
+    B[Feature B] --> C
+    C --> D[Feature D]
+```
+
+## Detailed Design
+
+### Feature A
+- **Parser changes**: Describe what needs to be added to the parser
+- **Engine changes**: Describe what needs to be added to the execution engine
+- **Files affected**: List files to modify
+
+### Feature B
+- **Parser changes**: ...
+- **Engine changes**: ...
+- **Files affected**: ...
+
+## Success Criteria
+- [ ] Feature A implemented and tested
+- [ ] Feature B implemented and tested
+
+## Notes
+Any additional context or considerations.
+```
+
+### 4.3 Planning Process
+
+```
+1. Read docs/sqlite.reqs.md and docs/sql1999.reqs.md
+2. Filter by priority (HIGH first)
+3. Select feasible features for this iteration
+4. Analyze each feature:
+   - What parser changes needed?
+   - What engine changes needed?
+   - What are the dependencies between features?
+5. Create docs/plan-v0.3.x.md with detailed design and DAG (mermaid format)
+6. Commit and push the plan
+7. Get user approval before starting implementation
+```
+
+---
+
+## 5. Release Process
+
+### 5.1 Version Tagging
+
+When a version is complete:
+
+1. Tag the release: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
+2. Push tag: `git push origin vX.Y.Z`
+3. Merge to main branch
+
+### 5.2 Release Notes
+
+After tagging, update `docs/HISTORY.md` with:
+
+```markdown
+## **vX.Y.Z** (YYYY-MM-DD)
+
+### Features
+- List new features
+
+### Known Issues
+- List known issues or leave empty
+
+### Fixed Bugs
+- Extract from git: `git log --oneline vX.Y.Z...HEAD --grep="#bugfix"`
+- List each bugfix commit
+
+### Tests
+- Update test count
+```
+
+### 5.3 Release Checklist
+
+- [ ] All tests pass
+- [ ] Tag created and pushed
+- [ ] Merged to main branch
+- [ ] HISTORY.md updated with release notes
+
+---
+
+## 6. Commit Guidelines
+
+### 6.1 When to Commit
 
 - After completing a task or subtask
 - After fixing a bug
 - After adding significant tests
 - Before starting risky refactoring
 
-### 4.2 Commit Message Format
+### 6.2 Commit Message Format
 
 ```
 <type>: <short description>
@@ -160,7 +340,7 @@ feat: Implement B-Tree search operation
 - Added test for edge case
 ```
 
-### 4.3 Commit Size
+### 6.3 Commit Size
 
 - Prefer smaller, focused commits over large changes
 - Each commit should be logically self-contained
@@ -168,33 +348,33 @@ feat: Implement B-Tree search operation
 
 ---
 
-## 5. Subsystem-Specific Guidance
+## 7. Subsystem-Specific Guidance
 
-### 5.1 Platform Bridges (PB)
+### 7.1 Platform Bridges (PB)
 
 - Keep OS-specific code isolated
 - Use interfaces for testability
 - Handle errors gracefully
 
-### 5.2 Data Storage (DS)
+### 7.2 Data Storage (DS)
 
 - Follow SQLite file format exactly
 - Test with existing SQLite databases
 - Verify page-level operations with hex dumps
 
-### 5.3 Query Processing (QP)
+### 7.3 Query Processing (QP)
 
 - Use goyacc for parser generation
 - Provide clear error messages with line/column numbers
 - Test error handling thoroughly
 
-### 5.4 Query Execution (QE)
+### 7.4 Query Execution (QE)
 
 - Follow SQLite VM opcode semantics
 - Test edge cases (NULLs, type conversions)
 - Verify result correctness against SQLite
 
-### 5.5 Transaction Monitor (TM)
+### 7.5 Transaction Monitor (TM)
 
 - Test crash recovery scenarios
 - Verify ACID properties
@@ -202,16 +382,16 @@ feat: Implement B-Tree search operation
 
 ---
 
-## 6. Testing Strategy
+## 8. Testing Strategy
 
-### 6.1 Test Categories
+### 8.1 Test Categories
 
 1. **Unit Tests**: Test individual components in isolation
 2. **Integration Tests**: Test subsystem interactions
 3. **SQLite Comparison Tests**: Run same SQL, compare results
 4. **Stress Tests**: Large data, concurrent operations
 
-### 6.2 SQLite Testing
+### 8.2 SQLite Testing
 
 Run comparison tests frequently:
 
@@ -223,7 +403,7 @@ go test ./test/sqllogictest/...
 go test -run TestSQLiteComparison
 ```
 
-### 6.3 Test Data
+### 8.3 Test Data
 
 - Use the test data in `test/` directory
 - Create edge case tests for NULLs, boundaries
@@ -231,15 +411,15 @@ go test -run TestSQLiteComparison
 
 ---
 
-## 7. Documentation
+## 9. Documentation
 
-### 7.1 Code Documentation
+### 9.1 Code Documentation
 
 - Document public interfaces
 - Explain complex algorithms in comments
 - Use meaningful variable/function names
 
-### 7.2 Project Documentation
+### 9.2 Project Documentation
 
 - Update `docs/` when making architectural changes
 - Keep PHASES.md current with progress

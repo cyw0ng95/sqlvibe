@@ -230,7 +230,44 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		p.advance()
 		ref := &TableRef{Name: p.current().Literal}
 		p.advance()
+		if p.current().Type == TokenIdentifier {
+			ref.Alias = p.current().Literal
+			p.advance()
+		}
 		stmt.From = ref
+
+		for p.current().Type == TokenKeyword && (p.current().Literal == "INNER" || p.current().Literal == "LEFT" || p.current().Literal == "CROSS" || p.current().Literal == "JOIN") {
+			join := &Join{}
+
+			if p.current().Literal == "INNER" || p.current().Literal == "LEFT" || p.current().Literal == "CROSS" {
+				join.Type = p.current().Literal
+				p.advance()
+			}
+
+			if p.current().Literal == "JOIN" {
+				p.advance()
+			}
+
+			rightTable := &TableRef{Name: p.current().Literal}
+			p.advance()
+			if p.current().Type == TokenIdentifier {
+				rightTable.Alias = p.current().Literal
+				p.advance()
+			}
+			join.Right = rightTable
+
+			if p.current().Literal == "ON" {
+				p.advance()
+				cond, err := p.parseExpr()
+				if err == nil {
+					join.Cond = cond
+				}
+			}
+
+			join.Left = ref
+			ref.Join = join
+			ref = rightTable
+		}
 	}
 
 	if p.current().Literal == "WHERE" {

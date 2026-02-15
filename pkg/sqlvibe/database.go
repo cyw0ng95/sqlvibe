@@ -328,6 +328,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 		}
 
+		// Handle sqlite_master virtual table
+		if tableName == "sqlite_master" {
+			return db.querySqliteMaster()
+		}
+
 		tableData, ok := db.data[tableName]
 		if !ok || tableData == nil {
 			if len(stmt.Columns) > 0 {
@@ -1109,4 +1114,22 @@ func (db *Database) computeGroupBy(data []map[string]interface{}, stmt *QP.Selec
 
 	fmt.Printf("DEBUG groupby: returning %d rows\n", len(resultData))
 	return &Rows{Columns: resultCols, Data: resultData}, nil
+}
+
+func (db *Database) querySqliteMaster() (*Rows, error) {
+	results := make([][]interface{}, 0)
+	for tableName := range db.tables {
+		sql := fmt.Sprintf("CREATE TABLE %s ()", tableName)
+		results = append(results, []interface{}{
+			"table",
+			tableName,
+			tableName,
+			int64(0),
+			sql,
+		})
+	}
+	return &Rows{
+		Columns: []string{"type", "name", "tbl_name", "rootpage", "sql"},
+		Data:    results,
+	}, nil
 }
