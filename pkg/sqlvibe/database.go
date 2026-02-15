@@ -1175,9 +1175,24 @@ func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, col
 	sorted := make([][]interface{}, len(data))
 	copy(sorted, data)
 
+	// Pre-evaluate ORDER BY expressions for each row
+	// This is needed for non-ColumnRef expressions (e.g., val * -1)
+	orderByValues := make([][]interface{}, len(orderBy))
+	for obIdx, ob := range orderBy {
+		orderByValues[obIdx] = make([]interface{}, len(data))
+		for rowIdx, row := range data {
+			// Convert row slice to map for EvalExpr
+			rowMap := make(map[string]interface{})
+			for colIdx, colName := range cols {
+				rowMap[colName] = row[colIdx]
+			}
+			orderByValues[obIdx][rowIdx] = db.engine.EvalExpr(rowMap, ob.Expr)
+		}
+	}
+
 	for i := range sorted {
 		for j := i + 1; j < len(sorted); j++ {
-			for _, ob := range orderBy {
+			for obIdx, ob := range orderBy {
 				var keyValI, keyValJ interface{}
 				if colRef, ok := ob.Expr.(*QP.ColumnRef); ok {
 					for ci, cn := range cols {
@@ -1187,6 +1202,10 @@ func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, col
 							break
 						}
 					}
+				} else {
+					// Use pre-evaluated expression values
+					keyValI = orderByValues[obIdx][i]
+					keyValJ = orderByValues[obIdx][j]
 				}
 				cmp := db.compareVals(keyValI, keyValJ)
 				if ob.Desc {
@@ -1194,6 +1213,10 @@ func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, col
 				}
 				if cmp > 0 {
 					sorted[i], sorted[j] = sorted[j], sorted[i]
+					// Also swap the pre-evaluated values to maintain consistency
+					for obIdx2 := range orderBy {
+						orderByValues[obIdx2][i], orderByValues[obIdx2][j] = orderByValues[obIdx2][j], orderByValues[obIdx2][i]
+					}
 					break
 				} else if cmp < 0 {
 					break

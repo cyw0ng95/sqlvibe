@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"sort"
 	"testing"
 
 	_ "github.com/glebarez/go-sqlite"
@@ -122,18 +123,20 @@ func rowsEqual(a, b map[string]interface{}) bool {
 		}
 	}
 
-	// If maps have different keys but same length, compare by values (position-based)
+	// If maps have different keys but same length, compare by sorted values
 	if len(a) == len(b) && len(a) > 0 {
-		aVals := make([]interface{}, 0, len(a))
-		bVals := make([]interface{}, 0, len(b))
+		allA := make([]string, 0, len(a))
+		allB := make([]string, 0, len(b))
 		for _, v := range a {
-			aVals = append(aVals, v)
+			allA = append(allA, valueToSortableString(v))
 		}
 		for _, v := range b {
-			bVals = append(bVals, v)
+			allB = append(allB, valueToSortableString(v))
 		}
-		for i := range aVals {
-			if !valueEqual(aVals[i], bVals[i]) {
+		sort.Strings(allA)
+		sort.Strings(allB)
+		for i := 0; i < len(allA); i++ {
+			if allA[i] != allB[i] {
 				return false
 			}
 		}
@@ -156,7 +159,24 @@ func rowsEqual(a, b map[string]interface{}) bool {
 	return true
 }
 
-// debugTypes prints the actual types of values in two maps
+func valueToSortableString(v interface{}) string {
+	if v == nil {
+		return "nil"
+	}
+	switch val := v.(type) {
+	case int64:
+		return fmt.Sprintf("int:%d", val)
+	case float64:
+		return fmt.Sprintf("float:%f", val)
+	case string:
+		return fmt.Sprintf("string:%s", val)
+	case []byte:
+		return fmt.Sprintf("bytes:%s", string(val))
+	default:
+		return fmt.Sprintf("unknown:%v", val)
+	}
+}
+
 func debugTypes(a, b map[string]interface{}) string {
 	result := ""
 	for k := range a {
