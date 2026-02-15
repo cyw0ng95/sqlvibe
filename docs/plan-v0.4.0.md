@@ -18,6 +18,13 @@ Implement index support (CREATE INDEX, DROP INDEX), PRAGMA statements, set opera
 - LIMIT with OFFSET improvements (from sqlite.reqs.md)
 - Date/Time types (from sql1999.reqs.md F051)
 - Improved subquery support (ALL/ANY, EXISTS improvements)
+- Failure case fixes from test results:
+  - E011-02: Float math (Abs, Ceil, Floor, Round)
+  - E011-03: DECIMAL/NUMERIC arithmetic
+  - E011-04: Arithmetic operators (unary minus, large numbers)
+  - E011-05: Comparison operators, ORDER BY expressions, NULL predicates
+  - E011-06: Implicit numeric casting
+  - F481: COALESCE function with NULL values
 - E021 Character Data Types (ALL 12 sections):
   - E021-01: CHARACTER (CHAR)
   - E021-02: CHARACTER VARYING (VARCHAR)
@@ -229,6 +236,38 @@ CREATE [UNIQUE] INDEX [IF NOT EXISTS] index_name ON table_name (column_name [, .
 - **Goal**: CURRENT_DATE, CURRENT_TIME, CURRENT_TIMESTAMP, LOCALTIME, LOCALTIMESTAMP
 - **Files affected**: `internal/QE/expr.go`
 
+### 7. E011 Failure Case Fixes
+
+#### 7.1 E011-02: Float Math Functions
+- **Goal**: Fix Abs, Ceil, Floor, Round functions
+- **Files affected**: `internal/QE/expr.go`
+- **Issues**: Functions returning NULL instead of correct values
+
+#### 7.2 E011-03: DECIMAL/NUMERIC Arithmetic
+- **Goal**: Fix decimal arithmetic operations
+- **Files affected**: `internal/QE/expr.go`
+- **Issues**: Decimal add/sub/mul/div operations returning wrong results
+
+#### 7.3 E011-04: Arithmetic Operators
+- **Goal**: Fix unary minus, large number operations
+- **Files affected**: `internal/QE/expr.go`
+- **Issues**: Unary minus on column references, large number arithmetic
+
+#### 7.4 E011-05: Comparison Operators
+- **Goal**: Fix ORDER BY expressions, NULL IS NULL / IS NOT NULL predicates
+- **Files affected**: `internal/QE/expr.go`
+- **Issues**: ORDER BY with expressions, NULL predicates returning NULL instead of 0/1
+
+#### 7.5 E011-06: Implicit Numeric Casting
+- **Goal**: Fix mixed type arithmetic and comparison
+- **Files affected**: `internal/QE/expr.go`
+- **Issues**: INT + REAL, DECIMAL + REAL casting and operations
+
+#### 7.6 F481: COALESCE Function
+- **Goal**: Fix COALESCE with NULL values
+- **Files affected**: `internal/QE/expr.go`
+- **Issues**: COALESCE returning NULL when first argument is non-NULL
+
 ## Success Criteria
 
 - [ ] CREATE INDEX creates index B-Tree
@@ -260,6 +299,16 @@ CREATE [UNIQUE] INDEX [IF NOT EXISTS] index_name ON table_name (column_name [, .
 - [ ] E021-11: POSITION function returns substring index
 - [ ] E021-12: Character comparison works correctly
 
+### E011/F481 Failure Fix Criteria
+
+- [ ] E011-02: Float math (Abs, Ceil, Floor, Round) returns correct values
+- [ ] E011-03: DECIMAL/NUMERIC arithmetic returns correct results
+- [ ] E011-04: Arithmetic operators (unary minus, large numbers) work correctly
+- [ ] E011-05: Comparison operators, ORDER BY expressions work correctly
+- [ ] E011-05: NULL IS NULL / IS NOT NULL returns 0/1 (not NULL)
+- [ ] E011-06: Implicit numeric casting works correctly
+- [ ] F481: COALESCE returns first non-NULL argument
+
 ### Date/Time Success Criteria
 
 - [ ] DATE type stores dates correctly
@@ -275,5 +324,6 @@ CREATE [UNIQUE] INDEX [IF NOT EXISTS] index_name ON table_name (column_name [, .
 - CASE: Test with `go test -run TestCaseExpression ./pkg/sqlvibe`
 - E021 Tests: Test with `go test -run TestE021 /internal/TS/SQL1999/E021/...`
 - Date/Time: Test with `go test -run TestDateTime ./pkg/sqlvibe`
+- Failure Fixes: Test with `go test -race -asan ./...`
 - Index usage in queries requires planner modifications
 - Transaction management deferred to future version
