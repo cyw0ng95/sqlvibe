@@ -139,21 +139,24 @@ internal/TS/
 
 **Naming Convention:**
 All tests must use the following naming convention:
-- **Testsuite Name**: High-level grouping (e.g., "DML", "Query", "Transaction")
+- **Testsuite Name**: High-level grouping (first testsuite: "SQL1999", then "DML", "Query", "Transaction", etc.)
 - **Test Case Name**: Specific test scenario (e.g., "InsertSingle", "SelectWhere")
-- **Test Level**: Unit, Integration, or Blackbox
+- **Test Level**: 1 (Fundamental), 2 (FileBased), 3 (EdgeCases)
+  - Level 1: Fundamental tests - basic functionality, uses :memory: backend
+  - Level 2: File-based tests - requires file storage backend (transaction durability, etc.)
+  - Level 3: Edge cases - boundary conditions, NULL handling, etc.
 
 **Interface Design:**
 ```go
 type TestCase struct {
     Testsuite string  // e.g., "DML", "Query", "Transaction"
     Name      string  // e.g., "InsertSingle", "SelectWhere" 
-    Level     string  // "unit", "integration", "blackbox"
+    Level     int     // 1 (Fundamental), 2 (FileBased), 3 (EdgeCases)
     Fn        func(*testing.T)
 }
 
 // Register test case
-func RegisterTest(ts, name, level string, fn func(*testing.T))
+func RegisterTest(ts, name string, level int, fn func(*testing.T))
 ```
 
 All existing and new test cases must use this framework to group tests consistently.
