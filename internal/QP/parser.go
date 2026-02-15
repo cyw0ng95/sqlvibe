@@ -64,8 +64,9 @@ type DeleteStmt struct {
 func (d *DeleteStmt) NodeType() string { return "DeleteStmt" }
 
 type CreateTableStmt struct {
-	Name    string
-	Columns []ColumnDef
+	Name        string
+	Columns     []ColumnDef
+	IfNotExists bool
 }
 
 func (c *CreateTableStmt) NodeType() string { return "CreateTableStmt" }
@@ -235,6 +236,31 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		stmt.Where = where
 	}
 
+	if p.current().Literal == "ORDER" {
+		p.advance()
+		if p.current().Literal == "BY" {
+			p.advance()
+			for {
+				expr, err := p.parseExpr()
+				if err != nil {
+					break
+				}
+				ob := OrderBy{Expr: expr, Desc: false}
+				if p.current().Literal == "DESC" {
+					ob.Desc = true
+					p.advance()
+				} else if p.current().Literal == "ASC" {
+					p.advance()
+				}
+				stmt.OrderBy = append(stmt.OrderBy, ob)
+				if p.current().Type != TokenComma {
+					break
+				}
+				p.advance()
+			}
+		}
+	}
+
 	return stmt, nil
 }
 
@@ -374,9 +400,18 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 
 	if p.current().Literal == "TABLE" {
 		p.advance()
-		stmt := &CreateTableStmt{
-			Name: p.current().Literal,
+		stmt := &CreateTableStmt{}
+		if p.current().Type == TokenKeyword && p.current().Literal == "IF" {
+			p.advance()
+			if p.current().Type == TokenKeyword && p.current().Literal == "NOT" {
+				p.advance()
+				if p.current().Type == TokenKeyword && p.current().Literal == "EXISTS" {
+					stmt.IfNotExists = true
+					p.advance()
+				}
+			}
 		}
+		stmt.Name = p.current().Literal
 		p.advance()
 
 		if p.current().Type == TokenLeftParen {

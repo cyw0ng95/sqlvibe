@@ -14,8 +14,9 @@ type Database struct {
 	engine *QE.QueryEngine
 	tx     *Transaction
 	// In-memory data storage for tables
-	tables map[string]map[string]string        // table name -> column name -> type
-	data   map[string][]map[string]interface{} // table name -> rows -> column name -> value
+	tables      map[string]map[string]string        // table name -> column name -> type
+	primaryKeys map[string][]string                 // table name -> primary key column names
+	data        map[string][]map[string]interface{} // table name -> rows -> column name -> value
 }
 
 type Conn interface {
@@ -129,10 +130,11 @@ func Open(path string) (*Database, error) {
 	engine := QE.NewQueryEngine()
 
 	return &Database{
-		pm:     pm,
-		engine: engine,
-		tables: make(map[string]map[string]string),
-		data:   make(map[string][]map[string]interface{}),
+		pm:          pm,
+		engine:      engine,
+		tables:      make(map[string]map[string]string),
+		primaryKeys: make(map[string][]string),
+		data:        make(map[string][]map[string]interface{}),
 	}, nil
 }
 
@@ -158,14 +160,27 @@ func (db *Database) Exec(sql string) (Result, error) {
 	switch ast.NodeType() {
 	case "CreateTableStmt":
 		stmt := ast.(*QP.CreateTableStmt)
+		if _, exists := db.tables[stmt.Name]; exists {
+			if stmt.IfNotExists {
+				return Result{}, nil
+			}
+			return Result{}, fmt.Errorf("table %s already exists", stmt.Name)
+		}
 		schema := make(map[string]QE.ColumnType)
 		colTypes := make(map[string]string)
+		var pkCols []string
 		for _, col := range stmt.Columns {
 			schema[col.Name] = QE.ColumnType{Name: col.Name, Type: col.Type}
 			colTypes[col.Name] = col.Type
+			if col.PrimaryKey {
+				pkCols = append(pkCols, col.Name)
+			}
 		}
 		db.engine.RegisterTable(stmt.Name, schema)
 		db.tables[stmt.Name] = colTypes
+		if len(pkCols) > 0 {
+			db.primaryKeys[stmt.Name] = pkCols
+		}
 		return Result{}, nil
 	case "InsertStmt":
 		stmt := ast.(*QP.InsertStmt)
@@ -173,17 +188,37 @@ func (db *Database) Exec(sql string) (Result, error) {
 			db.data[stmt.Table] = make([]map[string]interface{}, 0)
 		}
 		tableSchema := db.tables[stmt.Table]
+		pkCols := db.primaryKeys[stmt.Table]
+
+		// Determine column names - use schema if not specified in INSERT
+		colNames := stmt.Columns
+		if len(colNames) == 0 && tableSchema != nil {
+			for colName := range tableSchema {
+				colNames = append(colNames, colName)
+			}
+		}
+
 		for _, rowExprs := range stmt.Values {
 			row := make(map[string]interface{})
 			for i, expr := range rowExprs {
-				if i < len(stmt.Columns) {
-					colName := stmt.Columns[i]
+				if i < len(colNames) {
+					colName := colNames[i]
 					colType := ""
 					if tableSchema != nil {
 						colType = tableSchema[colName]
 					}
 					val := db.extractValueTyped(expr, colType)
 					row[colName] = val
+				}
+			}
+			if len(pkCols) > 0 {
+				for _, pkCol := range pkCols {
+					pkVal := row[pkCol]
+					for _, existingRow := range db.data[stmt.Table] {
+						if existingRow[pkCol] == pkVal {
+							return Result{}, fmt.Errorf("UNIQUE constraint failed: %s.%s", stmt.Table, pkCol)
+						}
+					}
 				}
 			}
 			db.data[stmt.Table] = append(db.data[stmt.Table], row)
@@ -229,6 +264,12 @@ func (db *Database) Exec(sql string) (Result, error) {
 		}
 		return Result{RowsAffected: 0}, nil
 	case "DropTableStmt":
+		stmt := ast.(*QP.DropTableStmt)
+		if _, exists := db.tables[stmt.Name]; exists {
+			delete(db.tables, stmt.Name)
+			delete(db.data, stmt.Name)
+			delete(db.primaryKeys, stmt.Name)
+		}
 		return Result{}, nil
 	}
 
@@ -276,15 +317,17 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		var cols []string
 		if len(stmt.Columns) == 1 {
 			// Check for SELECT *
-			if cr, ok := stmt.Columns[0].(*QP.ColumnRef); ok && cr.Name == "*" {
-				// SELECT * - get all columns from table schema
-				if tableSchema, ok := db.tables[tableName]; ok {
-					for colName := range tableSchema {
-						cols = append(cols, colName)
+			if cr, ok := stmt.Columns[0].(*QP.ColumnRef); ok {
+				if cr.Name == "*" {
+					// SELECT * - get all columns from table schema
+					if tableSchema, ok := db.tables[tableName]; ok {
+						for colName := range tableSchema {
+							cols = append(cols, colName)
+						}
 					}
+				} else {
+					cols = []string{cr.Name}
 				}
-			} else {
-				cols = []string{cr.Name}
 			}
 		} else {
 			// Specific columns
@@ -306,18 +349,36 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			}
 		}
 
+		// Apply WHERE clause filter
+		filteredData := tableData
+		// Apply WHERE clause filter
+		if stmt.Where != nil {
+			filteredData = make([]map[string]interface{}, 0)
+			for _, row := range tableData {
+				if db.evalWhere(row, stmt.Where) {
+					filteredData = append(filteredData, row)
+				}
+			}
+		}
+
 		// Filter data based on columns
-		resultData := make([][]interface{}, len(tableData))
-		for rowIdx, row := range tableData {
+		resultData := make([][]interface{}, 0, len(filteredData))
+		for _, row := range filteredData {
 			resultRow := make([]interface{}, len(cols))
-			for colIdx, colName := range cols {
+			for colIdx := range cols {
+				colName := cols[colIdx]
 				if val, ok := row[colName]; ok {
 					resultRow[colIdx] = val
 				} else {
 					resultRow[colIdx] = nil
 				}
 			}
-			resultData[rowIdx] = resultRow
+			resultData = append(resultData, resultRow)
+		}
+
+		// Apply ORDER BY if present
+		if len(stmt.OrderBy) > 0 {
+			resultData = db.applyOrderBy(resultData, stmt.OrderBy, cols)
 		}
 
 		return &Rows{Columns: cols, Data: resultData, pos: -1}, nil
@@ -594,4 +655,39 @@ func (db *Database) compareVals(a, b interface{}) int {
 		return 0
 	}
 	return 0
+}
+
+func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, cols []string) [][]interface{} {
+	if len(orderBy) == 0 || len(data) == 0 {
+		return data
+	}
+
+	sorted := make([][]interface{}, len(data))
+	copy(sorted, data)
+
+	for i := range sorted {
+		for j := i + 1; j < len(sorted); j++ {
+			for _, ob := range orderBy {
+				var keyValI, keyValJ interface{}
+				if colRef, ok := ob.Expr.(*QP.ColumnRef); ok {
+					for ci, cn := range cols {
+						if cn == colRef.Name {
+							keyValI = sorted[i][ci]
+							keyValJ = sorted[j][ci]
+							break
+						}
+					}
+				}
+				cmp := db.compareVals(keyValI, keyValJ)
+				if ob.Desc {
+					cmp = -cmp
+				}
+				if cmp < 0 {
+					sorted[i], sorted[j] = sorted[j], sorted[i]
+					break
+				}
+			}
+		}
+	}
+	return sorted
 }
