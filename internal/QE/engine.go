@@ -195,6 +195,9 @@ func (qe *QueryEngine) evalExpr(row map[string]interface{}, expr QP.Expr) bool {
 	case *QP.BinaryExpr:
 		leftVal := qe.evalValue(row, e.Left)
 		rightVal := qe.evalValue(row, e.Right)
+		if leftVal == nil || rightVal == nil {
+			return false
+		}
 		switch e.Op {
 		case QP.TokenEq:
 			return qe.valuesEqual(leftVal, rightVal)

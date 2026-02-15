@@ -329,7 +329,6 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		}
 
 		tableData, ok := db.data[tableName]
-		fmt.Printf("DEBUG Query: tableName=%s, db.data=%v, ok=%v\n", tableName, db.data, ok)
 		if !ok || tableData == nil {
 			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 		}
@@ -337,9 +336,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		hasAggregate := false
 		var aggregateFunc *QP.FuncCall
 		for _, col := range stmt.Columns {
-			fmt.Printf("DEBUG aggregate: col type=%T value=%+v\n", col, col)
 			if fc, ok := col.(*QP.FuncCall); ok {
-				fmt.Printf("DEBUG aggregate: found FuncCall name=%s\n", fc.Name)
 				if fc.Name == "SUM" || fc.Name == "AVG" || fc.Name == "MIN" || fc.Name == "MAX" || fc.Name == "COUNT" {
 					hasAggregate = true
 					aggregateFunc = fc

@@ -696,6 +696,10 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				return &FuncCall{Name: tok.Literal, Args: args}, nil
 			}
 		}
+		if tok.Literal == "NULL" {
+			p.advance()
+			return &Literal{Value: nil}, nil
+		}
 		p.advance()
 		return &ColumnRef{Name: tok.Literal}, nil
 	case TokenLeftParen:
