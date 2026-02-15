@@ -285,7 +285,7 @@ graph TD
 ## Success Criteria
 
 ### Wave 1 (Bugfixes) - CRITICAL
-- [ ] E011-02: Float math (Abs, Ceil, Floor, Round) returns correct values
+- [x] E011-02: Float math (Abs, Ceil, Floor, Round) returns correct values
 - [ ] E011-03: DECIMAL/NUMERIC arithmetic returns correct results
 - [ ] E011-04: Arithmetic operators (unary minus, large numbers) work correctly
 - [ ] E011-05: Comparison operators, ORDER BY expressions work correctly
