@@ -1022,14 +1022,13 @@ func TestMultipleTables(t *testing.T) {
 	compareQueryResults(t, sqlvibeDB, sqliteDB, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", "TableList")
 }
 
-// TestSQL1999_CH03_Numbers tests SQL:1999 Chapter 3 - Numeric Types
-// INTEGER, SMALLINT, BIGINT, DECIMAL, NUMERIC, FLOAT, REAL, DOUBLE PRECISION
-func TestSQL1999_CH03_Numbers(t *testing.T) {
-	sqlvibePath := "/tmp/test_ch03.db"
-	sqlitePath := "/tmp/test_ch03_sqlite.db"
-
-	defer os.Remove(sqlvibePath)
-	defer os.Remove(sqlitePath)
+// TestSQL1999_F301_NumericTypes_L1 tests SQL:1999 Feature F301 - Numeric Types
+// Test Level: 1 (Fundamental - uses :memory: backend)
+// Tests INTEGER, SMALLINT, BIGINT, DECIMAL, NUMERIC, FLOAT, REAL, DOUBLE PRECISION
+func TestSQL1999_F301_NumericTypes_L1(t *testing.T) {
+	// Level 1 tests use :memory: backend (non-storage fundamental tests)
+	sqlvibePath := ":memory:"
+	sqlitePath := ":memory:"
 
 	sqlvibeDB, err := Open(sqlvibePath)
 	if err != nil {
