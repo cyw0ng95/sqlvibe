@@ -1,17 +1,17 @@
-package ds
+package DS
 
 import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/internal/pb"
+	"github.com/sqlvibe/sqlvibe/internal/PB"
 )
 
 func TestBTreeCreate(t *testing.T) {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test.db")
 
-	file, err := pb.OpenFile(testPath, pb.O_CREATE|pb.O_RDWR)
+	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
 	if err != nil {
 		t.Fatalf("failed to open file: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestBTreeInsert(t *testing.T) {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test.db")
 
-	file, err := pb.OpenFile(testPath, pb.O_CREATE|pb.O_RDWR)
+	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
 	if err != nil {
 		t.Fatalf("failed to open file: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestBTreeSearch(t *testing.T) {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test.db")
 
-	file, err := pb.OpenFile(testPath, pb.O_CREATE|pb.O_RDWR)
+	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
 	if err != nil {
 		t.Fatalf("failed to open file: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestBTreeCursor(t *testing.T) {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test.db")
 
-	file, err := pb.OpenFile(testPath, pb.O_CREATE|pb.O_RDWR)
+	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
 	if err != nil {
 		t.Fatalf("failed to open file: %v", err)
 	}

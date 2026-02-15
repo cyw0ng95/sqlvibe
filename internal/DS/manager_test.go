@@ -1,17 +1,17 @@
-package ds
+package DS
 
 import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/internal/pb"
+	"github.com/sqlvibe/sqlvibe/internal/PB"
 )
 
 func TestPageManagerCreate(t *testing.T) {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test.db")
 
-	file, err := pb.OpenFile(testPath, pb.O_CREATE|pb.O_RDWR)
+	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
 	if err != nil {
 		t.Fatalf("failed to open file: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestPageManagerReadWritePage(t *testing.T) {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test.db")
 
-	file, err := pb.OpenFile(testPath, pb.O_CREATE|pb.O_RDWR)
+	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
 	if err != nil {
 		t.Fatalf("failed to open file: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestPageManagerReadWritePage(t *testing.T) {
 	data := []byte("hello world")
 	pm.WritePage(&Page{Num: page, Data: data, Type: PageTypeLeafTbl})
 
-	file2, err := pb.OpenFile(testPath, pb.O_RDONLY)
+	file2, err := PB.OpenFile(testPath, PB.O_RDONLY)
 	if err != nil {
 		t.Fatalf("failed to reopen file: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestPageManagerFreeList(t *testing.T) {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test.db")
 
-	file, err := pb.OpenFile(testPath, pb.O_CREATE|pb.O_RDWR)
+	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
 	if err != nil {
 		t.Fatalf("failed to open file: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestPageManagerHeader(t *testing.T) {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test.db")
 
-	file, err := pb.OpenFile(testPath, pb.O_CREATE|pb.O_RDWR)
+	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
 	if err != nil {
 		t.Fatalf("failed to open file: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestPageManagerSync(t *testing.T) {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test.db")
 
-	file, err := pb.OpenFile(testPath, pb.O_CREATE|pb.O_RDWR)
+	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
 	if err != nil {
 		t.Fatalf("failed to open file: %v", err)
 	}

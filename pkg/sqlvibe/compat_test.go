@@ -2,11 +2,176 @@ package sqlvibe
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
+	"reflect"
 	"testing"
 
 	_ "github.com/glebarez/go-sqlite"
 )
+
+func fetchAllRows(rows *Rows) ([]map[string]interface{}, error) {
+	if rows == nil {
+		return nil, nil
+	}
+
+	results := make([]map[string]interface{}, 0, len(rows.Data))
+	for _, rowData := range rows.Data {
+		row := make(map[string]interface{})
+		for i, col := range rows.Columns {
+			if i < len(rowData) {
+				row[col] = rowData[i]
+			}
+		}
+		results = append(results, row)
+	}
+	return results, nil
+}
+
+// fetchAllRowsSQLite fetches all rows from a database/sql result
+func fetchAllRowsSQLite(rows *sql.Rows) ([]map[string]interface{}, error) {
+	if rows == nil {
+		return nil, nil
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+
+	var results []map[string]interface{}
+	for rows.Next() {
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range values {
+			valuePtrs[i] = &values[i]
+		}
+
+		if err := rows.Scan(valuePtrs...); err != nil {
+			continue
+		}
+
+		row := make(map[string]interface{})
+		for i, col := range columns {
+			row[col] = values[i]
+		}
+		results = append(results, row)
+	}
+	return results, nil
+}
+
+func compareQueryResults(t *testing.T, sqlvibeDB *Database, sqliteDB *sql.DB, sql string, testName string) {
+	sqlvibeRows, err := sqlvibeDB.Query(sql)
+	if err != nil {
+		t.Errorf("%s: sqlvibe query error: %v", testName, err)
+		return
+	}
+	sqlvibeData, err := fetchAllRows(sqlvibeRows)
+	if err != nil {
+		t.Errorf("%s: sqlvibe fetch error: %v", testName, err)
+		return
+	}
+
+	sqliteRows, err := sqliteDB.Query(sql)
+	if err != nil {
+		t.Errorf("%s: sqlite query error: %v", testName, err)
+		return
+	}
+	sqliteData, err := fetchAllRowsSQLite(sqliteRows)
+	if err != nil {
+		t.Errorf("%s: sqlite fetch error: %v", testName, err)
+		return
+	}
+
+	if len(sqlvibeData) != len(sqliteData) {
+		t.Errorf("%s: row count mismatch: sqlvibe=%d, sqlite=%d", testName, len(sqlvibeData), len(sqliteData))
+		return
+	}
+
+	for i := range sqliteData {
+		if !rowsEqual(sqlvibeData[i], sqliteData[i]) {
+			t.Errorf("%s: row %d mismatch: %s", testName, i, debugTypes(sqlvibeData[i], sqliteData[i]))
+		}
+	}
+}
+
+// rowsEqual compares two row maps for equality
+func rowsEqual(a, b map[string]interface{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, av := range a {
+		bv, ok := b[k]
+		if !ok {
+			return false
+		}
+		if !valueEqual(av, bv) {
+			return false
+		}
+	}
+	return true
+}
+
+// debugTypes prints the actual types of values in two maps
+func debugTypes(a, b map[string]interface{}) string {
+	result := ""
+	for k := range a {
+		result += fmt.Sprintf("%s: sqlvibe=%T(%v) sqlite=%T(%v) ", k, a[k], a[k], b[k], b[k])
+	}
+	return result
+}
+
+// valueEqual compares two values for equality, handling nil, int64, float64, string
+func valueEqual(a, b interface{}) bool {
+	// Handle nil cases
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	// Use reflect for deep comparison
+	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
+
+	// If both are numeric types, compare as floats
+	if isNumeric(av) && isNumeric(bv) {
+		af := toFloat64(av)
+		bf := toFloat64(bv)
+		return af == bf
+	}
+
+	// Direct comparison
+	return reflect.DeepEqual(a, b)
+}
+
+// isNumeric checks if a value is numeric
+func isNumeric(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return true
+	case reflect.Float32, reflect.Float64:
+		return true
+	}
+	return false
+}
+
+// toFloat64 converts a numeric value to float64
+func toFloat64(v reflect.Value) float64 {
+	switch v.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return float64(v.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return float64(v.Uint())
+	case reflect.Float32, reflect.Float64:
+		return v.Float()
+	}
+	return 0
+}
 
 func TestCompatibilityBasicSQL(t *testing.T) {
 	sqlvibePath := "/tmp/test_basic_sql.db"
@@ -58,32 +223,8 @@ func TestCompatibilityBasicSQL(t *testing.T) {
 	}
 
 	t.Run("VerifyResults", func(t *testing.T) {
-		sqlvibeRows, err := sqlvibeDB.Query("SELECT id, name, age FROM users ORDER BY id")
-		if err != nil {
-			t.Fatalf("sqlvibe query error: %v", err)
-		}
-
-		rows, err := sqliteDB.Query("SELECT id, name, age FROM users ORDER BY id")
-		if err != nil {
-			t.Fatalf("sqlite query error: %v", err)
-		}
-		defer rows.Close()
-
-		var sqliteResults []map[string]interface{}
-		for rows.Next() {
-			var id int64
-			var name string
-			var age int64
-			rows.Scan(&id, &name, &age)
-			sqliteResults = append(sqliteResults, map[string]interface{}{
-				"id":   id,
-				"name": name,
-				"age":  age,
-			})
-		}
-
-		t.Logf("sqlvibe columns: %v", sqlvibeRows.Columns)
-		t.Logf("sqlite results: %v", sqliteResults)
+		// Compare actual query results between sqlvibe and SQLite
+		compareQueryResults(t, sqlvibeDB, sqliteDB, "SELECT id, name, age FROM users ORDER BY id", "VerifyResults")
 	})
 }
 
@@ -123,9 +264,15 @@ func TestDMLInsert(t *testing.T) {
 			_, err1 := sqlvibeDB.Exec(tt.sql)
 			_, err2 := sqliteDB.Exec(tt.sql)
 
-			t.Logf("sqlvibe: %v, sqlite: %v", err1, err2)
+			// Compare error states
+			if (err1 == nil) != (err2 == nil) {
+				t.Errorf("%s: error mismatch: sqlvibe=%v, sqlite=%v", tt.name, err1, err2)
+			}
 		})
 	}
+
+	// Verify inserted data matches
+	compareQueryResults(t, sqlvibeDB, sqliteDB, "SELECT id, value FROM test ORDER BY id", "VerifyInsertedData")
 }
 
 func TestDMLUpdate(t *testing.T) {
@@ -164,9 +311,15 @@ func TestDMLUpdate(t *testing.T) {
 			_, err1 := sqlvibeDB.Exec(tt.sql)
 			_, err2 := sqliteDB.Exec(tt.sql)
 
-			t.Logf("sqlvibe: %v, sqlite: %v", err1, err2)
+			// Compare error states
+			if (err1 == nil) != (err2 == nil) {
+				t.Errorf("%s: error mismatch: sqlvibe=%v, sqlite=%v", tt.name, err1, err2)
+			}
 		})
 	}
+
+	// Verify updated data matches
+	compareQueryResults(t, sqlvibeDB, sqliteDB, "SELECT id, value FROM test ORDER BY id", "VerifyUpdatedData")
 }
 
 func TestDMLDelete(t *testing.T) {
@@ -205,9 +358,15 @@ func TestDMLDelete(t *testing.T) {
 			_, err1 := sqlvibeDB.Exec(tt.sql)
 			_, err2 := sqliteDB.Exec(tt.sql)
 
-			t.Logf("sqlvibe: %v, sqlite: %v", err1, err2)
+			// Compare error states
+			if (err1 == nil) != (err2 == nil) {
+				t.Errorf("%s: error mismatch: sqlvibe=%v, sqlite=%v", tt.name, err1, err2)
+			}
 		})
 	}
+
+	// Verify remaining data matches
+	compareQueryResults(t, sqlvibeDB, sqliteDB, "SELECT id, value FROM test ORDER BY id", "VerifyDeletedData")
 }
 
 func TestQueryWhereClauses(t *testing.T) {
@@ -248,26 +407,19 @@ func TestQueryWhereClauses(t *testing.T) {
 		{"In", "SELECT * FROM test WHERE age IN (25, 30, 35)"},
 		{"Between", "SELECT * FROM test WHERE age BETWEEN 26 AND 34"},
 		{"Like", "SELECT * FROM test WHERE name LIKE 'A%'"},
-		{"IsNull", "INSERT INTO test VALUES (5, 'Eve', NULL, 1)"},
+		// For IsNull, we need to insert first
+		{"IsNull", "SELECT * FROM test WHERE age IS NULL"},
 		{"IsNotNull", "SELECT * FROM test WHERE age IS NOT NULL"},
 	}
 
+	// First insert the NULL row for IsNull test
+	sqlvibeDB.Exec("INSERT INTO test VALUES (5, 'Eve', NULL, 1)")
+	sqliteDB.Exec("INSERT INTO test VALUES (5, 'Eve', NULL, 1)")
+
 	for _, tt := range whereTests {
 		t.Run(tt.name, func(t *testing.T) {
-			sqlvibeDB.Exec(tt.sql)
-
-			rows, err := sqliteDB.Query(tt.sql)
-			if err != nil {
-				t.Logf("sqlite query error: %v", err)
-				return
-			}
-			defer rows.Close()
-
-			var count int
-			for rows.Next() {
-				count++
-			}
-			t.Logf("sqlite returned %d rows", count)
+			// Compare actual query results between sqlvibe and SQLite
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
 }
@@ -311,27 +463,8 @@ func TestQueryAggregates(t *testing.T) {
 
 	for _, tt := range aggTests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows, err := sqliteDB.Query(tt.sql)
-			if err != nil {
-				t.Logf("sqlite query error: %v", err)
-				return
-			}
-			defer rows.Close()
-
-			var results [][]interface{}
-			for rows.Next() {
-				cols, err := rows.Columns()
-				if err != nil {
-					continue
-				}
-				vals := make([]interface{}, len(cols))
-				for i := range vals {
-					vals[i] = new(interface{})
-				}
-				rows.Scan(vals...)
-				results = append(results, vals)
-			}
-			t.Logf("sqlite %s: %v", tt.name, results)
+			// Compare aggregate results between sqlvibe and SQLite
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
 }
@@ -371,18 +504,8 @@ func TestQueryJoins(t *testing.T) {
 
 	for _, tt := range joinTests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows, err := sqliteDB.Query(tt.sql)
-			if err != nil {
-				t.Logf("sqlite query error: %v", err)
-				return
-			}
-			defer rows.Close()
-
-			var count int
-			for rows.Next() {
-				count++
-			}
-			t.Logf("sqlite %s returned %d rows", tt.name, count)
+			// Compare join results between sqlvibe and SQLite
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
 }
@@ -421,18 +544,8 @@ func TestQuerySubqueries(t *testing.T) {
 
 	for _, tt := range subqueryTests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows, err := sqliteDB.Query(tt.sql)
-			if err != nil {
-				t.Logf("sqlite query error: %v", err)
-				return
-			}
-			defer rows.Close()
-
-			var count int
-			for rows.Next() {
-				count++
-			}
-			t.Logf("sqlite %s returned %d rows", tt.name, count)
+			// Compare subquery results between sqlvibe and SQLite
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
 }
@@ -471,21 +584,8 @@ func TestQueryOrderBy(t *testing.T) {
 
 	for _, tt := range orderTests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows, err := sqliteDB.Query(tt.sql)
-			if err != nil {
-				t.Logf("sqlite query error: %v", err)
-				return
-			}
-			defer rows.Close()
-
-			var results []map[string]interface{}
-			for rows.Next() {
-				var id, value int64
-				var name string
-				rows.Scan(&id, &value, &name)
-				results = append(results, map[string]interface{}{"id": id, "value": value, "name": name})
-			}
-			t.Logf("sqlite %s: %v", tt.name, results)
+			// Compare ordered results between sqlvibe and SQLite
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
 }
@@ -523,18 +623,8 @@ func TestQueryLimit(t *testing.T) {
 
 	for _, tt := range limitTests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows, err := sqliteDB.Query(tt.sql)
-			if err != nil {
-				t.Logf("sqlite query error: %v", err)
-				return
-			}
-			defer rows.Close()
-
-			var count int
-			for rows.Next() {
-				count++
-			}
-			t.Logf("sqlite %s returned %d rows", tt.name, count)
+			// Compare limited results between sqlvibe and SQLite
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
 }
@@ -657,11 +747,8 @@ func TestEdgeCaseNULLs(t *testing.T) {
 
 	for _, tt := range nullTests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := sqlvibeDB.Exec(tt.sql)
-			t.Logf("sqlvibe %s: %v", tt.name, err)
-
-			_, err = sqliteDB.Exec(tt.sql)
-			t.Logf("sqlite %s: %v", tt.name, err)
+			// Compare NULL handling results between sqlvibe and SQLite
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
 }
@@ -695,17 +782,24 @@ func TestEdgeCaseTypes(t *testing.T) {
 		{"Integer", "SELECT * FROM test WHERE i = 42"},
 		{"Real", "SELECT * FROM test WHERE r > 3.0"},
 		{"Text", "SELECT * FROM test WHERE t = 'hello'"},
-		{"TypeAffinity", "CREATE TABLE test2 (a TEXT, b NUMERIC)"},
 	}
 
 	for _, tt := range typeTests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err1 := sqlvibeDB.Exec(tt.sql)
-			_, err2 := sqliteDB.Exec(tt.sql)
-
-			t.Logf("sqlvibe: %v, sqlite: %v", err1, err2)
+			// Compare type handling results between sqlvibe and SQLite
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
+
+	// Test type affinity table creation
+	t.Run("TypeAffinity", func(t *testing.T) {
+		_, err1 := sqlvibeDB.Exec("CREATE TABLE test2 (a TEXT, b NUMERIC)")
+		_, err2 := sqliteDB.Exec("CREATE TABLE test2 (a TEXT, b NUMERIC)")
+		// Just verify both succeed or both fail
+		if (err1 == nil) != (err2 == nil) {
+			t.Errorf("TypeAffinity: error mismatch: sqlvibe=%v, sqlite=%v", err1, err2)
+		}
+	})
 }
 
 func TestEdgeCaseEmpty(t *testing.T) {
@@ -739,28 +833,26 @@ func TestEdgeCaseEmpty(t *testing.T) {
 		{"SelectWithData", "SELECT * FROM with_data"},
 		{"CountEmpty", "SELECT COUNT(*) FROM empty_table"},
 		{"CountWithData", "SELECT COUNT(*) FROM with_data"},
-		{"DeleteAll", "DELETE FROM with_data"},
-		{"SelectAfterDelete", "SELECT * FROM with_data"},
 	}
 
 	for _, tt := range emptyTests {
 		t.Run(tt.name, func(t *testing.T) {
-			sqlvibeDB.Exec(tt.sql)
-
-			rows, err := sqliteDB.Query(tt.sql)
-			if err != nil {
-				t.Logf("sqlite query error: %v", err)
-				return
-			}
-			defer rows.Close()
-
-			var count int
-			for rows.Next() {
-				count++
-			}
-			t.Logf("sqlite %s returned %d rows", tt.name, count)
+			// Compare empty result handling between sqlvibe and SQLite
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
+
+	// Test DELETE and verify
+	t.Run("DeleteAll", func(t *testing.T) {
+		_, err1 := sqlvibeDB.Exec("DELETE FROM with_data")
+		_, err2 := sqliteDB.Exec("DELETE FROM with_data")
+		if (err1 == nil) != (err2 == nil) {
+			t.Errorf("DeleteAll: error mismatch: sqlvibe=%v, sqlite=%v", err1, err2)
+		}
+	})
+
+	// Verify after delete
+	compareQueryResults(t, sqlvibeDB, sqliteDB, "SELECT * FROM with_data", "SelectAfterDelete")
 }
 
 func TestPreparedStatements(t *testing.T) {
@@ -864,11 +956,8 @@ func TestMultipleTables(t *testing.T) {
 		sqliteDB.Exec(sql)
 	}
 
-	sqlvibeRows, _ := sqlvibeDB.Query("SELECT name FROM sqlite_master WHERE type='table'")
-	sqliteRows, _ := sqliteDB.Query("SELECT name FROM sqlite_master WHERE type='table'")
-
-	t.Logf("sqlvibe tables query result: %v", sqlvibeRows)
-	t.Logf("sqlite tables query result: %v", sqliteRows)
+	// Compare table list
+	compareQueryResults(t, sqlvibeDB, sqliteDB, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", "TableList")
 }
 
 // TestSQL1999_CH03_Numbers tests SQL:1999 Chapter 3 - Numeric Types
@@ -908,11 +997,14 @@ func TestSQL1999_CH03_Numbers(t *testing.T) {
 		t.Run(tt.name+"_create", func(t *testing.T) {
 			_, err1 := sqlvibeDB.Exec(tt.sql)
 			_, err2 := sqliteDB.Exec(tt.sql)
-			t.Logf("sqlvibe: %v, sqlite: %v", err1, err2)
+			// Just verify both succeed or both fail
+			if (err1 == nil) != (err2 == nil) {
+				t.Errorf("%s: error mismatch: sqlvibe=%v, sqlite=%v", tt.name, err1, err2)
+			}
 		})
 	}
 
-	// Test numeric operations
+	// Test numeric operations - create table and insert data
 	sqlvibeDB.Exec("CREATE TABLE nums (id INTEGER PRIMARY KEY, val INTEGER)")
 	sqliteDB.Exec("CREATE TABLE nums (id INTEGER PRIMARY KEY, val INTEGER)")
 
@@ -931,11 +1023,14 @@ func TestSQL1999_CH03_Numbers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err1 := sqlvibeDB.Exec(tt.sql)
 			_, err2 := sqliteDB.Exec(tt.sql)
-			t.Logf("sqlvibe: %v, sqlite: %v", err1, err2)
+			// Just verify both succeed or both fail
+			if (err1 == nil) != (err2 == nil) {
+				t.Errorf("%s: error mismatch: sqlvibe=%v, sqlite=%v", tt.name, err1, err2)
+			}
 		})
 	}
 
-	// Test numeric expressions
+	// Test numeric expressions - compare actual results
 	exprTests := []struct {
 		name string
 		sql  string
@@ -950,17 +1045,8 @@ func TestSQL1999_CH03_Numbers(t *testing.T) {
 
 	for _, tt := range exprTests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Execute on sqlvibe
-			_, err1 := sqlvibeDB.Exec(tt.sql)
-			if err1 != nil {
-				t.Logf("sqlvibe %s error: %v", tt.name, err1)
-			}
-
-			// Execute on sqlite
-			_, err2 := sqliteDB.Exec(tt.sql)
-			if err2 != nil {
-				t.Logf("sqlite %s error: %v", tt.name, err2)
-			}
+			// Compare numeric expression results between sqlvibe and SQLite
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
 
@@ -978,9 +1064,8 @@ func TestSQL1999_CH03_Numbers(t *testing.T) {
 
 	for _, tt := range aggTests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err1 := sqlvibeDB.Exec(tt.sql)
-			_, err2 := sqliteDB.Exec(tt.sql)
-			t.Logf("sqlvibe: %v, sqlite: %v", err1, err2)
+			// Compare aggregate results between sqlvibe and SQLite
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
 
@@ -995,11 +1080,11 @@ func TestSQL1999_CH03_Numbers(t *testing.T) {
 
 	for _, tt := range orderTests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err1 := sqlvibeDB.Exec(tt.sql)
-			_, err2 := sqliteDB.Exec(tt.sql)
-			t.Logf("sqlvibe: %v, sqlite: %v", err1, err2)
+			// Compare ordered results between sqlvibe and SQLite
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
 
-	t.Log("Ch03 Numbers test completed - compare results manually if needed")
+	// Final verification - all data should match
+	compareQueryResults(t, sqlvibeDB, sqliteDB, "SELECT * FROM nums ORDER BY id", "FinalVerification")
 }

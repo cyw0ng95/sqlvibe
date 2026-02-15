@@ -1,4 +1,4 @@
-package tm
+package TM
 
 import (
 	"errors"

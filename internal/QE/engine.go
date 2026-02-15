@@ -1,4 +1,4 @@
-package qe
+package QE
 
 import (
 	"errors"
@@ -114,11 +114,13 @@ func (qe *QueryEngine) ColumnValue(cursorID int, colName string) (interface{}, e
 	}
 
 	switch colType.Type {
-	case "INTEGER":
+	case "INTEGER", "INT", "SMALLINT", "BIGINT":
 		return int64(0), nil
-	case "REAL":
+	case "DECIMAL", "NUMERIC":
 		return float64(0), nil
-	case "TEXT":
+	case "FLOAT", "REAL", "DOUBLE", "DOUBLE PRECISION":
+		return float64(0), nil
+	case "TEXT", "VARCHAR", "CHAR", "CHARACTER":
 		return "", nil
 	default:
 		return nil, nil

@@ -1,4 +1,4 @@
-package qe
+package QE
 
 import (
 	"strconv"

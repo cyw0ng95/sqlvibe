@@ -1,18 +1,18 @@
-package ds
+package DS
 
 import (
-	"github.com/sqlvibe/sqlvibe/internal/pb"
+	"github.com/sqlvibe/sqlvibe/internal/PB"
 )
 
 type PageManager struct {
-	file     pb.File
+	file     PB.File
 	pageSize int
 	numPages uint32
 	header   *DatabaseHeader
 	freeList []uint32
 }
 
-func NewPageManager(file pb.File, pageSize int) (*PageManager, error) {
+func NewPageManager(file PB.File, pageSize int) (*PageManager, error) {
 	pm := &PageManager{
 		file:     file,
 		pageSize: pageSize,

@@ -1,4 +1,4 @@
-package qp
+package QP
 
 type ASTNode interface {
 	NodeType() string
@@ -302,7 +302,45 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 }
 
 func (p *Parser) parseUpdate() (*UpdateStmt, error) {
-	return nil, nil
+	stmt := &UpdateStmt{Set: make([]SetClause, 0)}
+
+	if p.current().Type != TokenKeyword || p.current().Literal != "UPDATE" {
+		return nil, nil
+	}
+	p.advance()
+
+	stmt.Table = p.current().Literal
+	p.advance()
+
+	if p.current().Literal == "SET" {
+		p.advance()
+		for {
+			col := &ColumnRef{Name: p.current().Literal}
+			p.advance()
+			p.expect(TokenEq)
+			val, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			stmt.Set = append(stmt.Set, SetClause{Column: col, Value: val})
+
+			if p.current().Type != TokenComma {
+				break
+			}
+			p.advance()
+		}
+	}
+
+	if p.current().Literal == "WHERE" {
+		p.advance()
+		where, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Where = where
+	}
+
+	return stmt, nil
 }
 
 func (p *Parser) parseDelete() (*DeleteStmt, error) {
@@ -348,11 +386,22 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 					Name: p.current().Literal,
 				}
 				p.advance()
-				if p.current().Type == TokenIdentifier {
+				if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
 					col.Type = p.current().Literal
 					p.advance()
 				}
 				stmt.Columns = append(stmt.Columns, col)
+
+				for p.current().Type == TokenKeyword && p.current().Literal != "PRIMARY" && p.current().Literal != "REFERENCES" {
+					p.advance()
+				}
+				if p.current().Type == TokenKeyword && p.current().Literal == "PRIMARY" {
+					col.PrimaryKey = true
+					p.advance()
+					if p.current().Type == TokenKeyword && p.current().Literal == "KEY" {
+						p.advance()
+					}
+				}
 
 				if p.current().Type != TokenComma {
 					break

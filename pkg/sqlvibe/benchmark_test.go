@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sqlvibe/sqlvibe/internal/qp"
+	"github.com/sqlvibe/sqlvibe/internal/QP"
 )
 
 func BenchmarkCreateTable(b *testing.B) {
@@ -144,7 +144,7 @@ func BenchmarkTokenize(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		tokenizer := qp.NewTokenizer(sql)
+		tokenizer := QP.NewTokenizer(sql)
 		tokenizer.Tokenize()
 	}
 }
@@ -154,9 +154,9 @@ func BenchmarkParse(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		tokenizer := qp.NewTokenizer(sql)
+		tokenizer := QP.NewTokenizer(sql)
 		tokens, _ := tokenizer.Tokenize()
-		parser := qp.NewParser(tokens)
+		parser := QP.NewParser(tokens)
 		parser.Parse()
 	}
 }

@@ -1,4 +1,4 @@
-package ds
+package DS
 
 type BTree struct {
 	pm       *PageManager

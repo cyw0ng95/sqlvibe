@@ -1,4 +1,4 @@
-package qe
+package QE
 
 type ResultSet struct {
 	columns []string
