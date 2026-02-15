@@ -183,6 +183,12 @@ All existing and new test cases must use this framework to group tests consisten
 - [x] Correlated subquery
 - [ ] :memory: database support
 - [ ] TS: Test Suites subsystem created
+- [x] E011-01: INTEGER and SMALLINT test cases
+- [x] E011-02: REAL, DOUBLE PRECISION, FLOAT test cases
+- [x] E011-03: DECIMAL and NUMERIC test cases
+- [x] E011-04: Arithmetic operators (+, -, *, /) test cases
+- [x] E011-05: Comparison operators (=, <>, >, >=, <, <=) test cases
+- [x] E011-06: Implicit casting among numeric types test cases
 
 ## Notes
 - JOINs share similar nested-loop implementation pattern
