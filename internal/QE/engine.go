@@ -688,31 +688,32 @@ func (qe *QueryEngine) valuesEqual(a, b interface{}) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	av, aok := a.(int64)
-	bv, bok := b.(int64)
-	if aok && bok {
+
+	av, aIsInt := a.(int64)
+	bv, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
 		return av == bv
 	}
-	af, aok := a.(float64)
-	bf, bok := b.(float64)
-	if aok && bok {
+
+	af, aIsFloat := a.(float64)
+	bf, bIsFloat := b.(float64)
+	if aIsFloat && bIsFloat {
 		return af == bf
 	}
-	as, aok := a.(string)
-	bs, bok := b.(string)
-	if aok && bok {
+
+	as, aIsString := a.(string)
+	bs, bIsString := b.(string)
+	if aIsString && bIsString {
 		return as == bs
 	}
-	if aok {
-		var iv int64
-		fmt.Sscanf(fmt.Sprintf("%v", bs), "%d", &iv)
-		return av == iv
+
+	if aIsInt && bIsFloat {
+		return float64(av) == bf
 	}
-	if bok {
-		var iv int64
-		fmt.Sscanf(fmt.Sprintf("%v", as), "%d", &iv)
-		return iv == bv
+	if aIsFloat && bIsInt {
+		return af == float64(bv)
 	}
+
 	return false
 }
 
