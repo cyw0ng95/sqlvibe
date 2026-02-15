@@ -330,6 +330,20 @@ func (db *Database) Query(sql string) (*Rows, error) {
 
 		tableData, ok := db.data[tableName]
 		if !ok || tableData == nil {
+			if len(stmt.Columns) > 0 {
+				hasAggregate := false
+				for _, col := range stmt.Columns {
+					if fc, ok := col.(*QP.FuncCall); ok {
+						if fc.Name == "COUNT" {
+							hasAggregate = true
+							break
+						}
+					}
+				}
+				if hasAggregate {
+					return &Rows{Columns: []string{"COUNT(*)"}, Data: [][]interface{}{{int64(0)}}}, nil
+				}
+			}
 			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 		}
 
@@ -879,7 +893,10 @@ func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, col
 				if cmp > 0 {
 					sorted[i], sorted[j] = sorted[j], sorted[i]
 					break
+				} else if cmp < 0 {
+					break
 				}
+				// if cmp == 0, continue to next ORDER BY column
 			}
 		}
 	}
