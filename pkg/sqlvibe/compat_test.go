@@ -216,7 +216,11 @@ func toFloat64(v reflect.Value) float64 {
 	return 0
 }
 
-func TestCompatibilityBasicSQL(t *testing.T) {
+// TestSQLite_F491_BasicSQL_L2 tests SQLite compatibility - Basic SQL operations
+// Testsuite: SQLite
+// Feature ID: F491 (General SQL Features)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F491_BasicSQL_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_basic_sql.db"
 	sqlitePath := "/tmp/test_basic_sqlite.db"
 
@@ -271,7 +275,11 @@ func TestCompatibilityBasicSQL(t *testing.T) {
 	})
 }
 
-func TestDMLInsert(t *testing.T) {
+// TestSQLite_F131_Insert_L2 tests SQLite compatibility - INSERT operations
+// Testsuite: SQLite
+// Feature ID: F131 (Grouped Operations - INSERT)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F131_Insert_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_dml_insert.db"
 	sqlitePath := "/tmp/test_dml_insert_sqlite.db"
 
@@ -318,7 +326,11 @@ func TestDMLInsert(t *testing.T) {
 	compareQueryResults(t, sqlvibeDB, sqliteDB, "SELECT id, value FROM test ORDER BY id", "VerifyInsertedData")
 }
 
-func TestDMLUpdate(t *testing.T) {
+// TestSQLite_F131_Update_L2 tests SQLite compatibility - UPDATE operations
+// Testsuite: SQLite
+// Feature ID: F131 (Grouped Operations - UPDATE)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F131_Update_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_dml_update.db"
 	sqlitePath := "/tmp/test_dml_update_sqlite.db"
 
@@ -365,7 +377,11 @@ func TestDMLUpdate(t *testing.T) {
 	compareQueryResults(t, sqlvibeDB, sqliteDB, "SELECT id, value FROM test ORDER BY id", "VerifyUpdatedData")
 }
 
-func TestDMLDelete(t *testing.T) {
+// TestSQLite_F131_Delete_L2 tests SQLite compatibility - DELETE operations
+// Testsuite: SQLite
+// Feature ID: F131 (Grouped Operations - DELETE)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F131_Delete_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_dml_delete.db"
 	sqlitePath := "/tmp/test_dml_delete_sqlite.db"
 
@@ -412,7 +428,11 @@ func TestDMLDelete(t *testing.T) {
 	compareQueryResults(t, sqlvibeDB, sqliteDB, "SELECT id, value FROM test ORDER BY id", "VerifyDeletedData")
 }
 
-func TestQueryWhereClauses(t *testing.T) {
+// TestSQLite_F491_Where_L2 tests SQLite compatibility - WHERE clause operations
+// Testsuite: SQLite
+// Feature ID: F491 (General SQL Features)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F491_Where_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_where.db"
 	sqlitePath := "/tmp/test_where_sqlite.db"
 
@@ -467,7 +487,11 @@ func TestQueryWhereClauses(t *testing.T) {
 	}
 }
 
-func TestQueryAggregates(t *testing.T) {
+// TestSQLite_F051_Aggregates_L2 tests SQLite compatibility - Aggregate functions
+// Testsuite: SQLite
+// Feature ID: F051 (Date and Time - reusing for Aggregates as per project convention)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F051_Aggregates_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_aggregates.db"
 	sqlitePath := "/tmp/test_aggregates_sqlite.db"
 
@@ -511,7 +535,11 @@ func TestQueryAggregates(t *testing.T) {
 	}
 }
 
-func TestQueryJoins(t *testing.T) {
+// TestSQLite_F041_Joins_L2 tests SQLite compatibility - JOIN operations
+// Testsuite: SQLite
+// Feature ID: F041 (Joined Tables)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F041_Joins_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_joins.db"
 	sqlitePath := "/tmp/test_joins_sqlite.db"
 
@@ -552,7 +580,11 @@ func TestQueryJoins(t *testing.T) {
 	}
 }
 
-func TestQuerySubqueries(t *testing.T) {
+// TestSQLite_F471_Subqueries_L2 tests SQLite compatibility - Subquery operations
+// Testsuite: SQLite
+// Feature ID: F471 (Scalar Subquery Values)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F471_Subqueries_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_subqueries.db"
 	sqlitePath := "/tmp/test_subqueries_sqlite.db"
 
@@ -603,7 +635,11 @@ func TestQuerySubqueries(t *testing.T) {
 	}
 }
 
-func TestQueryOrderBy(t *testing.T) {
+// TestSQLite_F491_OrderBy_L2 tests SQLite compatibility - ORDER BY operations
+// Testsuite: SQLite
+// Feature ID: F491 (General SQL Features)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F491_OrderBy_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_orderby.db"
 	sqlitePath := "/tmp/test_orderby_sqlite.db"
 
@@ -643,7 +679,11 @@ func TestQueryOrderBy(t *testing.T) {
 	}
 }
 
-func TestQueryLimit(t *testing.T) {
+// TestSQLite_F491_Limit_L2 tests SQLite compatibility - LIMIT operations
+// Testsuite: SQLite
+// Feature ID: F491 (General SQL Features)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F491_Limit_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_limit.db"
 	sqlitePath := "/tmp/test_limit_sqlite.db"
 
@@ -682,7 +722,11 @@ func TestQueryLimit(t *testing.T) {
 	}
 }
 
-func TestTransactionCommit(t *testing.T) {
+// TestSQLite_F501_Commit_L2 tests SQLite compatibility - Transaction commit
+// Testsuite: SQLite
+// Feature ID: F501 (Transaction Support)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F501_Commit_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_tx_commit.db"
 	defer os.Remove(sqlvibePath)
 
@@ -724,7 +768,11 @@ func TestTransactionCommit(t *testing.T) {
 	t.Logf("Query returned columns: %v", rows.Columns)
 }
 
-func TestTransactionRollback(t *testing.T) {
+// TestSQLite_F501_Rollback_L2 tests SQLite compatibility - Transaction rollback
+// Testsuite: SQLite
+// Feature ID: F501 (Transaction Support)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F501_Rollback_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_tx_rollback.db"
 	defer os.Remove(sqlvibePath)
 
@@ -766,7 +814,11 @@ func TestTransactionRollback(t *testing.T) {
 	t.Logf("Query returned columns: %v", rows.Columns)
 }
 
-func TestEdgeCaseNULLs(t *testing.T) {
+// TestSQLite_F481_NULLs_L2 tests SQLite compatibility - NULL handling
+// Testsuite: SQLite
+// Feature ID: F481 (Expanded NULL Predicate)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F481_NULLs_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_nulls.db"
 	sqlitePath := "/tmp/test_nulls_sqlite.db"
 
@@ -815,7 +867,11 @@ func TestEdgeCaseNULLs(t *testing.T) {
 	}
 }
 
-func TestEdgeCaseTypes(t *testing.T) {
+// TestSQLite_F301_Types_L2 tests SQLite compatibility - Type handling
+// Testsuite: SQLite
+// Feature ID: F301 (Numeric Types - reusing for general type handling)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F301_Types_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_types.db"
 	sqlitePath := "/tmp/test_types_sqlite.db"
 
@@ -864,7 +920,11 @@ func TestEdgeCaseTypes(t *testing.T) {
 	})
 }
 
-func TestEdgeCaseEmpty(t *testing.T) {
+// TestSQLite_F491_Empty_L2 tests SQLite compatibility - Empty table handling
+// Testsuite: SQLite
+// Feature ID: F491 (General SQL Features)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F491_Empty_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_empty.db"
 	sqlitePath := "/tmp/test_empty_sqlite.db"
 
@@ -917,7 +977,11 @@ func TestEdgeCaseEmpty(t *testing.T) {
 	compareQueryResults(t, sqlvibeDB, sqliteDB, "SELECT * FROM with_data", "SelectAfterDelete")
 }
 
-func TestPreparedStatements(t *testing.T) {
+// TestSQLite_F521_Prepared_L2 tests SQLite compatibility - Prepared statements
+// Testsuite: SQLite
+// Feature ID: F521 (Prepared Statements - project convention)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F521_Prepared_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_prepared.db"
 	defer os.Remove(sqlvibePath)
 
@@ -955,7 +1019,11 @@ func TestPreparedStatements(t *testing.T) {
 	t.Logf("Columns: %v", rows.Columns)
 }
 
-func TestTransactionAPI(t *testing.T) {
+// TestSQLite_F501_API_L2 tests SQLite compatibility - Transaction API
+// Testsuite: SQLite
+// Feature ID: F501 (Transaction Support)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F501_API_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_tx.db"
 	defer os.Remove(sqlvibePath)
 
@@ -995,7 +1063,11 @@ func TestTransactionAPI(t *testing.T) {
 	}
 }
 
-func TestMultipleTables(t *testing.T) {
+// TestSQLite_F491_MultiTables_L2 tests SQLite compatibility - Multiple tables
+// Testsuite: SQLite
+// Feature ID: F491 (General SQL Features)
+// Test Level: 2 (FileBased - uses file storage)
+func TestSQLite_F491_MultiTables_L2(t *testing.T) {
 	sqlvibePath := "/tmp/test_multi.db"
 	sqlitePath := "/tmp/test_multi_sqlite.db"
 
