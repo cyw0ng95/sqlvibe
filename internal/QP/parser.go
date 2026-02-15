@@ -870,7 +870,7 @@ func (p *Parser) parseUnaryExpr() (Expr, error) {
 	if p.current().Type == TokenMinus || p.current().Type == TokenNot {
 		op := p.current().Type
 		p.advance()
-		expr, err := p.parseEqExpr()
+		expr, err := p.parsePrimaryExpr()
 		if err != nil {
 			return nil, err
 		}

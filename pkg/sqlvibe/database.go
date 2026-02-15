@@ -456,6 +456,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 				}
 			}
 		} else {
+			exprIndex := 0
 			for _, col := range stmt.Columns {
 				switch c := col.(type) {
 				case *QP.ColumnRef:
@@ -464,14 +465,22 @@ func (db *Database) Query(sql string) (*Rows, error) {
 					if c.Alias != "" {
 						cols = append(cols, c.Alias)
 					} else {
-						cols = append(cols, "expr")
+						cols = append(cols, fmt.Sprintf("expr%d", exprIndex))
+						exprIndex++
 					}
 				case *QP.FuncCall:
 					cols = append(cols, c.Name)
 				case *QP.SubqueryExpr:
 					cols = append(cols, "subquery")
+				case *QP.BinaryExpr:
+					cols = append(cols, fmt.Sprintf("expr%d", exprIndex))
+					exprIndex++
+				case *QP.UnaryExpr:
+					cols = append(cols, fmt.Sprintf("expr%d", exprIndex))
+					exprIndex++
 				default:
-					cols = append(cols, "expr")
+					cols = append(cols, fmt.Sprintf("expr%d", exprIndex))
+					exprIndex++
 				}
 			}
 		}

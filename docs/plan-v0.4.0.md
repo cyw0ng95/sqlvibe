@@ -294,8 +294,8 @@ graph TD
   - Next action: Implement fix—replace float64 code with custom decimal/scale logic, strictly no external packages.
 
 - [ ] E011-04: Arithmetic operators (unary minus, large numbers) work correctly
-- [ ] E011-05: Comparison operators, ORDER BY expressions work correctly
-- [ ] E011-05: NULL IS NULL / IS NOT NULL returns 0/1 (not NULL)
+- [x] E011-05: Comparison operators, ORDER BY expressions work correctly
+- [x] E011-05: NULL IS NULL / IS NOT NULL returns 0/1 (not NULL)
 - [ ] E011-06: Implicit numeric casting works correctly
 - [ ] F481: COALESCE returns first non-NULL argument
 

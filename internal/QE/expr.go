@@ -1,6 +1,8 @@
 package QE
 
 import (
+	"math"
+	"math/big"
 	"strconv"
 )
 
@@ -78,41 +80,162 @@ func (e *ExprEvaluator) BinaryOp(op OpCode, a, b interface{}) (interface{}, erro
 }
 
 func (e *ExprEvaluator) add(a, b interface{}) interface{} {
+	if isFloat64(a) || isFloat64(b) {
+		av := e.toFloat64(a)
+		bv := e.toFloat64(b)
+		return av + bv
+	}
+
+	aInt, aIsInt := e.toInteger(a)
+	bInt, bIsInt := e.toInteger(b)
+
+	if aIsInt && bIsInt {
+		ai := new(big.Int).SetInt64(aInt)
+		bi := new(big.Int).SetInt64(bInt)
+		result := new(big.Int).Add(ai, bi)
+		if result.IsInt64() {
+			return result.Int64()
+		}
+		f, _ := result.Float64()
+		return f
+	}
+
 	av := e.toFloat64(a)
 	bv := e.toFloat64(b)
-	if av == float64(int(av)) && bv == float64(int(bv)) {
-		return int(av) + int(bv)
-	}
 	return av + bv
 }
 
 func (e *ExprEvaluator) sub(a, b interface{}) interface{} {
+	if isFloat64(a) || isFloat64(b) {
+		av := e.toFloat64(a)
+		bv := e.toFloat64(b)
+		return av - bv
+	}
+
+	aInt, aIsInt := e.toInteger(a)
+	bInt, bIsInt := e.toInteger(b)
+
+	if aIsInt && bIsInt {
+		ai := new(big.Int).SetInt64(aInt)
+		bi := new(big.Int).SetInt64(bInt)
+		result := new(big.Int).Sub(ai, bi)
+		if result.IsInt64() {
+			return result.Int64()
+		}
+		f, _ := result.Float64()
+		return f
+	}
+
 	av := e.toFloat64(a)
 	bv := e.toFloat64(b)
 	return av - bv
 }
 
 func (e *ExprEvaluator) mul(a, b interface{}) interface{} {
+	if isFloat64(a) || isFloat64(b) {
+		av := e.toFloat64(a)
+		bv := e.toFloat64(b)
+		return av * bv
+	}
+
+	aInt, aIsInt := e.toInteger(a)
+	bInt, bIsInt := e.toInteger(b)
+
+	if aIsInt && bIsInt {
+		ai := new(big.Int).SetInt64(aInt)
+		bi := new(big.Int).SetInt64(bInt)
+		result := new(big.Int).Mul(ai, bi)
+		if result.IsInt64() {
+			return result.Int64()
+		}
+		f, _ := result.Float64()
+		return f
+	}
+
 	av := e.toFloat64(a)
 	bv := e.toFloat64(b)
 	return av * bv
 }
 
 func (e *ExprEvaluator) div(a, b interface{}) interface{} {
+	if isFloat64(a) || isFloat64(b) {
+		av := e.toFloat64(a)
+		bv := e.toFloat64(b)
+		if bv == 0 {
+			return nil
+		}
+		return av / bv
+	}
+
+	aIsInt := isInteger(a)
+	bIsInt := isInteger(b)
+	if aIsInt && bIsInt {
+		aInt, _ := e.toInteger(a)
+		bInt, _ := e.toInteger(b)
+		if bInt == 0 {
+			return nil
+		}
+		ai := new(big.Int).SetInt64(aInt)
+		bi := new(big.Int).SetInt64(bInt)
+
+		absA := new(big.Int).Abs(ai)
+		absB := new(big.Int).Abs(bi)
+		quotient := new(big.Int).Div(absA, absB)
+
+		if (aInt < 0 && bInt > 0) || (aInt > 0 && bInt < 0) {
+			quotient.Neg(quotient)
+		}
+
+		if quotient.IsInt64() {
+			return quotient.Int64()
+		}
+		f, _ := quotient.Float64()
+		return f
+	}
 	av := e.toFloat64(a)
 	bv := e.toFloat64(b)
 	if bv == 0 {
 		return nil
 	}
-	// SQLite does integer division when both operands are integers
-	aIsInt := isInteger(a)
-	bIsInt := isInteger(b)
-	if aIsInt && bIsInt {
-		return int64(int(av) / int(bv))
-	}
 	return av / bv
 }
 
+// toInteger attempts to convert a value to int64 for integer operations
+// Returns false for float64 values - they should be treated as floats, not integers
+func (e *ExprEvaluator) toInteger(v interface{}) (int64, bool) {
+	switch val := v.(type) {
+	case int:
+		return int64(val), true
+	case int64:
+		return val, true
+	case float64:
+		if math.IsInf(val, 0) || math.IsNaN(val) {
+			return 0, false
+		}
+		if val == float64(int64(val)) {
+			return int64(val), true
+		}
+		return 0, false
+	case string:
+		if i, err := strconv.ParseInt(val, 10, 64); err == nil {
+			return i, true
+		}
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			if math.IsInf(f, 0) || math.IsNaN(f) {
+				return 0, false
+			}
+			if f == float64(int64(f)) {
+				return int64(f), true
+			}
+			return 0, false
+		}
+		return 0, false
+	default:
+		return 0, false
+	}
+}
+
+// isInteger checks if a value is an integer type
 func isInteger(v interface{}) bool {
 	switch v.(type) {
 	case int, int8, int16, int32, int64:
@@ -121,13 +244,53 @@ func isInteger(v interface{}) bool {
 	return false
 }
 
-func (e *ExprEvaluator) mod(a, b interface{}) interface{} {
-	av := e.toFloat64(a)
-	bv := e.toFloat64(b)
-	if bv == 0 {
-		return nil
+func isFloat64(v interface{}) bool {
+	switch v.(type) {
+	case float64:
+		return true
 	}
-	return int(av) % int(bv)
+	return false
+}
+
+func (e *ExprEvaluator) mod(a, b interface{}) interface{} {
+	if isFloat64(a) || isFloat64(b) {
+		av := e.toFloat64(a)
+		bv := e.toFloat64(b)
+		if bv == 0 {
+			return nil
+		}
+		return int(av) % int(bv)
+	}
+
+	aIsInt := isInteger(a)
+	bIsInt := isInteger(b)
+	if aIsInt && bIsInt {
+		aInt, _ := e.toInteger(a)
+		bInt, _ := e.toInteger(b)
+		if bInt == 0 {
+			return nil
+		}
+		ai := new(big.Int).SetInt64(aInt)
+		bi := new(big.Int).SetInt64(bInt)
+
+		absA := new(big.Int).Abs(ai)
+		absB := new(big.Int).Abs(bi)
+		quotient := new(big.Int).Div(absA, absB)
+		if (aInt < 0 && bInt > 0) || (aInt > 0 && bInt < 0) {
+			quotient.Neg(quotient)
+		}
+
+		quotient.Mul(quotient, bi)
+		result := new(big.Int).Sub(ai, quotient)
+
+		// Check if result fits in int64
+		if result.IsInt64() {
+			return result.Int64()
+		}
+		f, _ := result.Float64()
+		return f
+	}
+	return nil
 }
 
 func (e *ExprEvaluator) toString(v interface{}) string {

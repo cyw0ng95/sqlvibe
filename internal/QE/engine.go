@@ -837,9 +837,15 @@ func matchLikeRecursive(value, pattern string, vi, pi int) bool {
 	return false
 }
 
+// evalFuncCall evaluates function calls like COALESCE, IFNULL, MAX, MIN, etc.
+// It handles built-in SQL functions that operate on row data.
 func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall) interface{} {
 	switch fc.Name {
 	case "COALESCE", "IFNULL":
+		// COALESCE returns the first non-NULL argument.
+		// Per SQL spec: COALESCE(a, b, ...) is equivalent to:
+		// CASE WHEN a IS NOT NULL THEN a ELSE b END
+		// This also matches SQLite's IFNULL(a, b) semantics.
 		for _, arg := range fc.Args {
 			val := qe.evalValue(row, arg)
 			if val != nil {
@@ -957,6 +963,26 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			return math.Round(v*divisor) / divisor
 		}
 		return val
+	case "TYPEOF":
+		if len(fc.Args) == 0 {
+			return "null"
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return "null"
+		}
+		switch val.(type) {
+		case int64:
+			return "integer"
+		case float64:
+			return "real"
+		case string:
+			return "text"
+		case []byte:
+			return "blob"
+		default:
+			return "unknown"
+		}
 	}
 	return nil
 }

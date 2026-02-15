@@ -54,6 +54,7 @@ When fixing bugs, the commit message MUST include:
 - **NEVER** leave empty catch blocks
 - **NEVER** delete failing tests to "pass"
 - Always fix root causes, not symptoms
+- **NEVER** add external packages to the codebase. Only use Go standard library and the existing codebase.
 
 ---
 
@@ -121,6 +122,8 @@ git push
 ### 3.5 Track Progress Against Plan
 
 During development, always reference the current plan:
+
+- When working on any task, always update the plan in docs/ accordingly (mark progress, add/revise task, document completion, etc.) before committing and pushing.
 
 1. **Read the plan** - Start each session by reading `docs/plan-VERSION.md`
 2. **Find next task** - Look for incomplete items in Success Criteria
