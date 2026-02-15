@@ -2,6 +2,7 @@ package sqlvibe
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/PB"
@@ -314,11 +315,19 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		return nil, err
 	}
 	if ast == nil {
+		fmt.Printf("DEBUG Query: ast is nil\n")
 		return nil, nil
 	}
 
+	fmt.Printf("DEBUG Query: ast.NodeType() = %s\n", ast.NodeType())
+
 	if ast.NodeType() == "SelectStmt" {
 		stmt := ast.(*QP.SelectStmt)
+		fmt.Printf("DEBUG Query: stmt.From = %v\n", stmt.From)
+		if stmt.From == nil {
+			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+		}
+		fmt.Printf("DEBUG Query: got SelectStmt, From.Name=%s, Join=%v\n", stmt.From.Name, stmt.From.Join)
 
 		var tableName string
 		if stmt.From != nil {
@@ -330,7 +339,13 @@ func (db *Database) Query(sql string) (*Rows, error) {
 
 		// Handle sqlite_master virtual table
 		if tableName == "sqlite_master" {
-			return db.querySqliteMaster()
+			return db.querySqliteMaster(stmt)
+		}
+
+		// Handle JOIN queries
+		if stmt.From != nil && stmt.From.Join != nil {
+			fmt.Printf("DEBUG join: detected join, left=%s, right=%s, type=%s\n", stmt.From.Name, stmt.From.Join.Right.Name, stmt.From.Join.Type)
+			return db.handleJoin(stmt)
 		}
 
 		tableData, ok := db.data[tableName]
@@ -426,7 +441,9 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		scan := QE.NewTableScan(db.engine, tableName)
 		scan.SetData(tableData)
 
+		fmt.Printf("DEBUG Query: WHERE clause = %v\n", stmt.Where)
 		predicate := db.engine.BuildPredicate(stmt.Where)
+		fmt.Printf("DEBUG Query: predicate built\n")
 		filter := QE.NewFilter(scan, predicate)
 
 		project := db.engine.NewProjectWithExpr(filter, cols, expressions)
@@ -454,6 +471,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		}
 
 		resultData := make([][]interface{}, 0)
+		rowCount := 0
 		for {
 			row, err := limited.Next()
 			if err != nil {
@@ -462,6 +480,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			if row == nil {
 				break
 			}
+			rowCount++
 			resultRow := make([]interface{}, len(cols))
 			for i, colName := range cols {
 				resultRow[i] = row[colName]
@@ -469,6 +488,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			resultData = append(resultData, resultRow)
 		}
 		limited.Close()
+		fmt.Printf("DEBUG Query: returned %d rows\n", rowCount)
 
 		if len(stmt.OrderBy) > 0 {
 			resultData = db.applyOrderBy(resultData, stmt.OrderBy, cols)
@@ -636,21 +656,74 @@ func (db *Database) evalWhere(row map[string]interface{}, where QP.Expr) bool {
 	}
 	switch e := where.(type) {
 	case *QP.BinaryExpr:
-		leftVal := db.evalExpr(row, e.Left)
-		rightVal := db.evalExpr(row, e.Right)
 		switch e.Op {
+		case QP.TokenAnd:
+			return db.evalWhere(row, e.Left) && db.evalWhere(row, e.Right)
+		case QP.TokenOr:
+			return db.evalWhere(row, e.Left) || db.evalWhere(row, e.Right)
 		case QP.TokenEq:
+			leftVal := db.evalExpr(row, e.Left)
+			rightVal := db.evalExpr(row, e.Right)
 			return db.valuesEqual(leftVal, rightVal)
 		case QP.TokenNe:
+			leftVal := db.evalExpr(row, e.Left)
+			rightVal := db.evalExpr(row, e.Right)
 			return !db.valuesEqual(leftVal, rightVal)
 		case QP.TokenLt:
+			leftVal := db.evalExpr(row, e.Left)
+			rightVal := db.evalExpr(row, e.Right)
 			return db.compareVals(leftVal, rightVal) < 0
 		case QP.TokenLe:
+			leftVal := db.evalExpr(row, e.Left)
+			rightVal := db.evalExpr(row, e.Right)
 			return db.compareVals(leftVal, rightVal) <= 0
 		case QP.TokenGt:
+			leftVal := db.evalExpr(row, e.Left)
+			rightVal := db.evalExpr(row, e.Right)
 			return db.compareVals(leftVal, rightVal) > 0
 		case QP.TokenGe:
+			leftVal := db.evalExpr(row, e.Left)
+			rightVal := db.evalExpr(row, e.Right)
 			return db.compareVals(leftVal, rightVal) >= 0
+		case QP.TokenIs:
+			leftVal := db.evalExpr(row, e.Left)
+			return leftVal == nil
+		case QP.TokenIsNot:
+			leftVal := db.evalExpr(row, e.Left)
+			return leftVal != nil
+		case QP.TokenIn:
+			leftVal := db.evalExpr(row, e.Left)
+			rightVal := db.evalExpr(row, e.Right)
+			if rightList, ok := rightVal.([]interface{}); ok {
+				for _, v := range rightList {
+					if db.valuesEqual(leftVal, v) {
+						return true
+					}
+				}
+				return false
+			}
+			return false
+		case QP.TokenLike:
+			leftVal := db.evalExpr(row, e.Left)
+			rightVal := db.evalExpr(row, e.Right)
+			leftStr, leftOk := leftVal.(string)
+			patternStr, patOk := rightVal.(string)
+			if !leftOk || !patOk {
+				return false
+			}
+			return db.matchLike(leftStr, patternStr)
+		case QP.TokenBetween:
+			leftVal := db.evalExpr(row, e.Left)
+			if andExpr, ok := e.Right.(*QP.BinaryExpr); ok {
+				minVal := db.evalExpr(row, andExpr.Left)
+				maxVal := db.evalExpr(row, andExpr.Right)
+				return db.compareVals(leftVal, minVal) >= 0 && db.compareVals(leftVal, maxVal) <= 0
+			}
+			return false
+		}
+	case *QP.UnaryExpr:
+		if e.Op == QP.TokenNot {
+			return !db.evalWhere(row, e.Expr)
 		}
 	}
 	return true
@@ -668,6 +741,16 @@ func (db *Database) evalExpr(row map[string]interface{}, expr QP.Expr) interface
 			return val
 		}
 		return nil
+	case *QP.UnaryExpr:
+		if e.Op == QP.TokenMinus {
+			val := db.evalExpr(row, e.Expr)
+			if n, ok := val.(int64); ok {
+				return -n
+			}
+			if n, ok := val.(float64); ok {
+				return -n
+			}
+		}
 	}
 	return nil
 }
@@ -769,6 +852,54 @@ func (db *Database) compareVals(a, b interface{}) int {
 		return 0
 	}
 	return 0
+}
+
+func (db *Database) matchLike(value, pattern string) bool {
+	if pattern == "" {
+		return value == ""
+	}
+	if pattern == "%" {
+		return true
+	}
+	simple := true
+	for _, c := range pattern {
+		if c == '%' || c == '_' {
+			simple = false
+			break
+		}
+	}
+	if simple {
+		return value == pattern
+	}
+	result := matchLikeRecursive(value, pattern, 0, 0)
+	return result
+}
+
+func matchLikeRecursive(value, pattern string, vi, pi int) bool {
+	if pi >= len(pattern) {
+		return vi >= len(value)
+	}
+	if vi >= len(value) {
+		for ; pi < len(pattern); pi++ {
+			if pattern[pi] != '%' {
+				return false
+			}
+		}
+		return true
+	}
+	pchar := pattern[pi]
+	if pchar == '%' {
+		for i := vi; i <= len(value); i++ {
+			if matchLikeRecursive(value, pattern, i, pi+1) {
+				return true
+			}
+		}
+		return false
+	}
+	if pchar == '_' || pchar == value[vi] {
+		return matchLikeRecursive(value, pattern, vi+1, pi+1)
+	}
+	return false
 }
 
 func (db *Database) computeAggregate(data []map[string]interface{}, fc *QP.FuncCall) interface{} {
@@ -1116,20 +1247,246 @@ func (db *Database) computeGroupBy(data []map[string]interface{}, stmt *QP.Selec
 	return &Rows{Columns: resultCols, Data: resultData}, nil
 }
 
-func (db *Database) querySqliteMaster() (*Rows, error) {
-	results := make([][]interface{}, 0)
+func (db *Database) querySqliteMaster(stmt *QP.SelectStmt) (*Rows, error) {
+	allResults := make([]map[string]interface{}, 0)
 	for tableName := range db.tables {
 		sql := fmt.Sprintf("CREATE TABLE %s ()", tableName)
-		results = append(results, []interface{}{
-			"table",
-			tableName,
-			tableName,
-			int64(0),
-			sql,
+		allResults = append(allResults, map[string]interface{}{
+			"type":     "table",
+			"name":     tableName,
+			"tbl_name": tableName,
+			"rootpage": int64(0),
+			"sql":      sql,
 		})
 	}
-	return &Rows{
-		Columns: []string{"type", "name", "tbl_name", "rootpage", "sql"},
-		Data:    results,
-	}, nil
+
+	filtered := make([]map[string]interface{}, 0)
+	for _, row := range allResults {
+		if stmt.Where == nil || db.evalWhere(row, stmt.Where) {
+			filtered = append(filtered, row)
+		}
+	}
+
+	cols := make([]string, 0)
+	for _, col := range stmt.Columns {
+		if cr, ok := col.(*QP.ColumnRef); ok {
+			cols = append(cols, cr.Name)
+		}
+	}
+
+	resultData := make([][]interface{}, 0)
+	for _, row := range filtered {
+		resultRow := make([]interface{}, 0)
+		for _, colName := range cols {
+			resultRow = append(resultRow, row[colName])
+		}
+		resultData = append(resultData, resultRow)
+	}
+
+	return &Rows{Columns: cols, Data: resultData}, nil
+}
+
+func (db *Database) handleJoin(stmt *QP.SelectStmt) (*Rows, error) {
+	join := stmt.From.Join
+
+	leftTableName := stmt.From.Name
+	fmt.Printf("DEBUG handleJoin: leftTable=%s\n", leftTableName)
+	leftData, ok := db.data[leftTableName]
+	if !ok || leftData == nil {
+		fmt.Printf("DEBUG handleJoin: left data not found for %s\n", leftTableName)
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+	fmt.Printf("DEBUG handleJoin: leftData len=%d\n", len(leftData))
+
+	rightTableName := join.Right.Name
+	fmt.Printf("DEBUG handleJoin: rightTable=%s\n", rightTableName)
+	rightData, ok := db.data[rightTableName]
+	if !ok || rightData == nil {
+		fmt.Printf("DEBUG handleJoin: right data not found for %s\n", rightTableName)
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+	fmt.Printf("DEBUG handleJoin: rightData len=%d\n", len(rightData))
+
+	var result *Rows
+	switch join.Type {
+	case "INNER":
+		result = db.innerJoin(leftData, rightData, join.Cond, stmt)
+	case "LEFT":
+		result = db.leftJoin(leftData, rightData, join.Cond, stmt)
+	case "CROSS":
+		result = db.crossJoin(leftData, rightData, stmt)
+	default:
+		fmt.Printf("DEBUG handleJoin: unknown join type: %s\n", join.Type)
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+
+	return result, nil
+}
+
+func (db *Database) innerJoin(left, right []map[string]interface{}, cond QP.Expr, stmt *QP.SelectStmt) *Rows {
+	resultData := make([][]interface{}, 0)
+
+	for _, lrow := range left {
+		for _, rrow := range right {
+			if db.evalJoinCond(lrow, rrow, cond) {
+				row := db.combineRows(lrow, rrow, stmt)
+				resultData = append(resultData, row)
+			}
+		}
+	}
+
+	cols := db.getJoinColumns(stmt)
+	return &Rows{Columns: cols, Data: resultData, pos: -1}
+}
+
+func (db *Database) leftJoin(left, right []map[string]interface{}, cond QP.Expr, stmt *QP.SelectStmt) *Rows {
+	resultData := make([][]interface{}, 0)
+	rightCols := db.getRightColumns(right)
+
+	for _, lrow := range left {
+		found := false
+		for _, rrow := range right {
+			if db.evalJoinCond(lrow, rrow, cond) {
+				row := db.combineRows(lrow, rrow, stmt)
+				resultData = append(resultData, row)
+				found = true
+			}
+		}
+		if !found {
+			row := make([]interface{}, 0)
+			for _, col := range stmt.Columns {
+				if cr, ok := col.(*QP.ColumnRef); ok {
+					colName := cr.Name
+					if idx := strings.Index(cr.Name, "."); idx > 0 {
+						colName = cr.Name[idx+1:]
+					}
+					if val, ok := lrow[colName]; ok {
+						row = append(row, val)
+					} else {
+						row = append(row, nil)
+					}
+				}
+			}
+			for range rightCols {
+				row = append(row, nil)
+			}
+			resultData = append(resultData, row)
+		}
+	}
+
+	cols := db.getJoinColumns(stmt)
+	return &Rows{Columns: cols, Data: resultData, pos: -1}
+}
+
+func (db *Database) crossJoin(left, right []map[string]interface{}, stmt *QP.SelectStmt) *Rows {
+	resultData := make([][]interface{}, 0)
+
+	for _, lrow := range left {
+		for _, rrow := range right {
+			row := db.combineRows(lrow, rrow, stmt)
+			resultData = append(resultData, row)
+		}
+	}
+
+	cols := db.getJoinColumns(stmt)
+	return &Rows{Columns: cols, Data: resultData, pos: -1}
+}
+
+func (db *Database) evalJoinCond(leftRow, rightRow map[string]interface{}, cond QP.Expr) bool {
+	if cond == nil {
+		return true
+	}
+	switch e := cond.(type) {
+	case *QP.BinaryExpr:
+		leftVal := db.evalJoinExpr(leftRow, rightRow, e.Left)
+		rightVal := db.evalJoinExpr(leftRow, rightRow, e.Right)
+		switch e.Op {
+		case QP.TokenEq:
+			return db.valuesEqual(leftVal, rightVal)
+		case QP.TokenNe:
+			return !db.valuesEqual(leftVal, rightVal)
+		case QP.TokenLt:
+			return db.compareVals(leftVal, rightVal) < 0
+		case QP.TokenLe:
+			return db.compareVals(leftVal, rightVal) <= 0
+		case QP.TokenGt:
+			return db.compareVals(leftVal, rightVal) > 0
+		case QP.TokenGe:
+			return db.compareVals(leftVal, rightVal) >= 0
+		}
+	}
+	return true
+}
+
+func (db *Database) evalJoinExpr(leftRow, rightRow map[string]interface{}, expr QP.Expr) interface{} {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *QP.Literal:
+		return e.Value
+	case *QP.ColumnRef:
+		if val, ok := leftRow[e.Name]; ok {
+			return val
+		}
+		if val, ok := rightRow[e.Name]; ok {
+			return val
+		}
+		if idx := strings.Index(e.Name, "."); idx > 0 {
+			colName := e.Name[idx+1:]
+			if val, ok := leftRow[colName]; ok {
+				return val
+			}
+			if val, ok := rightRow[colName]; ok {
+				return val
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
+func (db *Database) combineRows(left, right map[string]interface{}, stmt *QP.SelectStmt) []interface{} {
+	row := make([]interface{}, 0)
+	for _, col := range stmt.Columns {
+		if cr, ok := col.(*QP.ColumnRef); ok {
+			colName := cr.Name
+			if idx := strings.Index(cr.Name, "."); idx > 0 {
+				colName = cr.Name[idx+1:]
+			}
+			if val, ok := left[colName]; ok {
+				row = append(row, val)
+			} else if val, ok := right[colName]; ok {
+				row = append(row, val)
+			} else {
+				row = append(row, nil)
+			}
+		}
+	}
+	return row
+}
+
+func (db *Database) getJoinColumns(stmt *QP.SelectStmt) []string {
+	cols := make([]string, 0)
+	for _, col := range stmt.Columns {
+		if cr, ok := col.(*QP.ColumnRef); ok {
+			colName := cr.Name
+			if idx := strings.Index(cr.Name, "."); idx > 0 {
+				colName = cr.Name[idx+1:]
+			}
+			cols = append(cols, colName)
+		}
+	}
+	return cols
+}
+
+func (db *Database) getRightColumns(right []map[string]interface{}) []string {
+	if len(right) == 0 {
+		return []string{}
+	}
+	cols := make([]string, 0)
+	for k := range right[0] {
+		cols = append(cols, k)
+	}
+	return cols
 }

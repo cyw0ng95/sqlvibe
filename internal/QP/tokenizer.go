@@ -33,19 +33,27 @@ const (
 	TokenSlash
 	TokenPercent
 	TokenConcat
+	TokenAnd
+	TokenOr
+	TokenNot
+	TokenIn
+	TokenLike
+	TokenBetween
+	TokenIs
+	TokenIsNot
 )
 
 var keywords = map[string]TokenType{
 	"SELECT":        TokenKeyword,
 	"FROM":          TokenKeyword,
 	"WHERE":         TokenKeyword,
-	"AND":           TokenKeyword,
-	"OR":            TokenKeyword,
-	"NOT":           TokenKeyword,
-	"IN":            TokenKeyword,
-	"LIKE":          TokenKeyword,
-	"BETWEEN":       TokenKeyword,
-	"IS":            TokenKeyword,
+	"AND":           TokenAnd,
+	"OR":            TokenOr,
+	"NOT":           TokenNot,
+	"IN":            TokenIn,
+	"LIKE":          TokenLike,
+	"BETWEEN":       TokenBetween,
+	"IS":            TokenIs,
 	"NULL":          TokenKeyword,
 	"TRUE":          TokenKeyword,
 	"FALSE":         TokenKeyword,
@@ -75,6 +83,7 @@ var keywords = map[string]TokenType{
 	"LEFT":          TokenKeyword,
 	"RIGHT":         TokenKeyword,
 	"OUTER":         TokenKeyword,
+	"CROSS":         TokenKeyword,
 	"ON":            TokenKeyword,
 	"AS":            TokenKeyword,
 	"ORDER":         TokenKeyword,
@@ -101,6 +110,8 @@ var keywords = map[string]TokenType{
 	"AVG":           TokenKeyword,
 	"MIN":           TokenKeyword,
 	"MAX":           TokenKeyword,
+	"COALESCE":      TokenKeyword,
+	"IFNULL":        TokenKeyword,
 	"DISTINCT":      TokenKeyword,
 	"INTEGER":       TokenKeyword,
 	"TEXT":          TokenKeyword,

@@ -193,24 +193,102 @@ func (qe *QueryEngine) evalExpr(row map[string]interface{}, expr QP.Expr) bool {
 	}
 	switch e := expr.(type) {
 	case *QP.BinaryExpr:
-		leftVal := qe.evalValue(row, e.Left)
-		rightVal := qe.evalValue(row, e.Right)
-		if leftVal == nil || rightVal == nil {
-			return false
-		}
 		switch e.Op {
+		case QP.TokenAnd:
+			return qe.evalExpr(row, e.Left) && qe.evalExpr(row, e.Right)
+		case QP.TokenOr:
+			return qe.evalExpr(row, e.Left) || qe.evalExpr(row, e.Right)
 		case QP.TokenEq:
+			leftVal := qe.evalValue(row, e.Left)
+			rightVal := qe.evalValue(row, e.Right)
+			if leftVal == nil || rightVal == nil {
+				return false
+			}
 			return qe.valuesEqual(leftVal, rightVal)
 		case QP.TokenNe:
+			leftVal := qe.evalValue(row, e.Left)
+			rightVal := qe.evalValue(row, e.Right)
+			if leftVal == nil || rightVal == nil {
+				return false
+			}
 			return !qe.valuesEqual(leftVal, rightVal)
 		case QP.TokenLt:
+			leftVal := qe.evalValue(row, e.Left)
+			rightVal := qe.evalValue(row, e.Right)
+			if leftVal == nil || rightVal == nil {
+				return false
+			}
 			return qe.compareVals(leftVal, rightVal) < 0
 		case QP.TokenLe:
+			leftVal := qe.evalValue(row, e.Left)
+			rightVal := qe.evalValue(row, e.Right)
+			if leftVal == nil || rightVal == nil {
+				return false
+			}
 			return qe.compareVals(leftVal, rightVal) <= 0
 		case QP.TokenGt:
+			leftVal := qe.evalValue(row, e.Left)
+			rightVal := qe.evalValue(row, e.Right)
+			if leftVal == nil || rightVal == nil {
+				return false
+			}
 			return qe.compareVals(leftVal, rightVal) > 0
 		case QP.TokenGe:
+			leftVal := qe.evalValue(row, e.Left)
+			rightVal := qe.evalValue(row, e.Right)
+			if leftVal == nil || rightVal == nil {
+				return false
+			}
 			return qe.compareVals(leftVal, rightVal) >= 0
+		case QP.TokenIs:
+			leftVal := qe.evalValue(row, e.Left)
+			return leftVal == nil
+		case QP.TokenIsNot:
+			leftVal := qe.evalValue(row, e.Left)
+			return leftVal != nil
+		case QP.TokenIn:
+			leftVal := qe.evalValue(row, e.Left)
+			rightVal := qe.evalValue(row, e.Right)
+			if rightList, ok := rightVal.([]interface{}); ok {
+				for _, v := range rightList {
+					if qe.valuesEqual(leftVal, v) {
+						return true
+					}
+				}
+				return false
+			}
+			return false
+		case QP.TokenLike:
+			leftVal := qe.evalValue(row, e.Left)
+			rightVal := qe.evalValue(row, e.Right)
+			leftStr, leftOk := leftVal.(string)
+			patternStr, patOk := rightVal.(string)
+			if !leftOk || !patOk {
+				return false
+			}
+			return qe.matchLike(leftStr, patternStr)
+		case QP.TokenBetween:
+			leftVal := qe.evalValue(row, e.Left)
+			if andExpr, ok := e.Right.(*QP.BinaryExpr); ok {
+				minVal := qe.evalValue(row, andExpr.Left)
+				maxVal := qe.evalValue(row, andExpr.Right)
+				if leftVal == nil || minVal == nil || maxVal == nil {
+					return false
+				}
+				return qe.compareVals(leftVal, minVal) >= 0 && qe.compareVals(leftVal, maxVal) <= 0
+			}
+			return false
+		}
+	case *QP.UnaryExpr:
+		if e.Op == QP.TokenNot {
+			inner := qe.evalExpr(row, e.Expr)
+			if inner {
+				return false
+			}
+			if qe.hasNullColumn(row, e.Expr) {
+				return false
+			}
+			return true
 		}
 	}
 	return true
@@ -256,6 +334,8 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 			return qe.negate(val)
 		}
 		return val
+	case *QP.FuncCall:
+		return qe.evalFuncCall(row, e)
 	}
 	return nil
 }
@@ -343,6 +423,85 @@ func (qe *QueryEngine) compareVals(a, b interface{}) int {
 		return 0
 	}
 	return 0
+}
+
+func (qe *QueryEngine) matchLike(value, pattern string) bool {
+	if pattern == "" {
+		return value == ""
+	}
+	if pattern == "%" {
+		return true
+	}
+	simple := true
+	for _, c := range pattern {
+		if c == '%' || c == '_' {
+			simple = false
+			break
+		}
+	}
+	if simple {
+		return value == pattern
+	}
+	result := matchLikeRecursive(value, pattern, 0, 0)
+	return result
+}
+
+func matchLikeRecursive(value, pattern string, vi, pi int) bool {
+	if pi >= len(pattern) {
+		return vi >= len(value)
+	}
+	if vi >= len(value) {
+		for ; pi < len(pattern); pi++ {
+			if pattern[pi] != '%' {
+				return false
+			}
+		}
+		return true
+	}
+	pchar := pattern[pi]
+	if pchar == '%' {
+		for i := vi; i <= len(value); i++ {
+			if matchLikeRecursive(value, pattern, i, pi+1) {
+				return true
+			}
+		}
+		return false
+	}
+	if pchar == '_' || pchar == value[vi] {
+		return matchLikeRecursive(value, pattern, vi+1, pi+1)
+	}
+	return false
+}
+
+func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall) interface{} {
+	switch fc.Name {
+	case "COALESCE", "IFNULL":
+		for _, arg := range fc.Args {
+			val := qe.evalValue(row, arg)
+			if val != nil {
+				return val
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
+func (qe *QueryEngine) hasNullColumn(row map[string]interface{}, expr QP.Expr) bool {
+	switch e := expr.(type) {
+	case *QP.BinaryExpr:
+		if qe.hasNullColumn(row, e.Left) {
+			return true
+		}
+		return qe.hasNullColumn(row, e.Right)
+	case *QP.UnaryExpr:
+		return qe.hasNullColumn(row, e.Expr)
+	case *QP.ColumnRef:
+		if val, ok := row[e.Name]; ok {
+			return val == nil
+		}
+	}
+	return false
 }
 
 type Operator interface {

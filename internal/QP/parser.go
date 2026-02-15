@@ -1,6 +1,7 @@
 package QP
 
 import (
+	"fmt"
 	"strconv"
 )
 
@@ -208,6 +209,8 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 	}
 	p.advance()
 
+	fmt.Printf("DEBUG parseSelect: starting, current: Type=%v, Literal=%s\n", p.current().Type, p.current().Literal)
+
 	if p.current().Type == TokenAsterisk {
 		p.advance()
 		stmt.Columns = []Expr{&ColumnRef{Name: "*"}}
@@ -215,7 +218,11 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		for {
 			col, err := p.parseExpr()
 			if err != nil {
+				fmt.Printf("DEBUG parseSelect: parseExpr error: %v\n", err)
 				return nil, err
+			}
+			if col == nil {
+				fmt.Printf("DEBUG parseSelect: parseExpr returned nil, current: Type=%v, Literal=%s\n", p.current().Type, p.current().Literal)
 			}
 			stmt.Columns = append(stmt.Columns, col)
 
@@ -225,6 +232,8 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 			p.advance()
 		}
 	}
+
+	fmt.Printf("DEBUG parseSelect: after columns, current: Type=%v, Literal=%s\n", p.current().Type, p.current().Literal)
 
 	if p.current().Literal == "FROM" {
 		p.advance()
@@ -236,7 +245,9 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		}
 		stmt.From = ref
 
+		fmt.Printf("DEBUG parser: after table name, current token: Type=%v, Literal=%s\n", p.current().Type, p.current().Literal)
 		for p.current().Type == TokenKeyword && (p.current().Literal == "INNER" || p.current().Literal == "LEFT" || p.current().Literal == "CROSS" || p.current().Literal == "JOIN") {
+			fmt.Printf("DEBUG parser: in join loop, current: Type=%v, Literal=%s\n", p.current().Type, p.current().Literal)
 			join := &Join{}
 
 			if p.current().Literal == "INNER" || p.current().Literal == "LEFT" || p.current().Literal == "CROSS" {
@@ -561,13 +572,13 @@ func (p *Parser) parseOrExpr() (Expr, error) {
 		return nil, err
 	}
 
-	for p.current().Literal == "OR" {
+	for p.current().Type == TokenOr {
 		p.advance()
 		right, err := p.parseAndExpr()
 		if err != nil {
 			return nil, err
 		}
-		left = &BinaryExpr{Op: TokenKeyword, Left: left, Right: right}
+		left = &BinaryExpr{Op: TokenOr, Left: left, Right: right}
 	}
 
 	return left, nil
@@ -579,13 +590,13 @@ func (p *Parser) parseAndExpr() (Expr, error) {
 		return nil, err
 	}
 
-	for p.current().Literal == "AND" {
+	for p.current().Type == TokenAnd {
 		p.advance()
 		right, err := p.parseEqExpr()
 		if err != nil {
 			return nil, err
 		}
-		left = &BinaryExpr{Op: TokenKeyword, Left: left, Right: right}
+		left = &BinaryExpr{Op: TokenAnd, Left: left, Right: right}
 	}
 
 	return left, nil
@@ -616,6 +627,86 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 	left, err := p.parseAddExpr()
 	if err != nil {
 		return nil, err
+	}
+
+	if p.current().Type == TokenIs {
+		p.advance()
+		if p.current().Type == TokenNot {
+			p.advance()
+			if p.current().Type == TokenKeyword && p.current().Literal == "NULL" {
+				p.advance()
+				return &BinaryExpr{Op: TokenIsNot, Left: left, Right: &Literal{Value: nil}}, nil
+			}
+		}
+		if p.current().Type == TokenKeyword && p.current().Literal == "NULL" {
+			p.advance()
+			return &BinaryExpr{Op: TokenIs, Left: left, Right: &Literal{Value: nil}}, nil
+		}
+	}
+
+	if p.current().Type == TokenIn {
+		p.advance()
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			var values []interface{}
+			for {
+				if p.current().Type == TokenRightParen {
+					p.advance()
+					break
+				}
+				expr, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				if lit, ok := expr.(*Literal); ok {
+					values = append(values, lit.Value)
+				} else {
+					values = append(values, nil)
+				}
+				if p.current().Type == TokenComma {
+					p.advance()
+				}
+			}
+			return &BinaryExpr{Op: TokenIn, Left: left, Right: &Literal{Value: values}}, nil
+		}
+	}
+
+	if p.current().Type == TokenBetween {
+		p.advance()
+		right, err := p.parseAddExpr()
+		if err != nil {
+			return nil, err
+		}
+		if p.current().Type == TokenAnd {
+			p.advance()
+			andExpr, err := p.parseAddExpr()
+			if err != nil {
+				return nil, err
+			}
+			return &BinaryExpr{Op: TokenBetween, Left: left, Right: &BinaryExpr{Op: TokenAnd, Left: right, Right: andExpr}}, nil
+		}
+		return left, nil
+	}
+
+	if p.current().Type == TokenLike {
+		p.advance()
+		pattern, err := p.parseAddExpr()
+		if err != nil {
+			return nil, err
+		}
+		return &BinaryExpr{Op: TokenLike, Left: left, Right: pattern}, nil
+	}
+
+	for p.current().Type == TokenEq || p.current().Type == TokenNe ||
+		p.current().Type == TokenLt || p.current().Type == TokenLe ||
+		p.current().Type == TokenGt || p.current().Type == TokenGe {
+		op := p.current().Type
+		p.advance()
+		right, err := p.parseAddExpr()
+		if err != nil {
+			return nil, err
+		}
+		left = &BinaryExpr{Op: op, Left: left, Right: right}
 	}
 
 	return left, nil
@@ -660,10 +751,10 @@ func (p *Parser) parseMulExpr() (Expr, error) {
 }
 
 func (p *Parser) parseUnaryExpr() (Expr, error) {
-	if p.current().Type == TokenMinus || p.current().Type == TokenKeyword && p.current().Literal == "NOT" {
+	if p.current().Type == TokenMinus || p.current().Type == TokenNot {
 		op := p.current().Type
 		p.advance()
-		expr, err := p.parsePrimaryExpr()
+		expr, err := p.parseEqExpr()
 		if err != nil {
 			return nil, err
 		}
@@ -709,12 +800,21 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			return &FuncCall{Name: tok.Literal, Args: args}, nil
 		}
 
-		return &ColumnRef{Name: tok.Literal}, nil
+		colName := tok.Literal
+		if p.current().Type == TokenDot {
+			p.advance()
+			if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+				colName = tok.Literal + "." + p.current().Literal
+				p.advance()
+			}
+		}
+
+		return &ColumnRef{Name: colName}, nil
 	case TokenAsterisk:
 		p.advance()
 		return &ColumnRef{Name: "*"}, nil
 	case TokenKeyword:
-		if tok.Literal == "AVG" || tok.Literal == "MIN" || tok.Literal == "MAX" || tok.Literal == "COUNT" || tok.Literal == "SUM" {
+		if tok.Literal == "AVG" || tok.Literal == "MIN" || tok.Literal == "MAX" || tok.Literal == "COUNT" || tok.Literal == "SUM" || tok.Literal == "COALESCE" || tok.Literal == "IFNULL" {
 			p.advance()
 			if p.current().Type == TokenLeftParen {
 				p.advance()

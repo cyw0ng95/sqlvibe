@@ -13,6 +13,8 @@ Implement JOIN support (INNER, LEFT, CROSS) and sqlite_master table for basic qu
 
 ### MEDIUM Priority
 - CROSS JOIN (from sqlite.reqs.md, sql1999.reqs.md)
+- WHERE clause operators: AND, OR, NOT, IN, BETWEEN, LIKE, IS NULL, IS NOT NULL
+- COALESCE/IFNULL functions
 
 ## Implementation DAG
 
@@ -72,12 +74,16 @@ graph LR
 ## Success Criteria
 
 - [x] sqlite_master table returns table list
-- [ ] Parser handles JOIN syntax
-- [ ] INNER JOIN returns correct matched rows
-- [ ] LEFT JOIN includes unmatched left rows with NULL
-- [ ] CROSS JOIN produces Cartesian product
-- [ ] All tests pass (TestQueryJoins, TestMultipleTables)
+- [x] Parser handles JOIN syntax
+- [x] INNER JOIN returns correct matched rows
+- [x] LEFT JOIN includes unmatched left rows with NULL
+- [x] CROSS JOIN produces Cartesian product
+- [x] All JOIN tests pass (TestQueryJoins, TestMultipleTables)
+- [x] WHERE clause operators: AND, OR, NOT, IN, BETWEEN, LIKE, IS NULL, IS NOT NULL
+- [x] COALESCE/IFNULL functions
+- [ ] Subqueries (NOT YET IMPLEMENTED)
 
 ## Notes
 - JOINs share similar nested-loop implementation pattern
 - Test with: `go test -run TestQueryJoins ./pkg/sqlvibe`
+- Subqueries (scalar, IN, EXISTS, correlated) NOT YET IMPLEMENTED - requires parser and engine changes
