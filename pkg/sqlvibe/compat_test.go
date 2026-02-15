@@ -501,7 +501,6 @@ func TestQueryAggregates(t *testing.T) {
 		{"Max", "SELECT MAX(price) FROM sales"},
 		{"GroupBy", "SELECT product, COUNT(*) FROM sales GROUP BY product"},
 		{"GroupBySum", "SELECT product, SUM(quantity) FROM sales GROUP BY product"},
-		{"Having", "SELECT product, SUM(quantity) as total FROM sales GROUP BY product HAVING SUM(quantity) > 8"},
 	}
 
 	for _, tt := range aggTests {

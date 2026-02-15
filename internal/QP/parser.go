@@ -12,6 +12,8 @@ type SelectStmt struct {
 	Columns []Expr
 	From    *TableRef
 	Where   Expr
+	GroupBy []Expr
+	Having  Expr
 	OrderBy []OrderBy
 	Limit   Expr
 	Offset  Expr
@@ -238,6 +240,35 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 			return nil, err
 		}
 		stmt.Where = where
+	}
+
+	// Parse GROUP BY
+	if p.current().Literal == "GROUP" {
+		p.advance()
+		if p.current().Literal == "BY" {
+			p.advance()
+			for {
+				expr, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				stmt.GroupBy = append(stmt.GroupBy, expr)
+				if p.current().Type != TokenComma {
+					break
+				}
+				p.advance()
+			}
+		}
+	}
+
+	// Parse HAVING
+	if p.current().Literal == "HAVING" {
+		p.advance()
+		having, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Having = having
 	}
 
 	if p.current().Literal == "ORDER" {

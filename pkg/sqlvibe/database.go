@@ -355,6 +355,16 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return &Rows{Columns: []string{aggregateFunc.Name}, Data: [][]interface{}{{result}}}, nil
 		}
 
+		// Handle GROUP BY
+		if len(stmt.GroupBy) > 0 && hasAggregate {
+			fmt.Printf("DEBUG groupby: handling GROUP BY\n")
+			result, err := db.computeGroupBy(tableData, stmt)
+			if err != nil {
+				return nil, err
+			}
+			return result, nil
+		}
+
 		var cols []string
 		if len(stmt.Columns) == 1 {
 			if cr, ok := stmt.Columns[0].(*QP.ColumnRef); ok {
@@ -897,5 +907,192 @@ func (db *Database) serializeRow(row map[string]interface{}) []byte {
 		}
 		result = append(result, ';')
 	}
+
 	return result
+}
+
+func (db *Database) computeGroupBy(data []map[string]interface{}, stmt *QP.SelectStmt) (*Rows, error) {
+	fmt.Printf("DEBUG groupby: data length=%d\n", len(data))
+
+	groupByCols := make([]string, len(stmt.GroupBy))
+	for i, gb := range stmt.GroupBy {
+		if cr, ok := gb.(*QP.ColumnRef); ok {
+			groupByCols[i] = cr.Name
+		}
+	}
+	fmt.Printf("DEBUG groupby: groupByCols=%v\n", groupByCols)
+
+	groups := make(map[string][]map[string]interface{})
+	for _, row := range data {
+		key := ""
+		for _, col := range groupByCols {
+			if val, ok := row[col]; ok {
+				key += fmt.Sprintf("%v_", val)
+			}
+		}
+		groups[key] = append(groups[key], row)
+	}
+	fmt.Printf("DEBUG groupby: number of groups=%d\n", len(groups))
+
+	resultCols := make([]string, 0)
+	resultData := make([][]interface{}, 0)
+
+	for _, col := range stmt.Columns {
+		if cr, ok := col.(*QP.ColumnRef); ok {
+			resultCols = append(resultCols, cr.Name)
+		} else if fc, ok := col.(*QP.FuncCall); ok {
+			colName := fc.Name
+			if len(fc.Args) > 0 {
+				colName = fc.Name + "("
+				for i, arg := range fc.Args {
+					if i > 0 {
+						colName += ", "
+					}
+					if argCr, ok := arg.(*QP.ColumnRef); ok {
+						colName += argCr.Name
+					} else if lit, ok := arg.(*QP.Literal); ok {
+						colName += fmt.Sprintf("%v", lit.Value)
+					}
+				}
+				colName += ")"
+			} else {
+				colName = fc.Name + "(*)"
+			}
+			resultCols = append(resultCols, colName)
+		}
+	}
+	fmt.Printf("DEBUG groupby: resultCols=%v\n", resultCols)
+
+	aggCache := make(map[string]map[string]interface{})
+	for key, rows := range groups {
+		aggResults := make(map[string]interface{})
+		for _, col := range stmt.Columns {
+			if fc, ok := col.(*QP.FuncCall); ok {
+				colName := fc.Name
+				if len(fc.Args) > 0 {
+					colName = fc.Name + "("
+					for i, arg := range fc.Args {
+						if i > 0 {
+							colName += ", "
+						}
+						if argCr, ok := arg.(*QP.ColumnRef); ok {
+							colName += argCr.Name
+						} else if lit, ok := arg.(*QP.Literal); ok {
+							colName += fmt.Sprintf("%v", lit.Value)
+						}
+					}
+					colName += ")"
+				} else {
+					colName = fc.Name + "(*)"
+				}
+				aggResults[colName] = db.computeAggregate(rows, fc)
+			}
+		}
+		aggCache[key] = aggResults
+	}
+
+	for key, rows := range groups {
+		row := make([]interface{}, 0)
+
+		for _, gbCol := range groupByCols {
+			var val interface{}
+			if len(rows) > 0 {
+				val = rows[0][gbCol]
+			}
+			row = append(row, val)
+		}
+
+		for _, col := range stmt.Columns {
+			if fc, ok := col.(*QP.FuncCall); ok {
+				colName := fc.Name
+				if len(fc.Args) > 0 {
+					colName = fc.Name + "("
+					for i, arg := range fc.Args {
+						if i > 0 {
+							colName += ", "
+						}
+						if argCr, ok := arg.(*QP.ColumnRef); ok {
+							colName += argCr.Name
+						} else if lit, ok := arg.(*QP.Literal); ok {
+							colName += fmt.Sprintf("%v", lit.Value)
+						}
+					}
+					colName += ")"
+				} else {
+					colName = fc.Name + "(*)"
+				}
+				row = append(row, aggCache[key][colName])
+			}
+		}
+
+		if stmt.Having != nil {
+			passesHaving := false
+			for _, col := range stmt.Columns {
+				if fc, ok := col.(*QP.FuncCall); ok {
+					havingColName := fc.Name
+					if len(fc.Args) > 0 {
+						havingColName = fc.Name + "("
+						for i, arg := range fc.Args {
+							if i > 0 {
+								havingColName += ", "
+							}
+							if argCr, ok := arg.(*QP.ColumnRef); ok {
+								havingColName += argCr.Name
+							} else if lit, ok := arg.(*QP.Literal); ok {
+								havingColName += fmt.Sprintf("%v", lit.Value)
+							}
+						}
+						havingColName += ")"
+					} else {
+						havingColName = fc.Name + "(*)"
+					}
+					havingVal := aggCache[key][havingColName]
+
+					if pred, ok := stmt.Having.(*QP.BinaryExpr); ok {
+						if lit, ok := pred.Right.(*QP.Literal); ok {
+							litVal := lit.Value
+							cmp := db.compareVals(havingVal, litVal)
+							op := pred.Op
+							if op == QP.TokenGt && cmp > 0 {
+								passesHaving = true
+							} else if op == QP.TokenGe && cmp >= 0 {
+								passesHaving = true
+							} else if op == QP.TokenLt && cmp < 0 {
+								passesHaving = true
+							} else if op == QP.TokenLe && cmp <= 0 {
+								passesHaving = true
+							} else if op == QP.TokenEq && cmp == 0 {
+								passesHaving = true
+							}
+						}
+					}
+				}
+			}
+			if !passesHaving {
+				continue
+			}
+		}
+
+		resultData = append(resultData, row)
+	}
+
+	// Sort results by group by columns to match SQLite order
+	if len(resultData) > 1 && len(groupByCols) > 0 {
+		for i := 0; i < len(resultData)-1; i++ {
+			for j := i + 1; j < len(resultData); j++ {
+				for gbIdx := range groupByCols {
+					cmp := db.compareVals(resultData[i][gbIdx], resultData[j][gbIdx])
+					if cmp > 0 {
+						resultData[i], resultData[j] = resultData[j], resultData[i]
+						break
+					} else if cmp < 0 {
+						break
+					}
+				}
+			}
+		}
+	}
+
+	fmt.Printf("DEBUG groupby: returning %d rows\n", len(resultData))
+	return &Rows{Columns: resultCols, Data: resultData}, nil
 }
