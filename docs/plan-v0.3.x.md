@@ -137,6 +137,27 @@ internal/TS/
 └── helpers.go     # Test helper functions
 ```
 
+**Naming Convention:**
+All tests must use the following naming convention:
+- **Testsuite Name**: High-level grouping (e.g., "DML", "Query", "Transaction")
+- **Test Case Name**: Specific test scenario (e.g., "InsertSingle", "SelectWhere")
+- **Test Level**: Unit, Integration, or Blackbox
+
+**Interface Design:**
+```go
+type TestCase struct {
+    Testsuite string  // e.g., "DML", "Query", "Transaction"
+    Name      string  // e.g., "InsertSingle", "SelectWhere" 
+    Level     string  // "unit", "integration", "blackbox"
+    Fn        func(*testing.T)
+}
+
+// Register test case
+func RegisterTest(ts, name, level string, fn func(*testing.T))
+```
+
+All existing and new test cases must use this framework to group tests consistently.
+
 ## Success Criteria
 
 - [x] sqlite_master table returns table list
