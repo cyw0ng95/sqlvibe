@@ -158,6 +158,11 @@ func RegisterTest(ts, name, level string, fn func(*testing.T))
 
 All existing and new test cases must use this framework to group tests consistently.
 
+**Storage Backend:**
+- Non-storage related tests MUST use `:memory:` as the storage backend
+- Only tests that specifically require file storage (e.g., transaction durability, crash recovery) should use file-based storage
+- This ensures test isolation and improves performance
+
 ## Success Criteria
 
 - [x] sqlite_master table returns table list
