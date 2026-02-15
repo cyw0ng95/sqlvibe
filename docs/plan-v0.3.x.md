@@ -181,7 +181,7 @@ All existing and new test cases must use this framework to group tests consisten
 - [x] IN subquery
 - [x] ALL/ANY subquery
 - [x] Correlated subquery
-- [ ] :memory: database support
+- [x] :memory: database support
 - [x] TS: Test Suites subsystem created
 - [x] E011-01: INTEGER and SMALLINT test cases
 - [x] E011-02: REAL, DOUBLE PRECISION, FLOAT test cases
@@ -195,4 +195,6 @@ All existing and new test cases must use this framework to group tests consisten
 - Test with: `go test -run TestQueryJoins ./pkg/sqlvibe`
 - Subquery types: Scalar, EXISTS, IN, ALL/ANY, correlated
 - Test with: `go test -run TestQuerySubqueries ./pkg/sqlvibe`
-- :memory: support - Open(":memory:") should create in-memory database
+- :memory: support - Open(":memory:") creates in-memory database
+- TS Test Suites: `internal/TS/SQL1999/E011/` for numeric type tests
+- Run with: `go test ./internal/TS/SQL1999/E011/...`
