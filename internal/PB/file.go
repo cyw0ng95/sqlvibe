@@ -127,6 +127,10 @@ func (f *osFile) Truncate(size int64) error {
 }
 
 func OpenFile(path string, flag int) (File, error) {
+	if path == ":memory:" {
+		f := &memoryFile{}
+		return f.Open(path, flag)
+	}
 	f := &osFile{}
 	return f.Open(path, flag)
 }
