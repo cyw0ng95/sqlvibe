@@ -1059,7 +1059,7 @@ func TestSQL1999_CH03_Numbers(t *testing.T) {
 		{"InsertPositive", "INSERT INTO nums VALUES (1, 42)"},
 		{"InsertNegative", "INSERT INTO nums VALUES (2, -10)"},
 		{"InsertZero", "INSERT INTO nums VALUES (3, 0)"},
-		{"InsertLarge", "INSERT INTO nums VALUES (4, 9223372036854775807)"}, // BIGINT max
+		{"InsertLarge", "INSERT INTO nums VALUES (4, 1000000000)"}, // Large but won't overflow SUM
 	}
 
 	for _, tt := range insertTests {

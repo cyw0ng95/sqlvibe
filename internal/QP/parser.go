@@ -626,6 +626,31 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		}
 
 		return &ColumnRef{Name: tok.Literal}, nil
+	case TokenAsterisk:
+		p.advance()
+		return &ColumnRef{Name: "*"}, nil
+	case TokenKeyword:
+		if tok.Literal == "AVG" || tok.Literal == "MIN" || tok.Literal == "MAX" || tok.Literal == "COUNT" || tok.Literal == "SUM" {
+			p.advance()
+			if p.current().Type == TokenLeftParen {
+				p.advance()
+				args := make([]Expr, 0)
+				for !p.isEOF() && p.current().Type != TokenRightParen {
+					arg, err := p.parseExpr()
+					if err != nil {
+						return nil, err
+					}
+					args = append(args, arg)
+					if p.current().Type == TokenComma {
+						p.advance()
+					}
+				}
+				p.expect(TokenRightParen)
+				return &FuncCall{Name: tok.Literal, Args: args}, nil
+			}
+		}
+		p.advance()
+		return &ColumnRef{Name: tok.Literal}, nil
 	case TokenLeftParen:
 		p.advance()
 		expr, err := p.parseExpr()

@@ -329,8 +329,30 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		}
 
 		tableData, ok := db.data[tableName]
+		fmt.Printf("DEBUG Query: tableName=%s, db.data=%v, ok=%v\n", tableName, db.data, ok)
 		if !ok || tableData == nil {
 			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+		}
+
+		hasAggregate := false
+		var aggregateFunc *QP.FuncCall
+		for _, col := range stmt.Columns {
+			fmt.Printf("DEBUG aggregate: col type=%T value=%+v\n", col, col)
+			if fc, ok := col.(*QP.FuncCall); ok {
+				fmt.Printf("DEBUG aggregate: found FuncCall name=%s\n", fc.Name)
+				if fc.Name == "SUM" || fc.Name == "AVG" || fc.Name == "MIN" || fc.Name == "MAX" || fc.Name == "COUNT" {
+					hasAggregate = true
+					aggregateFunc = fc
+					break
+				}
+			}
+		}
+
+		if hasAggregate && stmt.Where == nil && len(stmt.Columns) == 1 {
+			fmt.Printf("DEBUG aggregate: computing result for %s\n", aggregateFunc.Name)
+			result := db.computeAggregate(tableData, aggregateFunc)
+			fmt.Printf("DEBUG aggregate: result=%v\n", result)
+			return &Rows{Columns: []string{aggregateFunc.Name}, Data: [][]interface{}{{result}}}, nil
 		}
 
 		var cols []string
@@ -721,6 +743,105 @@ func (db *Database) compareVals(a, b interface{}) int {
 		return 0
 	}
 	return 0
+}
+
+func (db *Database) computeAggregate(data []map[string]interface{}, fc *QP.FuncCall) interface{} {
+	funcName := fc.Name
+	var colName string
+	if len(fc.Args) > 0 {
+		if cr, ok := fc.Args[0].(*QP.ColumnRef); ok {
+			colName = cr.Name
+		}
+	}
+
+	switch funcName {
+	case "COUNT":
+		// COUNT(*) or COUNT() without args counts all rows
+		if len(fc.Args) == 0 || colName == "*" || colName == "" {
+			return int64(len(data))
+		}
+		count := 0
+		for _, r := range data {
+			if r != nil {
+				if val, ok := r[colName]; ok && val != nil {
+					count++
+				}
+			}
+		}
+		return int64(count)
+	case "SUM":
+		var sum float64
+		for _, r := range data {
+			if r != nil {
+				if val, ok := r[colName]; ok {
+					switch v := val.(type) {
+					case int64:
+						sum += float64(v)
+					case int:
+						sum += float64(v)
+					case float64:
+						sum += v
+					}
+				}
+			}
+		}
+		return sum
+	case "AVG":
+		var sum float64
+		var count int
+		for _, r := range data {
+			if r != nil {
+				if val, ok := r[colName]; ok && val != nil {
+					switch v := val.(type) {
+					case int64:
+						sum += float64(v)
+					case int:
+						sum += float64(v)
+					case float64:
+						sum += v
+					}
+					count++
+				}
+			}
+		}
+		if count == 0 {
+			return nil
+		}
+		return sum / float64(count)
+	case "MIN":
+		var minVal interface{}
+		for _, r := range data {
+			if r != nil {
+				if val, ok := r[colName]; ok && val != nil {
+					if minVal == nil {
+						minVal = val
+					} else {
+						if db.compareVals(val, minVal) < 0 {
+							minVal = val
+						}
+					}
+				}
+			}
+		}
+		return minVal
+	case "MAX":
+		var maxVal interface{}
+		for _, r := range data {
+			if r != nil {
+				if val, ok := r[colName]; ok && val != nil {
+					if maxVal == nil {
+						maxVal = val
+					} else {
+						if db.compareVals(val, maxVal) > 0 {
+							maxVal = val
+						}
+					}
+				}
+			}
+		}
+		return maxVal
+	}
+	return nil
 }
 
 func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, cols []string) [][]interface{} {
