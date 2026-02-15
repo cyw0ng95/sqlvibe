@@ -1,8 +1,8 @@
 package QP
 
 import (
-	"fmt"
 	"strconv"
+	"strings"
 )
 
 type ASTNode interface {
@@ -10,14 +10,15 @@ type ASTNode interface {
 }
 
 type SelectStmt struct {
-	Columns []Expr
-	From    *TableRef
-	Where   Expr
-	GroupBy []Expr
-	Having  Expr
-	OrderBy []OrderBy
-	Limit   Expr
-	Offset  Expr
+	Distinct bool
+	Columns  []Expr
+	From     *TableRef
+	Where    Expr
+	GroupBy  []Expr
+	Having   Expr
+	OrderBy  []OrderBy
+	Limit    Expr
+	Offset   Expr
 }
 
 func (s *SelectStmt) NodeType() string { return "SelectStmt" }
@@ -130,6 +131,19 @@ type FuncCall struct {
 
 func (e *FuncCall) exprNode() {}
 
+type SubqueryExpr struct {
+	Select *SelectStmt
+}
+
+func (e *SubqueryExpr) exprNode() {}
+
+type AliasExpr struct {
+	Expr  Expr
+	Alias string
+}
+
+func (e *AliasExpr) exprNode() {}
+
 type Parser struct {
 	tokens []Token
 	pos    int
@@ -209,7 +223,11 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 	}
 	p.advance()
 
-	fmt.Printf("DEBUG parseSelect: starting, current: Type=%v, Literal=%s\n", p.current().Type, p.current().Literal)
+	// Handle DISTINCT
+	if p.current().Type == TokenKeyword && p.current().Literal == "DISTINCT" {
+		p.advance()
+		stmt.Distinct = true
+	}
 
 	if p.current().Type == TokenAsterisk {
 		p.advance()
@@ -218,22 +236,26 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		for {
 			col, err := p.parseExpr()
 			if err != nil {
-				fmt.Printf("DEBUG parseSelect: parseExpr error: %v\n", err)
 				return nil, err
 			}
 			if col == nil {
-				fmt.Printf("DEBUG parseSelect: parseExpr returned nil, current: Type=%v, Literal=%s\n", p.current().Type, p.current().Literal)
 			}
 			stmt.Columns = append(stmt.Columns, col)
 
 			if p.current().Type != TokenComma {
+				// Check if we've hit a keyword that signals end of columns
+				if p.current().Type == TokenKeyword {
+					lit := p.current().Literal
+					litUpper := strings.ToUpper(lit)
+					if litUpper == "FROM" || litUpper == "WHERE" || litUpper == "ORDER" || litUpper == "GROUP" || litUpper == "HAVING" || litUpper == "LIMIT" || litUpper == "AS" {
+						break
+					}
+				}
 				break
 			}
 			p.advance()
 		}
 	}
-
-	fmt.Printf("DEBUG parseSelect: after columns, current: Type=%v, Literal=%s\n", p.current().Type, p.current().Literal)
 
 	if p.current().Literal == "FROM" {
 		p.advance()
@@ -245,9 +267,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		}
 		stmt.From = ref
 
-		fmt.Printf("DEBUG parser: after table name, current token: Type=%v, Literal=%s\n", p.current().Type, p.current().Literal)
 		for p.current().Type == TokenKeyword && (p.current().Literal == "INNER" || p.current().Literal == "LEFT" || p.current().Literal == "CROSS" || p.current().Literal == "JOIN") {
-			fmt.Printf("DEBUG parser: in join loop, current: Type=%v, Literal=%s\n", p.current().Type, p.current().Literal)
 			join := &Join{}
 
 			if p.current().Literal == "INNER" || p.current().Literal == "LEFT" || p.current().Literal == "CROSS" {
@@ -648,6 +668,16 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 		p.advance()
 		if p.current().Type == TokenLeftParen {
 			p.advance()
+			if p.current().Type == TokenKeyword && p.current().Literal == "SELECT" {
+				sub, err := p.parseSelect()
+				if err != nil {
+					return nil, err
+				}
+				if p.current().Type == TokenRightParen {
+					p.advance()
+				}
+				return &BinaryExpr{Op: TokenInSubquery, Left: left, Right: &SubqueryExpr{Select: sub}}, nil
+			}
 			var values []interface{}
 			for {
 				if p.current().Type == TokenRightParen {
@@ -686,6 +716,89 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 			return &BinaryExpr{Op: TokenBetween, Left: left, Right: &BinaryExpr{Op: TokenAnd, Left: right, Right: andExpr}}, nil
 		}
 		return left, nil
+	}
+
+	if p.current().Type == TokenExists {
+		p.advance()
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			if p.current().Type == TokenKeyword && p.current().Literal == "SELECT" {
+				sub, err := p.parseSelect()
+				if err != nil {
+					return nil, err
+				}
+				if p.current().Type == TokenRightParen {
+					p.advance()
+				}
+				return &BinaryExpr{Op: TokenExists, Left: &SubqueryExpr{Select: sub}, Right: nil}, nil
+			}
+		}
+	}
+
+	if p.current().Type == TokenIn {
+		p.advance()
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			if p.current().Type == TokenKeyword && p.current().Literal == "SELECT" {
+				sub, err := p.parseSelect()
+				if err != nil {
+					return nil, err
+				}
+				if p.current().Type == TokenRightParen {
+					p.advance()
+				}
+				return &BinaryExpr{Op: TokenInSubquery, Left: left, Right: &SubqueryExpr{Select: sub}}, nil
+			}
+			var values []interface{}
+			for {
+				if p.current().Type == TokenRightParen {
+					p.advance()
+					break
+				}
+				expr, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				if lit, ok := expr.(*Literal); ok {
+					values = append(values, lit.Value)
+				} else {
+					values = append(values, nil)
+				}
+				if p.current().Type == TokenComma {
+					p.advance()
+				}
+			}
+			return &BinaryExpr{Op: TokenIn, Left: left, Right: &Literal{Value: values}}, nil
+		}
+	}
+
+	for (p.current().Type == TokenGt || p.current().Type == TokenGe ||
+		p.current().Type == TokenLt || p.current().Type == TokenNe ||
+		p.current().Type == TokenEq) &&
+		(p.peek().Type == TokenKeyword && (p.peek().Literal == "ALL" || p.peek().Literal == "ANY" || p.peek().Literal == "SOME")) {
+		op := p.current().Type
+		p.advance()
+		quantifier := p.current().Literal
+		p.advance()
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			if p.current().Type == TokenKeyword && p.current().Literal == "SELECT" {
+				sub, err := p.parseSelect()
+				if err != nil {
+					return nil, err
+				}
+				if p.current().Type == TokenRightParen {
+					p.advance()
+				}
+				var quantOp TokenType
+				if quantifier == "ALL" {
+					quantOp = TokenAll
+				} else {
+					quantOp = TokenAny
+				}
+				return &BinaryExpr{Op: quantOp, Left: left, Right: &BinaryExpr{Op: op, Right: &SubqueryExpr{Select: sub}}}, nil
+			}
+		}
 	}
 
 	if p.current().Type == TokenLike {
@@ -768,6 +881,35 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	tok := p.current()
 
 	switch tok.Type {
+	case TokenLeftParen:
+		p.advance()
+		if p.current().Type == TokenKeyword && p.current().Literal == "SELECT" {
+			sub, err := p.parseSelect()
+			if err != nil {
+				return nil, err
+			}
+			if p.current().Type == TokenRightParen {
+				p.advance()
+			}
+			// Check for alias after subquery
+			if p.current().Type == TokenKeyword && (p.current().Literal == "AS" || p.current().Literal == "as") {
+				p.advance()
+				if p.current().Type == TokenIdentifier {
+					alias := p.current().Literal
+					p.advance()
+					return &AliasExpr{Expr: &SubqueryExpr{Select: sub}, Alias: alias}, nil
+				}
+			}
+			return &SubqueryExpr{Select: sub}, nil
+		}
+		expr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if p.current().Type == TokenRightParen {
+			p.advance()
+		}
+		return expr, nil
 	case TokenNumber:
 		p.advance()
 		if iv, err := strconv.ParseInt(tok.Literal, 10, 64); err == nil {
@@ -839,14 +981,6 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		}
 		p.advance()
 		return &ColumnRef{Name: tok.Literal}, nil
-	case TokenLeftParen:
-		p.advance()
-		expr, err := p.parseExpr()
-		if err != nil {
-			return nil, err
-		}
-		p.expect(TokenRightParen)
-		return expr, nil
 	}
 
 	return nil, nil

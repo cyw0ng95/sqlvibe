@@ -20,6 +20,7 @@ type QueryEngine struct {
 	tables   map[string]*TableReader
 	cursors  map[int]*Cursor
 	cursorID int
+	data     map[string][]map[string]interface{}
 }
 
 type TableReader struct {
@@ -41,13 +42,14 @@ type Cursor struct {
 	Closed bool
 }
 
-func NewQueryEngine(pm *DS.PageManager) *QueryEngine {
+func NewQueryEngine(pm *DS.PageManager, data map[string][]map[string]interface{}) *QueryEngine {
 	return &QueryEngine{
 		vm:       nil,
 		pm:       pm,
 		tables:   make(map[string]*TableReader),
 		cursors:  make(map[int]*Cursor),
 		cursorID: 0,
+		data:     data,
 	}
 }
 
@@ -278,6 +280,63 @@ func (qe *QueryEngine) evalExpr(row map[string]interface{}, expr QP.Expr) bool {
 				return qe.compareVals(leftVal, minVal) >= 0 && qe.compareVals(leftVal, maxVal) <= 0
 			}
 			return false
+		case QP.TokenExists:
+			subq := e.Left.(*QP.SubqueryExpr)
+			result := qe.evalSubquery(row, subq.Select)
+			if result.rows == nil {
+				return false
+			}
+			return len(result.rows) > 0
+		case QP.TokenInSubquery:
+			leftVal := qe.evalValue(row, e.Left)
+			subq := e.Right.(*QP.SubqueryExpr)
+			result := qe.evalSubquery(row, subq.Select)
+			if result.rows == nil || len(result.rows) == 0 {
+				return false
+			}
+			colName := subq.Select.Columns[0].(*QP.ColumnRef).Name
+			for _, r := range result.rows {
+				if qe.valuesEqual(leftVal, r[colName]) {
+					return true
+				}
+			}
+			return false
+		case QP.TokenAll:
+			rightExpr := e.Right.(*QP.BinaryExpr)
+			subq := rightExpr.Right.(*QP.SubqueryExpr)
+			result := qe.evalSubquery(row, subq.Select)
+			if result.rows == nil || len(result.rows) == 0 {
+				return false
+			}
+			for _, r := range result.rows {
+				cmpExpr := &QP.BinaryExpr{
+					Op:    rightExpr.Op,
+					Left:  e.Left,
+					Right: &QP.ColumnRef{Name: subq.Select.Columns[0].(*QP.ColumnRef).Name},
+				}
+				if !qe.evalExpr(r, cmpExpr) {
+					return false
+				}
+			}
+			return true
+		case QP.TokenAny:
+			rightExpr := e.Right.(*QP.BinaryExpr)
+			subq := rightExpr.Right.(*QP.SubqueryExpr)
+			result := qe.evalSubquery(row, subq.Select)
+			if result.rows == nil || len(result.rows) == 0 {
+				return false
+			}
+			for _, r := range result.rows {
+				cmpExpr := &QP.BinaryExpr{
+					Op:    rightExpr.Op,
+					Left:  e.Left,
+					Right: &QP.ColumnRef{Name: subq.Select.Columns[0].(*QP.ColumnRef).Name},
+				}
+				if qe.evalExpr(r, cmpExpr) {
+					return true
+				}
+			}
+			return false
 		}
 	case *QP.UnaryExpr:
 		if e.Op == QP.TokenNot {
@@ -290,6 +349,12 @@ func (qe *QueryEngine) evalExpr(row map[string]interface{}, expr QP.Expr) bool {
 			}
 			return true
 		}
+	case *QP.SubqueryExpr:
+		result := qe.evalSubquery(row, e.Select)
+		if result.rows == nil {
+			return false
+		}
+		return len(result.rows) > 0
 	}
 	return true
 }
@@ -336,12 +401,176 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		return val
 	case *QP.FuncCall:
 		return qe.evalFuncCall(row, e)
+	case *QP.AliasExpr:
+		return qe.evalValue(row, e.Expr)
+	case *QP.SubqueryExpr:
+		result := qe.evalSubquery(row, e.Select)
+		if result.rows == nil || len(result.rows) == 0 {
+			return nil
+		}
+		if len(e.Select.Columns) == 0 {
+			return nil
+		}
+		// Check if this is an aggregate function
+		if fc, ok := e.Select.Columns[0].(*QP.FuncCall); ok {
+			// Evaluate aggregate across all rows
+			switch fc.Name {
+			case "MAX":
+				var maxVal interface{}
+				for _, r := range result.rows {
+					val := qe.evalValue(r, fc.Args[0])
+					if val != nil {
+						if maxVal == nil || qe.compareVals(val, maxVal) > 0 {
+							maxVal = val
+						}
+					}
+				}
+				return maxVal
+			case "MIN":
+				var minVal interface{}
+				for _, r := range result.rows {
+					val := qe.evalValue(r, fc.Args[0])
+					if val != nil {
+						if minVal == nil || qe.compareVals(val, minVal) < 0 {
+							minVal = val
+						}
+					}
+				}
+				return minVal
+			case "SUM":
+				var sumVal float64
+				for _, r := range result.rows {
+					val := qe.evalValue(r, fc.Args[0])
+					if val != nil {
+						switch v := val.(type) {
+						case int64:
+							sumVal += float64(v)
+						case float64:
+							sumVal += v
+						}
+					}
+				}
+				return sumVal
+			case "AVG":
+				var sumVal float64
+				var count int
+				for _, r := range result.rows {
+					val := qe.evalValue(r, fc.Args[0])
+					if val != nil {
+						count++
+						switch v := val.(type) {
+						case int64:
+							sumVal += float64(v)
+						case float64:
+							sumVal += v
+						}
+					}
+				}
+				if count > 0 {
+					return sumVal / float64(count)
+				}
+				return nil
+			case "COUNT":
+				return int64(len(result.rows))
+			}
+		}
+		// For non-aggregate, just return the first row's value
+		return qe.evalValue(result.rows[0], e.Select.Columns[0])
 	}
 	return nil
 }
 
 func (qe *QueryEngine) EvalExpr(row map[string]interface{}, expr QP.Expr) interface{} {
 	return qe.evalValue(row, expr)
+}
+
+type subqueryResult struct {
+	rows []map[string]interface{}
+}
+
+func (qe *QueryEngine) evalSubquery(outerRow map[string]interface{}, sel *QP.SelectStmt) *subqueryResult {
+	if sel == nil || sel.From == nil {
+		return &subqueryResult{rows: nil}
+	}
+
+	tableName := sel.From.Name
+	tableData, ok := qe.data[tableName]
+	if !ok || tableData == nil {
+		return &subqueryResult{rows: nil}
+	}
+
+	rows := []map[string]interface{}{}
+	for _, row := range tableData {
+		if sel.Where != nil {
+			merged := make(map[string]interface{})
+			// First copy outer row (correlation references)
+			for k, v := range outerRow {
+				merged[k] = v
+			}
+			// Then copy inner row (overwrites outer for same columns)
+			// This allows e2.dept_id to reference inner row
+			for k, v := range row {
+				merged[k] = v
+			}
+			if !qe.evalExpr(merged, sel.Where) {
+				continue
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	return &subqueryResult{rows: rows}
+}
+
+func (qe *QueryEngine) decodeRow(data []byte, schema map[string]ColumnType) map[string]interface{} {
+	row := make(map[string]interface{})
+	if data == nil || len(data) == 0 {
+		for name := range schema {
+			row[name] = nil
+		}
+		return row
+	}
+
+	pos := 0
+	for name, colType := range schema {
+		if pos >= len(data) {
+			row[name] = nil
+			continue
+		}
+
+		switch colType.Type {
+		case "INTEGER":
+			if pos+8 <= len(data) {
+				val := int64(data[pos])
+				for i := 1; i < 8; i++ {
+					val |= int64(data[pos+i]) << (i * 8)
+				}
+				row[name] = val
+			} else {
+				row[name] = nil
+			}
+			pos += 8
+		case "REAL":
+			if pos+8 <= len(data) {
+				var f float64
+				fmt.Sscanf(string(data[pos:pos+8]), "%f", &f)
+				row[name] = f
+			} else {
+				row[name] = nil
+			}
+			pos += 8
+		case "TEXT":
+			if pos < len(data) {
+				row[name] = string(data[pos:])
+				pos = len(data)
+			} else {
+				row[name] = nil
+			}
+		default:
+			row[name] = nil
+		}
+	}
+	return row
 }
 
 func (qe *QueryEngine) valuesEqual(a, b interface{}) bool {
@@ -483,6 +712,32 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			}
 		}
 		return nil
+	case "MAX":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		return val
+	case "MIN":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		return val
+	case "COUNT":
+		return int64(1)
+	case "SUM":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		return val
+	case "AVG":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		return val
 	}
 	return nil
 }

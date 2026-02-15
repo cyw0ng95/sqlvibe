@@ -41,6 +41,10 @@ const (
 	TokenBetween
 	TokenIs
 	TokenIsNot
+	TokenExists
+	TokenInSubquery
+	TokenAll
+	TokenAny
 )
 
 var keywords = map[string]TokenType{
@@ -95,7 +99,7 @@ var keywords = map[string]TokenType{
 	"ASC":           TokenKeyword,
 	"DESC":          TokenKeyword,
 	"UNION":         TokenKeyword,
-	"ALL":           TokenKeyword,
+	"ALL":           TokenAll,
 	"EXCEPT":        TokenKeyword,
 	"INTERSECT":     TokenKeyword,
 	"CASE":          TokenKeyword,
@@ -103,7 +107,9 @@ var keywords = map[string]TokenType{
 	"THEN":          TokenKeyword,
 	"ELSE":          TokenKeyword,
 	"END":           TokenKeyword,
-	"EXISTS":        TokenKeyword,
+	"EXISTS":        TokenExists,
+	"ANY":           TokenAny,
+	"SOME":          TokenAny,
 	"CAST":          TokenKeyword,
 	"COUNT":         TokenKeyword,
 	"SUM":           TokenKeyword,

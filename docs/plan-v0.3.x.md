@@ -1,7 +1,7 @@
 # Plan v0.3.x
 
 ## Goal
-Implement JOIN support (INNER, LEFT, CROSS) and sqlite_master table for basic query capabilities. Also refactor codebase for better maintainability.
+Implement JOIN support (INNER, LEFT, CROSS), sqlite_master table, WHERE clause operators, COALESCE/IFNULL, and subqueries for full query capabilities.
 
 ## Requirements
 
@@ -9,7 +9,7 @@ Implement JOIN support (INNER, LEFT, CROSS) and sqlite_master table for basic qu
 - INNER JOIN (from sqlite.reqs.md, sql1999.reqs.md)
 - LEFT JOIN (from sqlite.reqs.md, sql1999.reqs.md)
 - sqlite_master table (from sqlite.reqs.md)
-- Code refactoring: Split database.go into smaller files
+- Subqueries: Scalar, EXISTS, IN, ALL/ANY, Correlated
 
 ### MEDIUM Priority
 - CROSS JOIN (from sqlite.reqs.md, sql1999.reqs.md)
@@ -22,6 +22,9 @@ Implement JOIN support (INNER, LEFT, CROSS) and sqlite_master table for basic qu
 graph LR
     P[JOIN Parser] --> E[JOIN Engine]
     E --> CJ[CROSS JOIN]
+    CJ --> SQ[Subqueries]
+    SQ --> SQ_P[Subquery Parser]
+    SQ_P --> SQ_E[Subquery Engine]
 ```
 
 **Notes:**
@@ -71,6 +74,36 @@ graph LR
   - `aggregate.go` - computeAggregate, computeGroupBy
 - **Files affected**: Create new files in `pkg/sqlvibe/`
 
+### 7. Subqueries
+- **Parser changes**: Detect subqueries in WHERE clause and SELECT columns
+- **Engine changes**: Execute subqueries and use results in parent query
+- **Files affected**: `internal/QP/parser.go`, `pkg/sqlvibe/database.go`
+
+**Implementation:**
+- Parse `(SELECT ...)` as SubqueryExpr in WHERE clause
+- Detect EXISTS `(SELECT ...)` 
+- Detect `IN (SELECT ...)` 
+- Detect `ALL/ANY (SELECT ...)`
+- Execute subquery, return scalar value or boolean
+
+### 7.1 Scalar Subquery
+- `SELECT (SELECT col FROM t2 WHERE ...)`
+- Returns single value
+- Must return at most one row
+
+### 7.2 EXISTS Subquery
+- `WHERE EXISTS (SELECT 1 FROM t2 WHERE ...)`
+- Returns TRUE if subquery returns any rows
+
+### 7.3 IN Subquery  
+- `WHERE col IN (SELECT col FROM t2 ...)`
+- Returns TRUE if value matches any result
+
+### 7.4 ALL/ANY Subquery
+- `WHERE col > ALL (SELECT ...)`
+- `WHERE col > ANY (SELECT ...)`
+- Quantified comparison
+
 ## Success Criteria
 
 - [x] sqlite_master table returns table list
@@ -81,9 +114,14 @@ graph LR
 - [x] All JOIN tests pass (TestQueryJoins, TestMultipleTables)
 - [x] WHERE clause operators: AND, OR, NOT, IN, BETWEEN, LIKE, IS NULL, IS NOT NULL
 - [x] COALESCE/IFNULL functions
-- [ ] Subqueries (NOT YET IMPLEMENTED)
+- [ ] Scalar subquery in SELECT
+- [ ] EXISTS subquery
+- [ ] IN subquery
+- [ ] ALL/ANY subquery
+- [ ] Correlated subquery
 
 ## Notes
 - JOINs share similar nested-loop implementation pattern
 - Test with: `go test -run TestQueryJoins ./pkg/sqlvibe`
-- Subqueries (scalar, IN, EXISTS, correlated) NOT YET IMPLEMENTED - requires parser and engine changes
+- Subquery types: Scalar, EXISTS, IN, ALL/ANY, correlated
+- Test with: `go test -run TestQuerySubqueries ./pkg/sqlvibe`

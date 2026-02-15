@@ -128,7 +128,8 @@ func Open(path string) (*Database, error) {
 		return nil, err
 	}
 
-	engine := QE.NewQueryEngine(pm)
+	data := make(map[string][]map[string]interface{})
+	engine := QE.NewQueryEngine(pm, data)
 
 	return &Database{
 		pm:          pm,
@@ -136,7 +137,7 @@ func Open(path string) (*Database, error) {
 		tables:      make(map[string]map[string]string),
 		primaryKeys: make(map[string][]string),
 		columnOrder: make(map[string][]string),
-		data:        make(map[string][]map[string]interface{}),
+		data:        data,
 	}, nil
 }
 
@@ -315,19 +316,15 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		return nil, err
 	}
 	if ast == nil {
-		fmt.Printf("DEBUG Query: ast is nil\n")
 		return nil, nil
 	}
 
-	fmt.Printf("DEBUG Query: ast.NodeType() = %s\n", ast.NodeType())
 
 	if ast.NodeType() == "SelectStmt" {
 		stmt := ast.(*QP.SelectStmt)
-		fmt.Printf("DEBUG Query: stmt.From = %v\n", stmt.From)
 		if stmt.From == nil {
 			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 		}
-		fmt.Printf("DEBUG Query: got SelectStmt, From.Name=%s, Join=%v\n", stmt.From.Name, stmt.From.Join)
 
 		var tableName string
 		if stmt.From != nil {
@@ -344,7 +341,6 @@ func (db *Database) Query(sql string) (*Rows, error) {
 
 		// Handle JOIN queries
 		if stmt.From != nil && stmt.From.Join != nil {
-			fmt.Printf("DEBUG join: detected join, left=%s, right=%s, type=%s\n", stmt.From.Name, stmt.From.Join.Right.Name, stmt.From.Join.Type)
 			return db.handleJoin(stmt)
 		}
 
@@ -380,15 +376,12 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		}
 
 		if hasAggregate && stmt.Where == nil && len(stmt.Columns) == 1 {
-			fmt.Printf("DEBUG aggregate: computing result for %s\n", aggregateFunc.Name)
 			result := db.computeAggregate(tableData, aggregateFunc)
-			fmt.Printf("DEBUG aggregate: result=%v\n", result)
 			return &Rows{Columns: []string{aggregateFunc.Name}, Data: [][]interface{}{{result}}}, nil
 		}
 
 		// Handle GROUP BY
 		if len(stmt.GroupBy) > 0 && hasAggregate {
-			fmt.Printf("DEBUG groupby: handling GROUP BY\n")
 			result, err := db.computeGroupBy(tableData, stmt)
 			if err != nil {
 				return nil, err
@@ -441,9 +434,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		scan := QE.NewTableScan(db.engine, tableName)
 		scan.SetData(tableData)
 
-		fmt.Printf("DEBUG Query: WHERE clause = %v\n", stmt.Where)
 		predicate := db.engine.BuildPredicate(stmt.Where)
-		fmt.Printf("DEBUG Query: predicate built\n")
 		filter := QE.NewFilter(scan, predicate)
 
 		project := db.engine.NewProjectWithExpr(filter, cols, expressions)
@@ -488,7 +479,6 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			resultData = append(resultData, resultRow)
 		}
 		limited.Close()
-		fmt.Printf("DEBUG Query: returned %d rows\n", rowCount)
 
 		if len(stmt.OrderBy) > 0 {
 			resultData = db.applyOrderBy(resultData, stmt.OrderBy, cols)
@@ -720,11 +710,91 @@ func (db *Database) evalWhere(row map[string]interface{}, where QP.Expr) bool {
 				return db.compareVals(leftVal, minVal) >= 0 && db.compareVals(leftVal, maxVal) <= 0
 			}
 			return false
+		case QP.TokenExists:
+			subq, ok := e.Left.(*QP.SubqueryExpr)
+			if !ok {
+				return false
+			}
+			result := db.evalSubquery(row, subq.Select)
+			return result != nil && len(result) > 0
+		case QP.TokenInSubquery:
+			leftVal := db.evalExpr(row, e.Left)
+			subq, ok := e.Right.(*QP.SubqueryExpr)
+			if !ok {
+				return false
+			}
+			result := db.evalSubquery(row, subq.Select)
+			if result == nil || len(result) == 0 {
+				return false
+			}
+			for _, r := range result {
+				for _, v := range r {
+					if db.valuesEqual(leftVal, v) {
+						return true
+					}
+				}
+			}
+			return false
+		case QP.TokenAll:
+			rightExpr, ok := e.Right.(*QP.BinaryExpr)
+			if !ok {
+				return false
+			}
+			subq, ok := rightExpr.Right.(*QP.SubqueryExpr)
+			if !ok {
+				return false
+			}
+			result := db.evalSubquery(row, subq.Select)
+			if result == nil || len(result) == 0 {
+				return false
+			}
+			for _, r := range result {
+				for _, v := range r {
+					cmpExpr := &QP.BinaryExpr{
+						Op:    rightExpr.Op,
+						Left:  e.Left,
+						Right: &QP.Literal{Value: v},
+					}
+					if !db.evalWhere(row, cmpExpr) {
+						return false
+					}
+				}
+			}
+			return true
+		case QP.TokenAny:
+			rightExpr, ok := e.Right.(*QP.BinaryExpr)
+			if !ok {
+				return false
+			}
+			subq, ok := rightExpr.Right.(*QP.SubqueryExpr)
+			if !ok {
+				return false
+			}
+			result := db.evalSubquery(row, subq.Select)
+			if result == nil || len(result) == 0 {
+				return false
+			}
+			for _, r := range result {
+				for _, v := range r {
+					cmpExpr := &QP.BinaryExpr{
+						Op:    rightExpr.Op,
+						Left:  e.Left,
+						Right: &QP.Literal{Value: v},
+					}
+					if db.evalWhere(row, cmpExpr) {
+						return true
+					}
+				}
+			}
+			return false
 		}
 	case *QP.UnaryExpr:
 		if e.Op == QP.TokenNot {
 			return !db.evalWhere(row, e.Expr)
 		}
+	case *QP.SubqueryExpr:
+		result := db.evalSubquery(row, e.Select)
+		return result != nil && len(result) > 0
 	}
 	return true
 }
@@ -852,6 +922,37 @@ func (db *Database) compareVals(a, b interface{}) int {
 		return 0
 	}
 	return 0
+}
+
+func (db *Database) evalSubquery(outerRow map[string]interface{}, sel *QP.SelectStmt) []map[string]interface{} {
+	if sel == nil || sel.From == nil {
+		return nil
+	}
+
+	tableName := sel.From.Name
+	tableData, ok := db.data[tableName]
+	if !ok || tableData == nil {
+		return nil
+	}
+
+	rows := []map[string]interface{}{}
+	for _, row := range tableData {
+		if sel.Where != nil {
+			merged := make(map[string]interface{})
+			for k, v := range outerRow {
+				merged[k] = v
+			}
+			for k, v := range row {
+				merged[k] = v
+			}
+			if !db.evalWhere(merged, sel.Where) {
+				continue
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	return rows
 }
 
 func (db *Database) matchLike(value, pattern string) bool {
@@ -1062,7 +1163,6 @@ func (db *Database) serializeRow(row map[string]interface{}) []byte {
 }
 
 func (db *Database) computeGroupBy(data []map[string]interface{}, stmt *QP.SelectStmt) (*Rows, error) {
-	fmt.Printf("DEBUG groupby: data length=%d\n", len(data))
 
 	groupByCols := make([]string, len(stmt.GroupBy))
 	for i, gb := range stmt.GroupBy {
@@ -1070,7 +1170,6 @@ func (db *Database) computeGroupBy(data []map[string]interface{}, stmt *QP.Selec
 			groupByCols[i] = cr.Name
 		}
 	}
-	fmt.Printf("DEBUG groupby: groupByCols=%v\n", groupByCols)
 
 	groups := make(map[string][]map[string]interface{})
 	for _, row := range data {
@@ -1082,7 +1181,6 @@ func (db *Database) computeGroupBy(data []map[string]interface{}, stmt *QP.Selec
 		}
 		groups[key] = append(groups[key], row)
 	}
-	fmt.Printf("DEBUG groupby: number of groups=%d\n", len(groups))
 
 	resultCols := make([]string, 0)
 	resultData := make([][]interface{}, 0)
@@ -1111,7 +1209,6 @@ func (db *Database) computeGroupBy(data []map[string]interface{}, stmt *QP.Selec
 			resultCols = append(resultCols, colName)
 		}
 	}
-	fmt.Printf("DEBUG groupby: resultCols=%v\n", resultCols)
 
 	aggCache := make(map[string]map[string]interface{})
 	for key, rows := range groups {
@@ -1243,7 +1340,6 @@ func (db *Database) computeGroupBy(data []map[string]interface{}, stmt *QP.Selec
 		}
 	}
 
-	fmt.Printf("DEBUG groupby: returning %d rows\n", len(resultData))
 	return &Rows{Columns: resultCols, Data: resultData}, nil
 }
 
@@ -1290,22 +1386,16 @@ func (db *Database) handleJoin(stmt *QP.SelectStmt) (*Rows, error) {
 	join := stmt.From.Join
 
 	leftTableName := stmt.From.Name
-	fmt.Printf("DEBUG handleJoin: leftTable=%s\n", leftTableName)
 	leftData, ok := db.data[leftTableName]
 	if !ok || leftData == nil {
-		fmt.Printf("DEBUG handleJoin: left data not found for %s\n", leftTableName)
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
-	fmt.Printf("DEBUG handleJoin: leftData len=%d\n", len(leftData))
 
 	rightTableName := join.Right.Name
-	fmt.Printf("DEBUG handleJoin: rightTable=%s\n", rightTableName)
 	rightData, ok := db.data[rightTableName]
 	if !ok || rightData == nil {
-		fmt.Printf("DEBUG handleJoin: right data not found for %s\n", rightTableName)
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
-	fmt.Printf("DEBUG handleJoin: rightData len=%d\n", len(rightData))
 
 	var result *Rows
 	switch join.Type {
@@ -1316,7 +1406,6 @@ func (db *Database) handleJoin(stmt *QP.SelectStmt) (*Rows, error) {
 	case "CROSS":
 		result = db.crossJoin(leftData, rightData, stmt)
 	default:
-		fmt.Printf("DEBUG handleJoin: unknown join type: %s\n", join.Type)
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
 

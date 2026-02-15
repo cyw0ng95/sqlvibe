@@ -117,7 +117,7 @@ func TestQueryEngine(t *testing.T) {
 		t.Fatalf("failed to create page manager: %v", err)
 	}
 
-	qe := NewQueryEngine(pm)
+	qe := NewQueryEngine(pm, nil)
 	qe.RegisterTable("users", map[string]ColumnType{
 		"id":   {Name: "id", Type: "INTEGER"},
 		"name": {Name: "name", Type: "TEXT"},
