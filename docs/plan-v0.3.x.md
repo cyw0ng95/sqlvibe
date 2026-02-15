@@ -16,6 +16,7 @@ Implement JOIN support (INNER, LEFT, CROSS), sqlite_master table, WHERE clause o
 - WHERE clause operators: AND, OR, NOT, IN, BETWEEN, LIKE, IS NULL, IS NOT NULL
 - COALESCE/IFNULL functions
 - :memory: database support (in-memory database)
+- TS: Test Suites subsystem for sqlvibe
 
 ## Implementation DAG
 
@@ -27,6 +28,7 @@ graph LR
     SQ --> SQ_P[Subquery Parser]
     SQ_P --> SQ_E[Subquery Engine]
     SQ_E --> MEM[:memory: Support]
+    MEM --> TS[TS: Test Suites]
 ```
 
 **Notes:**
@@ -116,6 +118,25 @@ graph LR
 - Use in-memory data structures only (no page manager needed)
 - Return empty/in-memory database struct
 
+### 9. TS: Test Suites Subsystem
+- **Goal**: Create a dedicated test subsystem for sqlvibe tests
+- **Files affected**: Create `internal/TS/` directory
+
+**Implementation:**
+- Create `internal/TS/` directory following other subsystem patterns (PB, DS, QP, QE, TM)
+- Implement test utilities and helpers
+- Support sqllogictest format compatibility
+- Provide test data management utilities
+- Coordinate with existing test files in `pkg/sqlvibe/`
+
+**Directory Structure:**
+```
+internal/TS/
+├── ts.go          # Test suite utilities
+├── testdata/      # Test data files
+└── helpers.go     # Test helper functions
+```
+
 ## Success Criteria
 
 - [x] sqlite_master table returns table list
@@ -132,6 +153,7 @@ graph LR
 - [x] ALL/ANY subquery
 - [x] Correlated subquery
 - [ ] :memory: database support
+- [ ] TS: Test Suites subsystem created
 
 ## Notes
 - JOINs share similar nested-loop implementation pattern
