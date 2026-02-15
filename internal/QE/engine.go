@@ -3,6 +3,7 @@ package QE
 import (
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
@@ -859,6 +860,90 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			return nil
 		}
 		val := qe.evalValue(row, fc.Args[0])
+		return val
+	case "ABS":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		switch v := val.(type) {
+		case int64:
+			if v < 0 {
+				return -v
+			}
+			return v
+		case float64:
+			return math.Abs(v)
+		}
+		return val
+	case "CEIL", "CEILING":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		switch v := val.(type) {
+		case int64:
+			return v
+		case float64:
+			return math.Ceil(v)
+		}
+		return val
+	case "FLOOR":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		switch v := val.(type) {
+		case int64:
+			return v
+		case float64:
+			return math.Floor(v)
+		}
+		return val
+	case "ROUND":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		// Default to 0 decimal places (return int64)
+		decimals := 0
+		if len(fc.Args) >= 2 {
+			if decVal := qe.evalValue(row, fc.Args[1]); decVal != nil {
+				switch d := decVal.(type) {
+				case int64:
+					decimals = int(d)
+				case float64:
+					decimals = int(d)
+				}
+			}
+		}
+		switch v := val.(type) {
+		case int64:
+			if decimals == 0 {
+				return v
+			}
+			// With decimal places, convert to float64
+			divisor := math.Pow10(decimals)
+			return math.Round(float64(v)*divisor) / divisor
+		case float64:
+			if decimals == 0 {
+				return math.Round(v)
+			}
+			divisor := math.Pow10(decimals)
+			return math.Round(v*divisor) / divisor
+		}
 		return val
 	}
 	return nil
