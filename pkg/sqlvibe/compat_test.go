@@ -58,6 +58,10 @@ func fetchAllRowsSQLite(rows *sql.Rows) ([]map[string]interface{}, error) {
 		}
 		results = append(results, row)
 	}
+	// Check for errors after iteration
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return results, nil
 }
 
@@ -771,6 +775,9 @@ func TestEdgeCaseNULLs(t *testing.T) {
 
 	sqlvibeDB, _ := Open(sqlvibePath)
 	sqliteDB, _ := sql.Open("sqlite", sqlitePath)
+	if err := sqliteDB.Ping(); err != nil {
+		t.Fatalf("Failed to ping sqlite: %v", err)
+	}
 	defer sqlvibeDB.Close()
 	defer sqliteDB.Close()
 
@@ -780,8 +787,14 @@ func TestEdgeCaseNULLs(t *testing.T) {
 	}
 
 	for _, sql := range setupSQL {
-		sqlvibeDB.Exec(sql)
-		sqliteDB.Exec(sql)
+		_, err := sqlvibeDB.Exec(sql)
+		if err != nil {
+			t.Fatalf("sqlvibe setup failed: %v", err)
+		}
+		_, err = sqliteDB.Exec(sql)
+		if err != nil {
+			t.Fatalf("sqlite setup failed: %v", err)
+		}
 	}
 
 	nullTests := []struct {

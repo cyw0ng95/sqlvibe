@@ -15,6 +15,7 @@ Implement JOIN support (INNER, LEFT, CROSS), sqlite_master table, WHERE clause o
 - CROSS JOIN (from sqlite.reqs.md, sql1999.reqs.md)
 - WHERE clause operators: AND, OR, NOT, IN, BETWEEN, LIKE, IS NULL, IS NOT NULL
 - COALESCE/IFNULL functions
+- :memory: database support (in-memory database)
 
 ## Implementation DAG
 
@@ -25,6 +26,7 @@ graph LR
     CJ --> SQ[Subqueries]
     SQ --> SQ_P[Subquery Parser]
     SQ_P --> SQ_E[Subquery Engine]
+    SQ_E --> MEM[:memory: Support]
 ```
 
 **Notes:**
@@ -104,6 +106,16 @@ graph LR
 - `WHERE col > ANY (SELECT ...)`
 - Quantified comparison
 
+### 8. :memory: Database Support
+- **Goal**: Support opening an in-memory database with `Open(":memory:")`
+- **Files affected**: `pkg/sqlvibe/database.go`
+
+**Implementation:**
+- Detect if path == ":memory:" in Open() function
+- Skip file operations for :memory: database
+- Use in-memory data structures only (no page manager needed)
+- Return empty/in-memory database struct
+
 ## Success Criteria
 
 - [x] sqlite_master table returns table list
@@ -114,14 +126,16 @@ graph LR
 - [x] All JOIN tests pass (TestQueryJoins, TestMultipleTables)
 - [x] WHERE clause operators: AND, OR, NOT, IN, BETWEEN, LIKE, IS NULL, IS NOT NULL
 - [x] COALESCE/IFNULL functions
-- [ ] Scalar subquery in SELECT
-- [ ] EXISTS subquery
-- [ ] IN subquery
-- [ ] ALL/ANY subquery
-- [ ] Correlated subquery
+- [x] Scalar subquery in SELECT
+- [x] EXISTS subquery
+- [x] IN subquery
+- [x] ALL/ANY subquery
+- [x] Correlated subquery
+- [ ] :memory: database support
 
 ## Notes
 - JOINs share similar nested-loop implementation pattern
 - Test with: `go test -run TestQueryJoins ./pkg/sqlvibe`
 - Subquery types: Scalar, EXISTS, IN, ALL/ANY, correlated
 - Test with: `go test -run TestQuerySubqueries ./pkg/sqlvibe`
+- :memory: support - Open(":memory:") should create in-memory database
