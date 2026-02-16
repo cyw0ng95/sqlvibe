@@ -417,25 +417,42 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return db.querySqliteMaster(stmt)
 		}
 
-		// VM for simple SELECT only (temporarily disabled while fixing issues)
+		// VM disabled for now - needs more work
+		isSimple := false
+		// // VM enabled for simple queries (no JOIN, no WHERE, no ORDER BY, no GROUP BY, no expressions, no LIMIT, no SetOp)
+		// // VM only handles simple column references like "SELECT col1, col2 FROM table"
 		// isSimple := true
 		// if stmt.From != nil && stmt.From.Join != nil {
 		// 	isSimple = false
 		// }
+		// if stmt.Where != nil {
+		// 	isSimple = false
+		// }
+		// if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
+		// 	isSimple = false
+		// }
+		// if stmt.GroupBy != nil && len(stmt.GroupBy) > 0 {
+		// 	isSimple = false
+		// }
+		// if stmt.Limit != nil {
+		// 	isSimple = false
+		// }
+		// if stmt.SetOp != "" {
+		// 	isSimple = false
+		// }
+		// // Check for expressions in SELECT list - VM only handles simple column refs
 		// for _, col := range stmt.Columns {
-		// 	if fc, ok := col.(*QP.FuncCall); ok {
-		// 		if fc.Name == "COUNT" || fc.Name == "SUM" || fc.Name == "AVG" || fc.Name == "MIN" || fc.Name == "MAX" {
-		// 			isSimple = false
-		// 			break
-		// 		}
+		// 	if _, ok := col.(*QP.ColumnRef); !ok {
+		// 		isSimple = false
+		// 		break
 		// 	}
 		// }
-		// if isSimple && stmt.Where == nil {
-		// 	rows, err := db.execVMQuery(sql, tableName)
-		// 	if err == nil && rows != nil {
-		// 		return rows, nil
-		// 	}
-		// }
+		if isSimple {
+			rows, err := db.execVMQuery(sql, tableName)
+			if err == nil && rows != nil && len(rows.Data) > 0 {
+				return rows, nil
+			}
+		}
 
 		if stmt.From != nil && stmt.From.Join != nil {
 			return db.handleJoin(stmt)

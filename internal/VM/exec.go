@@ -207,6 +207,18 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpIfNull2:
+			src := vm.registers[inst.P1]
+			fallback := vm.registers[inst.P2]
+			if dst, ok := inst.P4.(int); ok {
+				if src == nil {
+					vm.registers[dst] = fallback
+				} else {
+					vm.registers[dst] = src
+				}
+			}
+			continue
+
 		case OpAdd:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]

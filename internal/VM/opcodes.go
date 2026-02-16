@@ -79,6 +79,7 @@ const (
 	OpIsNull
 	OpNotNull
 	OpIfNull
+	OpIfNull2
 
 	// Arithmetic
 	OpAdd
@@ -257,6 +258,7 @@ var OpCodeInfo = map[OpCode]string{
 	OpIsNull:  "IsNull",
 	OpNotNull: "NotNull",
 	OpIfNull:  "IfNull",
+	OpIfNull2: "IfNull2",
 
 	// Arithmetic
 	OpAdd:       "Add",

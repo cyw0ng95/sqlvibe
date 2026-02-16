@@ -36,6 +36,23 @@ func (p *Program) EmitOp(op OpCode, p1, p2 int32) int {
 	return idx
 }
 
+func (p *Program) EmitOpWithDst(op OpCode, p1, p2 int32, dst int) int {
+	idx := len(p.Instructions)
+	p.Instructions = append(p.Instructions, Instruction{
+		Op: op,
+		P1: p1,
+		P2: p2,
+		P4: dst,
+	})
+	if dst >= p.NumRegs {
+		p.NumRegs = dst + 1
+	}
+	if int(p1) >= p.NumRegs {
+		p.NumRegs = int(p1) + 1
+	}
+	return idx
+}
+
 func (p *Program) EmitLoadConst(reg int, value interface{}) int {
 	idx := len(p.Instructions)
 	p.Instructions = append(p.Instructions, Instruction{

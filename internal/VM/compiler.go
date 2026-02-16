@@ -33,20 +33,19 @@ func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *Program {
 
 	if stmt.From != nil {
 		c.compileFrom(stmt.From, stmt.Where, stmt.Columns)
-	}
-
-	if stmt.Where != nil {
-		whereReg := c.compileExpr(stmt.Where)
-		_ = whereReg
-	}
-
-	if stmt.Columns != nil {
+	} else if stmt.Columns != nil {
+		// Handle SELECT without FROM (e.g., SELECT 1+1)
 		resultRegs := make([]int, 0)
 		for _, col := range stmt.Columns {
 			reg := c.compileExpr(col)
 			resultRegs = append(resultRegs, reg)
 		}
 		c.program.EmitResultRow(resultRegs)
+	}
+
+	if stmt.Where != nil && stmt.From == nil {
+		whereReg := c.compileExpr(stmt.Where)
+		_ = whereReg
 	}
 
 	c.program.Emit(OpHalt)
@@ -108,12 +107,18 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 		}
 		c.program.EmitResultRow(resultRegs)
 
+		// Emit loop continuation: Next + Goto, then Halt
+		// Next will jump to Halt when all rows are processed
+		// Goto jumps to after Rewind to process next row
 		np := c.program.EmitOp(OpNext, 0, 0)
-		gotoRewind := c.program.EmitGoto(rewindPos)
+		gotoRewind := c.program.EmitGoto(rewindPos + 1) // Jump to after Rewind
+		haltPos := len(c.program.Instructions)
 		c.program.Emit(OpHalt)
-		c.program.Fixup(np)
-		_ = gotoRewind
-		c.program.Fixup(gotoRewind)
+
+		// Fixup: Next jumps to Halt when EOF
+		c.program.FixupWithPos(np, haltPos)
+		// Fixup: Goto jumps back to after Rewind
+		c.program.FixupWithPos(gotoRewind, rewindPos+1)
 	}
 }
 
@@ -296,13 +301,13 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 
 	switch call.Name {
 	case "ABS":
-		c.program.EmitOp(OpAbs, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpAbs, int32(argRegs[0]), 0, dst)
 	case "UPPER":
-		c.program.EmitOp(OpUpper, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpUpper, int32(argRegs[0]), 0, dst)
 	case "LOWER":
-		c.program.EmitOp(OpLower, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpLower, int32(argRegs[0]), 0, dst)
 	case "LENGTH":
-		c.program.EmitOp(OpLength, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpLength, int32(argRegs[0]), 0, dst)
 	case "SUBSTR", "SUBSTRING":
 		if len(argRegs) >= 3 {
 			c.program.EmitOp(OpSubstr, int32(argRegs[0]), int32(argRegs[1]))
@@ -328,15 +333,27 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 			c.program.EmitOp(OpRTrim, int32(argRegs[0]), 0)
 		}
 	case "COALESCE":
-		nullReg := c.ra.Alloc()
-		c.program.EmitLoadConst(nullReg, nil)
-		c.program.EmitOp(OpIfNull, int32(argRegs[0]), int32(nullReg))
-		return nullReg
+		// COALESCE(a, b, ...) - return first non-null argument
+		// Handle 2+ arguments by checking each in sequence
+		if len(argRegs) >= 2 {
+			// Check if first arg is null, if so use second, else use first
+			checkReg := c.ra.Alloc()
+			c.program.EmitCopy(argRegs[0], checkReg)
+			fallbackReg := argRegs[1]
+			c.program.EmitOpWithDst(OpIfNull2, int32(checkReg), int32(fallbackReg), dst)
+			return dst
+		}
+		// Single argument - just return it
+		c.program.EmitCopy(argRegs[0], dst)
+		return dst
 	case "IFNULL":
-		nullReg := c.ra.Alloc()
-		c.program.EmitLoadConst(nullReg, nil)
-		c.program.EmitOp(OpIfNull, int32(argRegs[0]), int32(nullReg))
-		return nullReg
+		// IFNULL(a, b) - if a is null, return b, else return a
+		if len(argRegs) >= 2 {
+			c.program.EmitOpWithDst(OpIfNull2, int32(argRegs[0]), int32(argRegs[1]), dst)
+		} else {
+			c.program.EmitCopy(argRegs[0], dst)
+		}
+		return dst
 	case "INSTR":
 		if len(argRegs) >= 2 {
 			c.program.EmitOp(OpInstr, int32(argRegs[0]), int32(argRegs[1]))
