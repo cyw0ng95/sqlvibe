@@ -547,6 +547,14 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 				if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
 					col.Type = p.current().Literal
 					p.advance()
+					if p.current().Type == TokenLeftParen {
+						for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+							p.advance()
+						}
+						if p.current().Type == TokenRightParen {
+							p.advance()
+						}
+					}
 				}
 				stmt.Columns = append(stmt.Columns, col)
 
