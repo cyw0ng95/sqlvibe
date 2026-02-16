@@ -10,7 +10,7 @@ import (
 
 func FuzzSQL(f *testing.F) {
 	f.Fuzz(func(t *testing.T, query string) {
-		if len(query) == 0 || len(query) > 2000 {
+		if len(query) == 0 || len(query) > 3000 {
 			t.Skip()
 		}
 
@@ -20,13 +20,58 @@ func FuzzSQL(f *testing.F) {
 		}
 		defer db.Close()
 
-		query = strings.TrimSpace(query)
-		if len(query) == 0 {
-			t.Skip()
+		statements := splitStatements(query)
+		maxStmts := 10
+		if len(statements) > maxStmts {
+			statements = statements[:maxStmts]
 		}
 
-		executeSQL(db, query)
+		for _, stmt := range statements {
+			stmt = strings.TrimSpace(stmt)
+			if len(stmt) == 0 {
+				continue
+			}
+			executeSQL(db, stmt)
+		}
 	})
+}
+
+func splitStatements(sql string) []string {
+	var statements []string
+	var current strings.Builder
+	parenDepth := 0
+
+	for _, ch := range sql {
+		switch ch {
+		case '(':
+			parenDepth++
+			current.WriteRune(ch)
+		case ')':
+			parenDepth--
+			current.WriteRune(ch)
+		case ';':
+			if parenDepth == 0 {
+				stmt := current.String()
+				if strings.TrimSpace(stmt) != "" {
+					statements = append(statements, stmt)
+				}
+				current.Reset()
+			} else {
+				current.WriteRune(ch)
+			}
+		default:
+			current.WriteRune(ch)
+		}
+	}
+
+	if current.Len() > 0 {
+		stmt := current.String()
+		if strings.TrimSpace(stmt) != "" {
+			statements = append(statements, stmt)
+		}
+	}
+
+	return statements
 }
 
 func executeSQL(db *sqlvibe.Database, query string) (err error) {
@@ -40,7 +85,7 @@ func executeSQL(db *sqlvibe.Database, query string) (err error) {
 
 	if len(upperQuery) >= 6 {
 		prefix := upperQuery[:6]
-		if prefix == "SELECT" || prefix == "PRAGMA" || prefix == "INSERT" || prefix == "UPDATE" || prefix == "DELETE" || prefix == "CREATE" || prefix == "DROP" {
+		if prefix == "SELECT" || prefix == "PRAGMA" {
 			db.Query(query)
 			return nil
 		}
