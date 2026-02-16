@@ -323,11 +323,17 @@ graph TD
   - table_info, index_list, database_list
 
 ### Wave 4 (Advanced)
-- [ ] Query planner uses indexes for optimization (deferred - requires refactoring)
+- [x] Query planner uses indexes for optimization
+  - Basic index scan for equality lookups (col = value)
+  - Falls back to full table scan when no index available
+  - Unique index optimization (short-circuit after first match)
 - [x] DATE/TIME/TIMESTAMP types work correctly
 - [x] Datetime functions work correctly
   - DATE, TIME, DATETIME, TIMESTAMP
   - CURRENT_DATE, CURRENT_TIME, CURRENT_TIMESTAMP
+  - LOCALTIME, LOCALTIMESTAMP
+  - YEAR, MONTH, DAY, HOUR, MINUTE, SECOND extraction
+  - NOW, STRFTIME functions
 
 ### E021 Full Coverage (12 sections)
 - [x] E021-01: CHARACTER (CHAR) type
