@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -628,6 +629,8 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		return qe.evalValue(row, e.Expr)
 	case *QP.CaseExpr:
 		return qe.evalCaseExpr(row, e)
+	case *QP.CastExpr:
+		return qe.evalCastExpr(row, e)
 	case *QP.SubqueryExpr:
 		result := qe.evalSubquery(row, qe.outerAlias, e.Select)
 		if result.rows == nil || len(result.rows) == 0 {
@@ -763,6 +766,55 @@ func (qe *QueryEngine) evalCaseExpr(row map[string]interface{}, ce *QP.CaseExpr)
 		return qe.evalValue(row, ce.Else)
 	}
 	return nil
+}
+
+func (qe *QueryEngine) evalCastExpr(row map[string]interface{}, ce *QP.CastExpr) interface{} {
+	val := qe.evalValue(row, ce.Expr)
+	if val == nil {
+		return nil
+	}
+	switch ce.Type {
+	case "INTEGER", "INT":
+		if s, ok := val.(string); ok {
+			if iv, err := strconv.ParseInt(s, 10, 64); err == nil {
+				return iv
+			}
+			if fv, err := strconv.ParseFloat(s, 64); err == nil {
+				return int64(fv)
+			}
+			return nil
+		}
+		if fv, ok := val.(float64); ok {
+			return int64(fv)
+		}
+		return val
+	case "REAL", "FLOAT", "DOUBLE", "NUMERIC", "DECIMAL":
+		if s, ok := val.(string); ok {
+			if fv, err := strconv.ParseFloat(s, 64); err == nil {
+				return fv
+			}
+			return nil
+		}
+		if iv, ok := val.(int64); ok {
+			return float64(iv)
+		}
+		return val
+	case "TEXT", "VARCHAR", "CHAR", "CHARACTER":
+		if s, ok := val.(string); ok {
+			return s
+		}
+		if iv, ok := val.(int64); ok {
+			return strconv.FormatInt(iv, 10)
+		}
+		if fv, ok := val.(float64); ok {
+			return strconv.FormatFloat(fv, 'f', -1, 64)
+		}
+		return fmt.Sprintf("%v", val)
+	case "BLOB":
+		return val
+	default:
+		return val
+	}
 }
 
 type subqueryResult struct {

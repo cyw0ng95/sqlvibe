@@ -1,6 +1,7 @@
 package QP
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -185,6 +186,13 @@ type CaseWhen struct {
 }
 
 func (e *CaseExpr) exprNode() {}
+
+type CastExpr struct {
+	Expr Expr
+	Type string
+}
+
+func (e *CastExpr) exprNode() {}
 
 type Parser struct {
 	tokens     []Token
@@ -1167,6 +1175,30 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	case TokenString:
 		p.advance()
 		return &Literal{Value: tok.Literal}, nil
+	case TokenCast:
+		p.advance()
+		if p.current().Type != TokenLeftParen {
+			return nil, fmt.Errorf("expected '(' after CAST")
+		}
+		p.advance()
+		expr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if p.current().Type != TokenKeyword || p.current().Literal != "AS" {
+			return nil, fmt.Errorf("expected AS in CAST expression")
+		}
+		p.advance()
+		typeName := ""
+		if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+			typeName = strings.ToUpper(p.current().Literal)
+			p.advance()
+		}
+		if p.current().Type != TokenRightParen {
+			return nil, fmt.Errorf("expected ')' after CAST type")
+		}
+		p.advance()
+		return &CastExpr{Expr: expr, Type: typeName}, nil
 	case TokenIdentifier:
 		p.advance()
 

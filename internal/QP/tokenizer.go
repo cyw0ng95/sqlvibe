@@ -49,6 +49,7 @@ const (
 	TokenInSubquery
 	TokenAll
 	TokenAny
+	TokenCast
 )
 
 var keywords = map[string]TokenType{
@@ -115,7 +116,7 @@ var keywords = map[string]TokenType{
 	"EXISTS":            TokenExists,
 	"ANY":               TokenAny,
 	"SOME":              TokenAny,
-	"CAST":              TokenKeyword,
+	"CAST":              TokenCast,
 	"COUNT":             TokenKeyword,
 	"SUM":               TokenKeyword,
 	"AVG":               TokenKeyword,
