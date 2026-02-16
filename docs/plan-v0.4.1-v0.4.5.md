@@ -181,7 +181,9 @@ Fix all NULL handling and IN/BETWEEN operator bugs.
 - [x] LIKE operator in evalValue - fixed
 - [x] NOT LIKE operator - implemented
 - [x] GLOB operator - implemented
-- [ ] NULL comparison 3-valued logic - in progress
+- [x] NULL arithmetic (add, sub, mul, div, mod, concat) - fixed
+- [x] NULL comparison 3-valued logic - implemented
+- [x] AND/OR in SELECT expressions - implemented
 
 ### Tasks
 
@@ -235,8 +237,10 @@ Fix all NULL handling and IN/BETWEEN operator bugs.
 - [x] LIKE operator works in SELECT and WHERE
 - [x] NOT LIKE operator works
 - [x] GLOB operator works
-- [ ] NULL comparisons return correct results (3-valued logic)
-- [ ] All E011-05 tests pass
+- [x] NULL comparisons return correct results (3-valued logic)
+- [x] NULL arithmetic returns NULL for NULL operands
+- [x] AND/OR operators work in SELECT expressions
+- [x] E01105 tests pass
 
 ### Verification
 ```bash
