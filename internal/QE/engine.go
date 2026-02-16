@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
@@ -1160,6 +1161,63 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 		searchStr, _ := search.(string)
 		replaceStr, _ := replace.(string)
 		return strings.ReplaceAll(strStr, searchStr, replaceStr)
+	case "DATE":
+		if len(fc.Args) == 0 {
+			return time.Now().Format("2006-01-02")
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("2006-01-02", s); err == nil {
+				return t.Format("2006-01-02")
+			}
+			if t, err := time.Parse(time.RFC3339, s); err == nil {
+				return t.Format("2006-01-02")
+			}
+			return s
+		}
+		return nil
+	case "TIME":
+		if len(fc.Args) == 0 {
+			return time.Now().Format("15:04:05")
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("15:04:05", s); err == nil {
+				return t.Format("15:04:05")
+			}
+			return s
+		}
+		return nil
+	case "DATETIME", "TIMESTAMP":
+		if len(fc.Args) == 0 {
+			return time.Now().Format("2006-01-02 15:04:05")
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return t.Format("2006-01-02 15:04:05")
+			}
+			if t, err := time.Parse(time.RFC3339, s); err == nil {
+				return t.Format("2006-01-02 15:04:05")
+			}
+			return s
+		}
+		return nil
+	case "CURRENT_DATE":
+		return time.Now().Format("2006-01-02")
+	case "CURRENT_TIME":
+		return time.Now().Format("15:04:05")
+	case "CURRENT_TIMESTAMP":
+		return time.Now().Format("2006-01-02 15:04:05")
 	case "TYPEOF", "typeof":
 		if len(fc.Args) == 0 {
 			return "null"

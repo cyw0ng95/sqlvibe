@@ -1149,6 +1149,10 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			p.advance()
 			return &Literal{Value: nil}, nil
 		}
+		if tok.Literal == "CURRENT_DATE" || tok.Literal == "CURRENT_TIME" || tok.Literal == "CURRENT_TIMESTAMP" {
+			p.advance()
+			return &FuncCall{Name: tok.Literal, Args: []Expr{}}, nil
+		}
 		if tok.Literal == "CASE" {
 			return p.parseCaseExpr()
 		}
