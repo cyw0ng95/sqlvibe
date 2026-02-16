@@ -1,5 +1,43 @@
 # sqlvibe Release History
 
+## **v0.4.0** (2026-02-16)
+
+### Features
+- Index support: CREATE INDEX, DROP INDEX, B-Tree operations
+- Set operations: UNION, EXCEPT, INTERSECT
+- CASE expressions: Simple and Searched CASE
+- Full E021 character data types support
+  - CHAR, CHARACTER types
+  - VARCHAR, TEXT types
+  - Character functions: UPPER, LOWER, LENGTH, SUBSTRING, TRIM, INSTR
+  - String concatenation (|| operator)
+  - Implicit type casting
+- Date/Time types: DATE, TIME, TIMESTAMP
+- Date/Time functions: CURRENT_DATE, CURRENT_TIME, CURRENT_TIMESTAMP, STRFTIME, YEAR, MONTH, DAY
+- Query planner optimizations using indexes
+- PRAGMA statements: table_info, index_list, database_list
+- PlainFuzzer: Go native fuzzing framework for SQL testing
+
+### Known Issues
+- Some edge cases in INSTR/POSITION functions may differ from SQLite
+- BETWEEN with character types not fully implemented
+
+### Fixed Bugs
+- Float math functions (ABS, CEIL, FLOOR, ROUND) now return correct values
+- DECIMAL/NUMERIC arithmetic operations fixed
+- Unary minus on column references works correctly
+- NULL IS NULL / IS NOT NULL returns 0/1 (not NULL)
+- Implicit numeric casting between INTEGER/REAL/DECIMAL
+- COALESCE returns first non-NULL argument correctly
+- PlainFuzzer database reuse issue fixed (commit e51554d)
+
+### Tests
+- E011: Comprehensive numeric type tests (~290 test cases)
+- E021: Complete character data types tests (251 test cases across 12 sections)
+- PlainFuzzer: SQL fuzzing with mutation strategies
+
+---
+
 ## **v0.3.0** (2026-02-15)
 
 ### Features
