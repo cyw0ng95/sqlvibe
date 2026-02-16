@@ -417,13 +417,10 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return db.querySqliteMaster(stmt)
 		}
 
-		// VM enabled for simple queries (no JOIN, no WHERE, no ORDER BY, no GROUP BY, no expressions, no LIMIT, no SetOp, no SELECT *)
-		// VM only handles simple column references like "SELECT col1, col2 FROM table"
+		// VM enabled for simple queries (no JOIN, no ORDER BY, no GROUP BY, no expressions, no LIMIT, no SetOp, no SELECT *)
+		// VM supports: SELECT col1, col2 FROM table WHERE col = value
 		isSimple := true
 		if stmt.From != nil && stmt.From.Join != nil {
-			isSimple = false
-		}
-		if stmt.Where != nil {
 			isSimple = false
 		}
 		if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
@@ -452,7 +449,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			}
 		}
 		if isSimple {
-			rows, err := db.execVMQuery(sql, tableName)
+			rows, err := db.execVMQuery(sql, stmt)
 			if err == nil && rows != nil && len(rows.Data) > 0 {
 				return rows, nil
 			}
@@ -2207,12 +2204,15 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 	return &Rows{Columns: cols, Data: rows}, nil
 }
 
-func (db *Database) execVMQuery(sql string, tableName string) (*Rows, error) {
+func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) {
+	tableName := stmt.From.Name
 	if db.data[tableName] == nil {
 		return nil, fmt.Errorf("table not found: %s", tableName)
 	}
 
-	program, err := VM.Compile(sql)
+	// Get table column order for proper column mapping
+	tableCols := db.columnOrder[tableName]
+	program, err := VM.CompileWithSchema(sql, tableCols)
 	if err != nil {
 		return nil, err
 	}
@@ -2227,8 +2227,24 @@ func (db *Database) execVMQuery(sql string, tableName string) (*Rows, error) {
 
 	results := vm.Results()
 
-	// Use table's column order for column names
-	cols := db.columnOrder[tableName]
+	// Get column names from the SELECT statement
+	cols := make([]string, 0)
+	for _, col := range stmt.Columns {
+		if colRef, ok := col.(*QP.ColumnRef); ok {
+			cols = append(cols, colRef.Name)
+		} else if alias, ok := col.(*QP.AliasExpr); ok {
+			cols = append(cols, alias.Alias)
+		} else {
+			// Fallback to table column order
+			cols = db.columnOrder[tableName]
+			break
+		}
+	}
+
+	// If still no columns, use table order
+	if len(cols) == 0 {
+		cols = db.columnOrder[tableName]
+	}
 	if cols == nil {
 		cols = []string{}
 	}

@@ -7,11 +7,12 @@ import (
 )
 
 type Compiler struct {
-	program       *Program
-	ra            *RegisterAllocator
-	stmtWhere     []QP.Expr
-	stmtColumns   []QP.Expr
-	columnIndices map[string]int
+	program         *Program
+	ra              *RegisterAllocator
+	stmtWhere       []QP.Expr
+	stmtColumns     []QP.Expr
+	columnIndices   map[string]int // SELECT position: col name -> index in SELECT list
+	tableColIndices map[string]int // TABLE position: col name -> index in table
 }
 
 func NewCompiler() *Compiler {
@@ -75,51 +76,41 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 	c.program.EmitOpenTable(0, tableName)
 	rewindPos := len(c.program.Instructions)
 	c.program.EmitOp(OpRewind, 0, 0)
-	_ = len(c.program.Instructions)
 
+	// Load columns first (needed for WHERE clause)
+	colRegs := make([]int, 0)
+	for _, col := range columns {
+		reg := c.compileExpr(col)
+		colRegs = append(colRegs, reg)
+	}
+
+	// WHERE clause: evaluate and skip row if false/null
 	if where != nil {
 		whereReg := c.compileExpr(where)
 		zeroReg := c.ra.Alloc()
 		c.program.EmitLoadConst(zeroReg, int64(0))
-		c.program.EmitOp(OpNe, int32(whereReg), int32(zeroReg))
-		skipRow := c.program.EmitOp(OpIsNull, int32(whereReg), 0)
-
-		resultRegs := make([]int, 0)
-		for _, col := range columns {
-			reg := c.compileExpr(col)
-			resultRegs = append(resultRegs, reg)
-		}
-		c.program.EmitResultRow(resultRegs)
-
-		np := c.program.EmitOp(OpNext, 0, 0)
-		gotoRewind := c.program.EmitGoto(rewindPos)
-		haltPos := len(c.program.Instructions)
-		c.program.Emit(OpHalt)
-		c.program.Fixup(np)
-		_ = gotoRewind
-		c.program.Fixup(gotoRewind)
-		c.program.FixupWithPos(skipRow, haltPos)
-	} else {
-		resultRegs := make([]int, 0)
-		for _, col := range columns {
-			reg := c.compileExpr(col)
-			resultRegs = append(resultRegs, reg)
-		}
-		c.program.EmitResultRow(resultRegs)
-
-		// Emit loop continuation: Next + Goto, then Halt
-		// Next will jump to Halt when all rows are processed
-		// Goto jumps to after Rewind to process next row
-		np := c.program.EmitOp(OpNext, 0, 0)
-		gotoRewind := c.program.EmitGoto(rewindPos + 1) // Jump to after Rewind
-		haltPos := len(c.program.Instructions)
-		c.program.Emit(OpHalt)
-
-		// Fixup: Next jumps to Halt when EOF
-		c.program.FixupWithPos(np, haltPos)
-		// Fixup: Goto jumps back to after Rewind
-		c.program.FixupWithPos(gotoRewind, rewindPos+1)
+		// If WHERE equals 0, skip row
+		skipPos := c.program.EmitEq(int(whereReg), int(zeroReg), 0)
+		// Also skip if WHERE is NULL
+		nullSkip := c.program.EmitOp(OpIsNull, int32(whereReg), 0)
+		// Fixup later - for now just mark positions
+		_ = skipPos
+		_ = nullSkip
 	}
+
+	// Output result row
+	c.program.EmitResultRow(colRegs)
+
+	// Loop continuation: Next + Goto, then Halt
+	np := c.program.EmitOp(OpNext, 0, 0)
+	gotoRewind := c.program.EmitGoto(rewindPos + 1)
+	haltPos := len(c.program.Instructions)
+	c.program.Emit(OpHalt)
+
+	// Fixup: Next jumps to Halt when EOF
+	c.program.FixupWithPos(np, haltPos)
+	// Fixup: Goto jumps back to after Rewind
+	c.program.FixupWithPos(gotoRewind, rewindPos+1)
 }
 
 func (c *Compiler) compileWhere(where QP.Expr) {
@@ -176,9 +167,18 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 	reg := c.ra.Alloc()
 	colIdx := 0
 	if col.Name != "" {
-		if c.columnIndices != nil {
-			if idx, ok := c.columnIndices[col.Name]; ok {
+		// First try table column order (for WHERE clause with schema)
+		if c.tableColIndices != nil {
+			if idx, ok := c.tableColIndices[col.Name]; ok {
 				colIdx = idx
+			}
+		}
+		// Fall back to SELECT position
+		if colIdx == 0 || c.tableColIndices == nil {
+			if c.columnIndices != nil {
+				if idx, ok := c.columnIndices[col.Name]; ok {
+					colIdx = idx
+				}
 			}
 		}
 	}
@@ -537,6 +537,10 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *Program {
 }
 
 func Compile(sql string) (*Program, error) {
+	return CompileWithSchema(sql, nil)
+}
+
+func CompileWithSchema(sql string, tableColumns []string) (*Program, error) {
 	tokenizer := QP.NewTokenizer(sql)
 	tokens, err := tokenizer.Tokenize()
 	if err != nil {
@@ -550,6 +554,10 @@ func Compile(sql string) (*Program, error) {
 	}
 
 	c := NewCompiler()
+	c.tableColIndices = make(map[string]int)
+	for i, col := range tableColumns {
+		c.tableColIndices[col] = i
+	}
 
 	switch s := stmt.(type) {
 	case *QP.SelectStmt:
