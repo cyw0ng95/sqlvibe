@@ -376,6 +376,12 @@ go test -race -asan ./...
 ### Goal
 Fix remaining edge cases in numeric handling and aggregates.
 
+### Status (as of Feb 16, 2026)
+- [x] ORDER BY expression - already working (E01105 passes)
+- [x] ROUND with negative precision - implemented
+- [ ] ABS on column references - pre-existing engine issue
+- [ ] Integer overflow display - pre-existing issue
+
 ### Tasks
 
 #### Task 4.1: Fix ORDER BY Expression

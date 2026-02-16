@@ -1,5 +1,17 @@
 # sqlvibe Release History
 
+## **v0.4.4** (2026-02-16)
+
+### Bug Fixes
+- ROUND: Fixed handling of negative precision (ROUND(x, -n))
+
+### Known Issues
+- ABS on columns: Pre-existing engine issue with multiple column evaluation
+- CHAR_LENGTH, CHARACTER_LENGTH: SQLite doesn't support these functions
+- OCTET_LENGTH: SQLite doesn't support this function
+
+---
+
 ## **v0.4.3** (2026-02-16)
 
 ### Bug Fixes
