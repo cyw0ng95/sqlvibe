@@ -1250,12 +1250,22 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			if decimals == 0 {
 				return v
 			}
+			if decimals < 0 {
+				// Negative precision: round to left of decimal
+				divisor := math.Pow10(-decimals)
+				return int64(math.Round(float64(v)/divisor) * divisor)
+			}
 			// With decimal places, convert to float64
 			divisor := math.Pow10(decimals)
 			return math.Round(float64(v)*divisor) / divisor
 		case float64:
 			if decimals == 0 {
 				return math.Round(v)
+			}
+			if decimals < 0 {
+				// Negative precision: round to left of decimal
+				divisor := math.Pow10(-decimals)
+				return math.Round(v/divisor) * divisor
 			}
 			divisor := math.Pow10(decimals)
 			return math.Round(v*divisor) / divisor
