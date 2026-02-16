@@ -421,13 +421,10 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return db.querySqliteMaster(stmt)
 		}
 
-		// VM enabled for simple queries (no JOIN, no ORDER BY, no GROUP BY, no expressions, no LIMIT, no SetOp, no SELECT *)
-		// VM supports: SELECT col1, col2 FROM table WHERE col = value
+		// VM enabled for simple SELECT queries (no JOIN, no GROUP BY, no expressions, no LIMIT, no SetOp, no SELECT *)
+		// VM supports: SELECT col1, col2 FROM table WHERE col = value [ORDER BY col]
 		isSimple := true
 		if stmt.From != nil && stmt.From.Join != nil {
-			isSimple = false
-		}
-		if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
 			isSimple = false
 		}
 		if stmt.GroupBy != nil && len(stmt.GroupBy) > 0 {
@@ -455,7 +452,18 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		if isSimple {
 			rows, err := db.execVMQuery(sql, stmt)
 			if err == nil && rows != nil && len(rows.Data) > 0 {
+				// Handle ORDER BY - sort results
+				if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
+					rows, err = db.sortResults(rows, stmt.OrderBy)
+					if err != nil {
+						return nil, err
+					}
+				}
 				return rows, nil
+			}
+			// If VM returned empty or error, fall through to QE
+			if err != nil || rows == nil || len(rows.Data) == 0 {
+				// Continue to QE path
 			}
 		}
 
@@ -885,6 +893,102 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		return db.pragmaDatabaseList()
 	default:
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+}
+
+func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error) {
+	if len(orderBy) == 0 || rows == nil || len(rows.Data) == 0 {
+		return rows, nil
+	}
+
+	colMap := make(map[string]int)
+	for i, col := range rows.Columns {
+		colMap[col] = i
+	}
+
+	sorted := make([][]interface{}, len(rows.Data))
+	copy(sorted, rows.Data)
+
+	for i := range sorted {
+		for j := i + 1; j < len(sorted); j++ {
+			for _, ob := range orderBy {
+				colName := ""
+				if colRef, ok := ob.Expr.(*QP.ColumnRef); ok {
+					colName = colRef.Name
+				}
+				if colIdx, ok := colMap[colName]; ok {
+					a := sorted[i][colIdx]
+					b := sorted[j][colIdx]
+					cmp := compareValues(a, b)
+					if ob.Desc {
+						cmp = -cmp
+					}
+					// Swap if row i should come after row j (cmp > 0 for ascending means a > b)
+					// For DESC: we want descending, so swap when original a < b (after negating, cmp > 0)
+					if cmp > 0 {
+						sorted[i], sorted[j] = sorted[j], sorted[i]
+						break
+					} else if cmp < 0 {
+						break
+					}
+					// cmp == 0, continue to next ORDER BY column
+				}
+			}
+		}
+	}
+
+	return &Rows{Columns: rows.Columns, Data: sorted}, nil
+}
+
+func compareValues(a, b interface{}) int {
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	switch av := a.(type) {
+	case int64:
+		bv, ok := b.(int64)
+		if !ok {
+			return 0
+		}
+		if av < bv {
+			return -1
+		}
+		if av > bv {
+			return 1
+		}
+		return 0
+	case float64:
+		bv, ok := b.(float64)
+		if !ok {
+			return 0
+		}
+		if av < bv {
+			return -1
+		}
+		if av > bv {
+			return 1
+		}
+		return 0
+	case string:
+		bv, ok := b.(string)
+		if !ok {
+			return 0
+		}
+		if av < bv {
+			return -1
+		}
+		if av > bv {
+			return 1
+		}
+		return 0
+	default:
+		return 0
 	}
 }
 
