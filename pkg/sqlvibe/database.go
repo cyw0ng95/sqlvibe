@@ -656,10 +656,14 @@ func (db *Database) executeSelect(stmt *QP.SelectStmt) (*Rows, error) {
 
 	filteredData := tableData
 	if stmt.Where != nil {
-		filteredData = make([]map[string]interface{}, 0)
-		for _, row := range tableData {
-			if db.evalWhere(row, stmt.Where) {
-				filteredData = append(filteredData, row)
+		if indexData := db.tryUseIndex(tableName, stmt.Where); indexData != nil {
+			filteredData = indexData
+		} else {
+			filteredData = make([]map[string]interface{}, 0)
+			for _, row := range tableData {
+				if db.evalWhere(row, stmt.Where) {
+					filteredData = append(filteredData, row)
+				}
 			}
 		}
 	}
@@ -1031,6 +1035,68 @@ func (db *Database) MustExec(sql string, params ...interface{}) Result {
 		panic(err)
 	}
 	return res
+}
+
+func (db *Database) tryUseIndex(tableName string, where QP.Expr) []map[string]interface{} {
+	if where == nil {
+		return nil
+	}
+
+	binExpr, ok := where.(*QP.BinaryExpr)
+	if !ok {
+		return nil
+	}
+
+	if binExpr.Op != QP.TokenEq {
+		return nil
+	}
+
+	var colName string
+	var colValue interface{}
+
+	if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
+		if lit, ok := binExpr.Right.(*QP.Literal); ok {
+			colName = colRef.Name
+			colValue = lit.Value
+		}
+	} else if colRef, ok := binExpr.Right.(*QP.ColumnRef); ok {
+		if lit, ok := binExpr.Left.(*QP.Literal); ok {
+			colName = colRef.Name
+			colValue = lit.Value
+		}
+	}
+
+	if colName == "" {
+		return nil
+	}
+
+	for _, idx := range db.indexes {
+		if idx.Table == tableName && len(idx.Columns) > 0 && idx.Columns[0] == colName {
+			return db.scanByIndexValue(tableName, colName, colValue, idx.Unique)
+		}
+	}
+
+	return nil
+}
+
+func (db *Database) scanByIndexValue(tableName, colName string, value interface{}, unique bool) []map[string]interface{} {
+	tableData := db.data[tableName]
+	if tableData == nil {
+		return nil
+	}
+
+	result := make([]map[string]interface{}, 0)
+	for _, row := range tableData {
+		if rowVal, ok := row[colName]; ok {
+			if db.valuesEqual(rowVal, value) {
+				result = append(result, row)
+				if unique {
+					return result
+				}
+			}
+		}
+	}
+	return result
 }
 
 func (db *Database) evalWhere(row map[string]interface{}, where QP.Expr) bool {
