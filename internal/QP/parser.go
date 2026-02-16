@@ -113,6 +113,13 @@ type DropIndexStmt struct {
 
 func (d *DropIndexStmt) NodeType() string { return "DropIndexStmt" }
 
+type PragmaStmt struct {
+	Name  string
+	Value Expr
+}
+
+func (p *PragmaStmt) NodeType() string { return "PragmaStmt" }
+
 type Expr interface {
 	exprNode()
 }
@@ -212,6 +219,8 @@ func (p *Parser) Parse() (ASTNode, error) {
 			return p.parseCreate()
 		case "DROP":
 			return p.parseDrop()
+		case "PRAGMA":
+			return p.parsePragma()
 		}
 	}
 	return nil, nil
@@ -698,6 +707,37 @@ func (p *Parser) parseDrop() (ASTNode, error) {
 	}
 
 	return nil, nil
+}
+
+func (p *Parser) parsePragma() (ASTNode, error) {
+	p.advance()
+	stmt := &PragmaStmt{}
+
+	if p.current().Type == TokenIdentifier {
+		stmt.Name = p.current().Literal
+		p.advance()
+
+		if p.current().Type == TokenEq {
+			p.advance()
+			val, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			stmt.Value = val
+		} else if p.current().Type == TokenLeftParen {
+			p.advance()
+			val, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			stmt.Value = val
+			if p.current().Type == TokenRightParen {
+				p.advance()
+			}
+		}
+	}
+
+	return stmt, nil
 }
 
 func (p *Parser) parseExpr() (Expr, error) {
