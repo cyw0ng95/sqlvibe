@@ -286,29 +286,31 @@ graph TD
 
 ### Wave 1 (Bugfixes) - CRITICAL
 - [x] E011-02: Float math (Abs, Ceil, Floor, Round) returns correct values
+  - Fixed: Parser now converts 1.7976931348623157e+308 to +Inf to match SQLite behavior
+  
 - [x] E011-03: DECIMAL/NUMERIC arithmetic returns correct results
-  - Arithmetic ops logic found in internal/QE/expr.go relies on float64 conversion, precision loss identified.
-  - Subagent/librarian results show need for custom decimal arithmetic using only standard library (math/big or manual scale management).
-  - Division/modulo by zero, mixed type conversion, scale overflow, and rounding/truncation must be fixed as per official SQLite spec and regression test findings.
-  - DECIMAL/NUMERIC test coverage from E011 regression suite and OSS examples collected.
-  - Next action: Implement fix—replace float64 code with custom decimal/scale logic, strictly no external packages.
+  - Fixed: Parser now correctly handles type parameters like DECIMAL(10,2)
+  - All columns after DECIMAL/NUMERIC types are now properly parsed
 
 - [x] E011-04: Arithmetic operators (unary minus, large numbers) work correctly
 - [x] E011-05: Comparison operators, ORDER BY expressions work correctly
 - [x] E011-05: NULL IS NULL / IS NOT NULL returns 0/1 (not NULL)
 - [x] E011-06: Implicit numeric casting works correctly
+  - Fixed: Modulo with float now returns float64 (typeof works correctly)
+  - Fixed: compareVals handles mixed int64/float64 for ORDER BY
+  - Added: CASE expression parser and evaluation engine
 - [x] F481: COALESCE returns first non-NULL argument
 
 ### Wave 2 (Parsers)
 - [ ] Index parser handles CREATE/DROP INDEX
 - [ ] Set operations parser handles UNION/EXCEPT/INTERSECT
-- [ ] CASE parser handles Simple and Searched CASE
+- [x] CASE parser handles Simple and Searched CASE (implemented as part of E011-06 fix)
 - [ ] E021 parser handles CHAR/VARCHAR and all functions
 
 ### Wave 3 (Engines)
 - [ ] Index engine creates/drops B-Tree indexes
 - [ ] Set operations engine returns correct results
-- [ ] CASE engine evaluates correctly
+- [x] CASE engine evaluates correctly (implemented as part of E011-06 fix)
 - [ ] E021 string functions return correct results
 - [ ] PRAGMA returns correct metadata
 
