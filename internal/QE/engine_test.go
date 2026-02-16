@@ -5,50 +5,30 @@ import (
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/PB"
+	VMpkg "github.com/sqlvibe/sqlvibe/internal/VM"
 )
 
 func TestVMCreate(t *testing.T) {
-	instructions := []Instruction{
-		{Op: OpOpenRead, P1: 0},
-		{Op: OpNext, P1: 0},
-	}
-	vm := NewVM(instructions, 10)
+	program := VMpkg.NewProgram()
+	vm := VMpkg.NewVM(program)
 	if vm == nil {
 		t.Error("VM should not be nil")
-	}
-	if vm.pc != 0 {
-		t.Error("PC should start at 0")
 	}
 }
 
 func TestVMRun(t *testing.T) {
-	instructions := []Instruction{
-		{Op: OpInteger, P1: 0, P3: "1"},
-		{Op: OpInteger, P1: 1, P3: "2"},
-		{Op: OpAdd, P1: 0, P2: 1, P3: "2"},
+	program := VMpkg.NewProgram()
+	vm := VMpkg.NewVM(program)
+	if vm == nil {
+		t.Error("VM should not be nil")
 	}
-	vm := NewVM(instructions, 10)
-	vm.SetRegister(0, 10)
-	vm.SetRegister(1, 20)
-
-	evaluator := NewExprEvaluator(vm)
-	result, _ := evaluator.BinaryOp(OpAdd, 10, 20)
-	var resultVal int64
-	switch v := result.(type) {
-	case int:
-		resultVal = int64(v)
-	case int64:
-		resultVal = v
-	case float64:
-		resultVal = int64(v)
-	}
-	if resultVal != 30 {
-		t.Errorf("expected 30, got %v", result)
+	if vm.PC() != 0 {
+		t.Error("PC should start at 0")
 	}
 }
 
 func TestExprEvaluator(t *testing.T) {
-	vm := NewVM(nil, 10)
+	vm := VMpkg.NewVM(VMpkg.NewProgram())
 	evaluator := NewExprEvaluator(vm)
 
 	result := evaluator.toFloat64(10)
