@@ -293,11 +293,12 @@ Fix INSTR, TRIM, LENGTH, and other string functions.
 - **Tests**: E021-11 POSITION tests
 
 ### Success Criteria
-- [ ] INSTR returns correct 1-based position
-- [ ] TRIM removes specified characters
-- [ ] LTRIM/RTRIM work correctly
-- [ ] LENGTH counts characters for Unicode
-- [ ] POSITION syntax works
+- [x] INSTR returns correct 1-based position
+- [x] TRIM removes specified characters
+- [x] LTRIM/RTRIM work correctly
+- [x] LENGTH counts characters for Unicode
+- [ ] POSITION syntax works (SQLite doesn't support)
+- [ ] Some edge cases remain (TRIM tabs/newlines, SUBSTR negative)
 
 ### Verification
 ```bash
