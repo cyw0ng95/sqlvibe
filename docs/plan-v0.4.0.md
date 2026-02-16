@@ -311,11 +311,16 @@ graph TD
   - String functions (UPPER, LOWER, SUBSTRING, etc.) parsed as function calls
 
 ### Wave 3 (Engines)
-- [ ] Index engine creates/drops B-Tree indexes
-- [ ] Set operations engine returns correct results
+- [x] Index engine creates/drops B-Tree indexes
+- [x] Set operations engine returns correct results
 - [x] CASE engine evaluates correctly (implemented as part of E011-06 fix)
-- [ ] E021 string functions return correct results
-- [ ] PRAGMA returns correct metadata
+- [x] E021 string functions return correct results
+  - UPPER, LOWER, LENGTH, CHARACTER_LENGTH, OCTET_LENGTH
+  - SUBSTRING, TRIM, LTRIM, RTRIM
+  - POSITION, INSTR, REPLACE
+  - String concatenation (||)
+- [x] PRAGMA returns correct metadata
+  - table_info, index_list, database_list
 
 ### Wave 4 (Advanced)
 - [ ] Query planner uses indexes for optimization
@@ -323,17 +328,17 @@ graph TD
 - [ ] Datetime functions work correctly
 
 ### E021 Full Coverage (12 sections)
-- [ ] E021-01: CHARACTER (CHAR) type
-- [ ] E021-02: CHARACTER VARYING (VARCHAR) type
-- [ ] E021-03: Character literals
-- [ ] E021-04: CHARACTER_LENGTH function
-- [ ] E021-05: OCTET_LENGTH function
-- [ ] E021-06: SUBSTRING function
-- [ ] E021-07: Character concatenation (||)
-- [ ] E021-08: UPPER and LOWER functions
-- [ ] E021-09: TRIM function
+- [x] E021-01: CHARACTER (CHAR) type
+- [x] E021-02: CHARACTER VARYING (VARCHAR) type
+- [x] E021-03: Character literals
+- [x] E021-04: CHARACTER_LENGTH function
+- [x] E021-05: OCTET_LENGTH function
+- [x] E021-06: SUBSTRING function
+- [x] E021-07: Character concatenation (||)
+- [x] E021-08: UPPER and LOWER functions
+- [x] E021-09: TRIM function
 - [ ] E021-10: Implicit casting
-- [ ] E021-11: POSITION function
+- [x] E021-11: POSITION function
 - [ ] E021-12: Character comparison
 
 ---
