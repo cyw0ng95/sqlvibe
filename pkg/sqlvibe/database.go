@@ -20,6 +20,7 @@ type Database struct {
 	columnOrder map[string][]string                 // table name -> ordered column names
 	data        map[string][]map[string]interface{} // table name -> rows -> column name -> value
 	indexes     map[string]*IndexInfo               // index name -> index info
+	useVM       bool                                // use VM for query execution
 }
 
 type IndexInfo struct {
@@ -148,7 +149,12 @@ func Open(path string) (*Database, error) {
 		columnOrder: make(map[string][]string),
 		data:        data,
 		indexes:     make(map[string]*IndexInfo),
+		useVM:       false,
 	}, nil
+}
+
+func (db *Database) EnableVM(enable bool) {
+	db.useVM = enable
 }
 
 func (db *Database) getOrderedColumns(tableName string) []string {
@@ -415,6 +421,14 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		// Handle sqlite_master virtual table
 		if tableName == "sqlite_master" {
 			return db.querySqliteMaster(stmt)
+		}
+
+		// Try VM execution first for simple SELECT queries
+		if db.useVM {
+			rows, err := db.execVMQuery(sql, tableName)
+			if err == nil {
+				return rows, nil
+			}
 		}
 
 		// Handle JOIN queries
@@ -2098,6 +2112,38 @@ func (ctx *dbVmContext) GetTableColumns(tableName string) ([]string, error) {
 }
 
 func (db *Database) ExecVM(sql string) (*Rows, error) {
+	tokenizer := QP.NewTokenizer(sql)
+	tokens, err := tokenizer.Tokenize()
+	if err != nil {
+		return nil, fmt.Errorf("VM compile error: %v", err)
+	}
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+
+	parser := QP.NewParser(tokens)
+	ast, err := parser.Parse()
+	if err != nil {
+		return nil, fmt.Errorf("VM compile error: %v", err)
+	}
+	if ast == nil {
+		return nil, nil
+	}
+
+	var tableName string
+	switch stmt := ast.(type) {
+	case *QP.SelectStmt:
+		if stmt.From != nil {
+			tableName = stmt.From.Name
+		}
+	case *QP.InsertStmt:
+		tableName = stmt.Table
+	case *QP.UpdateStmt:
+		tableName = stmt.Table
+	case *QP.DeleteStmt:
+		tableName = stmt.Table
+	}
+
 	program, err := VM.Compile(sql)
 	if err != nil {
 		return nil, fmt.Errorf("VM compile error: %v", err)
@@ -2106,7 +2152,9 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 	ctx := &dbVmContext{db: db}
 	vm := VM.NewVMWithContext(program, ctx)
 
-	vm.Cursors().OpenTable("t1", db.data["t1"], db.columnOrder["t1"])
+	if tableName != "" && db.data[tableName] != nil {
+		vm.Cursors().OpenTable(tableName, db.data[tableName], db.columnOrder[tableName])
+	}
 
 	err = vm.Run(nil)
 	if err != nil {
@@ -2128,6 +2176,50 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 		if i == 0 {
 			rows = append(rows, row)
 		}
+	}
+
+	return &Rows{Columns: cols, Data: rows}, nil
+}
+
+func (db *Database) execVMQuery(sql string, tableName string) (*Rows, error) {
+	if db.data[tableName] == nil {
+		return nil, fmt.Errorf("table not found: %s", tableName)
+	}
+
+	program, err := VM.Compile(sql)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := &dbVmContext{db: db}
+	vm := VM.NewVMWithContext(program, ctx)
+
+	vm.Cursors().OpenTable(tableName, db.data[tableName], db.columnOrder[tableName])
+
+	err = vm.Run(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	cols := make([]string, 0)
+	rows := make([][]interface{}, 0)
+
+	for i := 0; i < program.NumRegs; i++ {
+		cols = append(cols, fmt.Sprintf("col%d", i))
+	}
+
+	for i := 0; i < program.NumRegs; i++ {
+		row := make([]interface{}, program.NumRegs)
+		for j := 0; j < program.NumRegs; j++ {
+			row[j] = vm.GetRegister(j)
+		}
+		if i == 0 {
+			rows = append(rows, row)
+		}
+	}
+
+	if len(rows) == 0 {
+		return &Rows{Columns: cols, Data: [][]interface{}{}}, nil
 	}
 
 	return &Rows{Columns: cols, Data: rows}, nil

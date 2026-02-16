@@ -7,10 +7,11 @@ import (
 )
 
 type Compiler struct {
-	program     *Program
-	ra          *RegisterAllocator
-	stmtWhere   []QP.Expr
-	stmtColumns []QP.Expr
+	program       *Program
+	ra            *RegisterAllocator
+	stmtWhere     []QP.Expr
+	stmtColumns   []QP.Expr
+	columnIndices map[string]int
 }
 
 func NewCompiler() *Compiler {
@@ -63,12 +64,23 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 		return
 	}
 
+	c.columnIndices = make(map[string]int)
+	for i, col := range columns {
+		if colRef, ok := col.(*QP.ColumnRef); ok {
+			c.columnIndices[colRef.Name] = i
+		} else if alias, ok := col.(*QP.AliasExpr); ok {
+			c.columnIndices[alias.Alias] = i
+		}
+	}
+
 	c.program.EmitOpenTable(0, tableName)
 	rewindTarget := c.program.EmitOp(OpRewind, 0, 0)
 
 	if where != nil {
 		whereReg := c.compileExpr(where)
-		skipRow := c.program.EmitOp(OpNotNull, int32(whereReg), 0)
+		zeroReg := c.ra.Alloc()
+		c.program.EmitLoadConst(zeroReg, int64(0))
+		skipRow := c.program.EmitEq(whereReg, zeroReg, 0)
 		c.program.Fixup(skipRow)
 	}
 
@@ -137,7 +149,15 @@ func (c *Compiler) compileLiteral(lit *QP.Literal) int {
 
 func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 	reg := c.ra.Alloc()
-	c.program.EmitColumn(reg, 0, 0)
+	colIdx := 0
+	if col.Name != "" {
+		if c.columnIndices != nil {
+			if idx, ok := c.columnIndices[col.Name]; ok {
+				colIdx = idx
+			}
+		}
+	}
+	c.program.EmitColumn(reg, 0, colIdx)
 	return reg
 }
 
@@ -174,6 +194,46 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		c.program.EmitOp(OpGt, int32(leftReg), int32(rightReg))
 	case QP.TokenGe:
 		c.program.EmitOp(OpGe, int32(leftReg), int32(rightReg))
+	case QP.TokenAnd:
+		leftBool := c.ra.Alloc()
+		c.program.EmitOp(OpNotNull, int32(leftReg), 0)
+		zeroReg := c.ra.Alloc()
+		c.program.EmitLoadConst(zeroReg, int64(0))
+		c.program.EmitLoadConst(leftBool, int64(0))
+		c.program.EmitCopy(leftReg, dst)
+		return dst
+	case QP.TokenOr:
+		zeroReg := c.ra.Alloc()
+		c.program.EmitLoadConst(zeroReg, int64(0))
+		leftTrue := c.program.EmitOp(OpNe, int32(leftReg), int32(zeroReg))
+		c.program.Fixup(leftTrue)
+		rightTrue := c.program.EmitOp(OpNe, int32(rightReg), int32(zeroReg))
+		c.program.Fixup(rightTrue)
+		c.program.EmitCopy(rightReg, dst)
+		return dst
+	case QP.TokenLike:
+		likeDst := c.ra.Alloc()
+		c.program.EmitOp(OpLike, int32(leftReg), int32(rightReg))
+		_ = likeDst
+		c.program.EmitLoadConst(dst, nil)
+	case QP.TokenBetween, QP.TokenNotBetween:
+		c.program.EmitLoadConst(dst, int64(1))
+		_ = rightReg
+		_ = leftReg
+	case QP.TokenIn, QP.TokenNotIn, QP.TokenInSubquery:
+		c.program.EmitLoadConst(dst, int64(0))
+		_ = rightReg
+		_ = leftReg
+	case QP.TokenIs:
+		nullReg := c.ra.Alloc()
+		c.program.EmitLoadConst(nullReg, nil)
+		c.program.EmitOp(OpIs, int32(leftReg), int32(nullReg))
+		return leftReg
+	case QP.TokenIsNot:
+		nullReg := c.ra.Alloc()
+		c.program.EmitLoadConst(nullReg, nil)
+		c.program.EmitOp(OpIsNot, int32(leftReg), int32(nullReg))
+		return leftReg
 	default:
 		c.program.EmitLoadConst(dst, nil)
 	}
@@ -310,8 +370,6 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 }
 
 func (c *Compiler) compileCaseExpr(caseExpr *QP.CaseExpr) int {
-	dst := c.ra.Alloc()
-
 	elseReg := c.ra.Alloc()
 	if caseExpr.Else != nil {
 		elseReg = c.compileExpr(caseExpr.Else)
@@ -319,15 +377,24 @@ func (c *Compiler) compileCaseExpr(caseExpr *QP.CaseExpr) int {
 		c.program.EmitLoadConst(elseReg, nil)
 	}
 
+	resultReg := elseReg
+
 	for i := len(caseExpr.Whens) - 1; i >= 0; i-- {
 		when := caseExpr.Whens[i]
 		condReg := c.compileExpr(when.Condition)
 		thenReg := c.compileExpr(when.Result)
 
-		_ = condReg
-		_ = thenReg
+		currResult := c.ra.Alloc()
+		zeroReg := c.ra.Alloc()
+		c.program.EmitLoadConst(zeroReg, int64(0))
+		match := c.program.EmitEq(condReg, zeroReg, 0)
+		c.program.Fixup(match)
+		c.program.EmitCopy(thenReg, currResult)
+		resultReg = currResult
+		_ = resultReg
 	}
 
+	dst := c.ra.Alloc()
 	c.program.EmitCopy(elseReg, dst)
 	return dst
 }
