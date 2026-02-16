@@ -1,6 +1,8 @@
 package QP
 
 import (
+	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -10,15 +12,18 @@ type ASTNode interface {
 }
 
 type SelectStmt struct {
-	Distinct bool
-	Columns  []Expr
-	From     *TableRef
-	Where    Expr
-	GroupBy  []Expr
-	Having   Expr
-	OrderBy  []OrderBy
-	Limit    Expr
-	Offset   Expr
+	Distinct   bool
+	Columns    []Expr
+	From       *TableRef
+	Where      Expr
+	GroupBy    []Expr
+	Having     Expr
+	OrderBy    []OrderBy
+	Limit      Expr
+	Offset     Expr
+	SetOp      string
+	SetOpAll   bool
+	SetOpRight *SelectStmt
 }
 
 func (s *SelectStmt) NodeType() string { return "SelectStmt" }
@@ -93,6 +98,29 @@ type DropTableStmt struct {
 
 func (d *DropTableStmt) NodeType() string { return "DropTableStmt" }
 
+type CreateIndexStmt struct {
+	Name        string
+	Table       string
+	Columns     []string
+	Unique      bool
+	IfNotExists bool
+}
+
+func (c *CreateIndexStmt) NodeType() string { return "CreateIndexStmt" }
+
+type DropIndexStmt struct {
+	Name string
+}
+
+func (d *DropIndexStmt) NodeType() string { return "DropIndexStmt" }
+
+type PragmaStmt struct {
+	Name  string
+	Value Expr
+}
+
+func (p *PragmaStmt) NodeType() string { return "PragmaStmt" }
+
 type Expr interface {
 	exprNode()
 }
@@ -146,6 +174,26 @@ type AliasExpr struct {
 
 func (e *AliasExpr) exprNode() {}
 
+type CaseExpr struct {
+	Operand Expr
+	Whens   []CaseWhen
+	Else    Expr
+}
+
+type CaseWhen struct {
+	Condition Expr
+	Result    Expr
+}
+
+func (e *CaseExpr) exprNode() {}
+
+type CastExpr struct {
+	Expr Expr
+	Type string
+}
+
+func (e *CastExpr) exprNode() {}
+
 type Parser struct {
 	tokens     []Token
 	pos        int
@@ -179,6 +227,8 @@ func (p *Parser) Parse() (ASTNode, error) {
 			return p.parseCreate()
 		case "DROP":
 			return p.parseDrop()
+		case "PRAGMA":
+			return p.parsePragma()
 		}
 	}
 	return nil, nil
@@ -383,6 +433,20 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 
+	if p.current().Literal == "UNION" || p.current().Literal == "EXCEPT" || p.current().Literal == "INTERSECT" {
+		stmt.SetOp = p.current().Literal
+		p.advance()
+		if p.current().Literal == "ALL" {
+			stmt.SetOpAll = true
+			p.advance()
+		}
+		right, err := p.parseSelect()
+		if err != nil {
+			return nil, err
+		}
+		stmt.SetOpRight = right
+	}
+
 	return stmt, nil
 }
 
@@ -520,6 +584,18 @@ func (p *Parser) parseDelete() (*DeleteStmt, error) {
 func (p *Parser) parseCreate() (ASTNode, error) {
 	p.advance()
 
+	if p.current().Literal == "UNIQUE" {
+		p.advance()
+		if p.current().Literal == "INDEX" {
+			return p.parseCreateIndex(true)
+		}
+		return nil, nil
+	}
+
+	if p.current().Literal == "INDEX" {
+		return p.parseCreateIndex(false)
+	}
+
 	if p.current().Literal == "TABLE" {
 		p.advance()
 		stmt := &CreateTableStmt{}
@@ -546,6 +622,14 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 				if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
 					col.Type = p.current().Literal
 					p.advance()
+					if p.current().Type == TokenLeftParen {
+						for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+							p.advance()
+						}
+						if p.current().Type == TokenRightParen {
+							p.advance()
+						}
+					}
 				}
 				stmt.Columns = append(stmt.Columns, col)
 
@@ -574,7 +658,50 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 	return nil, nil
 }
 
-func (p *Parser) parseDrop() (*DropTableStmt, error) {
+func (p *Parser) parseCreateIndex(unique bool) (ASTNode, error) {
+	p.advance()
+	stmt := &CreateIndexStmt{Unique: unique}
+
+	if p.current().Type == TokenKeyword && p.current().Literal == "IF" {
+		p.advance()
+		if p.current().Type == TokenNot {
+			p.advance()
+			if p.current().Type == TokenExists {
+				stmt.IfNotExists = true
+				p.advance()
+			}
+		}
+	}
+
+	stmt.Name = p.current().Literal
+	p.advance()
+
+	if p.current().Type == TokenKeyword && p.current().Literal == "ON" {
+		p.advance()
+		stmt.Table = p.current().Literal
+		p.advance()
+
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			for {
+				if p.current().Type == TokenIdentifier {
+					stmt.Columns = append(stmt.Columns, p.current().Literal)
+					p.advance()
+				}
+				if p.current().Type == TokenComma {
+					p.advance()
+				} else {
+					break
+				}
+			}
+			p.expect(TokenRightParen)
+		}
+	}
+
+	return stmt, nil
+}
+
+func (p *Parser) parseDrop() (ASTNode, error) {
 	p.advance()
 
 	if p.current().Literal == "TABLE" {
@@ -582,7 +709,43 @@ func (p *Parser) parseDrop() (*DropTableStmt, error) {
 		return &DropTableStmt{Name: p.current().Literal}, nil
 	}
 
+	if p.current().Literal == "INDEX" {
+		p.advance()
+		return &DropIndexStmt{Name: p.current().Literal}, nil
+	}
+
 	return nil, nil
+}
+
+func (p *Parser) parsePragma() (ASTNode, error) {
+	p.advance()
+	stmt := &PragmaStmt{}
+
+	if p.current().Type == TokenIdentifier {
+		stmt.Name = p.current().Literal
+		p.advance()
+
+		if p.current().Type == TokenEq {
+			p.advance()
+			val, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			stmt.Value = val
+		} else if p.current().Type == TokenLeftParen {
+			p.advance()
+			val, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			stmt.Value = val
+			if p.current().Type == TokenRightParen {
+				p.advance()
+			}
+		}
+	}
+
+	return stmt, nil
 }
 
 func (p *Parser) parseExpr() (Expr, error) {
@@ -667,6 +830,44 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 		}
 	}
 
+	if p.current().Type == TokenNot && p.peek().Type == TokenIn {
+		p.advance()
+		p.advance()
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			if p.current().Type == TokenKeyword && p.current().Literal == "SELECT" {
+				sub, err := p.parseSelect()
+				if err != nil {
+					return nil, err
+				}
+				if p.current().Type == TokenRightParen {
+					p.advance()
+				}
+				return &BinaryExpr{Op: TokenNotIn, Left: left, Right: &SubqueryExpr{Select: sub}}, nil
+			}
+			var values []interface{}
+			for {
+				if p.current().Type == TokenRightParen {
+					p.advance()
+					break
+				}
+				expr, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				if lit, ok := expr.(*Literal); ok {
+					values = append(values, lit.Value)
+				} else {
+					values = append(values, nil)
+				}
+				if p.current().Type == TokenComma {
+					p.advance()
+				}
+			}
+			return &BinaryExpr{Op: TokenNotIn, Left: left, Right: &Literal{Value: values}}, nil
+		}
+	}
+
 	if p.current().Type == TokenIn {
 		p.advance()
 		if p.current().Type == TokenLeftParen {
@@ -702,6 +903,24 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 			}
 			return &BinaryExpr{Op: TokenIn, Left: left, Right: &Literal{Value: values}}, nil
 		}
+	}
+
+	if p.current().Type == TokenNot && p.peek().Type == TokenBetween {
+		p.advance()
+		p.advance()
+		right, err := p.parseAddExpr()
+		if err != nil {
+			return nil, err
+		}
+		if p.current().Type == TokenAnd {
+			p.advance()
+			andExpr, err := p.parseAddExpr()
+			if err != nil {
+				return nil, err
+			}
+			return &BinaryExpr{Op: TokenNotBetween, Left: left, Right: &BinaryExpr{Op: TokenAnd, Left: right, Right: andExpr}}, nil
+		}
+		return left, nil
 	}
 
 	if p.current().Type == TokenBetween {
@@ -813,6 +1032,25 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 		return &BinaryExpr{Op: TokenLike, Left: left, Right: pattern}, nil
 	}
 
+	if p.current().Type == TokenNot && p.peek().Type == TokenLike {
+		p.advance()
+		p.advance()
+		pattern, err := p.parseAddExpr()
+		if err != nil {
+			return nil, err
+		}
+		return &BinaryExpr{Op: TokenNotLike, Left: left, Right: pattern}, nil
+	}
+
+	if p.current().Type == TokenGlob {
+		p.advance()
+		pattern, err := p.parseAddExpr()
+		if err != nil {
+			return nil, err
+		}
+		return &BinaryExpr{Op: TokenGlob, Left: left, Right: pattern}, nil
+	}
+
 	for p.current().Type == TokenEq || p.current().Type == TokenNe ||
 		p.current().Type == TokenLt || p.current().Type == TokenLe ||
 		p.current().Type == TokenGt || p.current().Type == TokenGe {
@@ -834,7 +1072,7 @@ func (p *Parser) parseAddExpr() (Expr, error) {
 		return nil, err
 	}
 
-	for p.current().Type == TokenPlus || p.current().Type == TokenMinus {
+	for p.current().Type == TokenPlus || p.current().Type == TokenMinus || p.current().Type == TokenConcat {
 		op := p.current().Type
 		p.advance()
 		right, err := p.parseMulExpr()
@@ -867,7 +1105,16 @@ func (p *Parser) parseMulExpr() (Expr, error) {
 }
 
 func (p *Parser) parseUnaryExpr() (Expr, error) {
-	if p.current().Type == TokenMinus || p.current().Type == TokenNot {
+	if p.current().Type == TokenMinus {
+		op := p.current().Type
+		p.advance()
+		expr, err := p.parsePrimaryExpr()
+		if err != nil {
+			return nil, err
+		}
+		return &UnaryExpr{Op: op, Expr: expr}, nil
+	}
+	if p.current().Type == TokenNot {
 		op := p.current().Type
 		p.advance()
 		expr, err := p.parseEqExpr()
@@ -919,12 +1166,39 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			return &Literal{Value: iv}, nil
 		}
 		if fv, err := strconv.ParseFloat(tok.Literal, 64); err == nil {
+			if fv == math.MaxFloat64 && strings.Contains(tok.Literal, "e+") {
+				return &Literal{Value: math.Inf(1)}, nil
+			}
 			return &Literal{Value: fv}, nil
 		}
 		return &Literal{Value: tok.Literal}, nil
 	case TokenString:
 		p.advance()
 		return &Literal{Value: tok.Literal}, nil
+	case TokenCast:
+		p.advance()
+		if p.current().Type != TokenLeftParen {
+			return nil, fmt.Errorf("expected '(' after CAST")
+		}
+		p.advance()
+		expr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if p.current().Type != TokenKeyword || p.current().Literal != "AS" {
+			return nil, fmt.Errorf("expected AS in CAST expression")
+		}
+		p.advance()
+		typeName := ""
+		if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+			typeName = strings.ToUpper(p.current().Literal)
+			p.advance()
+		}
+		if p.current().Type != TokenRightParen {
+			return nil, fmt.Errorf("expected ')' after CAST type")
+		}
+		p.advance()
+		return &CastExpr{Expr: expr, Type: typeName}, nil
 	case TokenIdentifier:
 		p.advance()
 
@@ -982,6 +1256,13 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			p.advance()
 			return &Literal{Value: nil}, nil
 		}
+		if tok.Literal == "CURRENT_DATE" || tok.Literal == "CURRENT_TIME" || tok.Literal == "CURRENT_TIMESTAMP" || tok.Literal == "LOCALTIME" || tok.Literal == "LOCALTIMESTAMP" {
+			p.advance()
+			return &FuncCall{Name: tok.Literal, Args: []Expr{}}, nil
+		}
+		if tok.Literal == "CASE" {
+			return p.parseCaseExpr()
+		}
 		p.advance()
 		// Check for table.column format (e.g., e.dept_id)
 		if p.current().Type == TokenDot {
@@ -997,4 +1278,49 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	}
 
 	return nil, nil
+}
+
+func (p *Parser) parseCaseExpr() (Expr, error) {
+	p.advance()
+	ce := &CaseExpr{}
+
+	if p.current().Type == TokenKeyword && p.current().Literal == "WHEN" {
+	} else if p.current().Type != TokenKeyword || p.current().Literal != "WHEN" {
+		operand, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		ce.Operand = operand
+	}
+
+	for p.current().Type == TokenKeyword && p.current().Literal == "WHEN" {
+		p.advance()
+		cond, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if p.current().Type == TokenKeyword && p.current().Literal == "THEN" {
+			p.advance()
+		}
+		result, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		ce.Whens = append(ce.Whens, CaseWhen{Condition: cond, Result: result})
+	}
+
+	if p.current().Type == TokenKeyword && p.current().Literal == "ELSE" {
+		p.advance()
+		elseExpr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		ce.Else = elseExpr
+	}
+
+	if p.current().Type == TokenKeyword && p.current().Literal == "END" {
+		p.advance()
+	}
+
+	return ce, nil
 }

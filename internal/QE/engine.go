@@ -3,6 +3,11 @@ package QE
 import (
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
@@ -406,6 +411,29 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		case QP.TokenPercent:
 			result, _ := exprEval.BinaryOp(OpRemainder, leftVal, rightVal)
 			return result
+		case QP.TokenConcat:
+			result, _ := exprEval.BinaryOp(OpConcat, leftVal, rightVal)
+			return result
+		case QP.TokenAnd:
+			if leftVal == nil || rightVal == nil {
+				return nil
+			}
+			leftBool := qe.toBool(leftVal)
+			rightBool := qe.toBool(rightVal)
+			if leftBool && rightBool {
+				return int64(1)
+			}
+			return int64(0)
+		case QP.TokenOr:
+			if leftVal == nil || rightVal == nil {
+				return nil
+			}
+			leftBool := qe.toBool(leftVal)
+			rightBool := qe.toBool(rightVal)
+			if leftBool || rightBool {
+				return int64(1)
+			}
+			return int64(0)
 		case QP.TokenEq:
 			if leftVal == nil || rightVal == nil {
 				return nil
@@ -454,6 +482,127 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 				return int64(1)
 			}
 			return int64(0)
+		case QP.TokenIs:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return int64(1) // NULL IS NULL -> 1
+			}
+			return int64(0)
+		case QP.TokenIsNot:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return int64(0)
+			}
+			return int64(1)
+		case QP.TokenIn:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			rightVal := qe.evalValue(row, e.Right)
+			if rightList, ok := rightVal.([]interface{}); ok {
+				for _, v := range rightList {
+					if qe.valuesEqual(leftVal, v) {
+						return int64(1)
+					}
+				}
+				return int64(0)
+			}
+			return int64(0)
+		case QP.TokenBetween:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			if andExpr, ok := e.Right.(*QP.BinaryExpr); ok {
+				minVal := qe.evalValue(row, andExpr.Left)
+				maxVal := qe.evalValue(row, andExpr.Right)
+				if minVal == nil || maxVal == nil {
+					return nil
+				}
+				if qe.compareVals(leftVal, minVal) >= 0 && qe.compareVals(leftVal, maxVal) <= 0 {
+					return int64(1)
+				}
+				return int64(0)
+			}
+			return int64(0)
+		case QP.TokenLike:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			rightVal := qe.evalValue(row, e.Right)
+			leftStr, leftOk := leftVal.(string)
+			patternStr, patOk := rightVal.(string)
+			if !leftOk || !patOk {
+				return int64(0)
+			}
+			if qe.matchLike(leftStr, patternStr) {
+				return int64(1)
+			}
+			return int64(0)
+		case QP.TokenNotLike:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			rightVal := qe.evalValue(row, e.Right)
+			leftStr, leftOk := leftVal.(string)
+			patternStr, patOk := rightVal.(string)
+			if !leftOk || !patOk {
+				return int64(0)
+			}
+			if qe.matchLike(leftStr, patternStr) {
+				return int64(0)
+			}
+			return int64(1)
+		case QP.TokenGlob:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			rightVal := qe.evalValue(row, e.Right)
+			leftStr, leftOk := leftVal.(string)
+			patternStr, patOk := rightVal.(string)
+			if !leftOk || !patOk {
+				return int64(0)
+			}
+			if qe.matchGlob(leftStr, patternStr) {
+				return int64(1)
+			}
+			return int64(0)
+		case QP.TokenNotIn:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			rightVal := qe.evalValue(row, e.Right)
+			if rightList, ok := rightVal.([]interface{}); ok {
+				for _, v := range rightList {
+					if qe.valuesEqual(leftVal, v) {
+						return int64(0)
+					}
+				}
+				return int64(1)
+			}
+			return int64(1)
+		case QP.TokenNotBetween:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			if andExpr, ok := e.Right.(*QP.BinaryExpr); ok {
+				minVal := qe.evalValue(row, andExpr.Left)
+				maxVal := qe.evalValue(row, andExpr.Right)
+				if minVal == nil || maxVal == nil {
+					return nil
+				}
+				if qe.compareVals(leftVal, minVal) >= 0 && qe.compareVals(leftVal, maxVal) <= 0 {
+					return int64(0)
+				}
+				return int64(1)
+			}
+			return int64(1)
 		}
 		return nil
 	case *QP.UnaryExpr:
@@ -461,11 +610,27 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		if e.Op == QP.TokenMinus {
 			return qe.negate(val)
 		}
+		if e.Op == QP.TokenNot {
+			if val == nil {
+				return int64(1)
+			}
+			if b, ok := val.(int64); ok {
+				if b == 0 {
+					return int64(1)
+				}
+				return int64(0)
+			}
+			return int64(0)
+		}
 		return val
 	case *QP.FuncCall:
 		return qe.evalFuncCall(row, e)
 	case *QP.AliasExpr:
 		return qe.evalValue(row, e.Expr)
+	case *QP.CaseExpr:
+		return qe.evalCaseExpr(row, e)
+	case *QP.CastExpr:
+		return qe.evalCastExpr(row, e)
 	case *QP.SubqueryExpr:
 		result := qe.evalSubquery(row, qe.outerAlias, e.Select)
 		if result.rows == nil || len(result.rows) == 0 {
@@ -566,6 +731,90 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 
 func (qe *QueryEngine) EvalExpr(row map[string]interface{}, expr QP.Expr) interface{} {
 	return qe.evalValue(row, expr)
+}
+
+func (qe *QueryEngine) evalCaseExpr(row map[string]interface{}, ce *QP.CaseExpr) interface{} {
+	if ce.Operand != nil {
+		operandVal := qe.evalValue(row, ce.Operand)
+		for _, when := range ce.Whens {
+			condVal := qe.evalValue(row, when.Condition)
+			if operandVal == nil && condVal == nil {
+				return qe.evalValue(row, when.Result)
+			}
+			if operandVal != nil && condVal != nil && qe.valuesEqual(operandVal, condVal) {
+				return qe.evalValue(row, when.Result)
+			}
+		}
+		if ce.Else != nil {
+			return qe.evalValue(row, ce.Else)
+		}
+		return nil
+	}
+
+	for _, when := range ce.Whens {
+		condVal := qe.evalValue(row, when.Condition)
+		if condVal != nil {
+			if intVal, ok := condVal.(int64); ok && intVal != 0 {
+				return qe.evalValue(row, when.Result)
+			}
+			if floatVal, ok := condVal.(float64); ok && floatVal != 0 {
+				return qe.evalValue(row, when.Result)
+			}
+		}
+	}
+	if ce.Else != nil {
+		return qe.evalValue(row, ce.Else)
+	}
+	return nil
+}
+
+func (qe *QueryEngine) evalCastExpr(row map[string]interface{}, ce *QP.CastExpr) interface{} {
+	val := qe.evalValue(row, ce.Expr)
+	if val == nil {
+		return nil
+	}
+	switch ce.Type {
+	case "INTEGER", "INT":
+		if s, ok := val.(string); ok {
+			if iv, err := strconv.ParseInt(s, 10, 64); err == nil {
+				return iv
+			}
+			if fv, err := strconv.ParseFloat(s, 64); err == nil {
+				return int64(fv)
+			}
+			return nil
+		}
+		if fv, ok := val.(float64); ok {
+			return int64(fv)
+		}
+		return val
+	case "REAL", "FLOAT", "DOUBLE", "NUMERIC", "DECIMAL":
+		if s, ok := val.(string); ok {
+			if fv, err := strconv.ParseFloat(s, 64); err == nil {
+				return fv
+			}
+			return nil
+		}
+		if iv, ok := val.(int64); ok {
+			return float64(iv)
+		}
+		return val
+	case "TEXT", "VARCHAR", "CHAR", "CHARACTER":
+		if s, ok := val.(string); ok {
+			return s
+		}
+		if iv, ok := val.(int64); ok {
+			return strconv.FormatInt(iv, 10)
+		}
+		if fv, ok := val.(float64); ok {
+			return strconv.FormatFloat(fv, 'f', -1, 64)
+		}
+		return fmt.Sprintf("%v", val)
+	case "BLOB":
+		return val
+	default:
+		return val
+	}
 }
 
 type subqueryResult struct {
@@ -675,30 +924,44 @@ func (qe *QueryEngine) valuesEqual(a, b interface{}) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	av, aok := a.(int64)
-	bv, bok := b.(int64)
-	if aok && bok {
+
+	av, aIsInt := a.(int64)
+	bv, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
 		return av == bv
 	}
-	af, aok := a.(float64)
-	bf, bok := b.(float64)
-	if aok && bok {
+
+	af, aIsFloat := a.(float64)
+	bf, bIsFloat := b.(float64)
+	if aIsFloat && bIsFloat {
 		return af == bf
 	}
-	as, aok := a.(string)
-	bs, bok := b.(string)
-	if aok && bok {
+
+	as, aIsString := a.(string)
+	bs, bIsString := b.(string)
+	if aIsString && bIsString {
 		return as == bs
 	}
-	if aok {
-		var iv int64
-		fmt.Sscanf(fmt.Sprintf("%v", bs), "%d", &iv)
-		return av == iv
+
+	if aIsInt && bIsFloat {
+		return float64(av) == bf
 	}
-	if bok {
-		var iv int64
-		fmt.Sscanf(fmt.Sprintf("%v", as), "%d", &iv)
-		return iv == bv
+	if aIsFloat && bIsInt {
+		return af == float64(bv)
+	}
+
+	return false
+}
+
+func (qe *QueryEngine) toBool(val interface{}) bool {
+	if val == nil {
+		return false
+	}
+	if b, ok := val.(int64); ok {
+		return b != 0
+	}
+	if b, ok := val.(bool); ok {
+		return b
 	}
 	return false
 }
@@ -824,9 +1087,63 @@ func matchLikeRecursive(value, pattern string, vi, pi int) bool {
 	return false
 }
 
+func (qe *QueryEngine) matchGlob(value, pattern string) bool {
+	if pattern == "" {
+		return value == ""
+	}
+	if pattern == "*" {
+		return true
+	}
+	simple := true
+	for _, c := range pattern {
+		if c == '*' || c == '?' {
+			simple = false
+			break
+		}
+	}
+	if simple {
+		return value == pattern
+	}
+	result := matchGlobRecursive(value, pattern, 0, 0)
+	return result
+}
+
+func matchGlobRecursive(value, pattern string, vi, pi int) bool {
+	if pi >= len(pattern) {
+		return vi >= len(value)
+	}
+	if vi >= len(value) {
+		for ; pi < len(pattern); pi++ {
+			if pattern[pi] != '*' {
+				return false
+			}
+		}
+		return true
+	}
+	pchar := pattern[pi]
+	if pchar == '*' {
+		for i := vi; i <= len(value); i++ {
+			if matchGlobRecursive(value, pattern, i, pi+1) {
+				return true
+			}
+		}
+		return false
+	}
+	if pchar == '?' || pchar == value[vi] {
+		return matchGlobRecursive(value, pattern, vi+1, pi+1)
+	}
+	return false
+}
+
+// evalFuncCall evaluates function calls like COALESCE, IFNULL, MAX, MIN, etc.
+// It handles built-in SQL functions that operate on row data.
 func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall) interface{} {
 	switch fc.Name {
 	case "COALESCE", "IFNULL":
+		// COALESCE returns the first non-NULL argument.
+		// Per SQL spec: COALESCE(a, b, ...) is equivalent to:
+		// CASE WHEN a IS NOT NULL THEN a ELSE b END
+		// This also matches SQLite's IFNULL(a, b) semantics.
 		for _, arg := range fc.Args {
 			val := qe.evalValue(row, arg)
 			if val != nil {
@@ -860,6 +1177,479 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 		}
 		val := qe.evalValue(row, fc.Args[0])
 		return val
+	case "ABS":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		switch v := val.(type) {
+		case int64:
+			if v < 0 {
+				return -v
+			}
+			return v
+		case float64:
+			return math.Abs(v)
+		}
+		return val
+	case "CEIL", "CEILING":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		switch v := val.(type) {
+		case int64:
+			return v
+		case float64:
+			return math.Ceil(v)
+		}
+		return val
+	case "FLOOR":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		switch v := val.(type) {
+		case int64:
+			return v
+		case float64:
+			return math.Floor(v)
+		}
+		return val
+	case "ROUND":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		// Default to 0 decimal places (return int64)
+		decimals := 0
+		if len(fc.Args) >= 2 {
+			if decVal := qe.evalValue(row, fc.Args[1]); decVal != nil {
+				switch d := decVal.(type) {
+				case int64:
+					decimals = int(d)
+				case float64:
+					decimals = int(d)
+				}
+			}
+		}
+		switch v := val.(type) {
+		case int64:
+			if decimals == 0 {
+				return v
+			}
+			if decimals < 0 {
+				// Negative precision: round to left of decimal
+				divisor := math.Pow10(-decimals)
+				return int64(math.Round(float64(v)/divisor) * divisor)
+			}
+			// With decimal places, convert to float64
+			divisor := math.Pow10(decimals)
+			return math.Round(float64(v)*divisor) / divisor
+		case float64:
+			if decimals == 0 {
+				return math.Round(v)
+			}
+			if decimals < 0 {
+				// Negative precision: round to left of decimal
+				divisor := math.Pow10(-decimals)
+				return math.Round(v/divisor) * divisor
+			}
+			divisor := math.Pow10(decimals)
+			return math.Round(v*divisor) / divisor
+		}
+		return val
+	case "UPPER":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			return strings.ToUpper(s)
+		}
+		return val
+	case "LOWER":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			return strings.ToLower(s)
+		}
+		return val
+	case "LENGTH", "CHARACTER_LENGTH", "CHAR_LENGTH":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			return int64(utf8.RuneCountInString(s))
+		}
+		return int64(0)
+	case "OCTET_LENGTH":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			return int64(len(s))
+		}
+		return int64(0)
+	case "SUBSTRING", "SUBSTR":
+		if len(fc.Args) < 2 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		s, ok := val.(string)
+		if !ok {
+			return nil
+		}
+		runes := []rune(s)
+		length := len(runes)
+		startVal := qe.evalValue(row, fc.Args[1])
+		start := 1
+		origStart := 0
+		if startInt, ok := startVal.(int64); ok {
+			origStart = int(startInt)
+			start = origStart
+		}
+		if start == 0 {
+			start = 1
+		}
+		if len(fc.Args) >= 3 {
+			lenVal := qe.evalValue(row, fc.Args[2])
+			if lenInt, ok := lenVal.(int64); ok {
+				length = int(lenInt)
+				if origStart == 0 && length > 0 {
+					length = length - 1
+				}
+			}
+		}
+		if start < 0 {
+			start = len(runes) + start + 1
+			if start < 1 {
+				start = 1
+			}
+		}
+		if start > len(runes) {
+			return ""
+		}
+		end := start - 1 + length
+		if end > len(runes) {
+			end = len(runes)
+		}
+		return string(runes[start-1 : end])
+	case "TRIM":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			if len(fc.Args) >= 2 {
+				chars := qe.evalValue(row, fc.Args[1])
+				if charsStr, ok := chars.(string); ok {
+					return strings.Trim(s, charsStr)
+				}
+			}
+			return strings.TrimSpace(s)
+		}
+		return val
+	case "LTRIM":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			if len(fc.Args) >= 2 {
+				chars := qe.evalValue(row, fc.Args[1])
+				if charsStr, ok := chars.(string); ok {
+					return strings.TrimLeft(s, charsStr)
+				}
+			}
+			return strings.TrimLeft(s, " \t\n\r")
+		}
+		return val
+	case "RTRIM":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			if len(fc.Args) >= 2 {
+				chars := qe.evalValue(row, fc.Args[1])
+				if charsStr, ok := chars.(string); ok {
+					return strings.TrimRight(s, charsStr)
+				}
+			}
+			return strings.TrimRight(s, " \t\n\r")
+		}
+		return val
+		return val
+	case "POSITION", "INSTR":
+		if len(fc.Args) < 2 {
+			return nil
+		}
+		haystack := qe.evalValue(row, fc.Args[0])
+		needle := qe.evalValue(row, fc.Args[1])
+		if haystack == nil || needle == nil {
+			return nil
+		}
+		haystackStr, ok1 := haystack.(string)
+		needleStr, ok2 := needle.(string)
+		if !ok1 || !ok2 {
+			return int64(0)
+		}
+		idx := strings.Index(haystackStr, needleStr)
+		if idx < 0 {
+			return int64(0)
+		}
+		return int64(utf8.RuneCountInString(haystackStr[:idx]) + 1)
+	case "REPLACE":
+		if len(fc.Args) < 3 {
+			return nil
+		}
+		str := qe.evalValue(row, fc.Args[0])
+		search := qe.evalValue(row, fc.Args[1])
+		replace := qe.evalValue(row, fc.Args[2])
+		if str == nil {
+			return nil
+		}
+		strStr, ok := str.(string)
+		if !ok {
+			return str
+		}
+		searchStr, _ := search.(string)
+		replaceStr, _ := replace.(string)
+		return strings.ReplaceAll(strStr, searchStr, replaceStr)
+	case "DATE":
+		if len(fc.Args) == 0 {
+			return time.Now().Format("2006-01-02")
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("2006-01-02", s); err == nil {
+				return t.Format("2006-01-02")
+			}
+			if t, err := time.Parse(time.RFC3339, s); err == nil {
+				return t.Format("2006-01-02")
+			}
+			return s
+		}
+		return nil
+	case "TIME":
+		if len(fc.Args) == 0 {
+			return time.Now().Format("15:04:05")
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("15:04:05", s); err == nil {
+				return t.Format("15:04:05")
+			}
+			return s
+		}
+		return nil
+	case "DATETIME", "TIMESTAMP":
+		if len(fc.Args) == 0 {
+			return time.Now().Format("2006-01-02 15:04:05")
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return t.Format("2006-01-02 15:04:05")
+			}
+			if t, err := time.Parse(time.RFC3339, s); err == nil {
+				return t.Format("2006-01-02 15:04:05")
+			}
+			return s
+		}
+		return nil
+	case "CURRENT_DATE":
+		return time.Now().Format("2006-01-02")
+	case "CURRENT_TIME":
+		return time.Now().Format("15:04:05")
+	case "CURRENT_TIMESTAMP":
+		return time.Now().Format("2006-01-02 15:04:05")
+	case "LOCALTIME":
+		return time.Now().Local().Format("15:04:05")
+	case "LOCALTIMESTAMP":
+		return time.Now().Local().Format("2006-01-02 15:04:05")
+	case "STRFTIME", "strftime":
+		if len(fc.Args) < 2 {
+			return nil
+		}
+		format := qe.evalValue(row, fc.Args[0])
+		timestamp := qe.evalValue(row, fc.Args[1])
+		if format == nil || timestamp == nil {
+			return nil
+		}
+		formatStr, _ := format.(string)
+		tsStr, _ := timestamp.(string)
+		t, err := time.Parse("2006-01-02 15:04:05", tsStr)
+		if err != nil {
+			t, err = time.Parse(time.RFC3339, tsStr)
+			if err != nil {
+				return nil
+			}
+		}
+		sqliteFormat := strings.ReplaceAll(formatStr, "%Y", "2006")
+		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%m", "01")
+		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%d", "02")
+		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%H", "15")
+		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%M", "04")
+		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%S", "05")
+		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%s", "05")
+		return t.Format(sqliteFormat)
+	case "NOW":
+		return time.Now().Format("2006-01-02 15:04:05")
+	case "YEAR", "YEAROF":
+		if len(fc.Args) == 0 {
+			return time.Now().Year()
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("2006-01-02", s); err == nil {
+				return int64(t.Year())
+			}
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return int64(t.Year())
+			}
+		}
+		return nil
+	case "MONTH", "MONTHOF":
+		if len(fc.Args) == 0 {
+			return int64(time.Now().Month())
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("2006-01-02", s); err == nil {
+				return int64(t.Month())
+			}
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return int64(t.Month())
+			}
+		}
+		return nil
+	case "DAY", "DAYOF":
+		if len(fc.Args) == 0 {
+			return int64(time.Now().Day())
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("2006-01-02", s); err == nil {
+				return int64(t.Day())
+			}
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return int64(t.Day())
+			}
+		}
+		return nil
+	case "HOUR", "HOUROF":
+		if len(fc.Args) == 0 {
+			return int64(time.Now().Hour())
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("15:04:05", s); err == nil {
+				return int64(t.Hour())
+			}
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return int64(t.Hour())
+			}
+		}
+		return nil
+	case "MINUTE", "MINUTEOF":
+		if len(fc.Args) == 0 {
+			return int64(time.Now().Minute())
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("15:04:05", s); err == nil {
+				return int64(t.Minute())
+			}
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return int64(t.Minute())
+			}
+		}
+		return nil
+	case "SECOND", "SECONDOF":
+		if len(fc.Args) == 0 {
+			return int64(time.Now().Second())
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("15:04:05", s); err == nil {
+				return int64(t.Second())
+			}
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return int64(t.Second())
+			}
+		}
+		return nil
+	case "TYPEOF", "typeof":
+		if len(fc.Args) == 0 {
+			return "null"
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return "null"
+		}
+		switch val.(type) {
+		case int64:
+			return "integer"
+		case float64:
+			return "real"
+		case string:
+			return "text"
+		case []byte:
+			return "blob"
+		default:
+			return "unknown"
+		}
 	}
 	return nil
 }

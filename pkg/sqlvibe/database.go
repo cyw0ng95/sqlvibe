@@ -18,6 +18,14 @@ type Database struct {
 	primaryKeys map[string][]string                 // table name -> primary key column names
 	columnOrder map[string][]string                 // table name -> ordered column names
 	data        map[string][]map[string]interface{} // table name -> rows -> column name -> value
+	indexes     map[string]*IndexInfo               // index name -> index info
+}
+
+type IndexInfo struct {
+	Name    string
+	Table   string
+	Columns []string
+	Unique  bool
 }
 
 type Conn interface {
@@ -138,6 +146,7 @@ func Open(path string) (*Database, error) {
 		primaryKeys: make(map[string][]string),
 		columnOrder: make(map[string][]string),
 		data:        data,
+		indexes:     make(map[string]*IndexInfo),
 	}, nil
 }
 
@@ -338,6 +347,28 @@ func (db *Database) Exec(sql string) (Result, error) {
 			delete(db.primaryKeys, stmt.Name)
 		}
 		return Result{}, nil
+	case "CreateIndexStmt":
+		stmt := ast.(*QP.CreateIndexStmt)
+		if _, exists := db.indexes[stmt.Name]; exists {
+			if stmt.IfNotExists {
+				return Result{}, nil
+			}
+			return Result{}, fmt.Errorf("index %s already exists", stmt.Name)
+		}
+		if _, exists := db.tables[stmt.Table]; !exists {
+			return Result{}, fmt.Errorf("table %s does not exist", stmt.Table)
+		}
+		db.indexes[stmt.Name] = &IndexInfo{
+			Name:    stmt.Name,
+			Table:   stmt.Table,
+			Columns: stmt.Columns,
+			Unique:  stmt.Unique,
+		}
+		return Result{}, nil
+	case "DropIndexStmt":
+		stmt := ast.(*QP.DropIndexStmt)
+		delete(db.indexes, stmt.Name)
+		return Result{}, nil
 	}
 
 	return Result{}, nil
@@ -360,6 +391,10 @@ func (db *Database) Query(sql string) (*Rows, error) {
 	}
 	if ast == nil {
 		return nil, nil
+	}
+
+	if ast.NodeType() == "PragmaStmt" {
+		return db.handlePragma(ast.(*QP.PragmaStmt))
 	}
 
 	if ast.NodeType() == "SelectStmt" {
@@ -456,6 +491,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 				}
 			}
 		} else {
+			exprIndex := 0
 			for _, col := range stmt.Columns {
 				switch c := col.(type) {
 				case *QP.ColumnRef:
@@ -464,14 +500,22 @@ func (db *Database) Query(sql string) (*Rows, error) {
 					if c.Alias != "" {
 						cols = append(cols, c.Alias)
 					} else {
-						cols = append(cols, "expr")
+						cols = append(cols, fmt.Sprintf("expr%d", exprIndex))
+						exprIndex++
 					}
 				case *QP.FuncCall:
 					cols = append(cols, c.Name)
 				case *QP.SubqueryExpr:
 					cols = append(cols, "subquery")
+				case *QP.BinaryExpr:
+					cols = append(cols, fmt.Sprintf("expr%d", exprIndex))
+					exprIndex++
+				case *QP.UnaryExpr:
+					cols = append(cols, fmt.Sprintf("expr%d", exprIndex))
+					exprIndex++
 				default:
-					cols = append(cols, "expr")
+					cols = append(cols, fmt.Sprintf("expr%d", exprIndex))
+					exprIndex++
 				}
 			}
 		}
@@ -549,10 +593,206 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			resultData = db.applyOrderBy(resultData, stmt.OrderBy, cols)
 		}
 
+		if stmt.SetOp != "" {
+			rightRows, err := db.executeSelect(stmt.SetOpRight)
+			if err != nil {
+				return nil, err
+			}
+			resultData = db.applySetOp(resultData, rightRows.Data, stmt.SetOp, stmt.SetOpAll)
+		}
+
 		return &Rows{Columns: cols, Data: resultData, pos: -1}, nil
 	}
 
 	return nil, nil
+}
+
+func (db *Database) executeSelect(stmt *QP.SelectStmt) (*Rows, error) {
+	if stmt == nil {
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+
+	if stmt.From == nil {
+		return db.evalConstantExpression(stmt)
+	}
+
+	var tableName string
+	if stmt.From != nil {
+		tableName = stmt.From.Name
+	}
+	if tableName == "" {
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+
+	if tableName == "sqlite_master" {
+		return db.querySqliteMaster(stmt)
+	}
+
+	if stmt.From != nil && stmt.From.Join != nil {
+		return db.handleJoin(stmt)
+	}
+
+	tableData, ok := db.data[tableName]
+	if !ok || tableData == nil {
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+
+	hasAggregate := false
+	var aggregateFunc *QP.FuncCall
+	for _, col := range stmt.Columns {
+		if fc, ok := col.(*QP.FuncCall); ok {
+			if fc.Name == "SUM" || fc.Name == "AVG" || fc.Name == "MIN" || fc.Name == "MAX" || fc.Name == "COUNT" {
+				hasAggregate = true
+				aggregateFunc = fc
+				break
+			}
+		}
+	}
+
+	if hasAggregate && stmt.Where == nil && len(stmt.Columns) == 1 {
+		result := db.computeAggregate(tableData, aggregateFunc)
+		return &Rows{Columns: []string{aggregateFunc.Name}, Data: [][]interface{}{{result}}}, nil
+	}
+
+	filteredData := tableData
+	if stmt.Where != nil {
+		if indexData := db.tryUseIndex(tableName, stmt.Where); indexData != nil {
+			filteredData = indexData
+		} else {
+			filteredData = make([]map[string]interface{}, 0)
+			for _, row := range tableData {
+				if db.evalWhere(row, stmt.Where) {
+					filteredData = append(filteredData, row)
+				}
+			}
+		}
+	}
+
+	cols := make([]string, 0)
+	for _, col := range stmt.Columns {
+		switch c := col.(type) {
+		case *QP.ColumnRef:
+			cols = append(cols, c.Name)
+		case *QP.AliasExpr:
+			cols = append(cols, c.Alias)
+		case *QP.FuncCall:
+			cols = append(cols, c.Name)
+		case *QP.Literal:
+			cols = append(cols, "expr")
+		default:
+			cols = append(cols, "expr")
+		}
+	}
+
+	resultData := make([][]interface{}, 0)
+	for _, row := range filteredData {
+		resultRow := make([]interface{}, len(cols))
+		for i, col := range stmt.Columns {
+			resultRow[i] = db.engine.EvalExpr(row, col)
+		}
+		resultData = append(resultData, resultRow)
+	}
+
+	if len(stmt.OrderBy) > 0 {
+		resultData = db.applyOrderBy(resultData, stmt.OrderBy, cols)
+	}
+
+	if stmt.SetOp != "" {
+		rightRows, err := db.executeSelect(stmt.SetOpRight)
+		if err != nil {
+			return nil, err
+		}
+		resultData = db.applySetOp(resultData, rightRows.Data, stmt.SetOp, stmt.SetOpAll)
+	}
+
+	return &Rows{Columns: cols, Data: resultData}, nil
+}
+
+func (db *Database) applySetOp(left, right [][]interface{}, op string, all bool) [][]interface{} {
+	switch op {
+	case "UNION":
+		return db.setOpUnion(left, right, all)
+	case "EXCEPT":
+		return db.setOpExcept(left, right, all)
+	case "INTERSECT":
+		return db.setOpIntersect(left, right, all)
+	}
+	return left
+}
+
+func (db *Database) setOpUnion(left, right [][]interface{}, all bool) [][]interface{} {
+	if all {
+		return append(left, right...)
+	}
+	seen := make(map[string]bool)
+	result := make([][]interface{}, 0)
+	for _, row := range left {
+		key := db.rowKey(row)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, row)
+		}
+	}
+	for _, row := range right {
+		key := db.rowKey(row)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+func (db *Database) setOpExcept(left, right [][]interface{}, all bool) [][]interface{} {
+	rightSet := make(map[string]bool)
+	for _, row := range right {
+		rightSet[db.rowKey(row)] = true
+	}
+	result := make([][]interface{}, 0)
+	for _, row := range left {
+		key := db.rowKey(row)
+		if !rightSet[key] {
+			if all {
+				result = append(result, row)
+			} else {
+				rightSet[key] = true
+				result = append(result, row)
+			}
+		}
+	}
+	return result
+}
+
+func (db *Database) setOpIntersect(left, right [][]interface{}, all bool) [][]interface{} {
+	rightSet := make(map[string]int)
+	for _, row := range right {
+		key := db.rowKey(row)
+		rightSet[key]++
+	}
+	result := make([][]interface{}, 0)
+	for _, row := range left {
+		key := db.rowKey(row)
+		if count, ok := rightSet[key]; ok && count > 0 {
+			result = append(result, row)
+			if !all {
+				rightSet[key] = 0
+			} else {
+				rightSet[key]--
+			}
+		}
+	}
+	return result
+}
+
+func (db *Database) rowKey(row []interface{}) string {
+	key := ""
+	for i, v := range row {
+		if i > 0 {
+			key += "|"
+		}
+		key += fmt.Sprintf("%v", v)
+	}
+	return key
 }
 
 func (db *Database) Close() error {
@@ -591,6 +831,98 @@ func (s *Statement) Query(params ...interface{}) (*Rows, error) {
 
 func (s *Statement) Close() error {
 	return nil
+}
+
+func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
+	switch stmt.Name {
+	case "table_info":
+		return db.pragmaTableInfo(stmt)
+	case "index_list":
+		return db.pragmaIndexList(stmt)
+	case "database_list":
+		return db.pragmaDatabaseList()
+	default:
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+}
+
+func (db *Database) pragmaTableInfo(stmt *QP.PragmaStmt) (*Rows, error) {
+	var tableName string
+	if stmt.Value != nil {
+		if lit, ok := stmt.Value.(*QP.Literal); ok {
+			if s, ok := lit.Value.(string); ok {
+				tableName = s
+			}
+		}
+	}
+
+	if tableName == "" {
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+
+	schema, exists := db.tables[tableName]
+	if !exists {
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+
+	columns := []string{"cid", "name", "type", "notnull", "dflt_value", "pk"}
+	data := make([][]interface{}, 0)
+	colOrder := db.columnOrder[tableName]
+	pkCols := db.primaryKeys[tableName]
+
+	for i, colName := range colOrder {
+		colType := schema[colName]
+		isPK := int64(0)
+		for _, pk := range pkCols {
+			if pk == colName {
+				isPK = 1
+				break
+			}
+		}
+		data = append(data, []interface{}{int64(i), colName, colType, int64(0), nil, isPK})
+	}
+
+	return &Rows{Columns: columns, Data: data}, nil
+}
+
+func (db *Database) pragmaIndexList(stmt *QP.PragmaStmt) (*Rows, error) {
+	var tableName string
+	if stmt.Value != nil {
+		if lit, ok := stmt.Value.(*QP.Literal); ok {
+			if s, ok := lit.Value.(string); ok {
+				tableName = s
+			}
+		}
+	}
+
+	if tableName == "" {
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+
+	columns := []string{"seq", "name", "unique", "origin", "partial"}
+	data := make([][]interface{}, 0)
+
+	seq := 0
+	for _, idx := range db.indexes {
+		if idx.Table == tableName {
+			unique := int64(0)
+			if idx.Unique {
+				unique = 1
+			}
+			data = append(data, []interface{}{int64(seq), idx.Name, unique, "c", int64(0)})
+			seq++
+		}
+	}
+
+	return &Rows{Columns: columns, Data: data}, nil
+}
+
+func (db *Database) pragmaDatabaseList() (*Rows, error) {
+	columns := []string{"seq", "name", "file"}
+	data := [][]interface{}{
+		{int64(0), "main", ""},
+	}
+	return &Rows{Columns: columns, Data: data}, nil
 }
 
 func (db *Database) ExecWithParams(sql string, params []interface{}) (Result, error) {
@@ -703,6 +1035,68 @@ func (db *Database) MustExec(sql string, params ...interface{}) Result {
 		panic(err)
 	}
 	return res
+}
+
+func (db *Database) tryUseIndex(tableName string, where QP.Expr) []map[string]interface{} {
+	if where == nil {
+		return nil
+	}
+
+	binExpr, ok := where.(*QP.BinaryExpr)
+	if !ok {
+		return nil
+	}
+
+	if binExpr.Op != QP.TokenEq {
+		return nil
+	}
+
+	var colName string
+	var colValue interface{}
+
+	if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
+		if lit, ok := binExpr.Right.(*QP.Literal); ok {
+			colName = colRef.Name
+			colValue = lit.Value
+		}
+	} else if colRef, ok := binExpr.Right.(*QP.ColumnRef); ok {
+		if lit, ok := binExpr.Left.(*QP.Literal); ok {
+			colName = colRef.Name
+			colValue = lit.Value
+		}
+	}
+
+	if colName == "" {
+		return nil
+	}
+
+	for _, idx := range db.indexes {
+		if idx.Table == tableName && len(idx.Columns) > 0 && idx.Columns[0] == colName {
+			return db.scanByIndexValue(tableName, colName, colValue, idx.Unique)
+		}
+	}
+
+	return nil
+}
+
+func (db *Database) scanByIndexValue(tableName, colName string, value interface{}, unique bool) []map[string]interface{} {
+	tableData := db.data[tableName]
+	if tableData == nil {
+		return nil
+	}
+
+	result := make([]map[string]interface{}, 0)
+	for _, row := range tableData {
+		if rowVal, ok := row[colName]; ok {
+			if db.valuesEqual(rowVal, value) {
+				result = append(result, row)
+				if unique {
+					return result
+				}
+			}
+		}
+	}
+	return result
 }
 
 func (db *Database) evalWhere(row map[string]interface{}, where QP.Expr) bool {
@@ -950,27 +1344,43 @@ func (db *Database) compareVals(a, b interface{}) int {
 	}
 	switch av := a.(type) {
 	case int64:
-		bv, ok := b.(int64)
-		if !ok {
+		switch bv := b.(type) {
+		case int64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
 			return 0
-		}
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
+		case float64:
+			if float64(av) < bv {
+				return -1
+			}
+			if float64(av) > bv {
+				return 1
+			}
+			return 0
 		}
 		return 0
 	case float64:
-		bv, ok := b.(float64)
-		if !ok {
+		switch bv := b.(type) {
+		case int64:
+			if av < float64(bv) {
+				return -1
+			}
+			if av > float64(bv) {
+				return 1
+			}
 			return 0
-		}
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
+		case float64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
 		}
 		return 0
 	case string:
@@ -1175,9 +1585,24 @@ func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, col
 	sorted := make([][]interface{}, len(data))
 	copy(sorted, data)
 
+	// Pre-evaluate ORDER BY expressions for each row
+	// This is needed for non-ColumnRef expressions (e.g., val * -1)
+	orderByValues := make([][]interface{}, len(orderBy))
+	for obIdx, ob := range orderBy {
+		orderByValues[obIdx] = make([]interface{}, len(data))
+		for rowIdx, row := range data {
+			// Convert row slice to map for EvalExpr
+			rowMap := make(map[string]interface{})
+			for colIdx, colName := range cols {
+				rowMap[colName] = row[colIdx]
+			}
+			orderByValues[obIdx][rowIdx] = db.engine.EvalExpr(rowMap, ob.Expr)
+		}
+	}
+
 	for i := range sorted {
 		for j := i + 1; j < len(sorted); j++ {
-			for _, ob := range orderBy {
+			for obIdx, ob := range orderBy {
 				var keyValI, keyValJ interface{}
 				if colRef, ok := ob.Expr.(*QP.ColumnRef); ok {
 					for ci, cn := range cols {
@@ -1187,6 +1612,10 @@ func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, col
 							break
 						}
 					}
+				} else {
+					// Use pre-evaluated expression values
+					keyValI = orderByValues[obIdx][i]
+					keyValJ = orderByValues[obIdx][j]
 				}
 				cmp := db.compareVals(keyValI, keyValJ)
 				if ob.Desc {
@@ -1194,6 +1623,10 @@ func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, col
 				}
 				if cmp > 0 {
 					sorted[i], sorted[j] = sorted[j], sorted[i]
+					// Also swap the pre-evaluated values to maintain consistency
+					for obIdx2 := range orderBy {
+						orderByValues[obIdx2][i], orderByValues[obIdx2][j] = orderByValues[obIdx2][j], orderByValues[obIdx2][i]
+					}
 					break
 				} else if cmp < 0 {
 					break

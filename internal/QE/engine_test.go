@@ -33,7 +33,16 @@ func TestVMRun(t *testing.T) {
 
 	evaluator := NewExprEvaluator(vm)
 	result, _ := evaluator.BinaryOp(OpAdd, 10, 20)
-	if result != int(30) && result != float64(30) {
+	var resultVal int64
+	switch v := result.(type) {
+	case int:
+		resultVal = int64(v)
+	case int64:
+		resultVal = v
+	case float64:
+		resultVal = int64(v)
+	}
+	if resultVal != 30 {
 		t.Errorf("expected 30, got %v", result)
 	}
 }
