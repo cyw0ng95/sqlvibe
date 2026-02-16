@@ -1,5 +1,19 @@
 # sqlvibe Release History
 
+## **v0.4.3** (2026-02-16)
+
+### Bug Fixes
+- CAST expression: Implemented CAST(expr AS type) syntax
+- Support for CAST to INTEGER, REAL, TEXT, BLOB types
+- Most CAST tests now pass (E02110)
+
+### Known Issues
+- CHAR_LENGTH, CHARACTER_LENGTH: SQLite doesn't support these functions
+- OCTET_LENGTH: SQLite doesn't support this function  
+- Unicode case folding differs between Go and SQLite (UPPER/LOWER)
+
+---
+
 ## **v0.4.2** (2026-02-16)
 
 ### Bug Fixes

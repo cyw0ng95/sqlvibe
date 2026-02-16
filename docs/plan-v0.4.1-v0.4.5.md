@@ -313,6 +313,12 @@ go test -race -asan ./...
 ### Goal
 Implement CAST expression and fix LIKE/GLOB.
 
+### Status (as of Feb 16, 2026)
+- [x] CAST expression - implemented
+- [x] LIKE on columns - already working
+- [x] GLOB operator - already working
+- [ ] Implicit casting in comparisons - partial
+
 ### Tasks
 
 #### Task 3.1: Implement CAST Expression
