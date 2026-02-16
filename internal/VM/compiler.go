@@ -74,13 +74,15 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 	}
 
 	c.program.EmitOpenTable(0, tableName)
-	rewindTarget := c.program.Emit(OpNoop)
+	rewindPos := len(c.program.Instructions)
+	c.program.EmitOp(OpRewind, 0, 0)
 
 	if where != nil {
 		whereReg := c.compileExpr(where)
 		zeroReg := c.ra.Alloc()
 		c.program.EmitLoadConst(zeroReg, int64(0))
-		skipRow := c.program.EmitNe(whereReg, zeroReg, 0)
+		c.program.EmitOp(OpEq, int32(whereReg), int32(zeroReg))
+		skipRow := c.program.EmitOp(OpIsNull, int32(whereReg), 0)
 
 		resultRegs := make([]int, 0)
 		for _, col := range columns {
@@ -89,12 +91,14 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 		}
 		c.program.EmitResultRow(resultRegs)
 
-		nt := c.program.EmitOp(OpNext, 0, 0)
+		nextPos := c.program.EmitOp(OpNext, 0, 0)
 		gotoRewind := c.program.Emit(OpGoto)
+		_ = gotoRewind
+		_ = nextPos
+
 		c.program.Fixup(gotoRewind)
 		c.program.FixupWithPos(skipRow, len(c.program.Instructions))
-		_ = nt
-		c.program.FixupWithPos(rewindTarget, len(c.program.Instructions))
+		c.program.FixupWithPos(rewindPos, len(c.program.Instructions))
 	} else {
 		resultRegs := make([]int, 0)
 		for _, col := range columns {
@@ -103,10 +107,13 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 		}
 		c.program.EmitResultRow(resultRegs)
 
-		nextTarget := c.program.EmitOp(OpNext, 0, 0)
-		_ = nextTarget
-		c.program.Fixup(nextTarget)
-		c.program.Fixup(rewindTarget)
+		np := c.program.EmitOp(OpNext, 0, 0)
+		gotoRewind := c.program.Emit(OpGoto)
+		_ = gotoRewind
+		_ = np
+
+		c.program.Fixup(np)
+		c.program.FixupWithPos(rewindPos, len(c.program.Instructions))
 	}
 
 	c.program.Emit(OpHalt)
