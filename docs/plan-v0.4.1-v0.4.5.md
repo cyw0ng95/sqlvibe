@@ -175,6 +175,14 @@ graph TD
 ### Goal
 Fix all NULL handling and IN/BETWEEN operator bugs.
 
+### Status (as of Feb 16, 2026)
+- [x] NOT IN operator - implemented in parser and engine
+- [x] NOT BETWEEN operator - implemented in parser and engine
+- [x] LIKE operator in evalValue - fixed
+- [x] NOT LIKE operator - implemented
+- [x] GLOB operator - implemented
+- [ ] NULL comparison 3-valued logic - in progress
+
 ### Tasks
 
 #### Task 1.1: Implement 3-Valued Logic
@@ -220,12 +228,15 @@ Fix all NULL handling and IN/BETWEEN operator bugs.
 - **Tests**: E011-05 NOT_BETWEEN tests
 
 ### Success Criteria
+- [x] IN operator works with all data types
+- [x] NOT IN operator returns correct results
+- [x] BETWEEN works with numeric and string types
+- [x] NOT BETWEEN works correctly
+- [x] LIKE operator works in SELECT and WHERE
+- [x] NOT LIKE operator works
+- [x] GLOB operator works
+- [ ] NULL comparisons return correct results (3-valued logic)
 - [ ] All E011-05 tests pass
-- [ ] NULL comparisons return correct results
-- [ ] IN operator works with all data types
-- [ ] NOT IN operator returns correct results
-- [ ] BETWEEN works with numeric and string types
-- [ ] NOT BETWEEN works correctly
 
 ### Verification
 ```bash
