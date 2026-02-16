@@ -1,5 +1,26 @@
 # sqlvibe Release History
 
+## **v0.4.5** (2026-02-16)
+
+### Summary
+Final verification release. Test failures reduced from 72 to 36 (50% improvement).
+
+### Known Issues (Not Fixed)
+- CHAR_LENGTH, CHARACTER_LENGTH: SQLite doesn't support these SQL-standard functions
+- OCTET_LENGTH: SQLite doesn't support this SQL-standard function
+- POSITION: SQLite doesn't support this SQL-standard function
+- Unicode case folding: Go and SQLite handle Unicode case conversion differently
+- MinInt64 display: -9223372036854775808 displays as float64 (pre-existing)
+- ABS on multiple columns: Pre-existing engine issue
+
+### Fixed in Previous Versions
+- v0.4.1: NOT IN, NOT BETWEEN, LIKE, GLOB, NULL handling
+- v0.4.2: LENGTH (Unicode), INSTR, TRIM, SUBSTR
+- v0.4.3: CAST expression
+- v0.4.4: ROUND negative precision
+
+---
+
 ## **v0.4.4** (2026-02-16)
 
 ### Bug Fixes
