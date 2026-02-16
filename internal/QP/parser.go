@@ -11,15 +11,18 @@ type ASTNode interface {
 }
 
 type SelectStmt struct {
-	Distinct bool
-	Columns  []Expr
-	From     *TableRef
-	Where    Expr
-	GroupBy  []Expr
-	Having   Expr
-	OrderBy  []OrderBy
-	Limit    Expr
-	Offset   Expr
+	Distinct   bool
+	Columns    []Expr
+	From       *TableRef
+	Where      Expr
+	GroupBy    []Expr
+	Having     Expr
+	OrderBy    []OrderBy
+	Limit      Expr
+	Offset     Expr
+	SetOp      string
+	SetOpAll   bool
+	SetOpRight *SelectStmt
 }
 
 func (s *SelectStmt) NodeType() string { return "SelectStmt" }
@@ -411,6 +414,20 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		if err == nil {
 			stmt.Offset = offset
 		}
+	}
+
+	if p.current().Literal == "UNION" || p.current().Literal == "EXCEPT" || p.current().Literal == "INTERSECT" {
+		stmt.SetOp = p.current().Literal
+		p.advance()
+		if p.current().Literal == "ALL" {
+			stmt.SetOpAll = true
+			p.advance()
+		}
+		right, err := p.parseSelect()
+		if err != nil {
+			return nil, err
+		}
+		stmt.SetOpRight = right
 	}
 
 	return stmt, nil
