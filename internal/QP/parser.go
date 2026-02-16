@@ -94,6 +94,22 @@ type DropTableStmt struct {
 
 func (d *DropTableStmt) NodeType() string { return "DropTableStmt" }
 
+type CreateIndexStmt struct {
+	Name        string
+	Table       string
+	Columns     []string
+	Unique      bool
+	IfNotExists bool
+}
+
+func (c *CreateIndexStmt) NodeType() string { return "CreateIndexStmt" }
+
+type DropIndexStmt struct {
+	Name string
+}
+
+func (d *DropIndexStmt) NodeType() string { return "DropIndexStmt" }
+
 type Expr interface {
 	exprNode()
 }
@@ -534,6 +550,18 @@ func (p *Parser) parseDelete() (*DeleteStmt, error) {
 func (p *Parser) parseCreate() (ASTNode, error) {
 	p.advance()
 
+	if p.current().Literal == "UNIQUE" {
+		p.advance()
+		if p.current().Literal == "INDEX" {
+			return p.parseCreateIndex(true)
+		}
+		return nil, nil
+	}
+
+	if p.current().Literal == "INDEX" {
+		return p.parseCreateIndex(false)
+	}
+
 	if p.current().Literal == "TABLE" {
 		p.advance()
 		stmt := &CreateTableStmt{}
@@ -596,12 +624,60 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 	return nil, nil
 }
 
-func (p *Parser) parseDrop() (*DropTableStmt, error) {
+func (p *Parser) parseCreateIndex(unique bool) (ASTNode, error) {
+	p.advance()
+	stmt := &CreateIndexStmt{Unique: unique}
+
+	if p.current().Type == TokenKeyword && p.current().Literal == "IF" {
+		p.advance()
+		if p.current().Type == TokenNot {
+			p.advance()
+			if p.current().Type == TokenExists {
+				stmt.IfNotExists = true
+				p.advance()
+			}
+		}
+	}
+
+	stmt.Name = p.current().Literal
+	p.advance()
+
+	if p.current().Type == TokenKeyword && p.current().Literal == "ON" {
+		p.advance()
+		stmt.Table = p.current().Literal
+		p.advance()
+
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			for {
+				if p.current().Type == TokenIdentifier {
+					stmt.Columns = append(stmt.Columns, p.current().Literal)
+					p.advance()
+				}
+				if p.current().Type == TokenComma {
+					p.advance()
+				} else {
+					break
+				}
+			}
+			p.expect(TokenRightParen)
+		}
+	}
+
+	return stmt, nil
+}
+
+func (p *Parser) parseDrop() (ASTNode, error) {
 	p.advance()
 
 	if p.current().Literal == "TABLE" {
 		p.advance()
 		return &DropTableStmt{Name: p.current().Literal}, nil
+	}
+
+	if p.current().Literal == "INDEX" {
+		p.advance()
+		return &DropIndexStmt{Name: p.current().Literal}, nil
 	}
 
 	return nil, nil
