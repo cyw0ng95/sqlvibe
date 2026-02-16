@@ -1,12 +1,15 @@
 package VM
 
 type Cursor struct {
-	ID       int
-	TableID  int
-	RowID    int64
-	EOF      bool
-	Index    int
-	IndexKey int64
+	ID        int
+	TableID   int
+	TableName string
+	RowID     int64
+	EOF       bool
+	Index     int
+	IndexKey  int64
+	Data      []map[string]interface{}
+	Columns   []string
 }
 
 type CursorArray struct {
@@ -29,6 +32,52 @@ func (ca *CursorArray) Open(tableID int) int {
 	}
 	ca.cursors = append(ca.cursors, cursor)
 	return cursor.ID
+}
+
+func (ca *CursorArray) OpenTable(tableName string, data []map[string]interface{}, columns []string) int {
+	cursor := &Cursor{
+		ID:        len(ca.cursors),
+		TableName: tableName,
+		RowID:     0,
+		EOF:       len(data) == 0,
+		Index:     -1,
+		Data:      data,
+		Columns:   columns,
+	}
+	ca.cursors = append(ca.cursors, cursor)
+	return cursor.ID
+}
+
+func (ca *CursorArray) Next(id int) (map[string]interface{}, bool) {
+	if id < 0 || id >= len(ca.cursors) || ca.cursors[id] == nil {
+		return nil, true
+	}
+	cursor := ca.cursors[id]
+	cursor.Index++
+	if cursor.Index >= len(cursor.Data) {
+		cursor.EOF = true
+		return nil, true
+	}
+	return cursor.Data[cursor.Index], false
+}
+
+func (ca *CursorArray) GetRow(id int) (map[string]interface{}, bool) {
+	if id < 0 || id >= len(ca.cursors) || ca.cursors[id] == nil {
+		return nil, true
+	}
+	cursor := ca.cursors[id]
+	if cursor.Index < 0 || cursor.Index >= len(cursor.Data) {
+		return nil, true
+	}
+	return cursor.Data[cursor.Index], false
+}
+
+func (ca *CursorArray) GetColumn(id int, colName string) interface{} {
+	if row, ok := ca.GetRow(id); ok {
+		return nil
+	} else {
+		return row[colName]
+	}
 }
 
 func (ca *CursorArray) Close(id int) error {

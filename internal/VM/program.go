@@ -399,6 +399,39 @@ func (p *Program) EmitHalt(err error) int {
 	return idx
 }
 
+func (p *Program) EmitOpenTable(cursorID int, tableName string) int {
+	idx := len(p.Instructions)
+	p.Instructions = append(p.Instructions, Instruction{
+		Op: OpOpenRead,
+		P1: int32(cursorID),
+		P3: tableName,
+	})
+	if cursorID >= p.NumCursors {
+		p.NumCursors = cursorID + 1
+	}
+	return idx
+}
+
+func (p *Program) EmitRewind(cursorID int, target int) int {
+	idx := len(p.Instructions)
+	p.Instructions = append(p.Instructions, Instruction{
+		Op: OpRewind,
+		P1: int32(cursorID),
+		P2: int32(target),
+	})
+	return idx
+}
+
+func (p *Program) EmitNext(cursorID int, target int) int {
+	idx := len(p.Instructions)
+	p.Instructions = append(p.Instructions, Instruction{
+		Op: OpNext,
+		P1: int32(cursorID),
+		P2: int32(target),
+	})
+	return idx
+}
+
 func (p *Program) Fixup(idx int) {
 	p.Instructions[idx].P2 = int32(len(p.Instructions))
 }

@@ -2079,13 +2079,35 @@ func (db *Database) getRightColumns(right []map[string]interface{}) []string {
 	return cols
 }
 
+type dbVmContext struct {
+	db *Database
+}
+
+func (ctx *dbVmContext) GetTableData(tableName string) ([]map[string]interface{}, error) {
+	if ctx.db.data == nil {
+		return nil, nil
+	}
+	return ctx.db.data[tableName], nil
+}
+
+func (ctx *dbVmContext) GetTableColumns(tableName string) ([]string, error) {
+	if ctx.db.columnOrder == nil {
+		return nil, nil
+	}
+	return ctx.db.columnOrder[tableName], nil
+}
+
 func (db *Database) ExecVM(sql string) (*Rows, error) {
 	program, err := VM.Compile(sql)
 	if err != nil {
 		return nil, fmt.Errorf("VM compile error: %v", err)
 	}
 
-	vm := VM.NewVM(program)
+	ctx := &dbVmContext{db: db}
+	vm := VM.NewVMWithContext(program, ctx)
+
+	vm.Cursors().OpenTable("t1", db.data["t1"], db.columnOrder["t1"])
+
 	err = vm.Run(nil)
 	if err != nil {
 		return nil, fmt.Errorf("VM execution error: %v", err)

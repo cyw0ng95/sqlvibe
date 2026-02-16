@@ -20,6 +20,11 @@ func (e *VmError) Error() string {
 	return fmt.Sprintf("VM error %d: %s", e.Code, e.Message)
 }
 
+type VmContext interface {
+	GetTableData(tableName string) ([]map[string]interface{}, error)
+	GetTableColumns(tableName string) ([]string, error)
+}
+
 type VM struct {
 	program   *Program
 	pc        int
@@ -30,9 +35,14 @@ type VM struct {
 	undo      [][]interface{}
 	errorcnt  int
 	err       error
+	ctx       VmContext
 }
 
 func NewVM(program *Program) *VM {
+	return NewVMWithContext(program, nil)
+}
+
+func NewVMWithContext(program *Program, ctx VmContext) *VM {
 	numRegs := program.NumRegs
 	if numRegs < 16 {
 		numRegs = 16
@@ -46,7 +56,16 @@ func NewVM(program *Program) *VM {
 		undo:      make([][]interface{}, 0),
 		errorcnt:  0,
 		err:       nil,
+		ctx:       ctx,
 	}
+}
+
+func (vm *VM) SetContext(ctx VmContext) {
+	vm.ctx = ctx
+}
+
+func (vm *VM) Context() VmContext {
+	return vm.ctx
 }
 
 func (vm *VM) Reset() {

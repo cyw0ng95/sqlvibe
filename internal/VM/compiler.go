@@ -7,8 +7,10 @@ import (
 )
 
 type Compiler struct {
-	program *Program
-	ra      *RegisterAllocator
+	program     *Program
+	ra          *RegisterAllocator
+	stmtWhere   []QP.Expr
+	stmtColumns []QP.Expr
 }
 
 func NewCompiler() *Compiler {
@@ -21,13 +23,15 @@ func NewCompiler() *Compiler {
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *Program {
 	c.program = NewProgram()
 	c.ra = NewRegisterAllocator(16)
+	c.stmtWhere = nil
+	c.stmtColumns = stmt.Columns
 
 	c.program.Emit(OpInit)
 	initPos := c.program.Emit(OpGoto)
 	c.program.Fixup(initPos)
 
 	if stmt.From != nil {
-		c.compileFrom(stmt.From)
+		c.compileFrom(stmt.From, stmt.Where, stmt.Columns)
 	}
 
 	if stmt.Where != nil {
@@ -49,15 +53,36 @@ func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *Program {
 	return c.program
 }
 
-func (c *Compiler) compileFrom(from *QP.TableRef) {
+func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Expr) {
 	if from == nil {
 		return
 	}
 
-	c.program.EmitOp(OpOpenRead, 0, 0)
-	c.program.Emit(OpRewind)
-	loopStart := c.program.Emit(OpNext)
-	c.program.Fixup(loopStart)
+	tableName := from.Name
+	if tableName == "" {
+		return
+	}
+
+	c.program.EmitOpenTable(0, tableName)
+	rewindTarget := c.program.EmitOp(OpRewind, 0, 0)
+
+	if where != nil {
+		whereReg := c.compileExpr(where)
+		skipRow := c.program.EmitOp(OpNotNull, int32(whereReg), 0)
+		c.program.Fixup(skipRow)
+	}
+
+	resultRegs := make([]int, 0)
+	for _, col := range columns {
+		reg := c.compileExpr(col)
+		resultRegs = append(resultRegs, reg)
+	}
+	c.program.EmitResultRow(resultRegs)
+
+	nextTarget := c.program.EmitOp(OpNext, 0, 0)
+	c.program.Fixup(nextTarget)
+	c.program.Fixup(rewindTarget)
+	c.program.Emit(OpHalt)
 }
 
 func (c *Compiler) compileWhere(where QP.Expr) {
