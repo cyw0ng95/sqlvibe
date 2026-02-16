@@ -417,36 +417,40 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return db.querySqliteMaster(stmt)
 		}
 
-		// VM disabled for now - needs more work
-		isSimple := false
-		// // VM enabled for simple queries (no JOIN, no WHERE, no ORDER BY, no GROUP BY, no expressions, no LIMIT, no SetOp)
-		// // VM only handles simple column references like "SELECT col1, col2 FROM table"
-		// isSimple := true
-		// if stmt.From != nil && stmt.From.Join != nil {
-		// 	isSimple = false
-		// }
-		// if stmt.Where != nil {
-		// 	isSimple = false
-		// }
-		// if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
-		// 	isSimple = false
-		// }
-		// if stmt.GroupBy != nil && len(stmt.GroupBy) > 0 {
-		// 	isSimple = false
-		// }
-		// if stmt.Limit != nil {
-		// 	isSimple = false
-		// }
-		// if stmt.SetOp != "" {
-		// 	isSimple = false
-		// }
-		// // Check for expressions in SELECT list - VM only handles simple column refs
-		// for _, col := range stmt.Columns {
-		// 	if _, ok := col.(*QP.ColumnRef); !ok {
-		// 		isSimple = false
-		// 		break
-		// 	}
-		// }
+		// VM enabled for simple queries (no JOIN, no WHERE, no ORDER BY, no GROUP BY, no expressions, no LIMIT, no SetOp, no SELECT *)
+		// VM only handles simple column references like "SELECT col1, col2 FROM table"
+		isSimple := true
+		if stmt.From != nil && stmt.From.Join != nil {
+			isSimple = false
+		}
+		if stmt.Where != nil {
+			isSimple = false
+		}
+		if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
+			isSimple = false
+		}
+		if stmt.GroupBy != nil && len(stmt.GroupBy) > 0 {
+			isSimple = false
+		}
+		if stmt.Limit != nil {
+			isSimple = false
+		}
+		if stmt.SetOp != "" {
+			isSimple = false
+		}
+		// Check for SELECT * - VM doesn't expand * to actual columns
+		for _, col := range stmt.Columns {
+			if colRef, ok := col.(*QP.ColumnRef); ok {
+				if colRef.Name == "*" {
+					isSimple = false
+					break
+				}
+			}
+			if _, ok := col.(*QP.ColumnRef); !ok {
+				isSimple = false
+				break
+			}
+		}
 		if isSimple {
 			rows, err := db.execVMQuery(sql, tableName)
 			if err == nil && rows != nil && len(rows.Data) > 0 {
@@ -2223,18 +2227,10 @@ func (db *Database) execVMQuery(sql string, tableName string) (*Rows, error) {
 
 	results := vm.Results()
 
-	cols := make([]string, 0)
-	if len(results) > 0 && len(results[0]) > 0 {
-		for i := range results[0] {
-			cols = append(cols, fmt.Sprintf("col%d", i))
-		}
-	}
-
-	if len(cols) == 0 {
-		cols = db.columnOrder[tableName]
-		if cols == nil {
-			cols = []string{}
-		}
+	// Use table's column order for column names
+	cols := db.columnOrder[tableName]
+	if cols == nil {
+		cols = []string{}
 	}
 
 	return &Rows{Columns: cols, Data: results}, nil
