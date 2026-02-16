@@ -1,6 +1,7 @@
 package QP
 
 import (
+	"math"
 	"strconv"
 	"strings"
 )
@@ -928,6 +929,9 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			return &Literal{Value: iv}, nil
 		}
 		if fv, err := strconv.ParseFloat(tok.Literal, 64); err == nil {
+			if fv == math.MaxFloat64 && strings.Contains(tok.Literal, "e+") {
+				return &Literal{Value: math.Inf(1)}, nil
+			}
 			return &Literal{Value: fv}, nil
 		}
 		return &Literal{Value: tok.Literal}, nil
