@@ -45,8 +45,8 @@ func NewVM(program *Program) *VM {
 
 func NewVMWithContext(program *Program, ctx VmContext) *VM {
 	numRegs := program.NumRegs
-	if numRegs < 16 {
-		numRegs = 16
+	if numRegs < 32 {
+		numRegs = 32
 	}
 	return &VM{
 		program:   program,

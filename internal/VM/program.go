@@ -5,6 +5,12 @@ type Program struct {
 	NumRegs      int
 	NumCursors   int
 	NumAgg       int
+	whereFixups  []whereFixupInfo
+}
+
+type whereFixupInfo struct {
+	idx   int
+	useP2 bool
 }
 
 func NewProgram() *Program {
@@ -13,6 +19,7 @@ func NewProgram() *Program {
 		NumRegs:      0,
 		NumCursors:   0,
 		NumAgg:       0,
+		whereFixups:  make([]whereFixupInfo, 0),
 	}
 }
 
@@ -33,6 +40,12 @@ func (p *Program) EmitOp(op OpCode, p1, p2 int32) int {
 		P1: p1,
 		P2: p2,
 	})
+	if int(p1) >= p.NumRegs {
+		p.NumRegs = int(p1) + 1
+	}
+	if int(p2) >= p.NumRegs {
+		p.NumRegs = int(p2) + 1
+	}
 	return idx
 }
 
@@ -472,4 +485,27 @@ func (p *Program) GetInstruction(idx int) Instruction {
 		return p.Instructions[idx]
 	}
 	return Instruction{Op: OpNoop}
+}
+
+func (p *Program) MarkFixup(idx int) {
+	p.whereFixups = append(p.whereFixups, whereFixupInfo{idx: idx, useP2: false})
+}
+
+func (p *Program) MarkFixupP2(idx int) {
+	p.whereFixups = append(p.whereFixups, whereFixupInfo{idx: idx, useP2: true})
+}
+
+func (p *Program) ApplyWhereFixups() {
+	target := len(p.Instructions)
+	for _, fixup := range p.whereFixups {
+		idx := fixup.idx
+		if idx >= 0 && idx < len(p.Instructions) {
+			if fixup.useP2 {
+				p.Instructions[idx].P2 = int32(target)
+			} else {
+				p.Instructions[idx].P4 = target
+			}
+		}
+	}
+	p.whereFixups = p.whereFixups[:0]
 }

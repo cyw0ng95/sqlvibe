@@ -17,12 +17,9 @@ func NewRegisterAllocator(initialRegs int) *RegisterAllocator {
 }
 
 func (ra *RegisterAllocator) Alloc() int {
-	for i := 0; i <= ra.maxReg; i++ {
+	for i := 0; i < ra.maxReg; i++ {
 		if !ra.inUse[i] {
 			ra.inUse[i] = true
-			if i >= ra.maxReg {
-				ra.maxReg = i + 1
-			}
 			return i
 		}
 	}

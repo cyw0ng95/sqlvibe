@@ -147,17 +147,18 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 		whereReg := c.compileExpr(where)
 		zeroReg := c.ra.Alloc()
 		c.program.EmitLoadConst(zeroReg, int64(0))
-		// If WHERE equals 0, skip row
 		skipPos := c.program.EmitEq(int(whereReg), int(zeroReg), 0)
-		// Also skip if WHERE is NULL
-		nullSkip := c.program.EmitOp(OpIsNull, int32(whereReg), 0)
-		// Fixup later - for now just mark positions
-		_ = skipPos
-		_ = nullSkip
+		nullSkipIdx := c.program.EmitOp(OpIsNull, int32(whereReg), 0)
+		c.program.Instructions[nullSkipIdx].P2 = 0
+		c.program.MarkFixup(skipPos)
+		c.program.MarkFixupP2(nullSkipIdx)
 	}
 
 	// Output result row
 	c.program.EmitResultRow(colRegs)
+
+	// Fixup: make WHERE skip instructions jump here (past ResultRow)
+	c.program.ApplyWhereFixups()
 
 	// Loop continuation: Next + Goto, then Halt
 	np := c.program.EmitOp(OpNext, 0, 0)
