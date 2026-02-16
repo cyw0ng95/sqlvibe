@@ -76,12 +76,13 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 	c.program.EmitOpenTable(0, tableName)
 	rewindPos := len(c.program.Instructions)
 	c.program.EmitOp(OpRewind, 0, 0)
+	_ = len(c.program.Instructions)
 
 	if where != nil {
 		whereReg := c.compileExpr(where)
 		zeroReg := c.ra.Alloc()
 		c.program.EmitLoadConst(zeroReg, int64(0))
-		c.program.EmitOp(OpEq, int32(whereReg), int32(zeroReg))
+		c.program.EmitOp(OpNe, int32(whereReg), int32(zeroReg))
 		skipRow := c.program.EmitOp(OpIsNull, int32(whereReg), 0)
 
 		resultRegs := make([]int, 0)
@@ -92,10 +93,13 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 		c.program.EmitResultRow(resultRegs)
 
 		np := c.program.EmitOp(OpNext, 0, 0)
-		c.program.EmitGoto(rewindPos)
-
+		gotoRewind := c.program.EmitGoto(rewindPos)
+		haltPos := len(c.program.Instructions)
+		c.program.Emit(OpHalt)
 		c.program.Fixup(np)
-		c.program.FixupWithPos(skipRow, len(c.program.Instructions))
+		_ = gotoRewind
+		c.program.Fixup(gotoRewind)
+		c.program.FixupWithPos(skipRow, haltPos)
 	} else {
 		resultRegs := make([]int, 0)
 		for _, col := range columns {
@@ -105,12 +109,12 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 		c.program.EmitResultRow(resultRegs)
 
 		np := c.program.EmitOp(OpNext, 0, 0)
-		c.program.EmitGoto(rewindPos)
-
+		gotoRewind := c.program.EmitGoto(rewindPos)
+		c.program.Emit(OpHalt)
 		c.program.Fixup(np)
+		_ = gotoRewind
+		c.program.Fixup(gotoRewind)
 	}
-
-	c.program.Emit(OpHalt)
 }
 
 func (c *Compiler) compileWhere(where QP.Expr) {

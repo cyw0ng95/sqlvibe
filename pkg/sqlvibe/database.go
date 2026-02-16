@@ -417,7 +417,26 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return db.querySqliteMaster(stmt)
 		}
 
-		// Handle JOIN queries
+		// VM for simple SELECT only (temporarily disabled while fixing issues)
+		// isSimple := true
+		// if stmt.From != nil && stmt.From.Join != nil {
+		// 	isSimple = false
+		// }
+		// for _, col := range stmt.Columns {
+		// 	if fc, ok := col.(*QP.FuncCall); ok {
+		// 		if fc.Name == "COUNT" || fc.Name == "SUM" || fc.Name == "AVG" || fc.Name == "MIN" || fc.Name == "MAX" {
+		// 			isSimple = false
+		// 			break
+		// 		}
+		// 	}
+		// }
+		// if isSimple && stmt.Where == nil {
+		// 	rows, err := db.execVMQuery(sql, tableName)
+		// 	if err == nil && rows != nil {
+		// 		return rows, nil
+		// 	}
+		// }
+
 		if stmt.From != nil && stmt.From.Join != nil {
 			return db.handleJoin(stmt)
 		}

@@ -550,7 +550,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			cursorID := int(inst.P1)
 			cursor := vm.cursors.Get(cursorID)
 			if cursor != nil {
-				cursor.Index = -1
+				cursor.Index = 0
 				cursor.EOF = len(cursor.Data) == 0
 			}
 			continue
@@ -566,8 +566,6 @@ func (vm *VM) Exec(ctx interface{}) error {
 					if target > 0 {
 						vm.pc = target
 					}
-				} else {
-					cursor.EOF = false
 				}
 			}
 			continue
