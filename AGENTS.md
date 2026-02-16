@@ -145,7 +145,49 @@ During development, always reference the current plan:
    - Update HISTORY.md
    - Merge to main
 
-### 3.6 Handling New Tasks
+### 3.6 Version Release Process
+
+When wrapping up a version/iteration (e.g., completing v0.4.1), follow these steps:
+
+#### Step 1: Verify All Tests Pass
+```bash
+go test ./...
+```
+
+#### Step 2: Update HISTORY.md
+Add a new section at the top of `docs/HISTORY.md`:
+```markdown
+## **v0.X.Y** (YYYY-MM-DD)
+
+### Bug Fixes
+- List all bug fixes
+
+### Features
+- List all new features (if any)
+
+### Breaking Changes
+- List any breaking changes (if any)
+```
+
+#### Step 3: Create and Push Tag
+```bash
+git tag -a v0.X.Y -m "Release v0.X.Y: Description"
+git push origin v0.X.Y
+```
+
+#### Step 4: Push the HISTORY Commit
+```bash
+git add -A
+git commit -m "docs: Add v0.X.Y release notes to HISTORY.md"
+git push
+```
+
+**Important:**
+- Always update HISTORY.md BEFORE creating the tag (or in the same commit)
+- The tag marks the exact release point
+- Push the tag separately: `git push origin v0.X.Y`
+
+### 3.7 Handling New Tasks
 
 When user adds new tasks during development:
 
