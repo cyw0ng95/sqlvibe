@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
@@ -406,6 +407,9 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 			return result
 		case QP.TokenPercent:
 			result, _ := exprEval.BinaryOp(OpRemainder, leftVal, rightVal)
+			return result
+		case QP.TokenConcat:
+			result, _ := exprEval.BinaryOp(OpConcat, leftVal, rightVal)
 			return result
 		case QP.TokenEq:
 			if leftVal == nil || rightVal == nil {
@@ -1001,6 +1005,161 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			return math.Round(v*divisor) / divisor
 		}
 		return val
+	case "UPPER":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			return strings.ToUpper(s)
+		}
+		return val
+	case "LOWER":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			return strings.ToLower(s)
+		}
+		return val
+	case "LENGTH", "CHARACTER_LENGTH", "CHAR_LENGTH":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			return int64(len(s))
+		}
+		return int64(0)
+	case "OCTET_LENGTH":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			return int64(len(s))
+		}
+		return int64(0)
+	case "SUBSTRING", "SUBSTR":
+		if len(fc.Args) < 2 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		s, ok := val.(string)
+		if !ok {
+			return nil
+		}
+		startVal := qe.evalValue(row, fc.Args[1])
+		start := 1
+		if startInt, ok := startVal.(int64); ok {
+			start = int(startInt)
+		}
+		if start < 1 {
+			start = 1
+		}
+		length := len(s)
+		if len(fc.Args) >= 3 {
+			lenVal := qe.evalValue(row, fc.Args[2])
+			if lenInt, ok := lenVal.(int64); ok {
+				length = int(lenInt)
+			}
+		}
+		end := start + length - 1
+		if end > len(s) {
+			end = len(s)
+		}
+		if start > len(s) {
+			return ""
+		}
+		return s[start-1 : end]
+	case "TRIM":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			return strings.TrimSpace(s)
+		}
+		return val
+	case "LTRIM":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			return strings.TrimLeft(s, " \t\n\r")
+		}
+		return val
+	case "RTRIM":
+		if len(fc.Args) == 0 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok {
+			return strings.TrimRight(s, " \t\n\r")
+		}
+		return val
+	case "POSITION", "INSTR":
+		if len(fc.Args) < 2 {
+			return nil
+		}
+		substr := qe.evalValue(row, fc.Args[0])
+		str := qe.evalValue(row, fc.Args[1])
+		if substr == nil || str == nil {
+			return nil
+		}
+		substrStr, ok1 := substr.(string)
+		strStr, ok2 := str.(string)
+		if !ok1 || !ok2 {
+			return int64(0)
+		}
+		idx := strings.Index(strStr, substrStr)
+		if idx < 0 {
+			return int64(0)
+		}
+		return int64(idx + 1)
+	case "REPLACE":
+		if len(fc.Args) < 3 {
+			return nil
+		}
+		str := qe.evalValue(row, fc.Args[0])
+		search := qe.evalValue(row, fc.Args[1])
+		replace := qe.evalValue(row, fc.Args[2])
+		if str == nil {
+			return nil
+		}
+		strStr, ok := str.(string)
+		if !ok {
+			return str
+		}
+		searchStr, _ := search.(string)
+		replaceStr, _ := replace.(string)
+		return strings.ReplaceAll(strStr, searchStr, replaceStr)
 	case "TYPEOF", "typeof":
 		if len(fc.Args) == 0 {
 			return "null"
