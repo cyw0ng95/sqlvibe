@@ -589,10 +589,202 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			resultData = db.applyOrderBy(resultData, stmt.OrderBy, cols)
 		}
 
+		if stmt.SetOp != "" {
+			rightRows, err := db.executeSelect(stmt.SetOpRight)
+			if err != nil {
+				return nil, err
+			}
+			resultData = db.applySetOp(resultData, rightRows.Data, stmt.SetOp, stmt.SetOpAll)
+		}
+
 		return &Rows{Columns: cols, Data: resultData, pos: -1}, nil
 	}
 
 	return nil, nil
+}
+
+func (db *Database) executeSelect(stmt *QP.SelectStmt) (*Rows, error) {
+	if stmt == nil {
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+
+	if stmt.From == nil {
+		return db.evalConstantExpression(stmt)
+	}
+
+	var tableName string
+	if stmt.From != nil {
+		tableName = stmt.From.Name
+	}
+	if tableName == "" {
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+
+	if tableName == "sqlite_master" {
+		return db.querySqliteMaster(stmt)
+	}
+
+	if stmt.From != nil && stmt.From.Join != nil {
+		return db.handleJoin(stmt)
+	}
+
+	tableData, ok := db.data[tableName]
+	if !ok || tableData == nil {
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+
+	hasAggregate := false
+	var aggregateFunc *QP.FuncCall
+	for _, col := range stmt.Columns {
+		if fc, ok := col.(*QP.FuncCall); ok {
+			if fc.Name == "SUM" || fc.Name == "AVG" || fc.Name == "MIN" || fc.Name == "MAX" || fc.Name == "COUNT" {
+				hasAggregate = true
+				aggregateFunc = fc
+				break
+			}
+		}
+	}
+
+	if hasAggregate && stmt.Where == nil && len(stmt.Columns) == 1 {
+		result := db.computeAggregate(tableData, aggregateFunc)
+		return &Rows{Columns: []string{aggregateFunc.Name}, Data: [][]interface{}{{result}}}, nil
+	}
+
+	filteredData := tableData
+	if stmt.Where != nil {
+		filteredData = make([]map[string]interface{}, 0)
+		for _, row := range tableData {
+			if db.evalWhere(row, stmt.Where) {
+				filteredData = append(filteredData, row)
+			}
+		}
+	}
+
+	cols := make([]string, 0)
+	for _, col := range stmt.Columns {
+		switch c := col.(type) {
+		case *QP.ColumnRef:
+			cols = append(cols, c.Name)
+		case *QP.AliasExpr:
+			cols = append(cols, c.Alias)
+		case *QP.FuncCall:
+			cols = append(cols, c.Name)
+		case *QP.Literal:
+			cols = append(cols, "expr")
+		default:
+			cols = append(cols, "expr")
+		}
+	}
+
+	resultData := make([][]interface{}, 0)
+	for _, row := range filteredData {
+		resultRow := make([]interface{}, len(cols))
+		for i, col := range stmt.Columns {
+			resultRow[i] = db.engine.EvalExpr(row, col)
+		}
+		resultData = append(resultData, resultRow)
+	}
+
+	if len(stmt.OrderBy) > 0 {
+		resultData = db.applyOrderBy(resultData, stmt.OrderBy, cols)
+	}
+
+	if stmt.SetOp != "" {
+		rightRows, err := db.executeSelect(stmt.SetOpRight)
+		if err != nil {
+			return nil, err
+		}
+		resultData = db.applySetOp(resultData, rightRows.Data, stmt.SetOp, stmt.SetOpAll)
+	}
+
+	return &Rows{Columns: cols, Data: resultData}, nil
+}
+
+func (db *Database) applySetOp(left, right [][]interface{}, op string, all bool) [][]interface{} {
+	switch op {
+	case "UNION":
+		return db.setOpUnion(left, right, all)
+	case "EXCEPT":
+		return db.setOpExcept(left, right, all)
+	case "INTERSECT":
+		return db.setOpIntersect(left, right, all)
+	}
+	return left
+}
+
+func (db *Database) setOpUnion(left, right [][]interface{}, all bool) [][]interface{} {
+	if all {
+		return append(left, right...)
+	}
+	seen := make(map[string]bool)
+	result := make([][]interface{}, 0)
+	for _, row := range left {
+		key := db.rowKey(row)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, row)
+		}
+	}
+	for _, row := range right {
+		key := db.rowKey(row)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+func (db *Database) setOpExcept(left, right [][]interface{}, all bool) [][]interface{} {
+	rightSet := make(map[string]bool)
+	for _, row := range right {
+		rightSet[db.rowKey(row)] = true
+	}
+	result := make([][]interface{}, 0)
+	for _, row := range left {
+		key := db.rowKey(row)
+		if !rightSet[key] {
+			if all {
+				result = append(result, row)
+			} else {
+				rightSet[key] = true
+				result = append(result, row)
+			}
+		}
+	}
+	return result
+}
+
+func (db *Database) setOpIntersect(left, right [][]interface{}, all bool) [][]interface{} {
+	rightSet := make(map[string]int)
+	for _, row := range right {
+		key := db.rowKey(row)
+		rightSet[key]++
+	}
+	result := make([][]interface{}, 0)
+	for _, row := range left {
+		key := db.rowKey(row)
+		if count, ok := rightSet[key]; ok && count > 0 {
+			result = append(result, row)
+			if !all {
+				rightSet[key] = 0
+			} else {
+				rightSet[key]--
+			}
+		}
+	}
+	return result
+}
+
+func (db *Database) rowKey(row []interface{}) string {
+	key := ""
+	for i, v := range row {
+		if i > 0 {
+			key += "|"
+		}
+		key += fmt.Sprintf("%v", v)
+	}
+	return key
 }
 
 func (db *Database) Close() error {
