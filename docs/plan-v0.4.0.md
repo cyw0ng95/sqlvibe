@@ -377,9 +377,9 @@ graph TD
 - [x] E021-07: Character concatenation (||)
 - [x] E021-08: UPPER and LOWER functions
 - [x] E021-09: TRIM function
-- [ ] E021-10: Implicit casting
+- [x] E021-10: Implicit casting
 - [x] E021-11: POSITION function
-- [ ] E021-12: Character comparison
+- [x] E021-12: Character comparison
 
 ---
 

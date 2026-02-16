@@ -1,0 +1,64 @@
+package E021
+
+import (
+	"database/sql"
+	"testing"
+
+	"github.com/sqlvibe/sqlvibe/internal/TS/SQL1999"
+	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
+)
+
+func TestSQL1999_F301_E02107_L1(t *testing.T) {
+	sqlvibePath := ":memory:"
+	sqlitePath := ":memory:"
+
+	sqlvibeDB, err := sqlvibe.Open(sqlvibePath)
+	if err != nil {
+		t.Fatalf("Failed to open sqlvibe: %v", err)
+	}
+	defer sqlvibeDB.Close()
+
+	sqliteDB, err := sql.Open("sqlite", sqlitePath)
+	if err != nil {
+		t.Fatalf("Failed to open sqlite: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	sqlvibeDB.Exec("CREATE TABLE concat_test (id INTEGER PRIMARY KEY, a TEXT, b TEXT)")
+	sqliteDB.Exec("CREATE TABLE concat_test (id INTEGER PRIMARY KEY, a TEXT, b TEXT)")
+
+	insertTests := []struct {
+		name string
+		sql  string
+	}{
+		{"HelloWorld", "INSERT INTO concat_test VALUES (1, 'Hello', 'World')"},
+		{"EmptyString", "INSERT INTO concat_test VALUES (2, '', 'World')"},
+		{"SpaceString", "INSERT INTO concat_test VALUES (3, 'Hello ', 'World')"},
+		{"Numbers", "INSERT INTO concat_test VALUES (4, '123', '456')"},
+	}
+
+	for _, tt := range insertTests {
+		t.Run(tt.name, func(t *testing.T) {
+			SQL1999.CompareExecResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
+		})
+	}
+
+	concatTests := []struct {
+		name string
+		sql  string
+	}{
+		{"ConcatColumns", "SELECT a || b FROM concat_test WHERE id = 1"},
+		{"ConcatLiteral", "SELECT 'Hello' || ' ' || 'World'"},
+		{"ConcatWithSpace", "SELECT a || ' ' || b FROM concat_test WHERE id = 1"},
+		{"ConcatEmpty", "SELECT a || b FROM concat_test WHERE id = 2"},
+		{"ConcatNumbers", "SELECT a || b FROM concat_test WHERE id = 4"},
+		{"ConcatThree", "SELECT a || b || '!' FROM concat_test WHERE id = 1"},
+		{"ConcatWithNumbers", "SELECT a || '123' FROM concat_test WHERE id = 1"},
+	}
+
+	for _, tt := range concatTests {
+		t.Run(tt.name, func(t *testing.T) {
+			SQL1999.CompareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
+		})
+	}
+}
