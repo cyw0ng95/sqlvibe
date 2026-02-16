@@ -2,6 +2,7 @@ package VM
 
 import (
 	"fmt"
+	"strings"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
 )
@@ -28,16 +29,23 @@ func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *Program {
 	c.stmtWhere = nil
 	c.stmtColumns = stmt.Columns
 
+	// Expand SELECT * to actual column names if needed
+	columns := stmt.Columns
+	if c.TableColIndices != nil && len(c.TableColIndices) > 0 {
+		columns = c.expandStarColumns(stmt.Columns)
+		c.stmtColumns = columns
+	}
+
 	c.program.Emit(OpInit)
 	initPos := c.program.Emit(OpGoto)
 	c.program.Fixup(initPos)
 
 	if stmt.From != nil {
-		c.compileFrom(stmt.From, stmt.Where, stmt.Columns)
-	} else if stmt.Columns != nil {
+		c.compileFrom(stmt.From, stmt.Where, columns)
+	} else if columns != nil {
 		// Handle SELECT without FROM (e.g., SELECT 1+1)
 		resultRegs := make([]int, 0)
-		for _, col := range stmt.Columns {
+		for _, col := range columns {
 			reg := c.compileExpr(col)
 			resultRegs = append(resultRegs, reg)
 		}
@@ -54,8 +62,58 @@ func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *Program {
 	return c.program
 }
 
+// expandStarColumns expands SELECT * to actual column references
+func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
+	if columns == nil {
+		return nil
+	}
+
+	// Check if there's a star column
+	hasStar := false
+	for _, col := range columns {
+		if colRef, ok := col.(*QP.ColumnRef); ok && colRef.Name == "*" {
+			hasStar = true
+			break
+		}
+	}
+
+	if !hasStar {
+		return columns
+	}
+
+	// Build expanded columns list
+	expanded := make([]QP.Expr, 0)
+
+	// Get table name if available - for now assume single table
+	// For SELECT *, expand to all columns from TableColIndices
+	for colName, idx := range c.TableColIndices {
+		// Skip internal/placeholder columns
+		if colName == "" || strings.HasPrefix(colName, "__") {
+			continue
+		}
+		colRef := &QP.ColumnRef{
+			Name: colName,
+		}
+		_ = idx // idx is position in table
+		expanded = append(expanded, colRef)
+	}
+
+	// If no valid columns found, return original
+	if len(expanded) == 0 {
+		return columns
+	}
+
+	return expanded
+}
+
 func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Expr) {
 	if from == nil {
+		return
+	}
+
+	// Handle JOINs - requires nested loop compilation
+	if from.Join != nil {
+		c.compileJoin(from, from.Join, where, columns)
 		return
 	}
 
@@ -111,6 +169,72 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 	c.program.FixupWithPos(np, haltPos)
 	// Fixup: Goto jumps back to after Rewind
 	c.program.FixupWithPos(gotoRewind, rewindPos+1)
+}
+
+func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.Expr, columns []QP.Expr) {
+	leftTableName := leftTable.Name
+	rightTableName := join.Right.Name
+
+	if leftTableName == "" || rightTableName == "" {
+		return
+	}
+
+	c.columnIndices = make(map[string]int)
+	for i, col := range columns {
+		if colRef, ok := col.(*QP.ColumnRef); ok {
+			c.columnIndices[colRef.Name] = i
+		} else if alias, ok := col.(*QP.AliasExpr); ok {
+			c.columnIndices[alias.Alias] = i
+		}
+	}
+
+	c.program.EmitOpenTable(0, leftTableName)
+	c.program.EmitOpenTable(1, rightTableName)
+
+	leftRewindPos := len(c.program.Instructions)
+	c.program.EmitOp(OpRewind, 0, 0)
+
+	rightRewindPos := len(c.program.Instructions)
+	c.program.EmitOp(OpRewind, 1, 0)
+
+	joinCondReg := -1
+	if join.Cond != nil {
+		joinCondReg = c.compileExpr(join.Cond)
+		zeroReg := c.ra.Alloc()
+		c.program.EmitLoadConst(zeroReg, int64(0))
+		skipPos := c.program.EmitEq(joinCondReg, zeroReg, 0)
+		nullSkip := c.program.EmitOp(OpIsNull, int32(joinCondReg), 0)
+		_ = skipPos
+		_ = nullSkip
+	}
+
+	colRegs := make([]int, 0)
+	for _, col := range columns {
+		reg := c.compileExpr(col)
+		colRegs = append(colRegs, reg)
+	}
+
+	if where != nil {
+		whereReg := c.compileExpr(where)
+		zeroReg := c.ra.Alloc()
+		c.program.EmitLoadConst(zeroReg, int64(0))
+		c.program.EmitEq(whereReg, zeroReg, 0)
+	}
+
+	c.program.EmitResultRow(colRegs)
+
+	rightNext := c.program.EmitOp(OpNext, 1, 0)
+	gotoRightRewind := c.program.EmitGoto(rightRewindPos + 1)
+	rightDonePos := len(c.program.Instructions)
+
+	c.program.EmitOp(OpNext, 0, 0)
+	gotoLeftRewind := c.program.EmitGoto(leftRewindPos + 1)
+	_ = gotoLeftRewind
+	c.program.Emit(OpHalt)
+
+	c.program.FixupWithPos(rightNext, rightDonePos)
+	c.program.FixupWithPos(gotoRightRewind, rightRewindPos+1)
+	c.program.FixupWithPos(gotoLeftRewind, leftRewindPos+1)
 }
 
 func (c *Compiler) compileWhere(where QP.Expr) {

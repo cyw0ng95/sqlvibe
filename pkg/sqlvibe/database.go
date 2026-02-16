@@ -421,31 +421,16 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return db.querySqliteMaster(stmt)
 		}
 
-		// VM enabled for simple SELECT queries (no JOIN, no GROUP BY, no expressions, no LIMIT, no SetOp, no SELECT *)
-		// VM supports: SELECT col1, col2 FROM table WHERE col = value [ORDER BY col]
+		// VM enabled for SELECT queries (JOIN supported, GROUP BY not yet, expressions not fully, SetOp not yet)
+		// VM supports: SELECT columns FROM table [WHERE] [ORDER BY] [LIMIT], and JOINs
 		isSimple := true
-		if stmt.From != nil && stmt.From.Join != nil {
-			isSimple = false
-		}
 		if stmt.GroupBy != nil && len(stmt.GroupBy) > 0 {
 			isSimple = false
 		}
 		if stmt.SetOp != "" {
 			isSimple = false
 		}
-		// Check for SELECT * - VM doesn't expand * to actual columns
-		for _, col := range stmt.Columns {
-			if colRef, ok := col.(*QP.ColumnRef); ok {
-				if colRef.Name == "*" {
-					isSimple = false
-					break
-				}
-			}
-			if _, ok := col.(*QP.ColumnRef); !ok {
-				isSimple = false
-				break
-			}
-		}
+		// VM now supports SELECT * expansion and JOINs
 		if isSimple {
 			rows, err := db.execVMQuery(sql, stmt)
 			if err == nil && rows != nil && len(rows.Data) > 0 {
@@ -2419,7 +2404,21 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	}
 
 	// Get table column order for proper column mapping
-	tableCols := db.columnOrder[tableName]
+	// For JOINs, combine columns from both tables
+	var tableCols []string
+	if stmt.From.Join != nil && stmt.From.Join.Right != nil {
+		leftCols := db.columnOrder[tableName]
+		rightCols := db.columnOrder[stmt.From.Join.Right.Name]
+		if leftCols != nil && rightCols != nil {
+			tableCols = append(leftCols, rightCols...)
+		} else if leftCols != nil {
+			tableCols = leftCols
+		} else if rightCols != nil {
+			tableCols = rightCols
+		}
+	} else {
+		tableCols = db.columnOrder[tableName]
+	}
 	program, err := VM.CompileWithSchema(sql, tableCols)
 	if err != nil {
 		return nil, err
