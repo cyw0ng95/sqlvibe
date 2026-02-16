@@ -8,6 +8,7 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/PB"
 	"github.com/sqlvibe/sqlvibe/internal/QE"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/sqlvibe/sqlvibe/internal/VM"
 )
 
 type Database struct {
@@ -2076,4 +2077,36 @@ func (db *Database) getRightColumns(right []map[string]interface{}) []string {
 		cols = append(cols, k)
 	}
 	return cols
+}
+
+func (db *Database) ExecVM(sql string) (*Rows, error) {
+	program, err := VM.Compile(sql)
+	if err != nil {
+		return nil, fmt.Errorf("VM compile error: %v", err)
+	}
+
+	vm := VM.NewVM(program)
+	err = vm.Run(nil)
+	if err != nil {
+		return nil, fmt.Errorf("VM execution error: %v", err)
+	}
+
+	cols := make([]string, 0)
+	rows := make([][]interface{}, 0)
+
+	for i := 0; i < program.NumRegs; i++ {
+		cols = append(cols, fmt.Sprintf("col%d", i))
+	}
+
+	for i := 0; i < program.NumRegs; i++ {
+		row := make([]interface{}, program.NumRegs)
+		for j := 0; j < program.NumRegs; j++ {
+			row[j] = vm.GetRegister(j)
+		}
+		if i == 0 {
+			rows = append(rows, row)
+		}
+	}
+
+	return &Rows{Columns: cols, Data: rows}, nil
 }

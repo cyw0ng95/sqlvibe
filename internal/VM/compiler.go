@@ -321,6 +321,92 @@ func (c *Compiler) Program() *Program {
 	return c.program
 }
 
+func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *Program {
+	c.program = NewProgram()
+	c.ra = NewRegisterAllocator(16)
+
+	c.program.Emit(OpInit)
+
+	for _, row := range stmt.Values {
+		rowRegs := make([]int, 0)
+		for _, val := range row {
+			reg := c.compileExpr(val)
+			rowRegs = append(rowRegs, reg)
+		}
+		c.program.EmitResultRow(rowRegs)
+	}
+
+	c.program.Emit(OpHalt)
+	return c.program
+}
+
+func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *Program {
+	c.program = NewProgram()
+	c.ra = NewRegisterAllocator(16)
+
+	c.program.Emit(OpInit)
+
+	for _, set := range stmt.Set {
+		valueReg := c.compileExpr(set.Value)
+		_ = valueReg
+	}
+
+	if stmt.Where != nil {
+		whereReg := c.compileExpr(stmt.Where)
+		_ = whereReg
+	}
+
+	c.program.Emit(OpHalt)
+	return c.program
+}
+
+func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *Program {
+	c.program = NewProgram()
+	c.ra = NewRegisterAllocator(16)
+
+	c.program.Emit(OpInit)
+
+	if stmt.Where != nil {
+		whereReg := c.compileExpr(stmt.Where)
+		_ = whereReg
+	}
+
+	c.program.Emit(OpHalt)
+	return c.program
+}
+
+func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *Program {
+	c.program = NewProgram()
+	c.ra = NewRegisterAllocator(16)
+
+	c.program.Emit(OpInit)
+
+	if stmt.GroupBy != nil {
+		groupRegs := make([]int, 0)
+		for _, gb := range stmt.GroupBy {
+			reg := c.compileExpr(gb)
+			groupRegs = append(groupRegs, reg)
+		}
+		_ = groupRegs
+	}
+
+	for _, col := range stmt.Columns {
+		if fc, ok := col.(*QP.FuncCall); ok {
+			switch fc.Name {
+			case "COUNT", "SUM", "AVG", "MIN", "MAX":
+				argRegs := make([]int, 0)
+				for _, arg := range fc.Args {
+					argRegs = append(argRegs, c.compileExpr(arg))
+				}
+				_ = argRegs
+			}
+		}
+	}
+
+	c.program.Emit(OpHalt)
+	return c.program
+}
+
 func Compile(sql string) (*Program, error) {
 	tokenizer := QP.NewTokenizer(sql)
 	tokens, err := tokenizer.Tokenize()
@@ -338,10 +424,34 @@ func Compile(sql string) (*Program, error) {
 
 	switch s := stmt.(type) {
 	case *QP.SelectStmt:
+		if hasAggregates(s) {
+			return c.CompileAggregate(s), nil
+		}
 		return c.CompileSelect(s), nil
+	case *QP.InsertStmt:
+		return c.CompileInsert(s), nil
+	case *QP.UpdateStmt:
+		return c.CompileUpdate(s), nil
+	case *QP.DeleteStmt:
+		return c.CompileDelete(s), nil
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %T", stmt)
 	}
+}
+
+func hasAggregates(stmt *QP.SelectStmt) bool {
+	if stmt == nil {
+		return false
+	}
+	for _, col := range stmt.Columns {
+		if fc, ok := col.(*QP.FuncCall); ok {
+			switch fc.Name {
+			case "COUNT", "SUM", "AVG", "MIN", "MAX", "TOTAL":
+				return true
+			}
+		}
+	}
+	return stmt.GroupBy != nil
 }
 
 func MustCompile(sql string) *Program {
