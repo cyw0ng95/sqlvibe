@@ -32,8 +32,15 @@ func TestSQL1999_F301_E02111_L1(t *testing.T) {
 		sql  string
 	}{
 		{"Hello", "INSERT INTO pos_test VALUES (1, 'hello world')"},
-		{"Empty", "INSERT INTO pos_test VALUES (2, '')"},
-		{"NoMatch", "INSERT INTO pos_test VALUES (3, 'xyz')"},
+		{"Repeat", "INSERT INTO pos_test VALUES (2, 'abcabcabc')"},
+		{"Empty", "INSERT INTO pos_test VALUES (3, '')"},
+		{"NoMatch", "INSERT INTO pos_test VALUES (4, 'xyz')"},
+		{"Multiple", "INSERT INTO pos_test VALUES (5, 'the quick brown fox jumps')"},
+		{"AtStart", "INSERT INTO pos_test VALUES (6, 'hello')"},
+		{"AtEnd", "INSERT INTO pos_test VALUES (7, 'world')"},
+		{"Special", "INSERT INTO pos_test VALUES (8, 'a,b,c,d,e')"},
+		{"Unicode", "INSERT INTO pos_test VALUES (9, '你好世界')"},
+		{"Numbers", "INSERT INTO pos_test VALUES (10, '123456123456')"},
 	}
 
 	for _, tt := range insertTests {
@@ -46,8 +53,25 @@ func TestSQL1999_F301_E02111_L1(t *testing.T) {
 		name string
 		sql  string
 	}{
+		{"INSTR_Basic", "SELECT INSTR('hello world', 'world')"},
 		{"INSTR_NotFound", "SELECT INSTR('hello world', 'xyz')"},
-		{"INSTR_Table_NotFound", "SELECT INSTR(val, 'xyz') FROM pos_test WHERE id = 3"},
+		{"INSTR_FirstChar", "SELECT INSTR('hello world', 'h')"},
+		{"INSTR_AtStart", "SELECT INSTR(val, 'hello') FROM pos_test WHERE id = 1"},
+		{"INSTR_NotFoundTable", "SELECT INSTR(val, 'xyz') FROM pos_test WHERE id = 1"},
+		{"INSTR_Repeat", "SELECT INSTR(val, 'a') FROM pos_test WHERE id = 2"},
+		{"INSTR_Empty", "SELECT INSTR(val, 'x') FROM pos_test WHERE id = 3"},
+		{"INSTR_Multiple", "SELECT INSTR(val, ' ') FROM pos_test WHERE id = 5"},
+		{"INSTR_Special", "SELECT INSTR(val, ',') FROM pos_test WHERE id = 8"},
+		{"INSTR_AtStart2", "SELECT INSTR(val, 'hello') FROM pos_test WHERE id = 6"},
+		{"INSTR_AtEnd", "SELECT INSTR(val, 'd') FROM pos_test WHERE id = 7"},
+		{"INSTR_Numbers", "SELECT INSTR(val, '3') FROM pos_test WHERE id = 10"},
+		{"INSTR_Concat", "SELECT INSTR('hello' || 'world', 'world')"},
+		{"INSTR_EmptyStr", "SELECT INSTR('hello', '')"},
+		{"INSTR_Whole", "SELECT INSTR(val, val) FROM pos_test WHERE id = 1"},
+		{"INSTR_AfterConcat", "SELECT INSTR('prefix-' || val, 'world') FROM pos_test WHERE id = 1"},
+		{"POSITION_Found", "SELECT POSITION('world' IN val) FROM pos_test WHERE id = 1"},
+		{"POSITION_NotFound", "SELECT POSITION('xyz' IN val) FROM pos_test WHERE id = 1"},
+		{"POSITION_First", "SELECT POSITION('l' IN val) FROM pos_test WHERE id = 1"},
 	}
 
 	for _, tt := range posTests {

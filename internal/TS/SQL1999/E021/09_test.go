@@ -37,6 +37,11 @@ func TestSQL1999_F301_E02109_L1(t *testing.T) {
 		{"Trailing", "INSERT INTO trim_test VALUES (4, 'hello   ')"},
 		{"Empty", "INSERT INTO trim_test VALUES (5, '')"},
 		{"MultiSpaces", "INSERT INTO trim_test VALUES (6, '     a b c     ')"},
+		{"Tabs", "INSERT INTO trim_test VALUES (7, '\t\thello\t\t')"},
+		{"Newlines", "INSERT INTO trim_test VALUES (8, '\n\nhello\n\n')"},
+		{"Mixed", "INSERT INTO trim_test VALUES (9, '   \t\n  hello  \n\t   ')"},
+		{"Special", "INSERT INTO trim_test VALUES (10, 'xxxhelloxxx')"},
+		{"Numbers", "INSERT INTO trim_test VALUES (11, '123hello123')"},
 	}
 
 	for _, tt := range insertTests {
@@ -59,6 +64,19 @@ func TestSQL1999_F301_E02109_L1(t *testing.T) {
 		{"TRIM_Literal", "SELECT TRIM('   test   ')"},
 		{"LTRIM_Literal", "SELECT LTRIM('   test')"},
 		{"RTRIM_Literal", "SELECT RTRIM('test   ')"},
+		{"TRIM_MultiSpaces", "SELECT TRIM(val) FROM trim_test WHERE id = 6"},
+		{"LTRIM_MultiSpaces", "SELECT LTRIM(val) FROM trim_test WHERE id = 6"},
+		{"RTRIM_MultiSpaces", "SELECT RTRIM(val) FROM trim_test WHERE id = 6"},
+		{"TRIM_Tabs", "SELECT TRIM(val) FROM trim_test WHERE id = 7"},
+		{"TRIM_Newlines", "SELECT TRIM(val) FROM trim_test WHERE id = 8"},
+		{"TRIM_Mixed", "SELECT TRIM(val) FROM trim_test WHERE id = 9"},
+		{"TRIM_Special", "SELECT TRIM(val, 'x') FROM trim_test WHERE id = 10"},
+		{"LTRIM_Special", "SELECT LTRIM(val, 'x') FROM trim_test WHERE id = 10"},
+		{"RTRIM_Special", "SELECT RTRIM(val, 'x') FROM trim_test WHERE id = 10"},
+		{"TRIM_Numbers", "SELECT TRIM(val, '1') FROM trim_test WHERE id = 11"},
+		{"TRIM_Concat", "SELECT TRIM('   ' || val || '   ') FROM trim_test WHERE id = 2"},
+		{"TRIM_InFunction", "SELECT UPPER(TRIM(val)) FROM trim_test WHERE id = 1"},
+		{"TRIM_Lower", "SELECT LOWER(TRIM(val)) FROM trim_test WHERE id = 1"},
 	}
 
 	for _, tt := range trimTests {
