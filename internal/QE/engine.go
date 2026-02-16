@@ -479,6 +479,8 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		return qe.evalFuncCall(row, e)
 	case *QP.AliasExpr:
 		return qe.evalValue(row, e.Expr)
+	case *QP.CaseExpr:
+		return qe.evalCaseExpr(row, e)
 	case *QP.SubqueryExpr:
 		result := qe.evalSubquery(row, qe.outerAlias, e.Select)
 		if result.rows == nil || len(result.rows) == 0 {
@@ -579,6 +581,41 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 
 func (qe *QueryEngine) EvalExpr(row map[string]interface{}, expr QP.Expr) interface{} {
 	return qe.evalValue(row, expr)
+}
+
+func (qe *QueryEngine) evalCaseExpr(row map[string]interface{}, ce *QP.CaseExpr) interface{} {
+	if ce.Operand != nil {
+		operandVal := qe.evalValue(row, ce.Operand)
+		for _, when := range ce.Whens {
+			condVal := qe.evalValue(row, when.Condition)
+			if operandVal == nil && condVal == nil {
+				return qe.evalValue(row, when.Result)
+			}
+			if operandVal != nil && condVal != nil && qe.valuesEqual(operandVal, condVal) {
+				return qe.evalValue(row, when.Result)
+			}
+		}
+		if ce.Else != nil {
+			return qe.evalValue(row, ce.Else)
+		}
+		return nil
+	}
+
+	for _, when := range ce.Whens {
+		condVal := qe.evalValue(row, when.Condition)
+		if condVal != nil {
+			if intVal, ok := condVal.(int64); ok && intVal != 0 {
+				return qe.evalValue(row, when.Result)
+			}
+			if floatVal, ok := condVal.(float64); ok && floatVal != 0 {
+				return qe.evalValue(row, when.Result)
+			}
+		}
+	}
+	if ce.Else != nil {
+		return qe.evalValue(row, ce.Else)
+	}
+	return nil
 }
 
 type subqueryResult struct {

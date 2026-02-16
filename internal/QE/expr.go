@@ -259,7 +259,7 @@ func (e *ExprEvaluator) mod(a, b interface{}) interface{} {
 		if bv == 0 {
 			return nil
 		}
-		return int(av) % int(bv)
+		return float64(int64(av) % int64(bv))
 	}
 
 	aIsInt := isInteger(a)
@@ -283,7 +283,6 @@ func (e *ExprEvaluator) mod(a, b interface{}) interface{} {
 		quotient.Mul(quotient, bi)
 		result := new(big.Int).Sub(ai, quotient)
 
-		// Check if result fits in int64
 		if result.IsInt64() {
 			return result.Int64()
 		}

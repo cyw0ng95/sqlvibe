@@ -959,27 +959,43 @@ func (db *Database) compareVals(a, b interface{}) int {
 	}
 	switch av := a.(type) {
 	case int64:
-		bv, ok := b.(int64)
-		if !ok {
+		switch bv := b.(type) {
+		case int64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
 			return 0
-		}
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
+		case float64:
+			if float64(av) < bv {
+				return -1
+			}
+			if float64(av) > bv {
+				return 1
+			}
+			return 0
 		}
 		return 0
 	case float64:
-		bv, ok := b.(float64)
-		if !ok {
+		switch bv := b.(type) {
+		case int64:
+			if av < float64(bv) {
+				return -1
+			}
+			if av > float64(bv) {
+				return 1
+			}
 			return 0
-		}
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
+		case float64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
 		}
 		return 0
 	case string:

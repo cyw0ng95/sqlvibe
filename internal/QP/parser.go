@@ -147,6 +147,19 @@ type AliasExpr struct {
 
 func (e *AliasExpr) exprNode() {}
 
+type CaseExpr struct {
+	Operand Expr
+	Whens   []CaseWhen
+	Else    Expr
+}
+
+type CaseWhen struct {
+	Condition Expr
+	Result    Expr
+}
+
+func (e *CaseExpr) exprNode() {}
+
 type Parser struct {
 	tokens     []Token
 	pos        int
@@ -1003,6 +1016,9 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			p.advance()
 			return &Literal{Value: nil}, nil
 		}
+		if tok.Literal == "CASE" {
+			return p.parseCaseExpr()
+		}
 		p.advance()
 		// Check for table.column format (e.g., e.dept_id)
 		if p.current().Type == TokenDot {
@@ -1018,4 +1034,49 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	}
 
 	return nil, nil
+}
+
+func (p *Parser) parseCaseExpr() (Expr, error) {
+	p.advance()
+	ce := &CaseExpr{}
+
+	if p.current().Type == TokenKeyword && p.current().Literal == "WHEN" {
+	} else if p.current().Type != TokenKeyword || p.current().Literal != "WHEN" {
+		operand, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		ce.Operand = operand
+	}
+
+	for p.current().Type == TokenKeyword && p.current().Literal == "WHEN" {
+		p.advance()
+		cond, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if p.current().Type == TokenKeyword && p.current().Literal == "THEN" {
+			p.advance()
+		}
+		result, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		ce.Whens = append(ce.Whens, CaseWhen{Condition: cond, Result: result})
+	}
+
+	if p.current().Type == TokenKeyword && p.current().Literal == "ELSE" {
+		p.advance()
+		elseExpr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		ce.Else = elseExpr
+	}
+
+	if p.current().Type == TokenKeyword && p.current().Literal == "END" {
+		p.advance()
+	}
+
+	return ce, nil
 }
