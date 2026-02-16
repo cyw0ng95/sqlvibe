@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
@@ -1241,7 +1242,7 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			return nil
 		}
 		if s, ok := val.(string); ok {
-			return int64(len(s))
+			return int64(utf8.RuneCountInString(s))
 		}
 		return int64(0)
 	case "OCTET_LENGTH":
@@ -1268,29 +1269,41 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 		if !ok {
 			return nil
 		}
+		runes := []rune(s)
+		length := len(runes)
 		startVal := qe.evalValue(row, fc.Args[1])
 		start := 1
+		origStart := 0
 		if startInt, ok := startVal.(int64); ok {
-			start = int(startInt)
+			origStart = int(startInt)
+			start = origStart
 		}
-		if start < 1 {
+		if start == 0 {
 			start = 1
 		}
-		length := len(s)
 		if len(fc.Args) >= 3 {
 			lenVal := qe.evalValue(row, fc.Args[2])
 			if lenInt, ok := lenVal.(int64); ok {
 				length = int(lenInt)
+				if origStart == 0 && length > 0 {
+					length = length - 1
+				}
 			}
 		}
-		end := start + length - 1
-		if end > len(s) {
-			end = len(s)
+		if start < 0 {
+			start = len(runes) + start + 1
+			if start < 1 {
+				start = 1
+			}
 		}
-		if start > len(s) {
+		if start > len(runes) {
 			return ""
 		}
-		return s[start-1 : end]
+		end := start - 1 + length
+		if end > len(runes) {
+			end = len(runes)
+		}
+		return string(runes[start-1 : end])
 	case "TRIM":
 		if len(fc.Args) == 0 {
 			return nil
@@ -1300,6 +1313,12 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			return nil
 		}
 		if s, ok := val.(string); ok {
+			if len(fc.Args) >= 2 {
+				chars := qe.evalValue(row, fc.Args[1])
+				if charsStr, ok := chars.(string); ok {
+					return strings.Trim(s, charsStr)
+				}
+			}
 			return strings.TrimSpace(s)
 		}
 		return val
@@ -1312,6 +1331,12 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			return nil
 		}
 		if s, ok := val.(string); ok {
+			if len(fc.Args) >= 2 {
+				chars := qe.evalValue(row, fc.Args[1])
+				if charsStr, ok := chars.(string); ok {
+					return strings.TrimLeft(s, charsStr)
+				}
+			}
 			return strings.TrimLeft(s, " \t\n\r")
 		}
 		return val
@@ -1324,28 +1349,35 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			return nil
 		}
 		if s, ok := val.(string); ok {
+			if len(fc.Args) >= 2 {
+				chars := qe.evalValue(row, fc.Args[1])
+				if charsStr, ok := chars.(string); ok {
+					return strings.TrimRight(s, charsStr)
+				}
+			}
 			return strings.TrimRight(s, " \t\n\r")
 		}
+		return val
 		return val
 	case "POSITION", "INSTR":
 		if len(fc.Args) < 2 {
 			return nil
 		}
-		substr := qe.evalValue(row, fc.Args[0])
-		str := qe.evalValue(row, fc.Args[1])
-		if substr == nil || str == nil {
+		haystack := qe.evalValue(row, fc.Args[0])
+		needle := qe.evalValue(row, fc.Args[1])
+		if haystack == nil || needle == nil {
 			return nil
 		}
-		substrStr, ok1 := substr.(string)
-		strStr, ok2 := str.(string)
+		haystackStr, ok1 := haystack.(string)
+		needleStr, ok2 := needle.(string)
 		if !ok1 || !ok2 {
 			return int64(0)
 		}
-		idx := strings.Index(strStr, substrStr)
+		idx := strings.Index(haystackStr, needleStr)
 		if idx < 0 {
 			return int64(0)
 		}
-		return int64(idx + 1)
+		return int64(utf8.RuneCountInString(haystackStr[:idx]) + 1)
 	case "REPLACE":
 		if len(fc.Args) < 3 {
 			return nil
