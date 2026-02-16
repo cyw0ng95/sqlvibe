@@ -20,7 +20,6 @@ type Database struct {
 	columnOrder map[string][]string                 // table name -> ordered column names
 	data        map[string][]map[string]interface{} // table name -> rows -> column name -> value
 	indexes     map[string]*IndexInfo               // index name -> index info
-	useVM       bool                                // use VM for query execution
 }
 
 type IndexInfo struct {
@@ -149,12 +148,7 @@ func Open(path string) (*Database, error) {
 		columnOrder: make(map[string][]string),
 		data:        data,
 		indexes:     make(map[string]*IndexInfo),
-		useVM:       false,
 	}, nil
-}
-
-func (db *Database) EnableVM(enable bool) {
-	db.useVM = enable
 }
 
 func (db *Database) getOrderedColumns(tableName string) []string {
@@ -421,14 +415,6 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		// Handle sqlite_master virtual table
 		if tableName == "sqlite_master" {
 			return db.querySqliteMaster(stmt)
-		}
-
-		// Try VM execution first for simple SELECT queries
-		if db.useVM {
-			rows, err := db.execVMQuery(sql, tableName)
-			if err == nil {
-				return rows, nil
-			}
 		}
 
 		// Handle JOIN queries
@@ -2193,8 +2179,6 @@ func (db *Database) execVMQuery(sql string, tableName string) (*Rows, error) {
 
 	ctx := &dbVmContext{db: db}
 	vm := VM.NewVMWithContext(program, ctx)
-
-	vm.Cursors().OpenTable(tableName, db.data[tableName], db.columnOrder[tableName])
 
 	err = vm.Run(nil)
 	if err != nil {

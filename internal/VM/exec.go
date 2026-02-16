@@ -537,7 +537,13 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if tableName == "" {
 				continue
 			}
-			vm.cursors.OpenTable(tableName, nil, nil)
+			if vm.ctx != nil {
+				if data, err := vm.ctx.GetTableData(tableName); err == nil && data != nil {
+					if cols, err := vm.ctx.GetTableColumns(tableName); err == nil {
+						vm.cursors.OpenTable(tableName, data, cols)
+					}
+				}
+			}
 			continue
 
 		case OpRewind:
