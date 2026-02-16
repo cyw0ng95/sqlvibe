@@ -132,6 +132,13 @@ graph TD
     W4 --> W5
 ```
 
+### Completed
+- ✅ Wave 1: Foundation
+- ✅ Wave 2: Core VM  
+- ✅ Wave 3: Compiler (SELECT, DML, Aggregate)
+- ✅ Wave 4: Operators
+- 🔄 Wave 5: Integration (in progress)
+
 ---
 
 ## Wave 1: Foundation (Analysis & Design)
@@ -351,6 +358,10 @@ internal/VM/
 
 ## Success Criteria
 
+- [x] VM package created with opcodes, compiler, engine, exec
+- [x] DML Compiler implemented (INSERT, UPDATE, DELETE)
+- [x] Aggregate Compiler implemented (COUNT, SUM, AVG, MIN, MAX)
+- [x] Basic VM integration in database layer
 - [ ] All existing tests pass with VM
 - [ ] Bytecode execution matches direct execution
 - [ ] Performance not degraded (>80% of direct)
