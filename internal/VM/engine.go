@@ -36,6 +36,7 @@ type VM struct {
 	errorcnt  int
 	err       error
 	ctx       VmContext
+	results   [][]interface{}
 }
 
 func NewVM(program *Program) *VM {
@@ -57,6 +58,7 @@ func NewVMWithContext(program *Program, ctx VmContext) *VM {
 		errorcnt:  0,
 		err:       nil,
 		ctx:       ctx,
+		results:   make([][]interface{}, 0),
 	}
 }
 
@@ -78,6 +80,7 @@ func (vm *VM) Reset() {
 	vm.affinity = 0
 	vm.errorcnt = 0
 	vm.err = nil
+	vm.results = make([][]interface{}, 0)
 }
 
 func (vm *VM) PC() int {
@@ -130,56 +133,19 @@ func (vm *VM) ErrorCode() int {
 	return vm.errorcnt
 }
 
+func (vm *VM) Results() [][]interface{} {
+	return vm.results
+}
+
 func (vm *VM) Run(ctx interface{}) error {
 	vm.Reset()
 	vm.pc = 0
 
-	for {
-		inst := vm.GetInstruction()
-
-		switch inst.Op {
-		case OpGoto:
-			if inst.P2 > 0 {
-				vm.pc = int(inst.P2)
-			}
-
-		case OpGosub:
-			vm.subReturn = append(vm.subReturn, vm.pc)
-			if inst.P2 > 0 {
-				vm.pc = int(inst.P2)
-			}
-
-		case OpReturn:
-			if len(vm.subReturn) > 0 {
-				n := len(vm.subReturn)
-				vm.pc = vm.subReturn[n-1]
-				vm.subReturn = vm.subReturn[:n-1]
-			}
-
-		case OpHalt:
-			if inst.P4 != nil {
-				if err, ok := inst.P4.(error); ok {
-					return err
-				}
-			}
-			return ErrHalt
-
-		case OpNoop:
-
-		default:
-			return fmt.Errorf("unimplemented opcode: %v", inst.Op)
-		}
-
-		if vm.pc >= len(vm.program.Instructions) {
-			break
-		}
-
-		if vm.pc < 0 {
-			return fmt.Errorf("negative PC: %d", vm.pc)
-		}
+	err := vm.Exec(ctx)
+	if err == ErrHalt {
+		return nil
 	}
-
-	return nil
+	return err
 }
 
 func (vm *VM) Step(ctx interface{}) (done bool, err error) {

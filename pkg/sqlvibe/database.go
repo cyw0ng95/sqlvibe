@@ -2201,26 +2201,21 @@ func (db *Database) execVMQuery(sql string, tableName string) (*Rows, error) {
 		return nil, err
 	}
 
+	results := vm.Results()
+
 	cols := make([]string, 0)
-	rows := make([][]interface{}, 0)
-
-	for i := 0; i < program.NumRegs; i++ {
-		cols = append(cols, fmt.Sprintf("col%d", i))
-	}
-
-	for i := 0; i < program.NumRegs; i++ {
-		row := make([]interface{}, program.NumRegs)
-		for j := 0; j < program.NumRegs; j++ {
-			row[j] = vm.GetRegister(j)
-		}
-		if i == 0 {
-			rows = append(rows, row)
+	if len(results) > 0 && len(results[0]) > 0 {
+		for i := range results[0] {
+			cols = append(cols, fmt.Sprintf("col%d", i))
 		}
 	}
 
-	if len(rows) == 0 {
-		return &Rows{Columns: cols, Data: [][]interface{}{}}, nil
+	if len(cols) == 0 {
+		cols = db.columnOrder[tableName]
+		if cols == nil {
+			cols = []string{}
+		}
 	}
 
-	return &Rows{Columns: cols, Data: rows}, nil
+	return &Rows{Columns: cols, Data: results}, nil
 }

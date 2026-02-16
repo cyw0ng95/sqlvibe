@@ -434,6 +434,20 @@ func (p *Program) EmitNext(cursorID int, target int) int {
 
 func (p *Program) Fixup(idx int) {
 	p.Instructions[idx].P2 = int32(len(p.Instructions))
+	if p.Instructions[idx].P4 != nil {
+		if _, ok := p.Instructions[idx].P4.(int); ok {
+			p.Instructions[idx].P4 = len(p.Instructions)
+		}
+	}
+}
+
+func (p *Program) FixupWithPos(idx, target int) {
+	p.Instructions[idx].P2 = int32(target)
+	if p.Instructions[idx].P4 != nil {
+		if _, ok := p.Instructions[idx].P4.(int); ok {
+			p.Instructions[idx].P4 = target
+		}
+	}
 }
 
 func (p *Program) GetInstruction(idx int) Instruction {

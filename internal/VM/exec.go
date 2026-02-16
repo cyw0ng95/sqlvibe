@@ -88,7 +88,14 @@ func (vm *VM) Exec(ctx interface{}) error {
 			continue
 
 		case OpResultRow:
-			return nil
+			if regs, ok := inst.P4.([]int); ok {
+				row := make([]interface{}, len(regs))
+				for i, reg := range regs {
+					row[i] = vm.registers[reg]
+				}
+				vm.results = append(vm.results, row)
+			}
+			continue
 
 		case OpEq:
 			lhs := vm.registers[inst.P1]
@@ -507,6 +514,56 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpCast:
 			vm.registers[inst.P1] = vm.registers[inst.P1]
+			continue
+
+		case OpColumn:
+			cursorID := int(inst.P1)
+			colIdx := int(inst.P2)
+			dst := inst.P4
+			cursor := vm.cursors.Get(cursorID)
+			if cursor != nil && cursor.Data != nil && cursor.Index >= 0 && cursor.Index < len(cursor.Data) {
+				row := cursor.Data[cursor.Index]
+				if colIdx >= 0 && colIdx < len(cursor.Columns) {
+					colName := cursor.Columns[colIdx]
+					if dstReg, ok := dst.(int); ok {
+						vm.registers[dstReg] = row[colName]
+					}
+				}
+			}
+			continue
+
+		case OpOpenRead:
+			tableName := inst.P3
+			if tableName == "" {
+				continue
+			}
+			vm.cursors.OpenTable(tableName, nil, nil)
+			continue
+
+		case OpRewind:
+			cursorID := int(inst.P1)
+			cursor := vm.cursors.Get(cursorID)
+			if cursor != nil {
+				cursor.Index = -1
+				cursor.EOF = len(cursor.Data) == 0
+			}
+			continue
+
+		case OpNext:
+			cursorID := int(inst.P1)
+			target := int(inst.P2)
+			cursor := vm.cursors.Get(cursorID)
+			if cursor != nil {
+				cursor.Index++
+				if cursor.Index >= len(cursor.Data) {
+					cursor.EOF = true
+					if target > 0 {
+						vm.pc = target
+					}
+				} else {
+					cursor.EOF = false
+				}
+			}
 			continue
 
 		default:
