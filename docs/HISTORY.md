@@ -1,5 +1,26 @@
 # sqlvibe Release History
 
+## **v0.4.2** (2026-02-16)
+
+### Bug Fixes
+- LENGTH: Fixed to count Unicode characters (runes) instead of bytes
+- INSTR: Fixed argument order (haystack, needle) and use rune-based indexing
+- TRIM/LTRIM/RTRIM: Added support for two-argument form TRIM(str, chars)
+- SUBSTR/SUBSTRING: Fixed negative start index, zero start, and Unicode support
+
+### Tests
+- E02104: LENGTH_Unicode, LENGTH_Chinese, LENGTH_Emoji now pass
+- E02106: Many SUBSTR tests now pass
+- E02109: TRIM_Special, LTRIM_Special, RTRIM_Special now pass
+
+### Known Issues
+- CHAR_LENGTH, CHARACTER_LENGTH: SQLite doesn't support these functions
+- OCTET_LENGTH: SQLite doesn't support this function
+- POSITION: SQLite doesn't support this function
+- TRIM tabs/newlines: Test data encoding differs between sqlvibe and SQLite
+
+---
+
 ## **v0.4.1** (2026-02-16)
 
 ### Bug Fixes
