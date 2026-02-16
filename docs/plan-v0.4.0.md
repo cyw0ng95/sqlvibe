@@ -302,10 +302,13 @@ graph TD
 - [x] F481: COALESCE returns first non-NULL argument
 
 ### Wave 2 (Parsers)
-- [ ] Index parser handles CREATE/DROP INDEX
-- [ ] Set operations parser handles UNION/EXCEPT/INTERSECT
+- [x] Index parser handles CREATE/DROP INDEX
+- [x] Set operations parser handles UNION/EXCEPT/INTERSECT
 - [x] CASE parser handles Simple and Searched CASE (implemented as part of E011-06 fix)
-- [ ] E021 parser handles CHAR/VARCHAR and all functions
+- [x] E021 parser handles CHAR/VARCHAR and all functions
+  - Added concatenation operator (||) parsing
+  - Added CHAR, CHARACTER as keywords
+  - String functions (UPPER, LOWER, SUBSTRING, etc.) parsed as function calls
 
 ### Wave 3 (Engines)
 - [ ] Index engine creates/drops B-Tree indexes
