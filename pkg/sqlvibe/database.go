@@ -430,9 +430,6 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		if stmt.GroupBy != nil && len(stmt.GroupBy) > 0 {
 			isSimple = false
 		}
-		if stmt.Limit != nil {
-			isSimple = false
-		}
 		if stmt.SetOp != "" {
 			isSimple = false
 		}
@@ -455,6 +452,13 @@ func (db *Database) Query(sql string) (*Rows, error) {
 				// Handle ORDER BY - sort results
 				if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
 					rows, err = db.sortResults(rows, stmt.OrderBy)
+					if err != nil {
+						return nil, err
+					}
+				}
+				// Handle LIMIT
+				if stmt.Limit != nil {
+					rows, err = db.applyLimit(rows, stmt.Limit, stmt.Offset)
 					if err != nil {
 						return nil, err
 					}
@@ -1838,6 +1842,46 @@ func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, col
 		}
 	}
 	return sorted
+}
+
+func (db *Database) applyLimit(rows *Rows, limitExpr QP.Expr, offsetExpr QP.Expr) (*Rows, error) {
+	if rows == nil || len(rows.Data) == 0 {
+		return rows, nil
+	}
+
+	limit := len(rows.Data)
+	offset := 0
+
+	if limitExpr != nil {
+		if lit, ok := limitExpr.(*QP.Literal); ok {
+			if num, ok := lit.Value.(int64); ok {
+				limit = int(num)
+			}
+		}
+	}
+
+	if offsetExpr != nil {
+		if lit, ok := offsetExpr.(*QP.Literal); ok {
+			if num, ok := lit.Value.(int64); ok {
+				offset = int(num)
+			}
+		}
+	}
+
+	if offset >= len(rows.Data) {
+		return &Rows{Columns: rows.Columns, Data: [][]interface{}{}}, nil
+	}
+
+	if limit <= 0 {
+		return &Rows{Columns: rows.Columns, Data: [][]interface{}{}}, nil
+	}
+
+	end := offset + limit
+	if end > len(rows.Data) {
+		end = len(rows.Data)
+	}
+
+	return &Rows{Columns: rows.Columns, Data: rows.Data[offset:end]}, nil
 }
 
 func (db *Database) serializeRow(row map[string]interface{}) []byte {

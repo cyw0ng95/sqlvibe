@@ -332,6 +332,25 @@ graph TD
   - Support EXPLAIN QUERY PLAN for query planning info
 - **Reference**: https://sqlite.org/opcode.html
 
+### Task 5.5: Split database.go into Multiple Files
+- **Files**: `pkg/sqlvibe/database.go` (2461 lines)
+- **Description**: Split monolith database.go into focused packages for maintainability
+- **Details**:
+  - Current file is 2461 lines - too large for maintainability
+  - Split into focused modules:
+    - `query.go` - Query execution logic (Query, Exec, executeSelect)
+    - `vm_integration.go` - VM execution (execVMQuery, handleExplain)
+    - `expression.go` - Expression evaluation (evalExpr, evalWhere)
+    - `operators.go` - Set operations (applySetOp, union, except, intersect)
+    - `joins.go` - Join handling (handleJoin, innerJoin, leftJoin, crossJoin)
+    - `aggregates.go` - Aggregate computation (computeAggregate, computeGroupBy)
+    - `pragmas.go` - Pragma handling (handlePragma, pragmaTableInfo, etc)
+    - `transactions.go` - Transaction handling (Begin, Commit, Rollback)
+    - `database.go` - Keep Database struct and core methods only
+  - Each file should be <500 lines
+  - Group related functionality together
+  - Maintain existing public API
+
 ---
 
 ## New Directory Structure
@@ -373,9 +392,9 @@ internal/VM/
 - [x] Aggregate Compiler implemented (COUNT, SUM, AVG, MIN, MAX)
 - [x] Basic VM integration in database layer
 - [x] WHERE clause support in VM
-- [ ] ORDER BY support in VM
-- [ ] LIMIT support in VM
-- [ ] EXPLAIN command implemented
+- [x] ORDER BY support (post-processing in database layer)
+- [x] LIMIT support in VM
+- [x] EXPLAIN command implemented
 - [ ] All existing tests pass with VM
 - [ ] Bytecode execution matches direct execution
 - [ ] Performance not degraded (>80% of direct)
