@@ -322,6 +322,16 @@ graph TD
   - Benchmark vs direct execution
   - Memory usage analysis
 
+### Task 5.4: EXPLAIN Command
+- **Files**: `internal/VM/compiler.go`, `pkg/sqlvibe/`
+- **Description**: Implement EXPLAIN command like SQLite
+- **Details**:
+  - Add EXPLAIN keyword parsing in QP
+  - Return bytecode program as rows instead of executing
+  - Format: addr, opcode, p1, p2, p3, p4, comment
+  - Support EXPLAIN QUERY PLAN for query planning info
+- **Reference**: https://sqlite.org/opcode.html
+
 ---
 
 ## New Directory Structure
@@ -362,6 +372,10 @@ internal/VM/
 - [x] DML Compiler implemented (INSERT, UPDATE, DELETE)
 - [x] Aggregate Compiler implemented (COUNT, SUM, AVG, MIN, MAX)
 - [x] Basic VM integration in database layer
+- [x] WHERE clause support in VM
+- [ ] ORDER BY support in VM
+- [ ] LIMIT support in VM
+- [ ] EXPLAIN command implemented
 - [ ] All existing tests pass with VM
 - [ ] Bytecode execution matches direct execution
 - [ ] Performance not degraded (>80% of direct)

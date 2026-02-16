@@ -121,6 +121,12 @@ type PragmaStmt struct {
 
 func (p *PragmaStmt) NodeType() string { return "PragmaStmt" }
 
+type ExplainStmt struct {
+	Query ASTNode
+}
+
+func (e *ExplainStmt) NodeType() string { return "ExplainStmt" }
+
 type Expr interface {
 	exprNode()
 }
@@ -229,7 +235,11 @@ func (p *Parser) Parse() (ASTNode, error) {
 			return p.parseDrop()
 		case "PRAGMA":
 			return p.parsePragma()
+		case "EXPLAIN":
+			return p.parseExplain()
 		}
+	case TokenExplain:
+		return p.parseExplain()
 	}
 	return nil, nil
 }
@@ -1323,4 +1333,49 @@ func (p *Parser) parseCaseExpr() (Expr, error) {
 	}
 
 	return ce, nil
+}
+
+func (p *Parser) parseExplain() (ASTNode, error) {
+	p.advance()
+	explain := &ExplainStmt{}
+
+	isQueryPlan := false
+	if p.current().Type == TokenKeyword && p.current().Literal == "QUERY" {
+		p.advance()
+		if p.current().Type == TokenKeyword && p.current().Literal == "PLAN" {
+			p.advance()
+			isQueryPlan = true
+		}
+	}
+
+	if p.current().Type == TokenKeyword && p.current().Literal == "SELECT" {
+		sel, err := p.parseSelect()
+		if err != nil {
+			return nil, err
+		}
+		explain.Query = sel
+	} else if p.current().Type == TokenKeyword && p.current().Literal == "INSERT" {
+		ins, err := p.parseInsert()
+		if err != nil {
+			return nil, err
+		}
+		explain.Query = ins
+	} else if p.current().Type == TokenKeyword && p.current().Literal == "UPDATE" {
+		upd, err := p.parseUpdate()
+		if err != nil {
+			return nil, err
+		}
+		explain.Query = upd
+	} else if p.current().Type == TokenKeyword && p.current().Literal == "DELETE" {
+		del, err := p.parseDelete()
+		if err != nil {
+			return nil, err
+		}
+		explain.Query = del
+	} else {
+		return nil, fmt.Errorf("EXPLAIN not supported for this statement type: %v", p.current())
+	}
+
+	_ = isQueryPlan
+	return explain, nil
 }

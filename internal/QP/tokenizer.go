@@ -15,6 +15,7 @@ const (
 	TokenString
 	TokenNumber
 	TokenKeyword
+	TokenExplain
 	TokenOperator
 	TokenLeftParen
 	TokenRightParen
@@ -117,6 +118,7 @@ var keywords = map[string]TokenType{
 	"ANY":               TokenAny,
 	"SOME":              TokenAny,
 	"CAST":              TokenCast,
+	"EXPLAIN":           TokenExplain,
 	"COUNT":             TokenKeyword,
 	"SUM":               TokenKeyword,
 	"AVG":               TokenKeyword,

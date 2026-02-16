@@ -12,7 +12,7 @@ type Compiler struct {
 	stmtWhere       []QP.Expr
 	stmtColumns     []QP.Expr
 	columnIndices   map[string]int // SELECT position: col name -> index in SELECT list
-	tableColIndices map[string]int // TABLE position: col name -> index in table
+	TableColIndices map[string]int // TABLE position: col name -> index in table (exported for external use)
 }
 
 func NewCompiler() *Compiler {
@@ -168,13 +168,13 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 	colIdx := 0
 	if col.Name != "" {
 		// First try table column order (for WHERE clause with schema)
-		if c.tableColIndices != nil {
-			if idx, ok := c.tableColIndices[col.Name]; ok {
+		if c.TableColIndices != nil {
+			if idx, ok := c.TableColIndices[col.Name]; ok {
 				colIdx = idx
 			}
 		}
 		// Fall back to SELECT position
-		if colIdx == 0 || c.tableColIndices == nil {
+		if colIdx == 0 || c.TableColIndices == nil {
 			if c.columnIndices != nil {
 				if idx, ok := c.columnIndices[col.Name]; ok {
 					colIdx = idx
@@ -554,9 +554,9 @@ func CompileWithSchema(sql string, tableColumns []string) (*Program, error) {
 	}
 
 	c := NewCompiler()
-	c.tableColIndices = make(map[string]int)
+	c.TableColIndices = make(map[string]int)
 	for i, col := range tableColumns {
-		c.tableColIndices[col] = i
+		c.TableColIndices[col] = i
 	}
 
 	switch s := stmt.(type) {
