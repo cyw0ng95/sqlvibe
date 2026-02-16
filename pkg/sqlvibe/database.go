@@ -18,6 +18,14 @@ type Database struct {
 	primaryKeys map[string][]string                 // table name -> primary key column names
 	columnOrder map[string][]string                 // table name -> ordered column names
 	data        map[string][]map[string]interface{} // table name -> rows -> column name -> value
+	indexes     map[string]*IndexInfo               // index name -> index info
+}
+
+type IndexInfo struct {
+	Name    string
+	Table   string
+	Columns []string
+	Unique  bool
 }
 
 type Conn interface {
@@ -138,6 +146,7 @@ func Open(path string) (*Database, error) {
 		primaryKeys: make(map[string][]string),
 		columnOrder: make(map[string][]string),
 		data:        data,
+		indexes:     make(map[string]*IndexInfo),
 	}, nil
 }
 
@@ -337,6 +346,28 @@ func (db *Database) Exec(sql string) (Result, error) {
 			delete(db.data, stmt.Name)
 			delete(db.primaryKeys, stmt.Name)
 		}
+		return Result{}, nil
+	case "CreateIndexStmt":
+		stmt := ast.(*QP.CreateIndexStmt)
+		if _, exists := db.indexes[stmt.Name]; exists {
+			if stmt.IfNotExists {
+				return Result{}, nil
+			}
+			return Result{}, fmt.Errorf("index %s already exists", stmt.Name)
+		}
+		if _, exists := db.tables[stmt.Table]; !exists {
+			return Result{}, fmt.Errorf("table %s does not exist", stmt.Table)
+		}
+		db.indexes[stmt.Name] = &IndexInfo{
+			Name:    stmt.Name,
+			Table:   stmt.Table,
+			Columns: stmt.Columns,
+			Unique:  stmt.Unique,
+		}
+		return Result{}, nil
+	case "DropIndexStmt":
+		stmt := ast.(*QP.DropIndexStmt)
+		delete(db.indexes, stmt.Name)
 		return Result{}, nil
 	}
 
