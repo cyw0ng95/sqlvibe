@@ -323,9 +323,11 @@ graph TD
   - table_info, index_list, database_list
 
 ### Wave 4 (Advanced)
-- [ ] Query planner uses indexes for optimization
-- [ ] DATE/TIME/TIMESTAMP types work correctly
-- [ ] Datetime functions work correctly
+- [ ] Query planner uses indexes for optimization (deferred - requires refactoring)
+- [x] DATE/TIME/TIMESTAMP types work correctly
+- [x] Datetime functions work correctly
+  - DATE, TIME, DATETIME, TIMESTAMP
+  - CURRENT_DATE, CURRENT_TIME, CURRENT_TIMESTAMP
 
 ### E021 Full Coverage (12 sections)
 - [x] E021-01: CHARACTER (CHAR) type
