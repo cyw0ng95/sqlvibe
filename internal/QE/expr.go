@@ -73,6 +73,9 @@ func (e *ExprEvaluator) BinaryOp(op OpCode, a, b interface{}) (interface{}, erro
 	case OpRemainder:
 		return e.mod(a, b), nil
 	case OpConcat:
+		if a == nil || b == nil {
+			return nil, nil
+		}
 		return e.toString(a) + e.toString(b), nil
 	default:
 		return nil, nil
@@ -80,6 +83,9 @@ func (e *ExprEvaluator) BinaryOp(op OpCode, a, b interface{}) (interface{}, erro
 }
 
 func (e *ExprEvaluator) add(a, b interface{}) interface{} {
+	if a == nil || b == nil {
+		return nil
+	}
 	if isFloat64(a) || isFloat64(b) {
 		av := e.toFloat64(a)
 		bv := e.toFloat64(b)
@@ -106,6 +112,9 @@ func (e *ExprEvaluator) add(a, b interface{}) interface{} {
 }
 
 func (e *ExprEvaluator) sub(a, b interface{}) interface{} {
+	if a == nil || b == nil {
+		return nil
+	}
 	if isFloat64(a) || isFloat64(b) {
 		av := e.toFloat64(a)
 		bv := e.toFloat64(b)
@@ -132,6 +141,9 @@ func (e *ExprEvaluator) sub(a, b interface{}) interface{} {
 }
 
 func (e *ExprEvaluator) mul(a, b interface{}) interface{} {
+	if a == nil || b == nil {
+		return nil
+	}
 	if isFloat64(a) || isFloat64(b) {
 		av := e.toFloat64(a)
 		bv := e.toFloat64(b)
@@ -158,6 +170,9 @@ func (e *ExprEvaluator) mul(a, b interface{}) interface{} {
 }
 
 func (e *ExprEvaluator) div(a, b interface{}) interface{} {
+	if a == nil || b == nil {
+		return nil
+	}
 	if isFloat64(a) || isFloat64(b) {
 		av := e.toFloat64(a)
 		bv := e.toFloat64(b)
@@ -253,6 +268,9 @@ func isFloat64(v interface{}) bool {
 }
 
 func (e *ExprEvaluator) mod(a, b interface{}) interface{} {
+	if a == nil || b == nil {
+		return nil
+	}
 	if isFloat64(a) || isFloat64(b) {
 		av := e.toFloat64(a)
 		bv := e.toFloat64(b)

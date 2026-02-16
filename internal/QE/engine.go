@@ -412,6 +412,26 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		case QP.TokenConcat:
 			result, _ := exprEval.BinaryOp(OpConcat, leftVal, rightVal)
 			return result
+		case QP.TokenAnd:
+			if leftVal == nil || rightVal == nil {
+				return nil
+			}
+			leftBool := qe.toBool(leftVal)
+			rightBool := qe.toBool(rightVal)
+			if leftBool && rightBool {
+				return int64(1)
+			}
+			return int64(0)
+		case QP.TokenOr:
+			if leftVal == nil || rightVal == nil {
+				return nil
+			}
+			leftBool := qe.toBool(leftVal)
+			rightBool := qe.toBool(rightVal)
+			if leftBool || rightBool {
+				return int64(1)
+			}
+			return int64(0)
 		case QP.TokenEq:
 			if leftVal == nil || rightVal == nil {
 				return nil
@@ -877,6 +897,19 @@ func (qe *QueryEngine) valuesEqual(a, b interface{}) bool {
 		return af == float64(bv)
 	}
 
+	return false
+}
+
+func (qe *QueryEngine) toBool(val interface{}) bool {
+	if val == nil {
+		return false
+	}
+	if b, ok := val.(int64); ok {
+		return b != 0
+	}
+	if b, ok := val.(bool); ok {
+		return b
+	}
 	return false
 }
 
