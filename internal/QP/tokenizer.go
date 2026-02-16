@@ -142,6 +142,8 @@ var keywords = map[string]TokenType{
 	"CURRENT_DATE":      TokenKeyword,
 	"CURRENT_TIME":      TokenKeyword,
 	"CURRENT_TIMESTAMP": TokenKeyword,
+	"LOCALTIME":         TokenKeyword,
+	"LOCALTIMESTAMP":    TokenKeyword,
 }
 
 type Token struct {

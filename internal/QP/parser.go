@@ -1149,7 +1149,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			p.advance()
 			return &Literal{Value: nil}, nil
 		}
-		if tok.Literal == "CURRENT_DATE" || tok.Literal == "CURRENT_TIME" || tok.Literal == "CURRENT_TIMESTAMP" {
+		if tok.Literal == "CURRENT_DATE" || tok.Literal == "CURRENT_TIME" || tok.Literal == "CURRENT_TIMESTAMP" || tok.Literal == "LOCALTIME" || tok.Literal == "LOCALTIMESTAMP" {
 			p.advance()
 			return &FuncCall{Name: tok.Literal, Args: []Expr{}}, nil
 		}

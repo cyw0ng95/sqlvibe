@@ -1218,6 +1218,122 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 		return time.Now().Format("15:04:05")
 	case "CURRENT_TIMESTAMP":
 		return time.Now().Format("2006-01-02 15:04:05")
+	case "LOCALTIME":
+		return time.Now().Local().Format("15:04:05")
+	case "LOCALTIMESTAMP":
+		return time.Now().Local().Format("2006-01-02 15:04:05")
+	case "STRFTIME", "strftime":
+		if len(fc.Args) < 2 {
+			return nil
+		}
+		format := qe.evalValue(row, fc.Args[0])
+		timestamp := qe.evalValue(row, fc.Args[1])
+		if format == nil || timestamp == nil {
+			return nil
+		}
+		formatStr, _ := format.(string)
+		tsStr, _ := timestamp.(string)
+		t, err := time.Parse("2006-01-02 15:04:05", tsStr)
+		if err != nil {
+			t, err = time.Parse(time.RFC3339, tsStr)
+			if err != nil {
+				return nil
+			}
+		}
+		sqliteFormat := strings.ReplaceAll(formatStr, "%Y", "2006")
+		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%m", "01")
+		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%d", "02")
+		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%H", "15")
+		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%M", "04")
+		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%S", "05")
+		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%s", "05")
+		return t.Format(sqliteFormat)
+	case "NOW":
+		return time.Now().Format("2006-01-02 15:04:05")
+	case "YEAR", "YEAROF":
+		if len(fc.Args) == 0 {
+			return time.Now().Year()
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("2006-01-02", s); err == nil {
+				return int64(t.Year())
+			}
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return int64(t.Year())
+			}
+		}
+		return nil
+	case "MONTH", "MONTHOF":
+		if len(fc.Args) == 0 {
+			return int64(time.Now().Month())
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("2006-01-02", s); err == nil {
+				return int64(t.Month())
+			}
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return int64(t.Month())
+			}
+		}
+		return nil
+	case "DAY", "DAYOF":
+		if len(fc.Args) == 0 {
+			return int64(time.Now().Day())
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("2006-01-02", s); err == nil {
+				return int64(t.Day())
+			}
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return int64(t.Day())
+			}
+		}
+		return nil
+	case "HOUR", "HOUROF":
+		if len(fc.Args) == 0 {
+			return int64(time.Now().Hour())
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("15:04:05", s); err == nil {
+				return int64(t.Hour())
+			}
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return int64(t.Hour())
+			}
+		}
+		return nil
+	case "MINUTE", "MINUTEOF":
+		if len(fc.Args) == 0 {
+			return int64(time.Now().Minute())
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("15:04:05", s); err == nil {
+				return int64(t.Minute())
+			}
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return int64(t.Minute())
+			}
+		}
+		return nil
+	case "SECOND", "SECONDOF":
+		if len(fc.Args) == 0 {
+			return int64(time.Now().Second())
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if s, ok := val.(string); ok {
+			if t, err := time.Parse("15:04:05", s); err == nil {
+				return int64(t.Second())
+			}
+			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return int64(t.Second())
+			}
+		}
+		return nil
 	case "TYPEOF", "typeof":
 		if len(fc.Args) == 0 {
 			return "null"
