@@ -124,6 +124,8 @@ var keywords = map[string]TokenType{
 	"REAL":          TokenKeyword,
 	"BLOB":          TokenKeyword,
 	"VARCHAR":       TokenKeyword,
+	"CHAR":          TokenKeyword,
+	"CHARACTER":     TokenKeyword,
 	"BOOLEAN":       TokenKeyword,
 	"BEGIN":         TokenKeyword,
 	"COMMIT":        TokenKeyword,

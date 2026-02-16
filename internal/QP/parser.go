@@ -949,7 +949,7 @@ func (p *Parser) parseAddExpr() (Expr, error) {
 		return nil, err
 	}
 
-	for p.current().Type == TokenPlus || p.current().Type == TokenMinus {
+	for p.current().Type == TokenPlus || p.current().Type == TokenMinus || p.current().Type == TokenConcat {
 		op := p.current().Type
 		p.advance()
 		right, err := p.parseMulExpr()
