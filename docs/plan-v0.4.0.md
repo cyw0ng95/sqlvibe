@@ -46,10 +46,17 @@ graph TD
         A2[Date/Time Types<br/>DATE/TIME/TIMESTAMP]
     end
     
+    %% Wave 5: Fuzzing
+    subgraph W5 ["Wave 5: Fuzzing"]
+        direction TB
+        F1[PlainFuzzer<br/>SQL Fuzzer]
+    end
+    
     %% Dependencies
     W1 --> W2
     W2 --> W3
     W3 --> W4
+    W4 --> W5
     
     %% Within-wave parallel dependencies
     B1 -.-> B2
@@ -256,6 +263,9 @@ graph TD
     A1[Index Planner]:::wave4
     A2[Date/Time]:::wave4
     
+    %% Wave 5
+    F1[PlainFuzzer]:::wave5
+    
     %% Dependencies
     B1 --> P1 & P2 & P3 & P4
     B2 --> P1 & P2 & P3 & P4
@@ -273,11 +283,15 @@ graph TD
     E5 --> A1
     E4 --> A2
     
+    A1 --> F1
+    A2 --> F1
+    
     %% Styling
     classDef wave1 fill:#ff9999,stroke:#333,stroke-width:2px
     classDef wave2 fill:#99ff99,stroke:#333,stroke-width:2px
     classDef wave3 fill:#9999ff,stroke:#333,stroke-width:2px
     classDef wave4 fill:#ffff99,stroke:#333,stroke-width:2px
+    classDef wave5 fill:#ff99ff,stroke:#333,stroke-width:2px
 ```
 
 ---
@@ -335,6 +349,24 @@ graph TD
   - YEAR, MONTH, DAY, HOUR, MINUTE, SECOND extraction
   - NOW, STRFTIME functions
 
+### Wave 5 (Fuzzing)
+- [x] PlainFuzzer generates valid SQL statements
+  - CREATE TABLE with various column types
+  - INSERT with various value types
+  - SELECT with WHERE, ORDER BY, GROUP BY, HAVING
+  - UPDATE and DELETE statements
+  - JOIN queries
+  - Subqueries
+- [x] PlainFuzzer handles edge cases
+  - NULL values in all contexts
+  - Large numbers (overflow handling)
+  - Special characters in strings
+  - Empty tables
+  - Division by zero
+- [x] PlainFuzzer detects crashes and panics
+  - No panics on malformed input
+  - Graceful error handling
+
 ### E021 Full Coverage (12 sections)
 - [x] E021-01: CHARACTER (CHAR) type
 - [x] E021-02: CHARACTER VARYING (VARCHAR) type
@@ -348,6 +380,31 @@ graph TD
 - [ ] E021-10: Implicit casting
 - [x] E021-11: POSITION function
 - [ ] E021-12: Character comparison
+
+---
+
+## Wave 5: Fuzzing Testsuite
+
+### Task 5.1: PlainFuzzer Implementation
+- **Feature**: Libfuzzer-style SQL fuzzer using Go's native fuzzing
+- **Location**: `internal/TS/PlainFuzzer/`
+- **Purpose**: Random SQL generation and execution to find bugs, panics, and correctness issues
+- **Dependencies**: All previous waves complete
+
+#### Sub-tasks:
+1. Create fuzzer entry point with SQL corpus generation
+2. Implement SQL statement fuzzing (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)
+3. Implement expression fuzzing (operators, functions, literals)
+4. Implement edge case generation (NULL, large numbers, special characters)
+5. Add comparison mode with SQLite for correctness verification
+6. Add crash/panic detection and reporting
+
+#### Files to Create:
+- `internal/TS/PlainFuzzer/fuzz_test.go` - Main fuzzer entry point
+- `internal/TS/PlainFuzzer/generator.go` - SQL generator
+- `internal/TS/PlainFuzzer/corpus.go` - Corpus management
+
+**Wave 5 Verification**: `go test -fuzz=FuzzSQL ./internal/TS/PlainFuzzer/...`
 
 ---
 
@@ -365,6 +422,9 @@ go test -run "TestIndex|TestSetOps|TestCase|TestE021|TestPragma" ./...
 
 # Wave 4: Advanced tests
 go test -run "TestPlanner|TestDateTime" ./...
+
+# Wave 5: Fuzzing tests
+go test -fuzz=FuzzSQL -fuzztime=60s ./internal/TS/PlainFuzzer/...
 
 # Full test suite
 go test -race -asan ./...
