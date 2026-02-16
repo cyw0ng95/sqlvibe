@@ -1,5 +1,23 @@
 # sqlvibe Release History
 
+## **v0.4.1** (2026-02-16)
+
+### Bug Fixes
+- NOT IN operator: Implemented in parser and engine
+- NOT BETWEEN operator: Implemented in parser and engine
+- LIKE operator: Fixed in SELECT expressions (added to evalValue)
+- NOT LIKE operator: Implemented in parser and engine
+- GLOB operator: Implemented with pattern matching
+- NULL arithmetic: Fixed add, sub, mul, div, mod, concat to return NULL for NULL operands
+- NULL comparisons: Fixed 3-valued logic for comparisons with NULL
+- AND/OR operators: Fixed in SELECT expressions
+
+### Tests
+- E01105: All IN/BETWEEN/NULL comparison tests now pass
+- E02112: All LIKE/GLOB/BETWEEN/IN tests now pass
+
+---
+
 ## **v0.4.0** (2026-02-16)
 
 ### Features
