@@ -822,6 +822,44 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 		}
 	}
 
+	if p.current().Type == TokenNot && p.peek().Type == TokenIn {
+		p.advance()
+		p.advance()
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			if p.current().Type == TokenKeyword && p.current().Literal == "SELECT" {
+				sub, err := p.parseSelect()
+				if err != nil {
+					return nil, err
+				}
+				if p.current().Type == TokenRightParen {
+					p.advance()
+				}
+				return &BinaryExpr{Op: TokenNotIn, Left: left, Right: &SubqueryExpr{Select: sub}}, nil
+			}
+			var values []interface{}
+			for {
+				if p.current().Type == TokenRightParen {
+					p.advance()
+					break
+				}
+				expr, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				if lit, ok := expr.(*Literal); ok {
+					values = append(values, lit.Value)
+				} else {
+					values = append(values, nil)
+				}
+				if p.current().Type == TokenComma {
+					p.advance()
+				}
+			}
+			return &BinaryExpr{Op: TokenNotIn, Left: left, Right: &Literal{Value: values}}, nil
+		}
+	}
+
 	if p.current().Type == TokenIn {
 		p.advance()
 		if p.current().Type == TokenLeftParen {
@@ -857,6 +895,24 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 			}
 			return &BinaryExpr{Op: TokenIn, Left: left, Right: &Literal{Value: values}}, nil
 		}
+	}
+
+	if p.current().Type == TokenNot && p.peek().Type == TokenBetween {
+		p.advance()
+		p.advance()
+		right, err := p.parseAddExpr()
+		if err != nil {
+			return nil, err
+		}
+		if p.current().Type == TokenAnd {
+			p.advance()
+			andExpr, err := p.parseAddExpr()
+			if err != nil {
+				return nil, err
+			}
+			return &BinaryExpr{Op: TokenNotBetween, Left: left, Right: &BinaryExpr{Op: TokenAnd, Left: right, Right: andExpr}}, nil
+		}
+		return left, nil
 	}
 
 	if p.current().Type == TokenBetween {
@@ -966,6 +1022,25 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 			return nil, err
 		}
 		return &BinaryExpr{Op: TokenLike, Left: left, Right: pattern}, nil
+	}
+
+	if p.current().Type == TokenNot && p.peek().Type == TokenLike {
+		p.advance()
+		p.advance()
+		pattern, err := p.parseAddExpr()
+		if err != nil {
+			return nil, err
+		}
+		return &BinaryExpr{Op: TokenNotLike, Left: left, Right: pattern}, nil
+	}
+
+	if p.current().Type == TokenGlob {
+		p.advance()
+		pattern, err := p.parseAddExpr()
+		if err != nil {
+			return nil, err
+		}
+		return &BinaryExpr{Op: TokenGlob, Left: left, Right: pattern}, nil
 	}
 
 	for p.current().Type == TokenEq || p.current().Type == TokenNe ||

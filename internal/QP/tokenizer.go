@@ -37,8 +37,12 @@ const (
 	TokenOr
 	TokenNot
 	TokenIn
+	TokenNotIn
 	TokenLike
+	TokenNotLike
+	TokenGlob
 	TokenBetween
+	TokenNotBetween
 	TokenIs
 	TokenIsNot
 	TokenExists
@@ -56,6 +60,7 @@ var keywords = map[string]TokenType{
 	"NOT":               TokenNot,
 	"IN":                TokenIn,
 	"LIKE":              TokenLike,
+	"GLOB":              TokenGlob,
 	"BETWEEN":           TokenBetween,
 	"IS":                TokenIs,
 	"NULL":              TokenKeyword,

@@ -469,7 +469,116 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		case QP.TokenIsNot:
 			leftVal := qe.evalValue(row, e.Left)
 			if leftVal == nil {
-				return int64(0) // NULL IS NOT NULL -> 0
+				return int64(0)
+			}
+			return int64(1)
+		case QP.TokenIn:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			rightVal := qe.evalValue(row, e.Right)
+			if rightList, ok := rightVal.([]interface{}); ok {
+				for _, v := range rightList {
+					if qe.valuesEqual(leftVal, v) {
+						return int64(1)
+					}
+				}
+				return int64(0)
+			}
+			return int64(0)
+		case QP.TokenBetween:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			if andExpr, ok := e.Right.(*QP.BinaryExpr); ok {
+				minVal := qe.evalValue(row, andExpr.Left)
+				maxVal := qe.evalValue(row, andExpr.Right)
+				if minVal == nil || maxVal == nil {
+					return nil
+				}
+				if qe.compareVals(leftVal, minVal) >= 0 && qe.compareVals(leftVal, maxVal) <= 0 {
+					return int64(1)
+				}
+				return int64(0)
+			}
+			return int64(0)
+		case QP.TokenLike:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			rightVal := qe.evalValue(row, e.Right)
+			leftStr, leftOk := leftVal.(string)
+			patternStr, patOk := rightVal.(string)
+			if !leftOk || !patOk {
+				return int64(0)
+			}
+			if qe.matchLike(leftStr, patternStr) {
+				return int64(1)
+			}
+			return int64(0)
+		case QP.TokenNotLike:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			rightVal := qe.evalValue(row, e.Right)
+			leftStr, leftOk := leftVal.(string)
+			patternStr, patOk := rightVal.(string)
+			if !leftOk || !patOk {
+				return int64(0)
+			}
+			if qe.matchLike(leftStr, patternStr) {
+				return int64(0)
+			}
+			return int64(1)
+		case QP.TokenGlob:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			rightVal := qe.evalValue(row, e.Right)
+			leftStr, leftOk := leftVal.(string)
+			patternStr, patOk := rightVal.(string)
+			if !leftOk || !patOk {
+				return int64(0)
+			}
+			if qe.matchGlob(leftStr, patternStr) {
+				return int64(1)
+			}
+			return int64(0)
+		case QP.TokenNotIn:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			rightVal := qe.evalValue(row, e.Right)
+			if rightList, ok := rightVal.([]interface{}); ok {
+				for _, v := range rightList {
+					if qe.valuesEqual(leftVal, v) {
+						return int64(0)
+					}
+				}
+				return int64(1)
+			}
+			return int64(1)
+		case QP.TokenNotBetween:
+			leftVal := qe.evalValue(row, e.Left)
+			if leftVal == nil {
+				return nil
+			}
+			if andExpr, ok := e.Right.(*QP.BinaryExpr); ok {
+				minVal := qe.evalValue(row, andExpr.Left)
+				maxVal := qe.evalValue(row, andExpr.Right)
+				if minVal == nil || maxVal == nil {
+					return nil
+				}
+				if qe.compareVals(leftVal, minVal) >= 0 && qe.compareVals(leftVal, maxVal) <= 0 {
+					return int64(0)
+				}
+				return int64(1)
 			}
 			return int64(1)
 		}
@@ -478,6 +587,18 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		val := qe.evalValue(row, e.Expr)
 		if e.Op == QP.TokenMinus {
 			return qe.negate(val)
+		}
+		if e.Op == QP.TokenNot {
+			if val == nil {
+				return int64(1)
+			}
+			if b, ok := val.(int64); ok {
+				if b == 0 {
+					return int64(1)
+				}
+				return int64(0)
+			}
+			return int64(0)
 		}
 		return val
 	case *QP.FuncCall:
@@ -876,6 +997,54 @@ func matchLikeRecursive(value, pattern string, vi, pi int) bool {
 	}
 	if pchar == '_' || pchar == value[vi] {
 		return matchLikeRecursive(value, pattern, vi+1, pi+1)
+	}
+	return false
+}
+
+func (qe *QueryEngine) matchGlob(value, pattern string) bool {
+	if pattern == "" {
+		return value == ""
+	}
+	if pattern == "*" {
+		return true
+	}
+	simple := true
+	for _, c := range pattern {
+		if c == '*' || c == '?' {
+			simple = false
+			break
+		}
+	}
+	if simple {
+		return value == pattern
+	}
+	result := matchGlobRecursive(value, pattern, 0, 0)
+	return result
+}
+
+func matchGlobRecursive(value, pattern string, vi, pi int) bool {
+	if pi >= len(pattern) {
+		return vi >= len(value)
+	}
+	if vi >= len(value) {
+		for ; pi < len(pattern); pi++ {
+			if pattern[pi] != '*' {
+				return false
+			}
+		}
+		return true
+	}
+	pchar := pattern[pi]
+	if pchar == '*' {
+		for i := vi; i <= len(value); i++ {
+			if matchGlobRecursive(value, pattern, i, pi+1) {
+				return true
+			}
+		}
+		return false
+	}
+	if pchar == '?' || pchar == value[vi] {
+		return matchGlobRecursive(value, pattern, vi+1, pi+1)
 	}
 	return false
 }
