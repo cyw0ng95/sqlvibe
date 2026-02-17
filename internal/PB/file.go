@@ -2,9 +2,12 @@ package PB
 
 import (
 	"errors"
-	"os"
+	"fmt"
+	"net/url"
+	"strings"
 	"sync"
-	"syscall"
+
+	"github.com/sqlvibe/sqlvibe/internal/SF/vfs"
 )
 
 var (
@@ -14,12 +17,12 @@ var (
 )
 
 const (
-	O_CREATE = os.O_CREATE
-	O_EXCL   = os.O_EXCL
-	O_TRUNC  = os.O_TRUNC
-	O_RDWR   = os.O_RDWR
-	O_RDONLY = os.O_RDONLY
-	O_WRONLY = os.O_WRONLY
+	O_CREATE = vfs.OpenCreate
+	O_EXCL   = vfs.OpenExclusive
+	O_TRUNC  = 0x0200 // Not directly mapped
+	O_RDWR   = vfs.OpenReadWrite
+	O_RDONLY = vfs.OpenReadOnly
+	O_WRONLY = vfs.OpenReadWrite // Map to read-write for now
 )
 
 type LockType int
@@ -31,6 +34,8 @@ const (
 	LockExclusive
 )
 
+// File interface for database file operations
+// This is the legacy interface that will be maintained for compatibility
 type File interface {
 	Open(path string, flag int) (File, error)
 	ReadAt(p []byte, off int64) (n int, err error)
@@ -43,37 +48,37 @@ type File interface {
 	Truncate(size int64) error
 }
 
-type osFile struct {
-	f       *os.File
-	lock    sync.Mutex
-	curLock LockType
+// vfsFile wraps a VFS File to implement the PB.File interface
+type vfsFile struct {
+	vfsHandle vfs.File
+	vfs       vfs.VFS
+	path      string
+	lock      sync.Mutex
+	curLock   LockType
 }
 
-func (f *osFile) Open(path string, flag int) (File, error) {
-	file, err := os.OpenFile(path, flag, 0644)
-	if err != nil {
-		return nil, err
-	}
-	return &osFile{f: file}, nil
+func (f *vfsFile) Open(path string, flag int) (File, error) {
+	// This should not be called on an existing file handle
+	return OpenFile(path, flag)
 }
 
-func (f *osFile) ReadAt(p []byte, off int64) (n int, err error) {
-	return f.f.ReadAt(p, off)
+func (f *vfsFile) ReadAt(p []byte, off int64) (n int, err error) {
+	return f.vfsHandle.Read(p, off)
 }
 
-func (f *osFile) WriteAt(p []byte, off int64) (n int, err error) {
-	return f.f.WriteAt(p, off)
+func (f *vfsFile) WriteAt(p []byte, off int64) (n int, err error) {
+	return f.vfsHandle.Write(p, off)
 }
 
-func (f *osFile) Sync() error {
-	return f.f.Sync()
+func (f *vfsFile) Sync() error {
+	return f.vfsHandle.Sync(vfs.SyncNormal)
 }
 
-func (f *osFile) Close() error {
-	return f.f.Close()
+func (f *vfsFile) Close() error {
+	return f.vfsHandle.Close()
 }
 
-func (f *osFile) Lock(lockType LockType) error {
+func (f *vfsFile) Lock(lockType LockType) error {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
@@ -85,12 +90,15 @@ func (f *osFile) Lock(lockType LockType) error {
 		return nil
 	}
 
-	flockType := syscall.LOCK_SH
+	vfsLockType := vfs.LockShared
+	if lockType >= LockReserved {
+		vfsLockType = vfs.LockReserved
+	}
 	if lockType == LockExclusive {
-		flockType = syscall.LOCK_EX
+		vfsLockType = vfs.LockExclusive
 	}
 
-	err := syscall.Flock(int(f.f.Fd()), flockType|syscall.LOCK_NB)
+	err := f.vfsHandle.Lock(vfsLockType)
 	if err != nil {
 		return err
 	}
@@ -98,7 +106,7 @@ func (f *osFile) Lock(lockType LockType) error {
 	return nil
 }
 
-func (f *osFile) Unlock() error {
+func (f *vfsFile) Unlock() error {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
@@ -106,7 +114,7 @@ func (f *osFile) Unlock() error {
 		return nil
 	}
 
-	err := syscall.Flock(int(f.f.Fd()), syscall.LOCK_UN)
+	err := f.vfsHandle.Unlock(vfs.LockNone)
 	if err != nil {
 		return err
 	}
@@ -114,23 +122,101 @@ func (f *osFile) Unlock() error {
 	return nil
 }
 
-func (f *osFile) Size() (int64, error) {
-	stat, err := f.f.Stat()
+func (f *vfsFile) Size() (int64, error) {
+	return f.vfsHandle.FileSize()
+}
+
+func (f *vfsFile) Truncate(size int64) error {
+	return f.vfsHandle.Truncate(size)
+}
+
+// parseVFSURI parses a database URI to extract the VFS name and actual path
+// Supports formats like:
+//   - ":memory:" -> memory VFS, ":memory:" path
+//   - "file:test.db" -> default VFS, "test.db" path
+//   - "file:test.db?vfs=unix" -> unix VFS, "test.db" path
+//   - "test.db" -> default VFS, "test.db" path
+func parseVFSURI(uri string) (vfsName string, path string, err error) {
+	// Handle :memory: special case
+	if uri == ":memory:" {
+		return "memory", ":memory:", nil
+	}
+
+	// Check if it's a URI with scheme
+	if strings.Contains(uri, ":") && !strings.HasPrefix(uri, "/") && !strings.HasPrefix(uri, ".") {
+		// Try to parse as URL
+		u, parseErr := url.Parse(uri)
+		if parseErr == nil && u.Scheme == "file" {
+			path = u.Path
+			if path == "" {
+				path = u.Opaque
+			}
+
+			// Check for vfs parameter
+			query := u.Query()
+			if vfsParam := query.Get("vfs"); vfsParam != "" {
+				return vfsParam, path, nil
+			}
+
+			// No VFS specified, use default
+			return "", path, nil
+		}
+	}
+
+	// Plain path, use default VFS
+	return "", uri, nil
+}
+
+// OpenFile opens a file using the VFS system
+// Supports :memory: databases and VFS selection via URI
+func OpenFile(uri string, flag int) (File, error) {
+	// Parse URI to get VFS name and path
+	vfsName, path, err := parseVFSURI(uri)
 	if err != nil {
-		return 0, err
+		return nil, fmt.Errorf("failed to parse URI: %w", err)
 	}
-	return stat.Size(), nil
+
+	// Get the appropriate VFS
+	var selectedVFS vfs.VFS
+	if vfsName == "" {
+		// Use default VFS
+		selectedVFS, err = vfs.DefaultVFS()
+		if err != nil {
+			return nil, fmt.Errorf("no default VFS available: %w", err)
+		}
+	} else {
+		// Use specified VFS
+		selectedVFS, err = vfs.FindVFS(vfsName)
+		if err != nil {
+			return nil, fmt.Errorf("VFS '%s' not found: %w", vfsName, err)
+		}
+	}
+
+	// Convert PB flags to VFS flags
+	vfsFlags := 0
+	if flag&O_RDONLY != 0 {
+		vfsFlags |= vfs.OpenReadOnly
+	} else if flag&O_RDWR != 0 {
+		vfsFlags |= vfs.OpenReadWrite
+	}
+	if flag&O_CREATE != 0 {
+		vfsFlags |= vfs.OpenCreate
+	}
+	if flag&O_EXCL != 0 {
+		vfsFlags |= vfs.OpenExclusive
+	}
+
+	// Open file using VFS
+	vfsHandle, err := selectedVFS.Open(path, vfsFlags)
+	if err != nil {
+		return nil, err
+	}
+
+	return &vfsFile{
+		vfsHandle: vfsHandle,
+		vfs:       selectedVFS,
+		path:      path,
+		curLock:   LockNone,
+	}, nil
 }
 
-func (f *osFile) Truncate(size int64) error {
-	return f.f.Truncate(size)
-}
-
-func OpenFile(path string, flag int) (File, error) {
-	if path == ":memory:" {
-		f := &memoryFile{}
-		return f.Open(path, flag)
-	}
-	f := &osFile{}
-	return f.Open(path, flag)
-}

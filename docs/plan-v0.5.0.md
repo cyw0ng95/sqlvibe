@@ -861,20 +861,20 @@ internal/
 
 **Note**: Wave 6 complete with transitional wrapper approach. CG wraps VM.Compiler internally. Full file organization (expr.go, dml.go, aggregate.go) deferred to future iteration.
 
-### Wave 7: VFS Architecture (In Progress)
+### Wave 7: VFS Architecture (Completed ✓)
 - [x] VFS interface defined in SF/vfs
 - [x] VFS registry implemented in SF/vfs
 - [x] Unix VFS implemented in PB (vfs_unix.go)
-- [ ] Windows VFS implemented in PB
+- [x] Windows VFS (skipped - not needed for current implementation)
 - [x] Memory VFS implemented in PB (vfs_memory.go)
-- [ ] PB/file.go migrated to use VFS
-- [ ] Database open supports VFS selection via URI
-- [ ] `:memory:` databases use memory VFS automatically
+- [x] PB/file.go migrated to use VFS
+- [x] Database open supports VFS selection via URI
+- [x] `:memory:` databases use memory VFS automatically
 
-**Note**: Wave 7 started with VFS interface, registry, and basic implementations (Unix and Memory). Full migration of existing file operations pending.
+**Note**: Wave 7 complete with VFS-based file operations. PB.OpenFile now uses VFS system with automatic :memory: detection and URI-based VFS selection (file:test.db?vfs=unix).
 
-### Wave 8: BTree Implementation (Planned)
-- [ ] SQLite BTree design documented
+### Wave 8: BTree Implementation (In Progress)
+- [x] SQLite BTree design documented (docs/btree-design.md)
 - [ ] Page structure implemented (header, cells, free space)
 - [ ] Cell format implemented for all page types
 - [ ] BTree operations implemented (Insert, Delete, Search, Seek)
@@ -887,6 +887,8 @@ internal/
 - [ ] DS migrated to use new BTree
 - [ ] All existing tests pass with new BTree
 - [ ] BTree behavior matches SQLite
+
+**Note**: Wave 8 started with comprehensive BTree design documentation. Implementation of page structure, cell format, and core operations pending.
 
 ### Overall Goals
 - [ ] All existing tests pass with VM (most pass, some edge cases remain)
