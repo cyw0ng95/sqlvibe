@@ -152,7 +152,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// Handle NULL comparisons - any comparison with NULL returns NULL
 			if lhs == nil || rhs == nil {
 				if inst.P4 != nil {
-					if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+					if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
 						vm.registers[dst] = nil
 					}
 				}
@@ -163,7 +163,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			
 			// Store result as 0 or 1 if P4 is a destination register
 			if inst.P4 != nil {
-				if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
 					if result {
 						vm.registers[dst] = int64(1)
 					} else {
@@ -185,7 +185,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// Handle NULL comparisons - any comparison with NULL returns NULL
 			if lhs == nil || rhs == nil {
 				if inst.P4 != nil {
-					if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+					if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
 						vm.registers[dst] = nil
 					}
 				}
@@ -196,7 +196,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			
 			// Store result as 0 or 1 if P4 is a destination register
 			if inst.P4 != nil {
-				if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
 					if result {
 						vm.registers[dst] = int64(1)
 					} else {
@@ -218,7 +218,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// Handle NULL comparisons - any comparison with NULL returns NULL
 			if lhs == nil || rhs == nil {
 				if inst.P4 != nil {
-					if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+					if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
 						vm.registers[dst] = nil
 					}
 				}
@@ -229,7 +229,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			
 			// Store result as 0 or 1 if P4 is a destination register
 			if inst.P4 != nil {
-				if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
 					if result {
 						vm.registers[dst] = int64(1)
 					} else {
@@ -251,7 +251,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// Handle NULL comparisons - any comparison with NULL returns NULL
 			if lhs == nil || rhs == nil {
 				if inst.P4 != nil {
-					if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+					if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
 						vm.registers[dst] = nil
 					}
 				}
@@ -262,7 +262,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			
 			// Store result as 0 or 1 if P4 is a destination register
 			if inst.P4 != nil {
-				if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
 					if result {
 						vm.registers[dst] = int64(1)
 					} else {
@@ -284,7 +284,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// Handle NULL comparisons - any comparison with NULL returns NULL
 			if lhs == nil || rhs == nil {
 				if inst.P4 != nil {
-					if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+					if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
 						vm.registers[dst] = nil
 					}
 				}
@@ -295,7 +295,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			
 			// Store result as 0 or 1 if P4 is a destination register
 			if inst.P4 != nil {
-				if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
 					if result {
 						vm.registers[dst] = int64(1)
 					} else {
@@ -317,7 +317,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// Handle NULL comparisons - any comparison with NULL returns NULL
 			if lhs == nil || rhs == nil {
 				if inst.P4 != nil {
-					if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+					if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
 						vm.registers[dst] = nil
 					}
 				}
@@ -328,7 +328,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			
 			// Store result as 0 or 1 if P4 is a destination register
 			if inst.P4 != nil {
-				if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
 					if result {
 						vm.registers[dst] = int64(1)
 					} else {
