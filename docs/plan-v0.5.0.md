@@ -873,22 +873,26 @@ internal/
 
 **Note**: Wave 7 complete with VFS-based file operations. PB.OpenFile now uses VFS system with automatic :memory: detection and URI-based VFS selection (file:test.db?vfs=unix).
 
-### Wave 8: BTree Implementation (Completed - Documentation)
+### Wave 8: BTree Implementation (Partially Complete - Core Encoding Done)
 - [x] SQLite BTree design documented (integrated into ARCHITECTURE.md section 2.3)
-- [x] Page structure documented (header formats, cell pointers, content area)
-- [x] Cell formats documented for all page types
-- [x] Varint and record encoding documented
-- [x] Overflow page handling documented
-- [x] Page balancing algorithms documented
-- [x] Freelist management documented
-- [x] BTree cursor design documented
-- [ ] Implementation: Page structure code (page.go, page_header.go) - Deferred
-- [ ] Implementation: Cell encoding/decoding (cell.go) - Deferred
-- [ ] Implementation: Varint encoding (encoding.go) - Deferred
-- [ ] Implementation: BTree operations (btree_ops.go) - Deferred
-- [ ] Implementation: Cursor (cursor.go) - Deferred
+- [x] **Varint encoding/decoding** (encoding.go - 397 lines, fully tested)
+- [x] **Record format encoding/decoding** (encoding.go, fully tested)
+- [x] **Cell format for all 4 page types** (cell.go - 311 lines, fully tested)
+- [x] Local payload size calculation (SQLite-compatible)
+- [x] Cell size computation
+- [ ] **Overflow page management** (overflow.go - ~300-400 lines needed)
+- [ ] **Page balancing algorithms** (balance.go - ~500-800 lines needed)
+- [ ] **Freelist management** (freelist.go - ~300-400 lines needed)
+- [ ] **Integration with existing BTree** (~200-300 lines needed)
+- [ ] Full test coverage with SQLite compatibility tests
 
-**Note**: Wave 8 documentation complete - comprehensive BTree design integrated into ARCHITECTURE.md section 2.3 (Data Storage). Full implementation deferred to future iterations as it requires substantial development effort (estimated 2000+ lines of code).
+**Status**: Core encoding infrastructure complete (~980 lines). Remaining work (~1200-1900 lines) includes:
+1. **Overflow pages**: Reading/writing multi-page payloads
+2. **Page balancing**: Split/merge/redistribute for tree maintenance (CRITICAL)
+3. **Freelist**: Free page management (can defer to v0.6.0)
+4. **Integration**: Update btree.go to use new encoding
+
+**Note**: Parts 1-2 (varint, record, cell encoding) complete and tested. These provide the foundation for SQLite-compatible storage. Parts 3-5 (overflow, balancing, freelist) deferred to v0.6.0 for focused implementation.
 
 ### Overall Goals
 - [ ] All existing tests pass with VM (most pass, some edge cases remain)
