@@ -741,10 +741,14 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpRewind:
 			cursorID := int(inst.P1)
+			target := int(inst.P2)
 			cursor := vm.cursors.Get(cursorID)
 			if cursor != nil {
 				cursor.Index = 0
 				cursor.EOF = len(cursor.Data) == 0
+				if cursor.EOF && target > 0 {
+					vm.pc = target
+				}
 			}
 			continue
 
@@ -793,6 +797,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 				if err != nil {
 					return err
 				}
+				vm.rowsAffected++
 			}
 			continue
 
@@ -826,6 +831,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 				if err != nil {
 					return err
 				}
+				vm.rowsAffected++
 			}
 			continue
 
@@ -844,6 +850,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 				if err != nil {
 					return err
 				}
+				vm.rowsAffected++
 				// After deletion, we need to adjust the cursor
 				// Reload the cursor data
 				if vm.ctx != nil {

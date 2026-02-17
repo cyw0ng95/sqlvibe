@@ -2275,8 +2275,6 @@ if db.data[tableName] != nil {
 vm.Cursors().OpenTableAtID(0, tableName, db.data[tableName], tableCols)
 }
 
-// Count rows before execution (for UPDATE/DELETE)
-rowsBefore := int64(len(db.data[tableName]))
 
 // Execute the VM program
 err = vm.Run(nil)
@@ -2284,12 +2282,6 @@ if err != nil {
 return Result{}, err
 }
 
-// Calculate rows affected
-rowsAfter := int64(len(db.data[tableName]))
-rowsAffected := rowsAfter - rowsBefore
-if rowsAffected < 0 {
-rowsAffected = -rowsAffected // For DELETE
-}
-
-return Result{RowsAffected: rowsAffected}, nil
+// Get rows affected from VM
+return Result{RowsAffected: vm.RowsAffected()}, nil
 }

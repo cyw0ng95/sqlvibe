@@ -639,7 +639,10 @@ func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *Program {
 	
 	// Rewind to start of table
 	loopStartIdx := len(c.program.Instructions)
-	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpRewind, P1: 0, P2: 0}) // P2 will be fixed up to jump past loop
+	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpRewind, P1: 0, P2: 0}) // P2 will be fixed up to jump past loop when empty
+	
+	// Loop body starts here
+	loopBodyIdx := len(c.program.Instructions)
 	
 	// WHERE clause: skip row if condition is false
 	if stmt.Where != nil {
@@ -681,11 +684,17 @@ func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *Program {
 		})
 	}
 	
-	// Next: advance to next row, loop back if not EOF
-	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpNext, P1: 0, P2: int32(loopStartIdx + 1)})
+	// Next: advance to next row, jump to after-loop if EOF
+	nextIdx := len(c.program.Instructions)
+	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpNext, P1: 0, P2: 0}) // P2 will be fixed up to after-loop
 	
-	// Fix up Rewind to jump here when EOF
-	c.program.Instructions[loopStartIdx].P2 = int32(len(c.program.Instructions))
+	// Jump back to loop body if not EOF
+	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpGoto, P2: int32(loopBodyIdx)})
+	
+	// After-loop: fix up Rewind and Next to jump here
+	afterLoopIdx := len(c.program.Instructions)
+	c.program.Instructions[loopStartIdx].P2 = int32(afterLoopIdx) // Rewind jumps here if empty
+	c.program.Instructions[nextIdx].P2 = int32(afterLoopIdx)      // Next jumps here if EOF
 
 	c.program.Emit(OpHalt)
 	return c.program
@@ -702,7 +711,10 @@ func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *Program {
 	
 	// Rewind to start of table
 	loopStartIdx := len(c.program.Instructions)
-	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpRewind, P1: 0, P2: 0}) // P2 will be fixed up to jump past loop
+	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpRewind, P1: 0, P2: 0}) // P2 will be fixed up to jump past loop when empty
+	
+	// Loop body starts here
+	loopBodyIdx := len(c.program.Instructions)
 	
 	// WHERE clause: skip row if condition is false
 	if stmt.Where != nil {
@@ -727,11 +739,17 @@ func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *Program {
 		})
 	}
 	
-	// Next: advance to next row, loop back if not EOF
-	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpNext, P1: 0, P2: int32(loopStartIdx + 1)})
+	// Next: advance to next row, jump to after-loop if EOF
+	nextIdx := len(c.program.Instructions)
+	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpNext, P1: 0, P2: 0}) // P2 will be fixed up to after-loop
 	
-	// Fix up Rewind to jump here when EOF
-	c.program.Instructions[loopStartIdx].P2 = int32(len(c.program.Instructions))
+	// Jump back to loop body if not EOF
+	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpGoto, P2: int32(loopBodyIdx)})
+	
+	// After-loop: fix up Rewind and Next to jump here
+	afterLoopIdx := len(c.program.Instructions)
+	c.program.Instructions[loopStartIdx].P2 = int32(afterLoopIdx) // Rewind jumps here if empty
+	c.program.Instructions[nextIdx].P2 = int32(afterLoopIdx)      // Next jumps here if EOF
 
 	c.program.Emit(OpHalt)
 	return c.program

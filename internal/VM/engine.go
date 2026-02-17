@@ -29,17 +29,18 @@ type VmContext interface {
 }
 
 type VM struct {
-	program   *Program
-	pc        int
-	registers []interface{}
-	cursors   *CursorArray
-	subReturn []int
-	affinity  int
-	undo      [][]interface{}
-	errorcnt  int
-	err       error
-	ctx       VmContext
-	results   [][]interface{}
+	program      *Program
+	pc           int
+	registers    []interface{}
+	cursors      *CursorArray
+	subReturn    []int
+	affinity     int
+	undo         [][]interface{}
+	errorcnt     int
+	err          error
+	ctx          VmContext
+	results      [][]interface{}
+	rowsAffected int64
 }
 
 func NewVM(program *Program) *VM {
@@ -84,6 +85,7 @@ func (vm *VM) Reset() {
 	vm.errorcnt = 0
 	vm.err = nil
 	vm.results = make([][]interface{}, 0)
+	vm.rowsAffected = 0
 }
 
 func (vm *VM) PC() int {
@@ -138,6 +140,10 @@ func (vm *VM) ErrorCode() int {
 
 func (vm *VM) Results() [][]interface{} {
 	return vm.results
+}
+
+func (vm *VM) RowsAffected() int64 {
+	return vm.rowsAffected
 }
 
 func (vm *VM) Run(ctx interface{}) error {
