@@ -14,6 +14,7 @@ type Compiler struct {
 	stmtColumns     []QP.Expr
 	columnIndices   map[string]int // SELECT position: col name -> index in SELECT list
 	TableColIndices map[string]int // TABLE position: col name -> index in table (exported for external use)
+	TableColOrder   []string       // TABLE position: ordered list of column names (for SELECT * expansion)
 }
 
 func NewCompiler() *Compiler {
@@ -81,21 +82,34 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 		return columns
 	}
 
-	// Build expanded columns list
+	// Build expanded columns list - use TableColOrder for deterministic ordering
 	expanded := make([]QP.Expr, 0)
 
-	// Get table name if available - for now assume single table
-	// For SELECT *, expand to all columns from TableColIndices
-	for colName, idx := range c.TableColIndices {
-		// Skip internal/placeholder columns
-		if colName == "" || strings.HasPrefix(colName, "__") {
-			continue
+	// Use the ordered column list to ensure deterministic output
+	if c.TableColOrder != nil && len(c.TableColOrder) > 0 {
+		for _, colName := range c.TableColOrder {
+			// Skip internal/placeholder columns
+			if colName == "" || strings.HasPrefix(colName, "__") {
+				continue
+			}
+			colRef := &QP.ColumnRef{
+				Name: colName,
+			}
+			expanded = append(expanded, colRef)
 		}
-		colRef := &QP.ColumnRef{
-			Name: colName,
+	} else {
+		// Fallback: iterate over TableColIndices (may be non-deterministic)
+		for colName, idx := range c.TableColIndices {
+			// Skip internal/placeholder columns
+			if colName == "" || strings.HasPrefix(colName, "__") {
+				continue
+			}
+			colRef := &QP.ColumnRef{
+				Name: colName,
+			}
+			_ = idx // idx is position in table
+			expanded = append(expanded, colRef)
 		}
-		_ = idx // idx is position in table
-		expanded = append(expanded, colRef)
 	}
 
 	// If no valid columns found, return original
@@ -290,7 +304,7 @@ func (c *Compiler) compileLiteral(lit *QP.Literal) int {
 
 func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 	reg := c.ra.Alloc()
-	colIdx := 0
+	colIdx := -1 // Use -1 as sentinel for unknown columns
 	if col.Name != "" {
 		// First try table column order (for WHERE clause with schema)
 		if c.TableColIndices != nil {
@@ -299,13 +313,16 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 			}
 		}
 		// Fall back to SELECT position
-		if colIdx == 0 || c.TableColIndices == nil {
-			if c.columnIndices != nil {
-				if idx, ok := c.columnIndices[col.Name]; ok {
-					colIdx = idx
-				}
+		if colIdx == -1 && c.columnIndices != nil {
+			if idx, ok := c.columnIndices[col.Name]; ok {
+				colIdx = idx
 			}
 		}
+	}
+	// If column not found, emit NULL instead of silently reading column 0
+	if colIdx == -1 {
+		c.program.EmitLoadConst(reg, nil)
+		return reg
 	}
 	c.program.EmitColumn(reg, 0, colIdx)
 	return reg
@@ -435,27 +452,29 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 		c.program.EmitOpWithDst(OpLength, int32(argRegs[0]), 0, dst)
 	case "SUBSTR", "SUBSTRING":
 		if len(argRegs) >= 3 {
-			c.program.EmitOp(OpSubstr, int32(argRegs[0]), int32(argRegs[1]))
+			c.program.EmitOpWithDst(OpSubstr, int32(argRegs[0]), int32(argRegs[1]), dst)
+		} else if len(argRegs) >= 2 {
+			c.program.EmitOpWithDst(OpSubstr, int32(argRegs[0]), int32(argRegs[1]), dst)
 		} else {
-			c.program.EmitOp(OpSubstr, int32(argRegs[0]), 0)
+			c.program.EmitOpWithDst(OpSubstr, int32(argRegs[0]), 0, dst)
 		}
 	case "TRIM":
 		if len(argRegs) >= 2 {
-			c.program.EmitOp(OpTrim, int32(argRegs[0]), int32(argRegs[1]))
+			c.program.EmitOpWithDst(OpTrim, int32(argRegs[0]), int32(argRegs[1]), dst)
 		} else {
-			c.program.EmitOp(OpTrim, int32(argRegs[0]), 0)
+			c.program.EmitOpWithDst(OpTrim, int32(argRegs[0]), 0, dst)
 		}
 	case "LTRIM":
 		if len(argRegs) >= 2 {
-			c.program.EmitOp(OpLTrim, int32(argRegs[0]), int32(argRegs[1]))
+			c.program.EmitOpWithDst(OpLTrim, int32(argRegs[0]), int32(argRegs[1]), dst)
 		} else {
-			c.program.EmitOp(OpLTrim, int32(argRegs[0]), 0)
+			c.program.EmitOpWithDst(OpLTrim, int32(argRegs[0]), 0, dst)
 		}
 	case "RTRIM":
 		if len(argRegs) >= 2 {
-			c.program.EmitOp(OpRTrim, int32(argRegs[0]), int32(argRegs[1]))
+			c.program.EmitOpWithDst(OpRTrim, int32(argRegs[0]), int32(argRegs[1]), dst)
 		} else {
-			c.program.EmitOp(OpRTrim, int32(argRegs[0]), 0)
+			c.program.EmitOpWithDst(OpRTrim, int32(argRegs[0]), 0, dst)
 		}
 	case "COALESCE":
 		// COALESCE(a, b, ...) - return first non-null argument
@@ -481,47 +500,49 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 		return dst
 	case "INSTR":
 		if len(argRegs) >= 2 {
-			c.program.EmitOp(OpInstr, int32(argRegs[0]), int32(argRegs[1]))
+			c.program.EmitOpWithDst(OpInstr, int32(argRegs[0]), int32(argRegs[1]), dst)
 		}
 	case "REPLACE":
 		if len(argRegs) >= 3 {
-			_ = c.program.EmitOp(OpReplace, int32(argRegs[0]), int32(argRegs[1]))
+			// REPLACE(str, from, to): copy input to dst, then apply replace
+			c.program.EmitCopy(argRegs[0], dst)
+			c.program.EmitOpWithDst(OpReplace, int32(argRegs[1]), int32(argRegs[2]), dst)
 		}
 	case "ROUND":
 		if len(argRegs) >= 1 {
-			c.program.EmitOp(OpRound, int32(argRegs[0]), 0)
+			c.program.EmitOpWithDst(OpRound, int32(argRegs[0]), 0, dst)
 		}
 	case "CEIL", "CEILING":
-		c.program.EmitOp(OpCeil, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpCeil, int32(argRegs[0]), 0, dst)
 	case "FLOOR":
-		c.program.EmitOp(OpFloor, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpFloor, int32(argRegs[0]), 0, dst)
 	case "SQRT":
-		c.program.EmitOp(OpSqrt, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpSqrt, int32(argRegs[0]), 0, dst)
 	case "POWER", "POW":
 		if len(argRegs) >= 2 {
-			c.program.EmitOp(OpPow, int32(argRegs[0]), int32(argRegs[1]))
+			c.program.EmitOpWithDst(OpPow, int32(argRegs[0]), int32(argRegs[1]), dst)
 		}
 	case "EXP":
-		c.program.EmitOp(OpExp, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpExp, int32(argRegs[0]), 0, dst)
 	case "LOG", "LOG10":
-		c.program.EmitOp(OpLog, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpLog, int32(argRegs[0]), 0, dst)
 	case "LN":
-		c.program.EmitOp(OpLn, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpLn, int32(argRegs[0]), 0, dst)
 	case "SIN":
-		c.program.EmitOp(OpSin, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpSin, int32(argRegs[0]), 0, dst)
 	case "COS":
-		c.program.EmitOp(OpCos, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpCos, int32(argRegs[0]), 0, dst)
 	case "TAN":
-		c.program.EmitOp(OpTan, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpTan, int32(argRegs[0]), 0, dst)
 	case "ASIN":
-		c.program.EmitOp(OpAsin, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpAsin, int32(argRegs[0]), 0, dst)
 	case "ACOS":
-		c.program.EmitOp(OpAcos, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpAcos, int32(argRegs[0]), 0, dst)
 	case "ATAN":
-		c.program.EmitOp(OpAtan, int32(argRegs[0]), 0)
+		c.program.EmitOpWithDst(OpAtan, int32(argRegs[0]), 0, dst)
 	case "ATAN2":
 		if len(argRegs) >= 2 {
-			_ = c.program.EmitOp(OpAtan2, int32(argRegs[0]), int32(argRegs[1]))
+			c.program.EmitOpWithDst(OpAtan2, int32(argRegs[0]), int32(argRegs[1]), dst)
 		}
 	default:
 		c.program.EmitLoadConst(dst, nil)
@@ -680,6 +701,7 @@ func CompileWithSchema(sql string, tableColumns []string) (*Program, error) {
 
 	c := NewCompiler()
 	c.TableColIndices = make(map[string]int)
+	c.TableColOrder = tableColumns
 	for i, col := range tableColumns {
 		c.TableColIndices[col] = i
 	}
