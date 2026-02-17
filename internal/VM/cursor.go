@@ -48,6 +48,23 @@ func (ca *CursorArray) OpenTable(tableName string, data []map[string]interface{}
 	return cursor.ID
 }
 
+func (ca *CursorArray) OpenTableAtID(cursorID int, tableName string, data []map[string]interface{}, columns []string) {
+	// Ensure cursors array is large enough
+	for len(ca.cursors) <= cursorID {
+		ca.cursors = append(ca.cursors, nil)
+	}
+	cursor := &Cursor{
+		ID:        cursorID,
+		TableName: tableName,
+		RowID:     0,
+		EOF:       len(data) == 0,
+		Index:     -1,
+		Data:      data,
+		Columns:   columns,
+	}
+	ca.cursors[cursorID] = cursor
+}
+
 func (ca *CursorArray) Next(id int) (map[string]interface{}, bool) {
 	if id < 0 || id >= len(ca.cursors) || ca.cursors[id] == nil {
 		return nil, true
