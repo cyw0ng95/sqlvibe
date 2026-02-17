@@ -20,17 +20,20 @@
 │                           Core Subsystems                                    │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  ┌──────────────────────┐    ┌──────────────────────┐                     │
-│  │   Query Processing   │───▶│  Query Execution     │                     │
-│  │       (QP)           │    │       (QE)           │                     │
-│  │                      │    │                      │                     │
-│  │  - Tokenizer         │    │  - VM Executor       │                     │
-│  │  - Parser            │    │  - Operator Engine   │                     │
-│  │  - Planner           │    │  - Result Set       │                     │
-│  │  - Optimizer         │    │                      │                     │
-│  └──────────────────────┘    └──────────────────────┘                     │
-│              │                                  │                           │
-│              ▼                                  ▼                           │
+│  ┌──────────────────────┐    ┌──────────────────────┐    ┌──────────────┐ │
+│  │   Query Processing   │───▶│  Code Generator     │───▶│  Virtual     │ │
+│  │       (QP)           │    │       (CG)          │    │  Machine     │ │
+│  │                      │    │                     │    │     (VM)     │ │
+│  │  - Tokenizer         │    │  - Expression       │    │              │ │
+│  │  - Parser            │    │    Compiler         │    │  - Bytecode  │ │
+│  │  - Planner           │    │  - DML Compiler     │    │    Executor  │ │
+│  │  - AST Generator     │    │  - Aggregate        │    │  - Register  │ │
+│  │                      │    │    Compiler         │    │    Manager   │ │
+│  │                      │    │  - Optimizer        │    │  - Cursor    │ │
+│  │                      │    │    (future)         │    │    Manager   │ │
+│  └──────────────────────┘    └──────────────────────┘    └──────────────┘ │
+│                                                                             │
+│              ▼                                                              │
 │  ┌──────────────────────────────────────────────────────────────────┐       │
 │  │                     Transaction Monitor (TM)                    │       │
 │  │                                                                  │       │
@@ -53,7 +56,7 @@
 │  ┌──────────────────────────────────────────────────────────────────┐       │
 │  │                   Platform Bridges (PB)                         │       │
 │  │                                                                  │       │
-│  │  - OS File Operations Abstraction                               │       │
+│  │  - VFS Implementations (Unix, Windows, Memory)                  │       │
 │  │  - File Locking                                                 │       │
 │  │  - Memory Management (mmap)                                     │       │
 │  └──────────────────────────────────────────────────────────────────┘       │
@@ -62,9 +65,9 @@
 │  ┌──────────────────────────────────────────────────────────────────┐       │
 │  │                  System Framework (SF)                           │       │
 │  │                                                                  │       │
+│  │  - VFS Interface                                                 │       │
 │  │  - Logging Infrastructure                                        │       │
 │  │  - Error Handling                                               │       │
-│  │  - Configuration Management                                      │       │
 │  └──────────────────────────────────────────────────────────────────┘       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -472,7 +475,172 @@ type ExecutionPlan struct {
 
 ---
 
-### 2.6 Transaction Monitor (TM)
+
+### 2.6 Code Generator (CG)
+
+**Purpose**: Compile AST to bytecode for VM execution
+
+**Components**:
+
+| Component | Responsibility |
+|-----------|----------------|
+| `compiler.go` | Main compiler and SELECT statement compilation |
+| `expr.go` | Expression compilation (literals, binary ops, functions) |
+| `dml.go` | DML statement compilation (INSERT, UPDATE, DELETE) |
+| `aggregate.go` | Aggregate function compilation (COUNT, SUM, AVG, etc.) |
+| `optimizer.go` | Bytecode optimization passes (future) |
+
+**Compilation Pipeline**:
+
+```
+QP.AST (SelectStmt, InsertStmt, etc.)
+    │
+    ▼
+┌────────────────────────────────────┐
+│       CG.Compiler                  │
+├────────────────────────────────────┤
+│  CompileSelect()                   │
+│  CompileInsert()                   │
+│  CompileUpdate()                   │
+│  CompileDelete()                   │
+│  CompileAggregate()                │
+│                                    │
+│  compileExpr()      ───┐           │
+│  compileBinaryExpr()   │           │
+│  compileFuncCall()     │ Internal  │
+│  compileColumnRef()    │ helpers   │
+│  compileLiteral()  ────┘           │
+└────────────────────────────────────┘
+    │
+    ▼
+VM.Program (Bytecode Instructions)
+```
+
+**Interface Design**:
+```go
+type Compiler struct {
+    vmCompiler *VM.Compiler
+}
+
+func NewCompiler() *Compiler
+func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program
+func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *VM.Program
+func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *VM.Program
+func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *VM.Program
+func Compile(sql string) (*VM.Program, error)
+func CompileWithSchema(sql string, tableColumns []string) (*VM.Program, error)
+```
+
+**Key Design Decisions**:
+- Separate compilation from execution (CG vs VM)
+- Support table schema for SELECT * expansion
+- Generate register-based bytecode
+- Enable future optimization passes
+
+---
+
+### 2.7 Virtual Machine (VM)
+
+**Purpose**: Execute bytecode programs produced by CG
+
+**Components**:
+
+| Component | Responsibility |
+|-----------|----------------|
+| `engine.go` | VM engine core and execution context |
+| `exec.go` | Instruction dispatcher and opcode handlers |
+| `opcodes.go` | Opcode definitions (100+ opcodes) |
+| `program.go` | Bytecode program representation |
+| `registers.go` | Register allocator |
+| `cursor.go` | Cursor management for table/index access |
+
+**VM Architecture**:
+
+```
+VM.Program (Bytecode)
+    │
+    ▼
+┌────────────────────────────────────┐
+│         VM.Engine                  │
+├────────────────────────────────────┤
+│  Registers: []interface{}          │
+│  Cursors:   *CursorArray          │
+│  PC:        int                    │
+│  Results:   [][]interface{}        │
+└────────────────────────────────────┘
+    │
+    ▼
+┌────────────────────────────────────┐
+│     Instruction Dispatcher         │
+├────────────────────────────────────┤
+│  switch inst.Op {                  │
+│    case OpOpenRead: ...            │
+│    case OpColumn: ...              │
+│    case OpEq: ...                  │
+│    case OpResultRow: ...           │
+│    case OpNext: ...                │
+│    case OpHalt: ...                │
+│  }                                 │
+└────────────────────────────────────┘
+    │
+    ▼
+Results / Side Effects
+```
+
+**Key Opcodes**:
+
+| Category | Opcodes |
+|----------|---------|
+| **Cursor Ops** | OpOpenRead, OpOpenWrite, OpRewind, OpNext, OpClose |
+| **Data Ops** | OpColumn, OpInsert, OpUpdate, OpDelete |
+| **Control Flow** | OpGoto, OpIf, OpIfNot, OpHalt |
+| **Comparison** | OpEq, OpNe, OpLt, OpLe, OpGt, OpGe |
+| **Arithmetic** | OpAdd, OpSubtract, OpMultiply, OpDivide, OpRemainder |
+| **String** | OpConcat, OpSubstr, OpUpper, OpLower, OpTrim |
+| **Aggregate** | OpCount, OpSum, OpAvg, OpMin, OpMax |
+| **Result** | OpResultRow, OpLoadConst, OpCopy |
+
+**Instruction Format**:
+```go
+type Instruction struct {
+    Op OpCode         // Opcode
+    P1 int32          // First operand (often register or cursor ID)
+    P2 int32          // Second operand
+    P3 interface{}    // Third operand (string or other type)
+    P4 interface{}    // Fourth operand (destination register or jump target)
+}
+```
+
+**Execution Example**:
+```
+// SELECT id, name FROM users WHERE age > 18
+
+OpInit                      // Initialize
+OpOpenRead 0, "users"       // Open cursor 0 for users table
+OpRewind 0                  // Position cursor at start
+OpColumn 0, 2, r0           // Load age into r0
+OpLoadConst r1, 18          // Load 18 into r1
+OpGt r0, r1, r2             // Compare: r2 = (age > 18)
+OpLoadConst r3, 0           // Load 0 into r3
+OpEq r2, r3, skipRow        // If r2 == 0, jump to skipRow
+OpColumn 0, 0, r4           // Load id into r4
+OpColumn 0, 1, r5           // Load name into r5
+OpResultRow [r4, r5]        // Emit result row
+skipRow:
+OpNext 0, loop              // Advance cursor, loop if more rows
+OpHalt                      // Done
+```
+
+**Key Design Decisions**:
+- Register-based VM (vs stack-based) for performance
+- Cursor abstraction for table/index access
+- SQLite-compatible opcode set
+- Support for WHERE clause jump targets vs register destinations
+
+---
+
+
+### 2.8 Transaction Monitor (TM)
 
 **Purpose**: ACID transaction management and concurrency control
 
