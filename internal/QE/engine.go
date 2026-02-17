@@ -101,11 +101,14 @@ func (qe *QueryEngine) OpenCursor(tableName string) (int, error) {
 	}
 
 	qe.cursorID++
-	btree, _ := table.btree.First()
+	btreeCursor := table.btree.NewCursor()
+	if err := btreeCursor.First(); err != nil {
+		return -1, err
+	}
 	cursor := &Cursor{
 		ID:     qe.cursorID,
 		Table:  table,
-		btree:  btree,
+		btree:  btreeCursor,
 		Row:    -1,
 		Closed: false,
 	}
@@ -139,7 +142,11 @@ func (qe *QueryEngine) NextRow(cursorID int) (map[string]interface{}, error) {
 	}
 
 	if cursor.btree != nil {
-		key, _, err := cursor.btree.Next()
+		if !cursor.btree.Valid() {
+			return nil, nil
+		}
+		
+		key, err := cursor.btree.Key()
 		if err != nil {
 			return nil, err
 		}
