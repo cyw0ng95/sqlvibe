@@ -100,10 +100,32 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpEq:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
+			
+			// Handle NULL comparisons - any comparison with NULL returns NULL
+			if lhs == nil || rhs == nil {
+				if inst.P4 != nil {
+					if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+						vm.registers[dst] = nil
+					}
+				}
+				continue
+			}
+			
 			result := compareVals(lhs, rhs) == 0
-			if result && inst.P4 != nil {
-				if target, ok := inst.P4.(int); ok {
-					vm.pc = target
+			
+			// Store result as 0 or 1 if P4 is a destination register
+			if inst.P4 != nil {
+				if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+					if result {
+						vm.registers[dst] = int64(1)
+					} else {
+						vm.registers[dst] = int64(0)
+					}
+				} else if result {
+					// P4 is a jump target for WHERE clauses
+					if target, ok := inst.P4.(int); ok {
+						vm.pc = target
+					}
 				}
 			}
 			continue
@@ -111,10 +133,32 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpNe:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
+			
+			// Handle NULL comparisons - any comparison with NULL returns NULL
+			if lhs == nil || rhs == nil {
+				if inst.P4 != nil {
+					if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+						vm.registers[dst] = nil
+					}
+				}
+				continue
+			}
+			
 			result := compareVals(lhs, rhs) != 0
-			if result && inst.P4 != nil {
-				if target, ok := inst.P4.(int); ok {
-					vm.pc = target
+			
+			// Store result as 0 or 1 if P4 is a destination register
+			if inst.P4 != nil {
+				if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+					if result {
+						vm.registers[dst] = int64(1)
+					} else {
+						vm.registers[dst] = int64(0)
+					}
+				} else if result {
+					// P4 is a jump target for WHERE clauses
+					if target, ok := inst.P4.(int); ok {
+						vm.pc = target
+					}
 				}
 			}
 			continue
@@ -122,10 +166,32 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpLt:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
+			
+			// Handle NULL comparisons - any comparison with NULL returns NULL
+			if lhs == nil || rhs == nil {
+				if inst.P4 != nil {
+					if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+						vm.registers[dst] = nil
+					}
+				}
+				continue
+			}
+			
 			result := compareVals(lhs, rhs) < 0
-			if result && inst.P4 != nil {
-				if target, ok := inst.P4.(int); ok {
-					vm.pc = target
+			
+			// Store result as 0 or 1 if P4 is a destination register
+			if inst.P4 != nil {
+				if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+					if result {
+						vm.registers[dst] = int64(1)
+					} else {
+						vm.registers[dst] = int64(0)
+					}
+				} else if result {
+					// P4 is a jump target for WHERE clauses
+					if target, ok := inst.P4.(int); ok {
+						vm.pc = target
+					}
 				}
 			}
 			continue
@@ -133,10 +199,32 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpLe:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
+			
+			// Handle NULL comparisons - any comparison with NULL returns NULL
+			if lhs == nil || rhs == nil {
+				if inst.P4 != nil {
+					if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+						vm.registers[dst] = nil
+					}
+				}
+				continue
+			}
+			
 			result := compareVals(lhs, rhs) <= 0
-			if result && inst.P4 != nil {
-				if target, ok := inst.P4.(int); ok {
-					vm.pc = target
+			
+			// Store result as 0 or 1 if P4 is a destination register
+			if inst.P4 != nil {
+				if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+					if result {
+						vm.registers[dst] = int64(1)
+					} else {
+						vm.registers[dst] = int64(0)
+					}
+				} else if result {
+					// P4 is a jump target for WHERE clauses
+					if target, ok := inst.P4.(int); ok {
+						vm.pc = target
+					}
 				}
 			}
 			continue
@@ -144,10 +232,32 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpGt:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
+			
+			// Handle NULL comparisons - any comparison with NULL returns NULL
+			if lhs == nil || rhs == nil {
+				if inst.P4 != nil {
+					if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+						vm.registers[dst] = nil
+					}
+				}
+				continue
+			}
+			
 			result := compareVals(lhs, rhs) > 0
-			if result && inst.P4 != nil {
-				if target, ok := inst.P4.(int); ok {
-					vm.pc = target
+			
+			// Store result as 0 or 1 if P4 is a destination register
+			if inst.P4 != nil {
+				if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+					if result {
+						vm.registers[dst] = int64(1)
+					} else {
+						vm.registers[dst] = int64(0)
+					}
+				} else if result {
+					// P4 is a jump target for WHERE clauses
+					if target, ok := inst.P4.(int); ok {
+						vm.pc = target
+					}
 				}
 			}
 			continue
@@ -155,10 +265,32 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpGe:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
+			
+			// Handle NULL comparisons - any comparison with NULL returns NULL
+			if lhs == nil || rhs == nil {
+				if inst.P4 != nil {
+					if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+						vm.registers[dst] = nil
+					}
+				}
+				continue
+			}
+			
 			result := compareVals(lhs, rhs) >= 0
-			if result && inst.P4 != nil {
-				if target, ok := inst.P4.(int); ok {
-					vm.pc = target
+			
+			// Store result as 0 or 1 if P4 is a destination register
+			if inst.P4 != nil {
+				if dst, ok := inst.P4.(int); ok && dst < len(vm.registers) {
+					if result {
+						vm.registers[dst] = int64(1)
+					} else {
+						vm.registers[dst] = int64(0)
+					}
+				} else if result {
+					// P4 is a jump target for WHERE clauses
+					if target, ok := inst.P4.(int); ok {
+						vm.pc = target
+					}
 				}
 			}
 			continue
@@ -779,12 +911,23 @@ func numericRemainder(a, b interface{}) interface{} {
 	av := reflectVal(a)
 	bv := reflectVal(b)
 
+	// Both integers
 	if av.typ == "int" && bv.typ == "int" {
 		if bv.v.(int64) == 0 {
 			return nil
 		}
 		return av.v.(int64) % bv.v.(int64)
 	}
+
+	// At least one is float - use math.Mod
+	if av.isNumeric() && bv.isNumeric() {
+		bFloat := bv.toFloat()
+		if bFloat == 0 {
+			return nil
+		}
+		return math.Mod(av.toFloat(), bFloat)
+	}
+
 	return nil
 }
 

@@ -421,226 +421,40 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return db.querySqliteMaster(stmt)
 		}
 
-		// VM enabled for SELECT queries (JOIN supported, GROUP BY not yet, expressions not fully, SetOp not yet)
-		// VM supports: SELECT columns FROM table [WHERE] [ORDER BY] [LIMIT], and JOINs
-		isSimple := true
-		if stmt.GroupBy != nil && len(stmt.GroupBy) > 0 {
-			isSimple = false
-		}
+		// VM execution for all SELECT queries
+		// SetOp (UNION, EXCEPT, INTERSECT) not yet supported by VM, use direct execution
 		if stmt.SetOp != "" {
-			isSimple = false
-		}
-		// VM now supports SELECT * expansion and JOINs
-		if isSimple {
-			rows, err := db.execVMQuery(sql, stmt)
-			if err == nil && rows != nil && len(rows.Data) > 0 {
-				// Handle ORDER BY - sort results
-				if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
-					rows, err = db.sortResults(rows, stmt.OrderBy)
-					if err != nil {
-						return nil, err
-					}
-				}
-				// Handle LIMIT
-				if stmt.Limit != nil {
-					rows, err = db.applyLimit(rows, stmt.Limit, stmt.Offset)
-					if err != nil {
-						return nil, err
-					}
-				}
-				return rows, nil
-			}
-			// If VM returned empty or error, fall through to QE
-			if err != nil || rows == nil || len(rows.Data) == 0 {
-				// Continue to QE path
-			}
+			return db.executeSelect(stmt)
 		}
 
-		if stmt.From != nil && stmt.From.Join != nil {
-			return db.handleJoin(stmt)
-		}
-
-		tableData, ok := db.data[tableName]
-		if !ok || tableData == nil {
-			if len(stmt.Columns) > 0 {
-				hasAggregate := false
-				for _, col := range stmt.Columns {
-					if fc, ok := col.(*QP.FuncCall); ok {
-						if fc.Name == "COUNT" {
-							hasAggregate = true
-							break
-						}
-					}
-				}
-				if hasAggregate {
-					return &Rows{Columns: []string{"COUNT(*)"}, Data: [][]interface{}{{int64(0)}}}, nil
-				}
-			}
-			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
-		}
-
-		hasAggregate := false
-		var aggregateFunc *QP.FuncCall
-		for _, col := range stmt.Columns {
-			if fc, ok := col.(*QP.FuncCall); ok {
-				if fc.Name == "SUM" || fc.Name == "AVG" || fc.Name == "MIN" || fc.Name == "MAX" || fc.Name == "COUNT" {
-					hasAggregate = true
-					aggregateFunc = fc
-					break
-				}
-			}
-		}
-
-		if hasAggregate && stmt.Where == nil && len(stmt.Columns) == 1 {
-			result := db.computeAggregate(tableData, aggregateFunc)
-			return &Rows{Columns: []string{aggregateFunc.Name}, Data: [][]interface{}{{result}}}, nil
-		}
-
-		// Handle GROUP BY
-		if len(stmt.GroupBy) > 0 && hasAggregate {
-			result, err := db.computeGroupBy(tableData, stmt)
-			if err != nil {
-				return nil, err
-			}
-			return result, nil
-		}
-
-		var cols []string
-		if len(stmt.Columns) == 1 {
-			if cr, ok := stmt.Columns[0].(*QP.ColumnRef); ok {
-				if cr.Name == "*" {
-					cols = db.getOrderedColumns(tableName)
-				} else {
-					cols = []string{cr.Name}
-				}
-			} else {
-				switch col := stmt.Columns[0].(type) {
-				case *QP.AliasExpr:
-					if col.Alias != "" {
-						cols = []string{col.Alias}
-					} else {
-						cols = []string{"expr"}
-					}
-				case *QP.FuncCall:
-					cols = []string{col.Name}
-				case *QP.SubqueryExpr:
-					cols = []string{"subquery"}
-				default:
-					cols = []string{"expr"}
-				}
-			}
-		} else {
-			exprIndex := 0
-			for _, col := range stmt.Columns {
-				switch c := col.(type) {
-				case *QP.ColumnRef:
-					cols = append(cols, c.Name)
-				case *QP.AliasExpr:
-					if c.Alias != "" {
-						cols = append(cols, c.Alias)
-					} else {
-						cols = append(cols, fmt.Sprintf("expr%d", exprIndex))
-						exprIndex++
-					}
-				case *QP.FuncCall:
-					cols = append(cols, c.Name)
-				case *QP.SubqueryExpr:
-					cols = append(cols, "subquery")
-				case *QP.BinaryExpr:
-					cols = append(cols, fmt.Sprintf("expr%d", exprIndex))
-					exprIndex++
-				case *QP.UnaryExpr:
-					cols = append(cols, fmt.Sprintf("expr%d", exprIndex))
-					exprIndex++
-				default:
-					cols = append(cols, fmt.Sprintf("expr%d", exprIndex))
-					exprIndex++
-				}
-			}
-		}
-
-		if len(cols) == 0 {
-			cols = db.getOrderedColumns(tableName)
-		}
-
-		expressions := make([]QP.Expr, len(stmt.Columns))
-		for i, col := range stmt.Columns {
-			if _, ok := col.(*QP.ColumnRef); ok {
-				expressions[i] = nil
-			} else {
-				expressions[i] = col
-			}
-		}
-
-		// Set outer alias for correlated subquery evaluation
-		if stmt.From != nil && stmt.From.Alias != "" {
-			db.engine.SetOuterAlias(stmt.From.Alias)
-		} else {
-			db.engine.SetOuterAlias("")
-		}
-
-		scan := QE.NewTableScan(db.engine, tableName)
-		scan.SetData(tableData)
-
-		predicate := db.engine.BuildPredicate(stmt.Where)
-		filter := QE.NewFilter(scan, predicate)
-
-		project := db.engine.NewProjectWithExpr(filter, cols, expressions)
-
-		var limit, offset int
-		if stmt.Limit != nil {
-			if lit, ok := stmt.Limit.(*QP.Literal); ok {
-				if num, ok := lit.Value.(int64); ok {
-					limit = int(num)
-				}
-			}
-		}
-		if stmt.Offset != nil {
-			if lit, ok := stmt.Offset.(*QP.Literal); ok {
-				if num, ok := lit.Value.(int64); ok {
-					offset = int(num)
-				}
-			}
-		}
-		limited := QE.NewLimit(project, limit, offset)
-
-		err = limited.Init()
+		// All other SELECT queries go through VM
+		rows, err := db.execVMQuery(sql, stmt)
 		if err != nil {
 			return nil, err
 		}
 
-		resultData := make([][]interface{}, 0)
-		rowCount := 0
-		for {
-			row, err := limited.Next()
+		// VM can return empty results validly - don't treat as error
+		if rows == nil {
+			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+		}
+
+		// Handle ORDER BY - sort results
+		if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
+			rows, err = db.sortResults(rows, stmt.OrderBy)
 			if err != nil {
 				return nil, err
 			}
-			if row == nil {
-				break
-			}
-			rowCount++
-			resultRow := make([]interface{}, len(cols))
-			for i, colName := range cols {
-				resultRow[i] = row[colName]
-			}
-			resultData = append(resultData, resultRow)
-		}
-		limited.Close()
-
-		if len(stmt.OrderBy) > 0 {
-			resultData = db.applyOrderBy(resultData, stmt.OrderBy, cols)
 		}
 
-		if stmt.SetOp != "" {
-			rightRows, err := db.executeSelect(stmt.SetOpRight)
+		// Handle LIMIT
+		if stmt.Limit != nil {
+			rows, err = db.applyLimit(rows, stmt.Limit, stmt.Offset)
 			if err != nil {
 				return nil, err
 			}
-			resultData = db.applySetOp(resultData, rightRows.Data, stmt.SetOp, stmt.SetOpAll)
 		}
 
-		return &Rows{Columns: cols, Data: resultData, pos: -1}, nil
+		return rows, nil
 	}
 
 	return nil, nil
@@ -2436,15 +2250,19 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 
 	// Get column names from the SELECT statement
 	cols := make([]string, 0)
-	for _, col := range stmt.Columns {
+	for i, col := range stmt.Columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
+			// Handle SELECT * - expand to all table columns
+			if colRef.Name == "*" {
+				cols = tableCols
+				break
+			}
 			cols = append(cols, colRef.Name)
 		} else if alias, ok := col.(*QP.AliasExpr); ok {
 			cols = append(cols, alias.Alias)
 		} else {
-			// Fallback to table column order
-			cols = db.columnOrder[tableName]
-			break
+			// For expressions without aliases, generate a column name
+			cols = append(cols, fmt.Sprintf("col_%d", i))
 		}
 	}
 
