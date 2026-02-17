@@ -45,36 +45,91 @@ internal/
     └── vm.go    # Existing VM infrastructure (100+ opcodes)
 ```
 
-### Target Architecture (v0.5.0)
+### Target Architecture (v0.5.0 → v0.8.0)
+
+**Current State (v0.5.0 - Completed):**
 ```
 internal/
-├── PB/          # Platform Bridges (unchanged)
-├── DS/          # Data Storage (unchanged)
-├── QP/          # Query Processing (unchanged)
-└── VM/          # NEW: Virtual Machine Subsystem (replaces QE direct execution)
-    ├── cursor.go     # Cursor operations
+├── PB/          # Platform Bridges
+├── DS/          # Data Storage (placeholder BTree)
+├── QP/          # Query Processing
+└── VM/          # Virtual Machine Subsystem (compiler + executor)
+    ├── cursor.go
     ├── compiler.go   # AST to bytecode compiler
-    ├── engine.go     # VM engine (replaces QE/engine.go)
-    ├── exec.go       # VM execution loop
-    ├── opcodes.go    # Opcode definitions (moves from QE/vm.go)
-    ├── program.go    # Compiled program representation
-    └── registers.go  # Register allocator
+    ├── engine.go
+    ├── exec.go
+    ├── opcodes.go
+    ├── program.go
+    └── registers.go
 ```
 
-### Package Responsibilities
+**Target State (v0.8.0):**
+```
+internal/
+├── CG/          # NEW: Code Generator (bytecode compiler)
+│   ├── compiler.go
+│   ├── expr.go
+│   ├── dml.go
+│   ├── aggregate.go
+│   └── optimizer.go
+├── DS/          # ENHANCED: Data Storage (SQLite BTree)
+│   ├── btree.go
+│   ├── btree_ops.go
+│   ├── btree_index.go
+│   ├── cursor.go
+│   ├── balance.go
+│   ├── overflow.go
+│   ├── freelist.go
+│   ├── page.go
+│   ├── cell.go
+│   ├── encoding.go
+│   ├── manager.go
+│   └── cache.go
+├── PB/          # ENHANCED: Platform Bridges (VFS implementations)
+│   ├── file.go
+│   ├── memory.go
+│   ├── vfs_unix.go
+│   ├── vfs_windows.go
+│   └── vfs_memory.go
+├── SF/          # ENHANCED: System Framework (VFS interface)
+│   ├── vfs.go
+│   └── log.go
+├── QP/          # Query Processing (unchanged)
+├── VM/          # REFINED: Virtual Machine (executor only)
+│   ├── engine.go
+│   ├── exec.go
+│   ├── opcodes.go
+│   ├── program.go
+│   ├── registers.go
+│   └── cursor.go
+└── TM/          # Transaction Monitor (unchanged)
+```
+
+### Package Responsibilities (Updated)
 
 | Package | Responsibility |
 |---------|----------------|
-| `PB` | Platform abstraction layer |
-| `DS` | Data storage, B-Tree, page management |
+| `CG` | AST to bytecode compilation (code generation) |
+| `DS` | SQLite-compatible BTree, page management, cursors |
+| `PB` | Platform-specific VFS implementations (Unix, Windows, Memory) |
+| `SF` | VFS interface, VFS registry, system utilities |
 | `QP` | SQL parsing, AST, query planning |
-| `VM` | Bytecode compilation, VM execution, cursor management |
+| `VM` | Bytecode execution, register management |
+| `TM` | Transaction management, locking, WAL |
 
-### Integration Flow
+### Integration Flow (Updated)
 ```
-QP (Parser) → AST → VM (Compiler) → Bytecode → VM (Engine) → Results
-                     ↓
-              DS (Cursors)
+User Query
+    ↓
+QP (Parser) → AST
+    ↓
+CG (Compiler) → Bytecode Program
+    ↓
+VM (Engine) → Execution
+    ↓           ↓
+DS (BTree) ← VFS (SF) ← VFS Impl (PB)
+    ↓
+Results
 ```
 
 ---
@@ -126,10 +181,39 @@ graph TD
         E3[Performance testing]
     end
     
+    %% Wave 6: Code Generator Subsystem
+    subgraph W6 ["Wave 6: CG Subsystem"]
+        direction TB
+        F1[Extract compiler to CG]
+        F2[CG package structure]
+        F3[Update VM integration]
+    end
+    
+    %% Wave 7: VFS Architecture
+    subgraph W7 ["Wave 7: VFS Layer"]
+        direction TB
+        G1[Design VFS interface]
+        G2[VFS in SF subsystem]
+        G3[Real VFS in PB]
+        G4[Memory VFS implementation]
+    end
+    
+    %% Wave 8: BTree Engine
+    subgraph W8 ["Wave 8: SQLite BTree"]
+        direction TB
+        H1[BTree design analysis]
+        H2[Page structure implementation]
+        H3[BTree operations]
+        H4[Index support]
+    end
+    
     W1 --> W2
     W2 --> W3
     W3 --> W4
     W4 --> W5
+    W5 --> W6
+    W6 --> W7
+    W7 --> W8
 ```
 
 ### Completed
@@ -141,6 +225,11 @@ graph TD
   - ✅ Fixed column name extraction bug for SELECT * and expressions
   - ✅ Fixed comparison operators and modulo for floats
   - ✅ All SELECT queries route through VM (except SetOp)
+
+### In Progress
+- [ ] Wave 6: Code Generator (CG) Subsystem
+- [ ] Wave 7: VFS Architecture Layer
+- [ ] Wave 8: SQLite-Compatible BTree
 
 ---
 
@@ -356,17 +445,359 @@ graph TD
 
 ---
 
-## New Directory Structure
+## Wave 6: Code Generator (CG) Subsystem
+
+### Overview
+Extract bytecode compilation logic from VM to a dedicated CG (Code Generator) subsystem. This improves separation of concerns: CG handles AST→bytecode compilation, VM handles bytecode execution.
+
+### Task 6.1: Design CG Package Structure
+- **Files**: `internal/CG/` (new)
+- **Description**: Design the Code Generator subsystem architecture
+- **Details**:
+  - Define CG package responsibility: AST to bytecode compilation only
+  - Define interfaces between CG, QP, and VM
+  - Plan file structure for CG subsystem
+  - Document compilation pipeline: QP (AST) → CG (Bytecode) → VM (Execution)
+
+### Task 6.2: Extract Compiler from VM to CG
+- **Files**: `internal/VM/compiler.go` → `internal/CG/compiler.go`
+- **Description**: Move compiler code from VM to CG subsystem
+- **Details**:
+  - Move `Compiler` struct and methods to `internal/CG/compiler.go`
+  - Move expression compilation logic to CG
+  - Move SELECT/DML compilation logic to CG
+  - Update package imports: `package VM` → `package CG`
+  - Keep VM types (OpCode, Instruction, Program) accessible to CG
+
+### Task 6.3: Create CG Package Files
+- **Files**: `internal/CG/` (new package)
+- **Description**: Organize CG subsystem into focused files
+- **Details**:
+  - `compiler.go` - Main compiler struct and SELECT compilation
+  - `expr.go` - Expression compilation (literals, binary ops, function calls)
+  - `dml.go` - DML compilation (INSERT, UPDATE, DELETE)
+  - `aggregate.go` - Aggregate function compilation
+  - `optimizer.go` - Future: bytecode optimization passes (placeholder)
+- **Expected Structure**:
+  ```
+  internal/CG/
+  ├── compiler.go    # Main compiler, SELECT
+  ├── expr.go        # Expression compilation
+  ├── dml.go         # INSERT/UPDATE/DELETE
+  ├── aggregate.go   # Aggregate functions
+  └── optimizer.go   # Future optimization (placeholder)
+  ```
+
+### Task 6.4: Update VM Integration Points
+- **Files**: `pkg/sqlvibe/database.go`, `internal/VM/`
+- **Description**: Update VM to use CG for compilation
+- **Details**:
+  - Update `database.go` to import and use `CG.Compiler`
+  - Change: `VM.NewCompiler()` → `CG.NewCompiler()`
+  - VM should only expose execution interfaces
+  - CG should output `VM.Program` for execution
+  - Test that compilation still works end-to-end
+
+### Task 6.5: Update Documentation
+- **Files**: `docs/ARCHITECTURE.md`, `docs/plan-v0.5.0.md`
+- **Description**: Document CG subsystem in architecture
+- **Details**:
+  - Add CG to subsystem diagram
+  - Document CG responsibilities
+  - Update integration flow: QP → CG → VM
+  - Update package responsibility matrix
+
+---
+
+## Wave 7: VFS (Virtual File System) Architecture
+
+### Overview
+Introduce a VFS abstraction layer in SF (System Framework) with real implementations in PB (Platform Bridges). This enables multiple storage backends (real files, memory, custom implementations) and better platform abstraction.
+
+### Task 7.1: Design VFS Interface
+- **Files**: `internal/SF/vfs.go` (new)
+- **Description**: Define VFS interface in System Framework
+- **Details**:
+  - Study SQLite's VFS interface design
+  - Define `VFS` interface with methods:
+    - `Open(name string, flags int) (File, error)`
+    - `Delete(name string) error`
+    - `Access(name string, flags int) (bool, error)`
+    - `FullPathname(name string) (string, error)`
+    - `Randomness(buf []byte) error`
+    - `Sleep(microseconds int) error`
+    - `CurrentTime() (float64, error)`
+  - Define `File` interface:
+    - `Close() error`
+    - `Read(p []byte, offset int64) (int, error)`
+    - `Write(p []byte, offset int64) (int, error)`
+    - `Truncate(size int64) error`
+    - `Sync(flags int) error`
+    - `FileSize() (int64, error)`
+    - `Lock(lockType int) error`
+    - `Unlock(lockType int) error`
+    - `CheckReservedLock() (bool, error)`
+    - `FileControl(op int, arg interface{}) error`
+    - `SectorSize() int`
+    - `DeviceCharacteristics() int`
+- **Reference**: https://www.sqlite.org/vfs.html
+
+### Task 7.2: Implement VFS Registry in SF
+- **Files**: `internal/SF/vfs.go`
+- **Description**: Create VFS registration and lookup system
+- **Details**:
+  - Implement VFS registry (map of name → VFS)
+  - `RegisterVFS(name string, vfs VFS, makeDefault bool) error`
+  - `FindVFS(name string) VFS`
+  - `DefaultVFS() VFS`
+  - Support multiple VFS backends simultaneously
+  - Thread-safe registration
+
+### Task 7.3: Implement Real File VFS in PB
+- **Files**: `internal/PB/vfs_unix.go`, `internal/PB/vfs_windows.go`
+- **Description**: Implement OS file system VFS in Platform Bridges
+- **Details**:
+  - Create `UnixVFS` implementing `SF.VFS` interface
+  - Create `WindowsVFS` implementing `SF.VFS` interface
+  - Use `os.File` for actual file operations
+  - Implement file locking (fcntl on Unix, LockFileEx on Windows)
+  - Implement sync operations (fsync/FlushFileBuffers)
+  - Register as default VFS: `SF.RegisterVFS("unix", unixVFS, true)`
+  - Use build tags: `//go:build unix` and `//go:build windows`
+
+### Task 7.4: Implement Memory VFS in PB
+- **Files**: `internal/PB/vfs_memory.go`
+- **Description**: Implement in-memory VFS for `:memory:` databases
+- **Details**:
+  - Create `MemoryVFS` implementing `SF.VFS` interface
+  - Store file content in `map[string][]byte`
+  - Support all file operations in memory
+  - Use for `:memory:` database paths
+  - Register: `SF.RegisterVFS("memory", memoryVFS, false)`
+  - Useful for testing and temporary databases
+
+### Task 7.5: Migrate PB/file.go to Use VFS
+- **Files**: `internal/PB/file.go`, `internal/DS/manager.go`
+- **Description**: Update existing file operations to use VFS
+- **Details**:
+  - Replace direct `os.File` usage with `SF.VFS` interface
+  - Update `PB.FileBackend` to use VFS
+  - Support VFS selection via database URI: `file:test.db?vfs=unix`
+  - Default to platform's default VFS
+  - Update DS manager to request VFS from SF
+
+### Task 7.6: Add VFS Configuration
+- **Files**: `pkg/sqlvibe/database.go`
+- **Description**: Add VFS selection to database open
+- **Details**:
+  - Parse VFS name from URI query parameter: `?vfs=unix`
+  - Support `:memory:` path → automatically use memory VFS
+  - Support explicit VFS selection: `file:test.db?vfs=memory`
+  - Default to OS's default VFS for file paths
+  - Example: `Open("file:test.db?vfs=unix")`
+
+---
+
+## Wave 8: SQLite-Compatible BTree Implementation
+
+### Overview
+Implement a proper SQLite-style BTree in DS (Data Storage) subsystem. Current BTree is a placeholder; this wave implements a production-quality BTree following SQLite's design.
+
+### Task 8.1: Analyze SQLite BTree Design
+- **Files**: `docs/btree-design.md` (new)
+- **Description**: Study and document SQLite's BTree implementation
+- **Details**:
+  - Study SQLite's btree.c implementation
+  - Document page types: table leaf, table interior, index leaf, index interior
+  - Document cell format for each page type
+  - Document overflow page handling
+  - Document freelist management
+  - Document page splitting and balancing algorithms
+  - Document key comparison and collation
+- **References**:
+  - https://www.sqlite.org/fileformat2.html
+  - https://www.sqlite.org/btreemodule.html
+  - SQLite source: btree.c, btreeInt.h
+
+### Task 8.2: Implement Page Structure
+- **Files**: `internal/DS/page.go`, `internal/DS/page_header.go`
+- **Description**: Implement SQLite-compatible page structure
+- **Details**:
+  - Page header format (8/12 bytes for leaf/interior pages)
+  - Cell pointer array
+  - Free space management within pages
+  - Page types: table_leaf (0x0d), table_interior (0x05), index_leaf (0x0a), index_interior (0x02)
+  - Unallocated space region
+  - Page defragmentation
+  - Support 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536 byte page sizes
+
+### Task 8.3: Implement Cell Format
+- **Files**: `internal/DS/cell.go`
+- **Description**: Implement cell encoding/decoding
+- **Details**:
+  - Table leaf cell: rowid + payload
+  - Table interior cell: left_child_page + rowid
+  - Index leaf cell: key + payload
+  - Index interior cell: left_child_page + key
+  - Varint encoding for integers (SQLite format)
+  - Record format for payloads (type serial codes)
+  - Overflow page handling for large payloads
+
+### Task 8.4: Implement BTree Operations
+- **Files**: `internal/DS/btree.go`, `internal/DS/btree_ops.go`
+- **Description**: Implement core BTree operations
+- **Details**:
+  - `Insert(key, value)` - Insert into table BTree
+  - `Delete(key)` - Delete from table BTree
+  - `Search(key)` - Search table BTree
+  - `Seek(key)` - Position cursor at key
+  - `Next()` / `Previous()` - Cursor movement
+  - Page splitting when full
+  - Page merging when underfull
+  - Tree rebalancing
+  - Root page promotion
+
+### Task 8.5: Implement Index BTree
+- **Files**: `internal/DS/btree_index.go`
+- **Description**: Implement index BTree operations
+- **Details**:
+  - Index key format: (indexed columns, rowid)
+  - Index leaf pages
+  - Index interior pages
+  - `IndexInsert(indexKey, rowid)`
+  - `IndexDelete(indexKey, rowid)`
+  - `IndexSeek(indexKey)` - Cursor positioning
+  - Support composite indexes (multiple columns)
+  - Support unique indexes (duplicate detection)
+
+### Task 8.6: Implement BTree Cursor
+- **Files**: `internal/DS/cursor.go`
+- **Description**: Implement BTree cursor for iteration
+- **Details**:
+  - Cursor state: current page, cell index, path from root
+  - `First()` - Position at first record
+  - `Last()` - Position at last record
+  - `Seek(key)` - Position at key
+  - `Next()` - Move to next record
+  - `Previous()` - Move to previous record
+  - `Key()` - Get current key
+  - `Value()` - Get current value
+  - Stack-based cursor path for tree traversal
+
+### Task 8.7: Implement Page Balancing
+- **Files**: `internal/DS/balance.go`
+- **Description**: Implement page balancing algorithms
+- **Details**:
+  - Balance operation triggered on insert/delete
+  - Redistribution: move cells between siblings
+  - Merge: combine underfull pages
+  - Split: divide overfull pages
+  - Divider key updates in parent pages
+  - Maintain minimum fill factor
+  - Quick balance (simple) vs full balance
+
+### Task 8.8: Implement Overflow Pages
+- **Files**: `internal/DS/overflow.go`
+- **Description**: Handle payloads larger than page size
+- **Details**:
+  - Overflow page chaining
+  - Overflow page allocation from freelist
+  - Overflow page deallocation to freelist
+  - Local payload calculation (M, X thresholds from SQLite)
+  - Read overflow payload across multiple pages
+  - Write overflow payload with page chaining
+
+### Task 8.9: Implement Freelist Management
+- **Files**: `internal/DS/freelist.go`
+- **Description**: Manage free pages in database file
+- **Details**:
+  - Freelist trunk pages
+  - Freelist leaf pages
+  - Allocate page from freelist
+  - Return page to freelist
+  - Freelist compaction
+  - Auto-vacuum support (future)
+
+### Task 8.10: Implement Varint and Record Encoding
+- **Files**: `internal/DS/encoding.go`
+- **Description**: Implement SQLite's encoding formats
+- **Details**:
+  - Varint encoding: 1-9 bytes for 64-bit integers
+  - Varint decoding
+  - Record header: serial type codes
+  - Serial types: NULL, int8, int16, int32, int48, int64, float64, zero, one, blob, text
+  - Record encoding: header + data
+  - Record decoding: parse header, extract fields
+
+### Task 8.11: Migrate Current DS to New BTree
+- **Files**: `internal/DS/manager.go`, `internal/DS/table.go`
+- **Description**: Update DS subsystem to use new BTree
+- **Details**:
+  - Replace placeholder BTree with new implementation
+  - Update table operations to use BTree cursors
+  - Update schema storage (sqlite_master table)
+  - Test data migration from old to new BTree
+  - Ensure backward compatibility with existing databases (if possible)
+
+### Task 8.12: Add BTree Tests
+- **Files**: `internal/DS/btree_test.go`
+- **Description**: Comprehensive BTree testing
+- **Details**:
+  - Unit tests for each operation
+  - Test page splitting/merging
+  - Test cursor iteration
+  - Test large payloads (overflow pages)
+  - Test concurrent access (future, with TM)
+  - Fuzzing tests for robustness
+  - Compare behavior with SQLite
+
+---
+
+## New Directory Structure (After Waves 6-8)
 
 ```
-internal/VM/
-├── cursor.go      # Cursor operations
-├── compiler.go    # AST to bytecode
-├── engine.go      # VM engine core
-├── exec.go        # VM execution loop
-├── opcodes.go     # Opcode definitions
-├── program.go     # Compiled program
-└── registers.go  # Register management
+internal/
+├── CG/                # Code Generator (Bytecode Compiler)
+│   ├── compiler.go    # Main compiler, SELECT
+│   ├── expr.go        # Expression compilation
+│   ├── dml.go         # INSERT/UPDATE/DELETE
+│   ├── aggregate.go   # Aggregate functions
+│   └── optimizer.go   # Future optimization
+├── DS/                # Data Storage
+│   ├── btree.go       # BTree core implementation
+│   ├── btree_ops.go   # BTree operations
+│   ├── btree_index.go # Index BTree
+│   ├── cursor.go      # BTree cursor
+│   ├── balance.go     # Page balancing
+│   ├── overflow.go    # Overflow pages
+│   ├── freelist.go    # Freelist management
+│   ├── page.go        # Page structure
+│   ├── page_header.go # Page header
+│   ├── cell.go        # Cell format
+│   ├── encoding.go    # Varint, record encoding
+│   ├── manager.go     # Database manager
+│   ├── cache.go       # Page cache
+│   └── table.go       # Table operations
+├── PB/                # Platform Bridges
+│   ├── file.go        # File backend (uses VFS)
+│   ├── memory.go      # Memory backend
+│   ├── vfs_unix.go    # Unix VFS implementation
+│   ├── vfs_windows.go # Windows VFS implementation
+│   └── vfs_memory.go  # Memory VFS
+├── SF/                # System Framework
+│   ├── vfs.go         # VFS interface and registry
+│   └── log.go         # Logging
+├── QP/                # Query Processing (Parser, AST)
+│   └── ...
+├── VM/                # Virtual Machine (Executor only)
+│   ├── engine.go      # VM engine
+│   ├── exec.go        # VM execution loop
+│   ├── opcodes.go     # Opcode definitions
+│   ├── program.go     # Program structure
+│   ├── registers.go   # Register management
+│   └── cursor.go      # VM cursors (wraps DS cursors)
+└── TM/                # Transaction Monitor
+    └── ...
 ```
 
 ---
@@ -374,12 +805,27 @@ internal/VM/
 ## Integration Points
 
 ### With QP (Query Processing)
-- Compiler receives QP.SelectStmt, QP.InsertStmt, QP.UpdateStmt, QP.DeleteStmt
-- Returns compiled Program
+- CG receives QP.SelectStmt, QP.InsertStmt, QP.UpdateStmt, QP.DeleteStmt
+- Returns compiled Program (VM.Program)
+
+### With CG (Code Generator)
+- VM receives compiled Program from CG
+- VM executes bytecode and returns results
 
 ### With DS (Data Storage)
-- Cursors read from DS tables
-- Index operations via DS interfaces
+- VM cursors read from DS BTree tables
+- DS provides BTree operations: Insert, Delete, Search, Cursor iteration
+- Index operations via DS BTree index interfaces
+
+### With SF (System Framework)
+- DS requests VFS from SF for file operations
+- VFS abstraction enables multiple storage backends
+- SF provides logging and error handling
+
+### With PB (Platform Bridges)
+- PB implements VFS interface for real file systems (Unix, Windows)
+- PB provides platform-specific optimizations (mmap, file locking)
+- PB implements memory VFS for `:memory:` databases
 
 ### With TM (Transaction Monitor)
 - Transaction begin/end
@@ -390,6 +836,7 @@ internal/VM/
 
 ## Success Criteria
 
+### Wave 1-5 (Completed)
 - [x] VM package created with opcodes, compiler, engine, exec
 - [x] DML Compiler implemented (INSERT, UPDATE, DELETE)
 - [x] Aggregate Compiler implemented (COUNT, SUM, AVG, MIN, MAX)
@@ -403,11 +850,47 @@ internal/VM/
 - [x] Fixed modulo operator for float types
 - [x] Fixed NULL handling in comparisons
 - [x] All SELECT queries route through VM (except SetOp which needs implementation)
+
+### Wave 6: CG Subsystem (In Progress)
+- [ ] CG package created with compiler extraction from VM
+- [ ] Compiler code moved from VM to CG
+- [ ] CG organized into focused files (compiler, expr, dml, aggregate)
+- [ ] VM integration updated to use CG
+- [ ] Documentation updated with CG architecture
+- [ ] All existing tests still pass after refactoring
+
+### Wave 7: VFS Architecture (Planned)
+- [ ] VFS interface defined in SF
+- [ ] VFS registry implemented in SF
+- [ ] Unix VFS implemented in PB
+- [ ] Windows VFS implemented in PB
+- [ ] Memory VFS implemented in PB
+- [ ] PB/file.go migrated to use VFS
+- [ ] Database open supports VFS selection via URI
+- [ ] `:memory:` databases use memory VFS automatically
+
+### Wave 8: BTree Implementation (Planned)
+- [ ] SQLite BTree design documented
+- [ ] Page structure implemented (header, cells, free space)
+- [ ] Cell format implemented for all page types
+- [ ] BTree operations implemented (Insert, Delete, Search, Seek)
+- [ ] BTree cursor implemented for iteration
+- [ ] Page balancing implemented (split, merge, redistribute)
+- [ ] Overflow pages implemented for large payloads
+- [ ] Freelist management implemented
+- [ ] Varint and record encoding implemented
+- [ ] Index BTree implemented
+- [ ] DS migrated to use new BTree
+- [ ] All existing tests pass with new BTree
+- [ ] BTree behavior matches SQLite
+
+### Overall Goals
 - [ ] All existing tests pass with VM (most pass, some edge cases remain)
 - [ ] Bytecode execution matches direct execution
 - [ ] Performance not degraded (>80% of direct)
-- [ ] Clear compilation pipeline documented
+- [ ] Clear compilation pipeline documented: QP → CG → VM → Results
 - [ ] Extensible for future optimizations
+- [ ] SQLite file format compatibility achieved
 
 **Note:** Direct execution has been fully replaced by VM for SELECT queries. SetOp (UNION, EXCEPT, INTERSECT) and DML operations (INSERT, UPDATE, DELETE) are the only remaining direct execution paths, pending VM implementation.
 
@@ -438,6 +921,11 @@ go test -race -asan ./...
 - Wave 3 depends on: Wave 2 complete
 - Wave 4 depends on: Wave 2 complete
 - Wave 5 depends on: Waves 3 & 4 complete
+- Wave 6 depends on: Wave 5 complete (refactor existing VM)
+- Wave 7 depends on: Wave 6 complete (VFS abstraction)
+- Wave 8 depends on: Wave 7 complete (BTree needs VFS)
+
+**Critical Path**: W1 → W2 → W3 → W4 → W5 → W6 → W7 → W8
 
 ---
 
@@ -449,15 +937,35 @@ go test -race -asan ./...
 | Complexity explosion | Medium | Incremental implementation, clear interfaces |
 | Test failures | Medium | Run tests after each wave |
 | Scope creep | Medium | Strict task boundaries |
+| BTree complexity | High | Study SQLite carefully, incremental implementation |
+| VFS compatibility | Medium | Test on multiple platforms, use build tags |
+| File format breaking changes | High | Careful migration, version checking |
 
 ---
 
 ## Timeline Estimate (Waves)
 
-- Wave 1: 1-2 days (Analysis)
-- Wave 2: 2-3 days (Core VM)
-- Wave 3: 3-4 days (Compiler)
-- Wave 4: 2-3 days (Operators)
-- Wave 5: 2-3 days (Integration)
+### Completed
+- Wave 1: 1-2 days (Analysis) ✅
+- Wave 2: 2-3 days (Core VM) ✅
+- Wave 3: 3-4 days (Compiler) ✅
+- Wave 4: 2-3 days (Operators) ✅
+- Wave 5: 2-3 days (Integration) ✅
 
-**Total: ~10-15 days**
+### Remaining
+- Wave 6: 1-2 days (CG Refactoring)
+- Wave 7: 3-4 days (VFS Architecture)
+- Wave 8: 7-10 days (BTree Implementation)
+
+**Completed: ~10-15 days**  
+**Remaining: ~11-16 days**  
+**Total: ~21-31 days**
+
+---
+
+## Version Planning
+
+- **v0.5.0**: Waves 1-5 (VM subsystem, bytecode execution) - **COMPLETED**
+- **v0.6.0**: Wave 6 (CG subsystem separation)
+- **v0.7.0**: Wave 7 (VFS architecture)
+- **v0.8.0**: Wave 8 (SQLite BTree implementation)
