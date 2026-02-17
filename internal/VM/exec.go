@@ -347,9 +347,21 @@ func (vm *VM) Exec(ctx interface{}) error {
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
 			result := (lhs == nil && rhs == nil) || (lhs != nil && rhs != nil && compareVals(lhs, rhs) == 0)
-			if result && inst.P4 != nil {
-				if target, ok := inst.P4.(int); ok {
-					vm.pc = target
+			
+			// P4 can be either a register (for storing result) or a jump target
+			if inst.P4 != nil {
+				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
+					// Store boolean result in register
+					if result {
+						vm.registers[dst] = int64(1)
+					} else {
+						vm.registers[dst] = int64(0)
+					}
+				} else if result {
+					// Jump if result is true
+					if target, ok := inst.P4.(int); ok {
+						vm.pc = target
+					}
 				}
 			}
 			continue
@@ -358,9 +370,21 @@ func (vm *VM) Exec(ctx interface{}) error {
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
 			result := (lhs == nil && rhs != nil) || (lhs != nil && rhs == nil) || (lhs != nil && rhs != nil && compareVals(lhs, rhs) != 0)
-			if result && inst.P4 != nil {
-				if target, ok := inst.P4.(int); ok {
-					vm.pc = target
+			
+			// P4 can be either a register (for storing result) or a jump target
+			if inst.P4 != nil {
+				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
+					// Store boolean result in register
+					if result {
+						vm.registers[dst] = int64(1)
+					} else {
+						vm.registers[dst] = int64(0)
+					}
+				} else if result {
+					// Jump if result is true
+					if target, ok := inst.P4.(int); ok {
+						vm.pc = target
+					}
 				}
 			}
 			continue
@@ -436,6 +460,28 @@ func (vm *VM) Exec(ctx interface{}) error {
 			rhs := vm.registers[inst.P2]
 			if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = numericRemainder(lhs, rhs)
+			}
+			continue
+
+		case OpBitAnd:
+			lhs := vm.registers[inst.P1]
+			rhs := vm.registers[inst.P2]
+			if dst, ok := inst.P4.(int); ok {
+				// Bitwise AND: convert to int64 and AND
+				lhsInt := toInt64(lhs)
+				rhsInt := toInt64(rhs)
+				vm.registers[dst] = lhsInt & rhsInt
+			}
+			continue
+
+		case OpBitOr:
+			lhs := vm.registers[inst.P1]
+			rhs := vm.registers[inst.P2]
+			if dst, ok := inst.P4.(int); ok {
+				// Bitwise OR: convert to int64 and OR
+				lhsInt := toInt64(lhs)
+				rhsInt := toInt64(rhs)
+				vm.registers[dst] = lhsInt | rhsInt
 			}
 			continue
 
@@ -1161,6 +1207,36 @@ func getLower(v interface{}) interface{} {
 	return fmt.Sprintf("%v", v)
 }
 
+func toInt64(v interface{}) int64 {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case int64:
+		return val
+	case int:
+		return int64(val)
+	case float64:
+		return int64(val)
+	case bool:
+		if val {
+			return 1
+		}
+		return 0
+	case string:
+		// Try to parse string as number
+		if i, err := strconv.ParseInt(val, 10, 64); err == nil {
+			return i
+		}
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			return int64(f)
+		}
+		return 0
+	default:
+		return 0
+	}
+}
+
 func getTrim(s interface{}, chars string, trimAll, left, right bool) interface{} {
 	if s == nil {
 		return nil
@@ -1391,7 +1467,8 @@ func toReal(v interface{}) interface{} {
 }
 
 func likeMatch(str, pattern string) bool {
-	return likeMatchRecursive(str, pattern, 0, 0)
+	// SQLite LIKE is case-insensitive by default (for ASCII characters)
+	return likeMatchRecursive(strings.ToUpper(str), strings.ToUpper(pattern), 0, 0)
 }
 
 func likeMatchRecursive(str string, pattern string, si, pi int) bool {
