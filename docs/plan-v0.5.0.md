@@ -138,6 +138,8 @@ graph TD
 - ✅ Wave 3: Compiler (SELECT, DML, Aggregate)
 - ✅ Wave 4: Operators
 - 🔄 Wave 5: Integration (in progress)
+  - ✅ Fixed column name extraction bug for SELECT * and expressions
+  - ⚠️ Some pre-existing VM operator bugs remain (modulo, comparisons)
 
 ---
 
