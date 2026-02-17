@@ -307,12 +307,19 @@ func (bt *BTree) insertCell(pageNum uint32, key []byte, value []byte) error {
 	// Find insertion point
 	insertIdx := bt.findCell(page, key)
 
-	// Write cell data
-	contentStart -= len(cellData)
-	copy(page.Data[contentStart:], cellData)
+	// Calculate new content start (growing downward from end of page)
+	newContentStart := contentStart - len(cellData)
+	
+	// Ensure we have space (simple check - proper check would consider fragmentation)
+	headerEnd := 8 + (numCells+1)*2 // Header + all cell pointers including new one
+	if newContentStart < headerEnd {
+		return fmt.Errorf("page full - need to split")
+	}
 
-	// Insert cell pointer
-	// Shift existing pointers
+	// Write cell data at new content area
+	copy(page.Data[newContentStart:newContentStart+len(cellData)], cellData)
+
+	// Shift existing cell pointers to make room for new pointer
 	for i := numCells; i > insertIdx; i-- {
 		src := 8 + (i-1)*2
 		dst := 8 + i*2
@@ -322,11 +329,11 @@ func (bt *BTree) insertCell(pageNum uint32, key []byte, value []byte) error {
 
 	// Set new cell pointer
 	pointerOffset := 8 + insertIdx*2
-	binary.BigEndian.PutUint16(page.Data[pointerOffset:pointerOffset+2], uint16(contentStart))
+	binary.BigEndian.PutUint16(page.Data[pointerOffset:pointerOffset+2], uint16(newContentStart))
 
 	// Update header
 	binary.BigEndian.PutUint16(page.Data[3:5], uint16(numCells+1))
-	binary.BigEndian.PutUint16(page.Data[5:7], uint16(contentStart))
+	binary.BigEndian.PutUint16(page.Data[5:7], uint16(newContentStart))
 
 	return bt.pm.WritePage(page)
 }

@@ -91,21 +91,22 @@ func DecodeTableLeafCell(buf []byte) (*CellData, error) {
 	pos += n
 	
 	// Determine if there's an overflow page
-	// If buffer has exactly 4 more bytes after payload would fit, it's overflow page
+	// If buffer has exactly 4 more bytes after payload, it's overflow page
 	remainingBytes := len(buf) - pos
 	hasOverflow := false
 	localSize := int(payloadSize)
 	
-	if remainingBytes == localSize+4 {
-		// Has overflow page at end
+	// Check if we have overflow page indicator (4 bytes after payload)
+	if remainingBytes >= localSize+4 {
+		// Could have overflow page - check if we have exactly payload + 4 bytes
+		// or if there's more data, only read what the payload size indicates
 		hasOverflow = true
 	} else if remainingBytes < localSize {
+		// Buffer too small - invalid
 		return nil, ErrInvalidCellFormat
-	} else {
-		// Normal case: buffer has exact payload size
-		localSize = remainingBytes
 	}
 	
+	// Read only the payload bytes indicated by payloadSize
 	cell.Payload = make([]byte, localSize)
 	copy(cell.Payload, buf[pos:pos+localSize])
 	cell.LocalSize = localSize
@@ -209,7 +210,7 @@ func DecodeIndexLeafCell(buf []byte) (*CellData, error) {
 	} else if remainingBytes < localSize {
 		return nil, ErrInvalidCellFormat
 	} else {
-		localSize = remainingBytes
+		// localSize already set to payloadSize
 	}
 	
 	cell.Key = make([]byte, localSize)
@@ -287,7 +288,7 @@ func DecodeIndexInteriorCell(buf []byte) (*CellData, error) {
 	} else if remainingBytes < localSize {
 		return nil, ErrInvalidCellFormat
 	} else {
-		localSize = remainingBytes
+		// localSize already set to payloadSize
 	}
 	
 	cell.Key = make([]byte, localSize)
