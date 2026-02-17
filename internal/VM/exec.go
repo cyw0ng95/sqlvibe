@@ -677,6 +677,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			continue
 
 		case OpOpenRead:
+			cursorID := int(inst.P1)
 			tableName := inst.P3
 			if tableName == "" {
 				continue
@@ -684,7 +685,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if vm.ctx != nil {
 				if data, err := vm.ctx.GetTableData(tableName); err == nil && data != nil {
 					if cols, err := vm.ctx.GetTableColumns(tableName); err == nil {
-						vm.cursors.OpenTable(tableName, data, cols)
+						vm.cursors.OpenTableAtID(cursorID, tableName, data, cols)
 					}
 				}
 			}

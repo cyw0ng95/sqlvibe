@@ -422,7 +422,7 @@ func (p *Program) EmitResultRow(regs []int) int {
 func (p *Program) EmitHalt(err error) int {
 	idx := len(p.Instructions)
 	p.Instructions = append(p.Instructions, Instruction{
-		Op: OpNull,
+		Op: OpHalt,
 		P1: 0,
 		P4: err,
 	})
