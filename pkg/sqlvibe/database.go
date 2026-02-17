@@ -259,87 +259,13 @@ func (db *Database) Exec(sql string) (Result, error) {
 		return Result{}, nil
 	case "InsertStmt":
 		stmt := ast.(*QP.InsertStmt)
-		if db.data[stmt.Table] == nil {
-			db.data[stmt.Table] = make([]map[string]interface{}, 0)
-		}
-		tableSchema := db.tables[stmt.Table]
-		pkCols := db.primaryKeys[stmt.Table]
-
-		colNames := stmt.Columns
-		if len(colNames) == 0 && tableSchema != nil {
-			colNames = db.getOrderedColumns(stmt.Table)
-		}
-
-		rowID := int64(len(db.data[stmt.Table])) + 1
-		for _, rowExprs := range stmt.Values {
-			row := make(map[string]interface{})
-			for i, expr := range rowExprs {
-				if i < len(colNames) {
-					colName := colNames[i]
-					colType := ""
-					if tableSchema != nil {
-						colType = tableSchema[colName]
-					}
-					val := db.extractValueTyped(expr, colType)
-					row[colName] = val
-				}
-			}
-			if len(pkCols) > 0 {
-				for _, pkCol := range pkCols {
-					pkVal := row[pkCol]
-					for _, existingRow := range db.data[stmt.Table] {
-						if existingRow[pkCol] == pkVal {
-							return Result{}, fmt.Errorf("UNIQUE constraint failed: %s.%s", stmt.Table, pkCol)
-						}
-					}
-				}
-			}
-			db.data[stmt.Table] = append(db.data[stmt.Table], row)
-
-			serialized := db.serializeRow(row)
-			db.engine.Insert(stmt.Table, uint64(rowID), serialized)
-			rowID++
-		}
-		return Result{RowsAffected: int64(len(stmt.Values))}, nil
+		return db.execVMDML(sql, stmt.Table)
 	case "UpdateStmt":
 		stmt := ast.(*QP.UpdateStmt)
-		if tableData, ok := db.data[stmt.Table]; ok {
-			rowsAffected := int64(0)
-			for i, row := range tableData {
-				if db.evalWhere(row, stmt.Where) {
-					for _, setClause := range stmt.Set {
-						if colRef, ok := setClause.Column.(*QP.ColumnRef); ok {
-							colType := ""
-							if tableSchema, ok := db.tables[stmt.Table]; ok {
-								colType = tableSchema[colRef.Name]
-							}
-							row[colRef.Name] = db.extractValueTyped(setClause.Value, colType)
-						}
-					}
-					db.data[stmt.Table][i] = row
-					rowsAffected++
-				}
-			}
-			return Result{RowsAffected: rowsAffected}, nil
-		}
-		return Result{RowsAffected: 0}, nil
+		return db.execVMDML(sql, stmt.Table)
 	case "DeleteStmt":
 		stmt := ast.(*QP.DeleteStmt)
-		if tableData, ok := db.data[stmt.Table]; ok {
-			newData := make([]map[string]interface{}, 0)
-			rowsAffected := int64(0)
-			for _, row := range tableData {
-				shouldDelete := db.evalWhere(row, stmt.Where)
-				if shouldDelete {
-					rowsAffected++
-				} else {
-					newData = append(newData, row)
-				}
-			}
-			db.data[stmt.Table] = newData
-			return Result{RowsAffected: rowsAffected}, nil
-		}
-		return Result{RowsAffected: 0}, nil
+		return db.execVMDML(sql, stmt.Table)
 	case "DropTableStmt":
 		stmt := ast.(*QP.DropTableStmt)
 		if _, exists := db.tables[stmt.Name]; exists {
@@ -2141,6 +2067,51 @@ func (ctx *dbVmContext) GetTableColumns(tableName string) ([]string, error) {
 	return ctx.db.columnOrder[tableName], nil
 }
 
+func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) error {
+	if ctx.db.data[tableName] == nil {
+		ctx.db.data[tableName] = make([]map[string]interface{}, 0)
+	}
+	
+	// Check primary key constraints
+	pkCols := ctx.db.primaryKeys[tableName]
+	if len(pkCols) > 0 {
+		for _, pkCol := range pkCols {
+			pkVal := row[pkCol]
+			for _, existingRow := range ctx.db.data[tableName] {
+				if existingRow[pkCol] == pkVal {
+					return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCol)
+				}
+			}
+		}
+	}
+	
+	ctx.db.data[tableName] = append(ctx.db.data[tableName], row)
+	
+	// Update storage engine
+	rowID := int64(len(ctx.db.data[tableName]))
+	serialized := ctx.db.serializeRow(row)
+	ctx.db.engine.Insert(tableName, uint64(rowID), serialized)
+	
+	return nil
+}
+
+func (ctx *dbVmContext) UpdateRow(tableName string, rowIndex int, row map[string]interface{}) error {
+	if ctx.db.data[tableName] == nil || rowIndex < 0 || rowIndex >= len(ctx.db.data[tableName]) {
+		return fmt.Errorf("invalid row index for table %s", tableName)
+	}
+	ctx.db.data[tableName][rowIndex] = row
+	return nil
+}
+
+func (ctx *dbVmContext) DeleteRow(tableName string, rowIndex int) error {
+	if ctx.db.data[tableName] == nil || rowIndex < 0 || rowIndex >= len(ctx.db.data[tableName]) {
+		return fmt.Errorf("invalid row index for table %s", tableName)
+	}
+	// Remove the row at the given index
+	ctx.db.data[tableName] = append(ctx.db.data[tableName][:rowIndex], ctx.db.data[tableName][rowIndex+1:]...)
+	return nil
+}
+
 func (db *Database) ExecVM(sql string) (*Rows, error) {
 	tokenizer := QP.NewTokenizer(sql)
 	tokens, err := tokenizer.Tokenize()
@@ -2275,4 +2246,50 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	}
 
 	return &Rows{Columns: cols, Data: results}, nil
+}
+
+func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
+// Ensure table exists
+if db.data[tableName] == nil {
+db.data[tableName] = make([]map[string]interface{}, 0)
+}
+
+// Get table column order
+tableCols := db.columnOrder[tableName]
+if tableCols == nil {
+tableCols = db.getOrderedColumns(tableName)
+}
+
+// Compile the DML statement
+program, err := VM.CompileWithSchema(sql, tableCols)
+if err != nil {
+return Result{}, err
+}
+
+// Create VM context
+ctx := &dbVmContext{db: db}
+vm := VM.NewVMWithContext(program, ctx)
+
+// Open table cursor
+if db.data[tableName] != nil {
+vm.Cursors().OpenTableAtID(0, tableName, db.data[tableName], tableCols)
+}
+
+// Count rows before execution (for UPDATE/DELETE)
+rowsBefore := int64(len(db.data[tableName]))
+
+// Execute the VM program
+err = vm.Run(nil)
+if err != nil {
+return Result{}, err
+}
+
+// Calculate rows affected
+rowsAfter := int64(len(db.data[tableName]))
+rowsAffected := rowsAfter - rowsBefore
+if rowsAffected < 0 {
+rowsAffected = -rowsAffected // For DELETE
+}
+
+return Result{RowsAffected: rowsAffected}, nil
 }

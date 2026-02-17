@@ -601,14 +601,27 @@ func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *Program {
 	c.ra = NewRegisterAllocator(16)
 
 	c.program.Emit(OpInit)
-
+	
+	// Open cursor for the table (cursor 0)
+	c.program.EmitOpenTable(0, stmt.Table)
+	
+	// Insert each row
 	for _, row := range stmt.Values {
+		// Compile each value expression into registers
 		rowRegs := make([]int, 0)
 		for _, val := range row {
 			reg := c.compileExpr(val)
 			rowRegs = append(rowRegs, reg)
 		}
-		c.program.EmitResultRow(rowRegs)
+		
+		// Emit Insert opcode with registers
+		idx := len(c.program.Instructions)
+		c.program.Instructions = append(c.program.Instructions, Instruction{
+			Op: OpInsert,
+			P1: 0, // cursor ID
+			P4: rowRegs,
+		})
+		_ = idx
 	}
 
 	c.program.Emit(OpHalt)
@@ -620,16 +633,59 @@ func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *Program {
 	c.ra = NewRegisterAllocator(16)
 
 	c.program.Emit(OpInit)
-
-	for _, set := range stmt.Set {
-		valueReg := c.compileExpr(set.Value)
-		_ = valueReg
-	}
-
+	
+	// Open cursor for the table (cursor 0)
+	c.program.EmitOpenTable(0, stmt.Table)
+	
+	// Rewind to start of table
+	loopStartIdx := len(c.program.Instructions)
+	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpRewind, P1: 0, P2: 0}) // P2 will be fixed up to jump past loop
+	
+	// WHERE clause: skip row if condition is false
 	if stmt.Where != nil {
 		whereReg := c.compileExpr(stmt.Where)
-		_ = whereReg
+		// If whereReg is false (0), jump to Next
+		skipTargetIdx := len(c.program.Instructions)
+		c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpIfNot, P1: int32(whereReg), P2: 0}) // P2 will be fixed up
+		
+		// Compile SET expressions
+		setRegs := make([]int, 0)
+		for _, set := range stmt.Set {
+			valueReg := c.compileExpr(set.Value)
+			setRegs = append(setRegs, valueReg)
+		}
+		
+		// Emit Update opcode
+		c.program.Instructions = append(c.program.Instructions, Instruction{
+			Op: OpUpdate,
+			P1: 0, // cursor ID
+			P4: setRegs,
+		})
+		
+		// Fix up skip target to jump here (to Next)
+		c.program.Instructions[skipTargetIdx].P2 = int32(len(c.program.Instructions))
+	} else {
+		// No WHERE clause, update all rows
+		// Compile SET expressions
+		setRegs := make([]int, 0)
+		for _, set := range stmt.Set {
+			valueReg := c.compileExpr(set.Value)
+			setRegs = append(setRegs, valueReg)
+		}
+		
+		// Emit Update opcode
+		c.program.Instructions = append(c.program.Instructions, Instruction{
+			Op: OpUpdate,
+			P1: 0, // cursor ID
+			P4: setRegs,
+		})
 	}
+	
+	// Next: advance to next row, loop back if not EOF
+	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpNext, P1: 0, P2: int32(loopStartIdx + 1)})
+	
+	// Fix up Rewind to jump here when EOF
+	c.program.Instructions[loopStartIdx].P2 = int32(len(c.program.Instructions))
 
 	c.program.Emit(OpHalt)
 	return c.program
@@ -640,11 +696,42 @@ func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *Program {
 	c.ra = NewRegisterAllocator(16)
 
 	c.program.Emit(OpInit)
-
+	
+	// Open cursor for the table (cursor 0)
+	c.program.EmitOpenTable(0, stmt.Table)
+	
+	// Rewind to start of table
+	loopStartIdx := len(c.program.Instructions)
+	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpRewind, P1: 0, P2: 0}) // P2 will be fixed up to jump past loop
+	
+	// WHERE clause: skip row if condition is false
 	if stmt.Where != nil {
 		whereReg := c.compileExpr(stmt.Where)
-		_ = whereReg
+		// If whereReg is false (0), jump to Next
+		skipTargetIdx := len(c.program.Instructions)
+		c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpIfNot, P1: int32(whereReg), P2: 0}) // P2 will be fixed up
+		
+		// Emit Delete opcode
+		c.program.Instructions = append(c.program.Instructions, Instruction{
+			Op: OpDelete,
+			P1: 0, // cursor ID
+		})
+		
+		// Fix up skip target to jump here (to Next)
+		c.program.Instructions[skipTargetIdx].P2 = int32(len(c.program.Instructions))
+	} else {
+		// No WHERE clause, delete all rows
+		c.program.Instructions = append(c.program.Instructions, Instruction{
+			Op: OpDelete,
+			P1: 0, // cursor ID
+		})
 	}
+	
+	// Next: advance to next row, loop back if not EOF
+	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpNext, P1: 0, P2: int32(loopStartIdx + 1)})
+	
+	// Fix up Rewind to jump here when EOF
+	c.program.Instructions[loopStartIdx].P2 = int32(len(c.program.Instructions))
 
 	c.program.Emit(OpHalt)
 	return c.program

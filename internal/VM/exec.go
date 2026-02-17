@@ -97,6 +97,54 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpIf:
+			// Jump to P2 if register P1 is true (non-zero, non-null)
+			val := vm.registers[inst.P1]
+			shouldJump := false
+			if val != nil {
+				switch v := val.(type) {
+				case int64:
+					shouldJump = v != 0
+				case float64:
+					shouldJump = v != 0.0
+				case bool:
+					shouldJump = v
+				case string:
+					shouldJump = len(v) > 0
+				default:
+					shouldJump = true
+				}
+			}
+			if shouldJump && inst.P2 != 0 {
+				vm.pc = int(inst.P2)
+			}
+			continue
+
+		case OpIfNot:
+			// Jump to P2 if register P1 is false (zero, null, or empty)
+			val := vm.registers[inst.P1]
+			shouldJump := false
+			if val == nil {
+				shouldJump = true
+			} else {
+				switch v := val.(type) {
+				case int64:
+					shouldJump = v == 0
+				case float64:
+					shouldJump = v == 0.0
+				case bool:
+					shouldJump = !v
+				case string:
+					shouldJump = len(v) == 0
+				default:
+					shouldJump = false
+				}
+			}
+			if shouldJump && inst.P2 != 0 {
+				vm.pc = int(inst.P2)
+			}
+			continue
+
 		case OpEq:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
@@ -710,6 +758,102 @@ func (vm *VM) Exec(ctx interface{}) error {
 					cursor.EOF = true
 					if target > 0 {
 						vm.pc = target
+					}
+				}
+			}
+			continue
+
+		case OpInsert:
+			// P1 = cursor ID (table)
+			// P4 = []int (register indices containing column values)
+			// Inserts a row into the table
+			cursorID := int(inst.P1)
+			cursor := vm.cursors.Get(cursorID)
+			if cursor == nil {
+				return fmt.Errorf("OpInsert: cursor %d not found", cursorID)
+			}
+			
+			regs, ok := inst.P4.([]int)
+			if !ok {
+				return fmt.Errorf("OpInsert: invalid P4 type")
+			}
+			
+			// Build row from registers
+			row := make(map[string]interface{})
+			cols := cursor.Columns
+			for i, reg := range regs {
+				if i < len(cols) {
+					row[cols[i]] = vm.registers[reg]
+				}
+			}
+			
+			// Insert via context
+			if vm.ctx != nil {
+				err := vm.ctx.InsertRow(cursor.TableName, row)
+				if err != nil {
+					return err
+				}
+			}
+			continue
+
+		case OpUpdate:
+			// P1 = cursor ID
+			// P4 = []int (register indices containing new column values)
+			// Updates the current row in the cursor
+			cursorID := int(inst.P1)
+			cursor := vm.cursors.Get(cursorID)
+			if cursor == nil {
+				return fmt.Errorf("OpUpdate: cursor %d not found", cursorID)
+			}
+			
+			regs, ok := inst.P4.([]int)
+			if !ok {
+				return fmt.Errorf("OpUpdate: invalid P4 type")
+			}
+			
+			// Build updated row from registers
+			row := cursor.Data[cursor.Index]
+			cols := cursor.Columns
+			for i, reg := range regs {
+				if i < len(cols) {
+					row[cols[i]] = vm.registers[reg]
+				}
+			}
+			
+			// Update via context
+			if vm.ctx != nil {
+				err := vm.ctx.UpdateRow(cursor.TableName, cursor.Index, row)
+				if err != nil {
+					return err
+				}
+			}
+			continue
+
+		case OpDelete:
+			// P1 = cursor ID
+			// Deletes the current row in the cursor
+			cursorID := int(inst.P1)
+			cursor := vm.cursors.Get(cursorID)
+			if cursor == nil {
+				return fmt.Errorf("OpDelete: cursor %d not found", cursorID)
+			}
+			
+			// Delete via context
+			if vm.ctx != nil {
+				err := vm.ctx.DeleteRow(cursor.TableName, cursor.Index)
+				if err != nil {
+					return err
+				}
+				// After deletion, we need to adjust the cursor
+				// Reload the cursor data
+				if vm.ctx != nil {
+					data, err := vm.ctx.GetTableData(cursor.TableName)
+					if err == nil {
+						cursor.Data = data
+						// Keep cursor at same index (which now points to next row)
+						if cursor.Index >= len(cursor.Data) {
+							cursor.EOF = true
+						}
 					}
 				}
 			}

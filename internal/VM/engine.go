@@ -23,6 +23,9 @@ func (e *VmError) Error() string {
 type VmContext interface {
 	GetTableData(tableName string) ([]map[string]interface{}, error)
 	GetTableColumns(tableName string) ([]string, error)
+	InsertRow(tableName string, row map[string]interface{}) error
+	UpdateRow(tableName string, rowIndex int, row map[string]interface{}) error
+	DeleteRow(tableName string, rowIndex int) error
 }
 
 type VM struct {

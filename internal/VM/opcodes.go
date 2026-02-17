@@ -152,6 +152,11 @@ const (
 	OpMakeRecord
 	OpBlobAppend
 
+	// DML operations
+	OpInsert
+	OpDelete
+	OpUpdate
+
 	// Null handling
 	OpIfNot
 	OpIf
@@ -330,6 +335,11 @@ var OpCodeInfo = map[OpCode]string{
 	// String building
 	OpMakeRecord: "MakeRecord",
 	OpBlobAppend: "BlobAppend",
+
+	// DML operations
+	OpInsert: "Insert",
+	OpDelete: "Delete",
+	OpUpdate: "Update",
 
 	// Null handling
 	OpIfNot: "IfNot",
