@@ -608,18 +608,36 @@ func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *Program {
 	// Insert each row
 	for _, row := range stmt.Values {
 		// Compile each value expression into registers
-		rowRegs := make([]int, 0)
-		for _, val := range row {
-			reg := c.compileExpr(val)
-			rowRegs = append(rowRegs, reg)
+		// If columns are specified in INSERT, map values to columns
+		// Otherwise, values map to table column order
+		var insertInfo interface{}
+		
+		if len(stmt.Columns) > 0 {
+			// Columns specified: create map of column name to register
+			colMap := make(map[string]int)
+			for i, val := range row {
+				if i < len(stmt.Columns) {
+					reg := c.compileExpr(val)
+					colMap[stmt.Columns[i]] = reg
+				}
+			}
+			insertInfo = colMap
+		} else {
+			// No columns specified: use positional array
+			rowRegs := make([]int, 0)
+			for _, val := range row {
+				reg := c.compileExpr(val)
+				rowRegs = append(rowRegs, reg)
+			}
+			insertInfo = rowRegs
 		}
 		
-		// Emit Insert opcode with registers
+		// Emit Insert opcode with column mapping or positional registers
 		idx := len(c.program.Instructions)
 		c.program.Instructions = append(c.program.Instructions, Instruction{
 			Op: OpInsert,
 			P1: 0, // cursor ID
-			P4: rowRegs,
+			P4: insertInfo,
 		})
 		_ = idx
 	}

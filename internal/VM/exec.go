@@ -769,7 +769,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpInsert:
 			// P1 = cursor ID (table)
-			// P4 = []int (register indices containing column values)
+			// P4 = []int (register indices) OR map[string]int (column name to register)
 			// Inserts a row into the table
 			cursorID := int(inst.P1)
 			cursor := vm.cursors.Get(cursorID)
@@ -777,18 +777,26 @@ func (vm *VM) Exec(ctx interface{}) error {
 				return fmt.Errorf("OpInsert: cursor %d not found", cursorID)
 			}
 			
-			regs, ok := inst.P4.([]int)
-			if !ok {
-				return fmt.Errorf("OpInsert: invalid P4 type")
-			}
-			
 			// Build row from registers
 			row := make(map[string]interface{})
-			cols := cursor.Columns
-			for i, reg := range regs {
-				if i < len(cols) {
-					row[cols[i]] = vm.registers[reg]
+			
+			// Check if P4 is a map (columns specified) or slice (positional)
+			switch v := inst.P4.(type) {
+			case map[string]int:
+				// Columns specified: map column names to values
+				for colName, regIdx := range v {
+					row[colName] = vm.registers[regIdx]
 				}
+			case []int:
+				// No columns specified: use table column order
+				cols := cursor.Columns
+				for i, reg := range v {
+					if i < len(cols) {
+						row[cols[i]] = vm.registers[reg]
+					}
+				}
+			default:
+				return fmt.Errorf("OpInsert: invalid P4 type")
 			}
 			
 			// Insert via context
