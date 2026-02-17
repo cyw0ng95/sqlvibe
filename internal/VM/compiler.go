@@ -331,19 +331,19 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 	case QP.TokenSlash:
 		c.program.EmitDivide(dst, leftReg, rightReg)
 	case QP.TokenPercent:
-		c.program.EmitOp(OpRemainder, int32(leftReg), int32(rightReg))
+		c.program.EmitOpWithDst(OpRemainder, int32(leftReg), int32(rightReg), dst)
 	case QP.TokenEq:
-		c.program.EmitOp(OpEq, int32(leftReg), int32(rightReg))
+		c.program.EmitOpWithDst(OpEq, int32(leftReg), int32(rightReg), dst)
 	case QP.TokenNe:
-		c.program.EmitOp(OpNe, int32(leftReg), int32(rightReg))
+		c.program.EmitOpWithDst(OpNe, int32(leftReg), int32(rightReg), dst)
 	case QP.TokenLt:
-		c.program.EmitOp(OpLt, int32(leftReg), int32(rightReg))
+		c.program.EmitOpWithDst(OpLt, int32(leftReg), int32(rightReg), dst)
 	case QP.TokenLe:
-		c.program.EmitOp(OpLe, int32(leftReg), int32(rightReg))
+		c.program.EmitOpWithDst(OpLe, int32(leftReg), int32(rightReg), dst)
 	case QP.TokenGt:
-		c.program.EmitOp(OpGt, int32(leftReg), int32(rightReg))
+		c.program.EmitOpWithDst(OpGt, int32(leftReg), int32(rightReg), dst)
 	case QP.TokenGe:
-		c.program.EmitOp(OpGe, int32(leftReg), int32(rightReg))
+		c.program.EmitOpWithDst(OpGe, int32(leftReg), int32(rightReg), dst)
 	case QP.TokenAnd:
 		leftBool := c.ra.Alloc()
 		c.program.EmitOp(OpNotNull, int32(leftReg), 0)
