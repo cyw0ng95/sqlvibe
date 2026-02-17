@@ -651,36 +651,43 @@ func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *Program {
 		skipTargetIdx := len(c.program.Instructions)
 		c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpIfNot, P1: int32(whereReg), P2: 0}) // P2 will be fixed up
 		
-		// Compile SET expressions
-		setRegs := make([]int, 0)
+		// Compile SET expressions with column names
+		// P4 will be a map[string]int mapping column name to register
+		setInfo := make(map[string]int)
 		for _, set := range stmt.Set {
 			valueReg := c.compileExpr(set.Value)
-			setRegs = append(setRegs, valueReg)
+			// Extract column name from SET clause
+			if colRef, ok := set.Column.(*QP.ColumnRef); ok {
+				setInfo[colRef.Name] = valueReg
+			}
 		}
 		
-		// Emit Update opcode
+		// Emit Update opcode with column mapping
 		c.program.Instructions = append(c.program.Instructions, Instruction{
 			Op: OpUpdate,
 			P1: 0, // cursor ID
-			P4: setRegs,
+			P4: setInfo,
 		})
 		
 		// Fix up skip target to jump here (to Next)
 		c.program.Instructions[skipTargetIdx].P2 = int32(len(c.program.Instructions))
 	} else {
 		// No WHERE clause, update all rows
-		// Compile SET expressions
-		setRegs := make([]int, 0)
+		// Compile SET expressions with column names
+		setInfo := make(map[string]int)
 		for _, set := range stmt.Set {
 			valueReg := c.compileExpr(set.Value)
-			setRegs = append(setRegs, valueReg)
+			// Extract column name from SET clause
+			if colRef, ok := set.Column.(*QP.ColumnRef); ok {
+				setInfo[colRef.Name] = valueReg
+			}
 		}
 		
-		// Emit Update opcode
+		// Emit Update opcode with column mapping
 		c.program.Instructions = append(c.program.Instructions, Instruction{
 			Op: OpUpdate,
 			P1: 0, // cursor ID
-			P4: setRegs,
+			P4: setInfo,
 		})
 	}
 	

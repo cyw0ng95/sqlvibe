@@ -803,7 +803,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpUpdate:
 			// P1 = cursor ID
-			// P4 = []int (register indices containing new column values)
+			// P4 = map[string]int mapping column name to register index
 			// Updates the current row in the cursor
 			cursorID := int(inst.P1)
 			cursor := vm.cursors.Get(cursorID)
@@ -811,18 +811,20 @@ func (vm *VM) Exec(ctx interface{}) error {
 				return fmt.Errorf("OpUpdate: cursor %d not found", cursorID)
 			}
 			
-			regs, ok := inst.P4.([]int)
+			setInfo, ok := inst.P4.(map[string]int)
 			if !ok {
-				return fmt.Errorf("OpUpdate: invalid P4 type")
+				return fmt.Errorf("OpUpdate: invalid P4 type, expected map[string]int")
 			}
 			
-			// Build updated row from registers
+			// Get the current row and update specified columns
+			if cursor.Index < 0 || cursor.Index >= len(cursor.Data) {
+				return fmt.Errorf("OpUpdate: invalid cursor position %d", cursor.Index)
+			}
 			row := cursor.Data[cursor.Index]
-			cols := cursor.Columns
-			for i, reg := range regs {
-				if i < len(cols) {
-					row[cols[i]] = vm.registers[reg]
-				}
+			
+			// Update only the columns specified in SET clause
+			for colName, regIdx := range setInfo {
+				row[colName] = vm.registers[regIdx]
 			}
 			
 			// Update via context
