@@ -2436,15 +2436,19 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 
 	// Get column names from the SELECT statement
 	cols := make([]string, 0)
-	for _, col := range stmt.Columns {
+	for i, col := range stmt.Columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
+			// Handle SELECT * - expand to all table columns
+			if colRef.Name == "*" {
+				cols = tableCols
+				break
+			}
 			cols = append(cols, colRef.Name)
 		} else if alias, ok := col.(*QP.AliasExpr); ok {
 			cols = append(cols, alias.Alias)
 		} else {
-			// Fallback to table column order
-			cols = db.columnOrder[tableName]
-			break
+			// For expressions without aliases, generate a column name
+			cols = append(cols, fmt.Sprintf("col_%d", i))
 		}
 	}
 
