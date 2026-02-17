@@ -397,7 +397,11 @@ internal/VM/
 - [x] ORDER BY support (post-processing in database layer)
 - [x] LIMIT support in VM
 - [x] EXPLAIN command implemented
-- [ ] All existing tests pass with VM
+- [x] Fixed column name extraction for SELECT * and expressions
+- [x] Fixed comparison operators to produce result values
+- [x] Fixed modulo operator for float types
+- [x] Fixed NULL handling in comparisons
+- [ ] All existing tests pass with VM (most pass, some pre-existing issues remain)
 - [ ] Bytecode execution matches direct execution
 - [ ] Performance not degraded (>80% of direct)
 - [ ] Clear compilation pipeline documented
