@@ -852,12 +852,14 @@ internal/
 - [x] All SELECT queries route through VM (except SetOp which needs implementation)
 
 ### Wave 6: CG Subsystem (In Progress)
-- [ ] CG package created with compiler extraction from VM
-- [ ] Compiler code moved from VM to CG
+- [x] CG package created with compiler extraction from VM
+- [x] Compiler code moved from VM to CG (wrapper approach - full extraction pending)
 - [ ] CG organized into focused files (compiler, expr, dml, aggregate)
-- [ ] VM integration updated to use CG
+- [x] VM integration updated to use CG (database.go now imports CG)
 - [ ] Documentation updated with CG architecture
-- [ ] All existing tests still pass after refactoring
+- [x] All existing tests still pass after refactoring
+
+**Note**: Wave 6 uses a transitional wrapper approach. The CG package wraps VM.Compiler for now. Full extraction of compiler logic from VM to CG files will be done incrementally.
 
 ### Wave 7: VFS Architecture (Planned)
 - [ ] VFS interface defined in SF
