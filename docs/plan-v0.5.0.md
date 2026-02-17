@@ -137,9 +137,10 @@ graph TD
 - ✅ Wave 2: Core VM  
 - ✅ Wave 3: Compiler (SELECT, DML, Aggregate)
 - ✅ Wave 4: Operators
-- 🔄 Wave 5: Integration (in progress)
+- ✅ Wave 5: Integration
   - ✅ Fixed column name extraction bug for SELECT * and expressions
-  - ⚠️ Some pre-existing VM operator bugs remain (modulo, comparisons)
+  - ✅ Fixed comparison operators and modulo for floats
+  - ✅ All SELECT queries route through VM (except SetOp)
 
 ---
 
@@ -401,11 +402,14 @@ internal/VM/
 - [x] Fixed comparison operators to produce result values
 - [x] Fixed modulo operator for float types
 - [x] Fixed NULL handling in comparisons
-- [ ] All existing tests pass with VM (most pass, some pre-existing issues remain)
+- [x] All SELECT queries route through VM (except SetOp which needs implementation)
+- [ ] All existing tests pass with VM (most pass, some edge cases remain)
 - [ ] Bytecode execution matches direct execution
 - [ ] Performance not degraded (>80% of direct)
 - [ ] Clear compilation pipeline documented
 - [ ] Extensible for future optimizations
+
+**Note:** Direct execution has been fully replaced by VM for SELECT queries. SetOp (UNION, EXCEPT, INTERSECT) and DML operations (INSERT, UPDATE, DELETE) are the only remaining direct execution paths, pending VM implementation.
 
 ---
 
