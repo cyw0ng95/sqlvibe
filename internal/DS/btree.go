@@ -1,39 +1,56 @@
 package DS
 
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+)
+
+// BTree represents a B-Tree using the new encoding infrastructure
 type BTree struct {
-	pm       *PageManager
-	rootPage uint32
-	isTable  bool
+	pm           *PageManager
+	om           *OverflowManager
+	balancer     *PageBalancer
+	freelist     *FreelistManager
+	rootPage     uint32
+	isTable      bool
 }
 
+// BTreeCursor represents a position in the B-Tree
 type BTreeCursor struct {
-	bt   *BTree
-	page *Page
-	cell int
+	bt       *BTree
+	path     []cursorLevel // Path from root to current position
+	valid    bool
 }
 
-type Cell struct {
-	Key     []byte
-	Payload []byte
-	Child   uint32
+type cursorLevel struct {
+	pageNum  uint32
+	cellIdx  int
 }
 
+// NewBTree creates a new B-Tree
 func NewBTree(pm *PageManager, rootPage uint32, isTable bool) *BTree {
 	return &BTree{
-		pm:       pm,
-		rootPage: rootPage,
-		isTable:  isTable,
+		pm:           pm,
+		om:           NewOverflowManager(pm),
+		balancer:     NewPageBalancer(pm),
+		freelist:     NewFreelistManager(pm, 0),
+		rootPage:     rootPage,
+		isTable:      isTable,
 	}
 }
 
+// RootPage returns the root page number
 func (bt *BTree) RootPage() uint32 {
 	return bt.rootPage
 }
 
+// IsTable returns true if this is a table B-Tree
 func (bt *BTree) IsTable() bool {
 	return bt.isTable
 }
 
+// Search finds a value by key in the B-Tree
 func (bt *BTree) Search(key []byte) ([]byte, error) {
 	if bt.rootPage == 0 {
 		return nil, nil
@@ -48,403 +65,407 @@ func (bt *BTree) Search(key []byte) ([]byte, error) {
 }
 
 func (bt *BTree) searchPage(page *Page, key []byte) ([]byte, error) {
-	if page.Type == PageTypeLeafTbl || page.Type == PageTypeLeafIdx {
-		return bt.searchLeaf(page, key)
-	}
-	return bt.searchInterior(page, key)
-}
+	pageType := page.Data[0]
+	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
 
-func (bt *BTree) searchLeaf(page *Page, key []byte) ([]byte, error) {
-	numCells := int(bt.readUint16(page.Data[3:5]))
-	cellPointers := bt.readCellPointers(page)
+	// Binary search for the cell
+	cellIdx := bt.findCell(page, key)
 
-	for i := 0; i < numCells; i++ {
-		cellOffset := int(cellPointers[i])
-		cellKey := bt.readKey(page, cellOffset, page.Type == PageTypeLeafTbl)
-
-		cmp := bt.compareKeys(key, cellKey)
-		if cmp == 0 {
-			_, payload := bt.readCellPayload(page, cellOffset, page.Type == PageTypeLeafTbl)
-			return payload, nil
+	if pageType == 0x0d || pageType == 0x02 { // Leaf pages
+		if cellIdx >= numCells {
+			return nil, nil // Not found
 		}
-		if cmp < 0 {
+
+		// Read cell
+		cellPointerOffset := 8 + cellIdx*2
+		cellOffset := int(binary.BigEndian.Uint16(page.Data[cellPointerOffset : cellPointerOffset+2]))
+
+		if pageType == 0x0d { // Table leaf
+			// Decode table leaf cell
+			cell, err := DecodeTableLeafCell(page.Data[cellOffset:])
+			if err != nil {
+				return nil, err
+			}
+
+			// Check if key matches rowid
+			keyRowid, _ := GetVarint(key)
+			if cell.Rowid == keyRowid {
+				return cell.Payload, nil
+			}
+			return nil, nil
+
+		} else { // Index leaf (0x02)
+			// Decode index leaf cell
+			cell, err := DecodeIndexLeafCell(page.Data[cellOffset:])
+			if err != nil {
+				return nil, err
+			}
+
+			// Compare keys
+			if bytes.Equal(cell.Key, key) {
+				return cell.Key, nil
+			}
 			return nil, nil
 		}
 	}
-	return nil, nil
-}
 
-func (bt *BTree) searchInterior(page *Page, key []byte) ([]byte, error) {
-	numCells := int(bt.readUint16(page.Data[3:5]))
-	cellPointers := bt.readCellPointers(page)
-
+	// Interior page - recurse
 	var childPage uint32
-	for i := 0; i < numCells; i++ {
-		cellOffset := int(cellPointers[i])
-		cellKey := bt.readKey(page, cellOffset, page.Type == PageTypeInteriorTbl)
+	if cellIdx < numCells {
+		cellPointerOffset := 8 + cellIdx*2
+		cellOffset := int(binary.BigEndian.Uint16(page.Data[cellPointerOffset : cellPointerOffset+2]))
 
-		if bt.compareKeys(key, cellKey) < 0 {
-			childPage = bt.readChildPage(page, cellOffset, page.Type == PageTypeInteriorTbl)
-			break
+		if pageType == 0x05 { // Table interior
+			cell, err := DecodeTableInteriorCell(page.Data[cellOffset:])
+			if err != nil {
+				return nil, err
+			}
+			childPage = cell.LeftChild
+		} else { // Index interior (0x0a)
+			cell, err := DecodeIndexInteriorCell(page.Data[cellOffset:])
+			if err != nil {
+				return nil, err
+			}
+			childPage = cell.LeftChild
 		}
-		if i == numCells-1 {
-			childPage = bt.readChildPage(page, cellOffset, page.Type == PageTypeInteriorTbl)
-		}
+	} else {
+		// Use rightmost pointer
+		childPage = binary.BigEndian.Uint32(page.Data[8:12])
 	}
 
-	if childPage == 0 {
-		return nil, nil
-	}
-
-	child, err := bt.pm.ReadPage(childPage)
+	childPageData, err := bt.pm.ReadPage(childPage)
 	if err != nil {
 		return nil, err
 	}
 
-	return bt.searchPage(child, key)
+	return bt.searchPage(childPageData, key)
 }
 
-func (bt *BTree) Insert(key, payload []byte) error {
-	if bt.rootPage == 0 {
-		return bt.createRoot(key, payload)
-	}
+// findCell performs binary search to find the insertion point for a key
+func (bt *BTree) findCell(page *Page, key []byte) int {
+	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
+	pageType := page.Data[0]
 
-	page, err := bt.pm.ReadPage(bt.rootPage)
-	if err != nil {
-		return err
-	}
+	left, right := 0, numCells
+	for left < right {
+		mid := (left + right) / 2
 
-	if bt.isFull(page) {
-		return bt.splitAndInsert(bt.rootPage, key, payload)
-	}
+		cellPointerOffset := 8 + mid*2
+		cellOffset := int(binary.BigEndian.Uint16(page.Data[cellPointerOffset : cellPointerOffset+2]))
 
-	return bt.insertIntoPage(page, key, payload)
-}
+		var cellKey []byte
+		if pageType == 0x0d { // Table leaf
+			// Extract rowid as key
+			_, n := GetVarint(page.Data[cellOffset:])
+			rowid, _ := GetVarint(page.Data[cellOffset+n:])
+			cellKey = make([]byte, 9)
+			PutVarint(cellKey, rowid)
+		} else if pageType == 0x02 { // Index leaf
+			payloadSize, n := GetVarint(page.Data[cellOffset:])
+			cellKey = page.Data[cellOffset+n : cellOffset+n+int(payloadSize)]
+		} else if pageType == 0x05 { // Table interior
+			cell, _ := DecodeTableInteriorCell(page.Data[cellOffset:])
+			cellKey = make([]byte, 9)
+			PutVarint(cellKey, cell.Rowid)
+		} else { // Index interior (0x0a)
+			payloadSize, n := GetVarint(page.Data[cellOffset:])
+			_, n2 := GetVarint(page.Data[cellOffset+n:])
+			cellKey = page.Data[cellOffset+n+n2 : cellOffset+n+n2+int(payloadSize)]
+		}
 
-func (bt *BTree) createRoot(key, payload []byte) error {
-	pageNum, err := bt.pm.AllocatePage()
-	if err != nil {
-		return err
-	}
-
-	pageSize := bt.pm.PageSize()
-	page := NewPage(pageNum, pageSize)
-	page.Type = PageTypeLeafTbl
-	if !bt.isTable {
-		page.Type = PageTypeLeafIdx
-	}
-
-	page.Data[0] = byte(page.Type)
-	cellOffset := pageSize - 8 - len(payload)
-	bt.writeUint16(page.Data[1:3], uint16(cellOffset))
-	bt.writeUint16(page.Data[3:5], 1)
-	bt.writeUint16(page.Data[5:7], 0)
-	bt.writeUint16(page.Data[7:9], 0)
-
-	rowID := bt.bytesToUint64(key)
-	bt.writeUint64(page.Data[cellOffset:], rowID)
-	copy(page.Data[cellOffset+8:], payload)
-
-	bt.writeUint16(page.Data[8:10], uint16(cellOffset))
-
-	bt.rootPage = pageNum
-
-	return bt.pm.WritePage(page)
-}
-
-func (bt *BTree) isFull(page *Page) bool {
-	numCells := int(bt.readUint16(page.Data[3:5]))
-	cellPointers := bt.readCellPointers(page)
-
-	if numCells == 0 {
-		firstFree := bt.readUint16(page.Data[1:3])
-		return firstFree < 4
-	}
-
-	lastCellOffset := int(cellPointers[numCells-1])
-	firstFree := bt.readUint16(page.Data[1:3])
-
-	cellSize := bt.estimateCellSize(page.Type == PageTypeLeafTbl)
-	return lastCellOffset-cellSize < int(firstFree)
-}
-
-func (bt *BTree) insertIntoPage(page *Page, key, payload []byte) error {
-	numCells := int(bt.readUint16(page.Data[3:5]))
-	cellPointers := bt.readCellPointers(page)
-
-	insertPos := numCells
-	for i := 0; i < numCells; i++ {
-		cellKey := bt.readKey(page, int(cellPointers[i]), page.Type == PageTypeLeafTbl)
-		if bt.compareKeys(key, cellKey) < 0 {
-			insertPos = i
-			break
+		cmp := CompareKeys(key, cellKey)
+		if cmp < 0 {
+			right = mid
+		} else if cmp > 0 {
+			left = mid + 1
+		} else {
+			return mid
 		}
 	}
 
-	for i := numCells; i > insertPos; i-- {
-		cellPointers[i] = cellPointers[i-1]
+	return left
+}
+
+// Insert inserts a key-value pair into the B-Tree
+func (bt *BTree) Insert(key []byte, value []byte) error {
+	if bt.rootPage == 0 {
+		// Create root page
+		pageNum, err := bt.pm.AllocatePage()
+		if err != nil {
+			return err
+		}
+		bt.rootPage = pageNum
+
+		// Initialize as leaf page
+		page, err := bt.pm.ReadPage(pageNum)
+		if err != nil {
+			return err
+		}
+
+		if bt.isTable {
+			page.Data[0] = 0x0d // Table leaf
+		} else {
+			page.Data[0] = 0x02 // Index leaf
+		}
+		binary.BigEndian.PutUint16(page.Data[3:5], 0) // 0 cells
+		binary.BigEndian.PutUint16(page.Data[5:7], uint16(bt.pm.PageSize()))
+
+		if err := bt.pm.WritePage(page); err != nil {
+			return err
+		}
 	}
 
-	bt.writeCell(page, insertPos, key, payload, 0)
-	bt.writeCellPointers(page, cellPointers)
+	return bt.insertIntoPage(bt.rootPage, key, value)
+}
 
-	numCells++
-	bt.writeUint16(page.Data[3:5], uint16(numCells))
+func (bt *BTree) insertIntoPage(pageNum uint32, key []byte, value []byte) error {
+	page, err := bt.pm.ReadPage(pageNum)
+	if err != nil {
+		return err
+	}
+
+	pageType := page.Data[0]
+	isLeaf := (pageType == 0x0d || pageType == 0x02)
+
+	if !isLeaf {
+		// Interior page: find child and recurse
+		childPage := bt.findChildForInsert(page, key)
+		if err := bt.insertIntoPage(childPage, key, value); err != nil {
+			return err
+		}
+
+		// Check if child split
+		overfull, _ := bt.balancer.IsPageOverfull(childPage)
+		if overfull {
+			// TODO: Handle split and update parent
+			return fmt.Errorf("page splitting not fully implemented yet")
+		}
+
+		return nil
+	}
+
+	// Leaf page: insert cell
+	if err := bt.insertCell(pageNum, key, value); err != nil {
+		return err
+	}
+
+	// Check if page needs splitting
+	overfull, _ := bt.balancer.IsPageOverfull(pageNum)
+	if overfull {
+		// TODO: Implement split logic
+		return fmt.Errorf("page splitting not fully implemented yet")
+	}
+
+	return nil
+}
+
+func (bt *BTree) findChildForInsert(page *Page, key []byte) uint32 {
+	cellIdx := bt.findCell(page, key)
+	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
+
+	if cellIdx < numCells {
+		cellPointerOffset := 8 + cellIdx*2
+		cellOffset := int(binary.BigEndian.Uint16(page.Data[cellPointerOffset : cellPointerOffset+2]))
+
+		pageType := page.Data[0]
+		if pageType == 0x05 { // Table interior
+			cell, _ := DecodeTableInteriorCell(page.Data[cellOffset:])
+			return cell.LeftChild
+		} else { // Index interior
+			cell, _ := DecodeIndexInteriorCell(page.Data[cellOffset:])
+			return cell.LeftChild
+		}
+	}
+
+	// Rightmost child
+	return binary.BigEndian.Uint32(page.Data[8:12])
+}
+
+func (bt *BTree) insertCell(pageNum uint32, key []byte, value []byte) error {
+	page, err := bt.pm.ReadPage(pageNum)
+	if err != nil {
+		return err
+	}
+
+	pageType := page.Data[0]
+	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
+	contentStart := int(binary.BigEndian.Uint16(page.Data[5:7]))
+
+	// Encode cell
+	var cellData []byte
+	if pageType == 0x0d { // Table leaf
+		rowid, _ := GetVarint(key)
+		cellData = EncodeTableLeafCell(rowid, value, 0)
+	} else { // Index leaf (0x02)
+		cellData = EncodeIndexLeafCell(key, 0)
+	}
+
+	if len(cellData) == 0 {
+		return fmt.Errorf("failed to encode cell")
+	}
+
+	// Find insertion point
+	insertIdx := bt.findCell(page, key)
+
+	// Write cell data
+	contentStart -= len(cellData)
+	copy(page.Data[contentStart:], cellData)
+
+	// Insert cell pointer
+	// Shift existing pointers
+	for i := numCells; i > insertIdx; i-- {
+		src := 8 + (i-1)*2
+		dst := 8 + i*2
+		binary.BigEndian.PutUint16(page.Data[dst:dst+2],
+			binary.BigEndian.Uint16(page.Data[src:src+2]))
+	}
+
+	// Set new cell pointer
+	pointerOffset := 8 + insertIdx*2
+	binary.BigEndian.PutUint16(page.Data[pointerOffset:pointerOffset+2], uint16(contentStart))
+
+	// Update header
+	binary.BigEndian.PutUint16(page.Data[3:5], uint16(numCells+1))
+	binary.BigEndian.PutUint16(page.Data[5:7], uint16(contentStart))
 
 	return bt.pm.WritePage(page)
 }
 
-func (bt *BTree) splitAndInsert(pageNum uint32, key, payload []byte) error {
-	return nil
+// NewCursor creates a new cursor positioned at the start of the B-Tree
+func (bt *BTree) NewCursor() *BTreeCursor {
+	return &BTreeCursor{
+		bt:    bt,
+		path:  make([]cursorLevel, 0),
+		valid: false,
+	}
 }
 
-func (bt *BTree) Delete(key []byte) error {
-	return nil
-}
+// First positions the cursor at the first entry
+func (c *BTreeCursor) First() error {
+	c.path = c.path[:0]
+	c.valid = false
 
-func (bt *BTree) First() (*BTreeCursor, error) {
-	if bt.rootPage == 0 {
-		return nil, nil
+	if c.bt.rootPage == 0 {
+		return nil
 	}
 
-	page, err := bt.pm.ReadPage(bt.rootPage)
+	// Navigate to leftmost leaf
+	pageNum := c.bt.rootPage
+	for {
+		page, err := c.bt.pm.ReadPage(pageNum)
+		if err != nil {
+			return err
+		}
+
+		pageType := page.Data[0]
+		c.path = append(c.path, cursorLevel{pageNum: pageNum, cellIdx: 0})
+
+		if pageType == 0x0d || pageType == 0x02 { // Leaf
+			c.valid = true
+			return nil
+		}
+
+		// Interior: go to leftmost child
+		cellPointerOffset := 8
+		cellOffset := int(binary.BigEndian.Uint16(page.Data[cellPointerOffset : cellPointerOffset+2]))
+
+		if pageType == 0x05 { // Table interior
+			cell, _ := DecodeTableInteriorCell(page.Data[cellOffset:])
+			pageNum = cell.LeftChild
+		} else { // Index interior
+			cell, _ := DecodeIndexInteriorCell(page.Data[cellOffset:])
+			pageNum = cell.LeftChild
+		}
+	}
+}
+
+// Valid returns true if the cursor points to a valid entry
+func (c *BTreeCursor) Valid() bool {
+	return c.valid
+}
+
+// Key returns the key at the current cursor position
+func (c *BTreeCursor) Key() ([]byte, error) {
+	if !c.valid || len(c.path) == 0 {
+		return nil, fmt.Errorf("invalid cursor position")
+	}
+
+	level := c.path[len(c.path)-1]
+	page, err := c.bt.pm.ReadPage(level.pageNum)
 	if err != nil {
 		return nil, err
 	}
 
-	for page.Type == PageTypeInteriorTbl || page.Type == PageTypeInteriorIdx {
-		childPage := bt.readChildPage(page, 0, page.Type == PageTypeInteriorTbl)
-		page, err = bt.pm.ReadPage(childPage)
+	cellPointerOffset := 8 + level.cellIdx*2
+	cellOffset := int(binary.BigEndian.Uint16(page.Data[cellPointerOffset : cellPointerOffset+2]))
+
+	pageType := page.Data[0]
+	if pageType == 0x0d { // Table leaf
+		cell, err := DecodeTableLeafCell(page.Data[cellOffset:])
 		if err != nil {
 			return nil, err
 		}
+		key := make([]byte, 9)
+		PutVarint(key, cell.Rowid)
+		return key, nil
+	} else { // Index leaf
+		cell, err := DecodeIndexLeafCell(page.Data[cellOffset:])
+		if err != nil {
+			return nil, err
+		}
+		return cell.Key, nil
+	}
+}
+
+// Value returns the value at the current cursor position
+func (c *BTreeCursor) Value() ([]byte, error) {
+	if !c.valid || len(c.path) == 0 {
+		return nil, fmt.Errorf("invalid cursor position")
 	}
 
-	if bt.readUint16(page.Data[3:5]) == 0 {
+	level := c.path[len(c.path)-1]
+	page, err := c.bt.pm.ReadPage(level.pageNum)
+	if err != nil {
+		return nil, err
+	}
+
+	pageType := page.Data[0]
+	if pageType != 0x0d { // Only table leaf has values
 		return nil, nil
 	}
 
-	return &BTreeCursor{bt: bt, page: page, cell: 0}, nil
-}
+	cellPointerOffset := 8 + level.cellIdx*2
+	cellOffset := int(binary.BigEndian.Uint16(page.Data[cellPointerOffset : cellPointerOffset+2]))
 
-func (c *BTreeCursor) Next() ([]byte, []byte, error) {
-	if c.page == nil {
-		return nil, nil, nil
+	cell, err := DecodeTableLeafCell(page.Data[cellOffset:])
+	if err != nil {
+		return nil, err
 	}
 
-	numCells := int(c.bt.readUint16(c.page.Data[3:5]))
-	if c.cell >= numCells-1 {
-		return nil, nil, nil
-	}
-
-	c.cell++
-	cellPointers := c.bt.readCellPointers(c.page)
-	cellOffset := int(cellPointers[c.cell])
-	key, payload := c.bt.readCellPayload(c.page, cellOffset, c.page.Type == PageTypeLeafTbl)
-
-	return key, payload, nil
+	return cell.Payload, nil
 }
 
-func (c *BTreeCursor) Close() error {
-	c.page = nil
+// Next moves the cursor to the next entry
+func (c *BTreeCursor) Next() error {
+	if !c.valid || len(c.path) == 0 {
+		return fmt.Errorf("invalid cursor position")
+	}
+
+	// Try to move to next cell in current page
+	level := &c.path[len(c.path)-1]
+	page, err := c.bt.pm.ReadPage(level.pageNum)
+	if err != nil {
+		return err
+	}
+
+	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
+	if level.cellIdx+1 < numCells {
+		level.cellIdx++
+		return nil
+	}
+
+	// End of page: move up and right
+	// TODO: Implement proper cursor navigation across pages
+	c.valid = false
 	return nil
-}
-
-func (bt *BTree) readUint16(data []byte) uint16 {
-	return uint16(data[0])<<8 | uint16(data[1])
-}
-
-func (bt *BTree) writeUint16(data []byte, val uint16) {
-	data[0] = byte(val >> 8)
-	data[1] = byte(val)
-}
-
-func (bt *BTree) writeUint64(data []byte, val uint64) {
-	data[0] = byte(val >> 56)
-	data[1] = byte(val >> 48)
-	data[2] = byte(val >> 40)
-	data[3] = byte(val >> 32)
-	data[4] = byte(val >> 24)
-	data[5] = byte(val >> 16)
-	data[6] = byte(val >> 8)
-	data[7] = byte(val)
-}
-
-func (bt *BTree) readCellPointers(page *Page) []uint16 {
-	numCells := int(bt.readUint16(page.Data[3:5]))
-	pointers := make([]uint16, numCells)
-	for i := 0; i < numCells; i++ {
-		offset := 8 + i*2
-		pointers[i] = bt.readUint16(page.Data[offset : offset+2])
-	}
-	return pointers
-}
-
-func (bt *BTree) writeCellPointers(page *Page, pointers []uint16) {
-	for i := range pointers {
-		offset := 8 + i*2
-		bt.writeUint16(page.Data[offset:offset+2], pointers[i])
-	}
-}
-
-func (bt *BTree) readKey(page *Page, offset int, isTable bool) []byte {
-	if isTable {
-		rowID := bt.bytesToUint64(page.Data[offset:])
-		key := make([]byte, 8)
-		key[0] = byte(rowID >> 56)
-		key[1] = byte(rowID >> 48)
-		key[2] = byte(rowID >> 40)
-		key[3] = byte(rowID >> 32)
-		key[4] = byte(rowID >> 24)
-		key[5] = byte(rowID >> 16)
-		key[6] = byte(rowID >> 8)
-		key[7] = byte(rowID)
-		return key
-	}
-
-	payloadLen, n := bt.readVarint(page.Data[offset:])
-	payloadEnd := offset + n + int(payloadLen)
-	return page.Data[offset:payloadEnd]
-}
-
-func (bt *BTree) readCellPayload(page *Page, offset int, isTable bool) ([]byte, []byte) {
-	if isTable {
-		rowID := bt.bytesToUint64(page.Data[offset:])
-		key := make([]byte, 8)
-		key[0] = byte(rowID >> 56)
-		key[1] = byte(rowID >> 48)
-		key[2] = byte(rowID >> 40)
-		key[3] = byte(rowID >> 32)
-		key[4] = byte(rowID >> 24)
-		key[5] = byte(rowID >> 16)
-		key[6] = byte(rowID >> 8)
-		key[7] = byte(rowID)
-		payload := page.Data[offset+8:]
-		return key, payload
-	}
-
-	payloadLen, n := bt.readVarint(page.Data[offset:])
-	payloadOffset := offset + n
-	payload := page.Data[payloadOffset : payloadOffset+int(payloadLen)]
-	return nil, payload
-}
-
-func (bt *BTree) writeCell(page *Page, cell int, key, payload []byte, child uint32) {
-	cellPointers := bt.readCellPointers(page)
-
-	if page.Type == PageTypeLeafTbl {
-		rowID := bt.bytesToUint64(key)
-		cellOffset := int(bt.readUint16(page.Data[1:3])) - 8 - len(payload) - 2
-		cellPointers[cell] = uint16(cellOffset)
-
-		bt.writeUint64(page.Data[cellOffset:], rowID)
-		copy(page.Data[cellOffset+8:], payload)
-
-		bt.writeUint16(page.Data[1:3], uint16(cellOffset+8+len(payload)))
-	} else if page.Type == PageTypeInteriorTbl {
-		cellOffset := int(bt.readUint16(page.Data[1:3])) - 8 - 4 - 2
-		cellPointers[cell] = uint16(cellOffset)
-
-		bt.writeUint64(page.Data[cellOffset:], uint64(child))
-		bt.writeUint64(page.Data[cellOffset+4:], bt.bytesToUint64(key))
-
-		bt.writeUint16(page.Data[1:3], uint16(cellOffset+12))
-	} else if page.Type == PageTypeLeafIdx {
-		cellOffset := int(bt.readUint16(page.Data[1:3])) - len(key) - len(payload) - 2
-		cellPointers[cell] = uint16(cellOffset)
-
-		copy(page.Data[cellOffset:], key)
-		offset := cellOffset + len(key)
-		copy(page.Data[offset:], payload)
-
-		bt.writeUint16(page.Data[1:3], uint16(cellOffset+len(key)+len(payload)))
-	}
-
-	bt.writeCellPointers(page, cellPointers)
-}
-
-func (bt *BTree) readChildPage(page *Page, offset int, isTable bool) uint32 {
-	if isTable {
-		_, n := bt.readVarint(page.Data[offset:])
-		child, _ := bt.readVarint(page.Data[offset+n:])
-		return uint32(child)
-	}
-	return uint32(bt.bytesToUint64(page.Data[offset : offset+4]))
-}
-
-func (bt *BTree) readVarint(data []byte) (uint64, int) {
-	var result uint64
-	var n int
-	for i := 0; i < 9 && i < len(data); i++ {
-		b := data[i]
-		if i < 8 {
-			result |= uint64(b&0x7f) << (i * 7)
-		} else {
-			result |= uint64(b) << (i * 7)
-		}
-		n++
-		if b < 0x80 {
-			break
-		}
-	}
-	return result, n
-}
-
-func (bt *BTree) writeVarint(data []byte, val uint64) int {
-	n := 0
-	for {
-		if n >= 9 {
-			break
-		}
-		if val < 0x80 {
-			data[n] = byte(val)
-			n++
-			break
-		}
-		data[n] = byte((val & 0x7f) | 0x80)
-		val >>= 7
-		n++
-	}
-	return n
-}
-
-func (bt *BTree) compareKeys(a, b []byte) int {
-	alen := len(a)
-	blen := len(b)
-	min := alen
-	if blen < min {
-		min = blen
-	}
-
-	for i := 0; i < min; i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-
-	if alen < blen {
-		return -1
-	}
-	if alen > blen {
-		return 1
-	}
-	return 0
-}
-
-func (bt *BTree) estimateCellSize(isTable bool) int {
-	if isTable {
-		return 10
-	}
-	return 20
-}
-
-func (bt *BTree) bytesToUint64(b []byte) uint64 {
-	var result uint64
-	for i, v := range b {
-		result |= uint64(v) << (uint(i) * 8)
-	}
-	return result
 }
