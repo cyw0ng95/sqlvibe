@@ -394,8 +394,10 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		}
 
 		// SetOp (UNION, EXCEPT, INTERSECT) not yet implemented in VM
+		// Wave 2 in progress - using temporary direct execution
 		if stmt.SetOp != "" {
-			return nil, fmt.Errorf("SetOp operations (UNION, EXCEPT, INTERSECT) are not yet supported - VM implementation pending")
+			// For now, return error - proper VM implementation needed
+			return nil, fmt.Errorf("SetOp operations (UNION, EXCEPT, INTERSECT) VM implementation in progress (Wave 2)")
 		}
 
 		// VM execution for all SELECT queries

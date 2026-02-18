@@ -158,6 +158,15 @@ const (
 	OpDelete
 	OpUpdate
 
+	// Set operations
+	OpUnionAll
+	OpUnionDistinct
+	OpExcept
+	OpIntersect
+	OpEphemeralCreate
+	OpEphemeralInsert
+	OpEphemeralFind
+
 	// Null handling
 	OpIfNot
 	OpIf
@@ -342,6 +351,15 @@ var OpCodeInfo = map[OpCode]string{
 	OpInsert: "Insert",
 	OpDelete: "Delete",
 	OpUpdate: "Update",
+
+	// Set operations
+	OpUnionAll:        "UnionAll",
+	OpUnionDistinct:   "UnionDistinct",
+	OpExcept:          "Except",
+	OpIntersect:       "Intersect",
+	OpEphemeralCreate: "EphemeralCreate",
+	OpEphemeralInsert: "EphemeralInsert",
+	OpEphemeralFind:   "EphemeralFind",
 
 	// Null handling
 	OpIfNot: "IfNot",
