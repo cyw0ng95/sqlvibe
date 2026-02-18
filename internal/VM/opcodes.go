@@ -66,6 +66,7 @@ const (
 	OpAggStep
 	OpAggFinal
 	OpCount
+	OpAggregate
 
 	// Comparison
 	OpEq
@@ -263,6 +264,7 @@ var OpCodeInfo = map[OpCode]string{
 	OpAggStep:   "AggStep",
 	OpAggFinal:  "AggFinal",
 	OpCount:     "Count",
+	OpAggregate: "Aggregate",
 
 	// Comparison
 	OpEq:      "Eq",
