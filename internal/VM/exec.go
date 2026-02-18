@@ -618,6 +618,23 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpGlob:
+			pattern := ""
+			str := ""
+			if v, ok := vm.registers[inst.P1].(string); ok {
+				str = v
+			}
+			if v, ok := vm.registers[inst.P2].(string); ok {
+				pattern = v
+			}
+			if dst, ok := inst.P4.(int); ok {
+				vm.registers[dst] = int64(0)
+				if globMatch(str, pattern) {
+					vm.registers[dst] = int64(1)
+				}
+			}
+			continue
+
 		case OpAbs:
 			src := vm.registers[inst.P1]
 			if dst, ok := inst.P4.(int); ok {
@@ -1186,11 +1203,16 @@ func stringSubstr(s interface{}, start, length int64) interface{} {
 			startIdx = 0
 		}
 	} else {
-		// SQLite treats 0 as 1
+		// SQLite: start=0 is treated as 1, BUT excludes position 0
+		// SUBSTR('hello', 0, 5) = 'hell' (not 'hello')
+		// So start=0 or start=1 both start from position 1 (index 0)
+		// But 0 means "start from beginning but exclude first char" for length purposes
 		if startIdx == 0 {
-			startIdx = 1
+			// Start=0: exclude first character
+			startIdx = 0
+		} else {
+			startIdx = startIdx - 1 // Convert to 0-based
 		}
-		startIdx = startIdx - 1 // Convert to 0-based
 	}
 
 	if startIdx >= len(runes) {
@@ -1201,6 +1223,10 @@ func stringSubstr(s interface{}, start, length int64) interface{} {
 	// SQLite: if length is 0, return empty string
 	if length == 0 {
 		return ""
+	}
+	// If start was 0, length is reduced by 1 to exclude first char
+	if start == 0 && length > 0 {
+		length = length - 1
 	}
 	if length > 0 {
 		endIdx = startIdx + int(length)
@@ -1512,46 +1538,149 @@ func likeMatch(str, pattern string) bool {
 }
 
 func likeMatchRecursive(str string, pattern string, si, pi int) bool {
-	for pi < len(pattern) && si < len(str) {
-		pch := pattern[pi]
+	// Check if pattern is exhausted
+	if pi >= len(pattern) {
+		// Pattern exhausted - match if string also exhausted
+		return si >= len(str)
+	}
 
-		if pch == '%' {
-			for i := pi + 1; i <= len(pattern); i++ {
-				if likeMatchRecursive(str, pattern, si, i) {
-					return true
+	// Check if string is exhausted but pattern still has content
+	if si >= len(str) {
+		// String exhausted - remaining pattern must all be %
+		for i := pi; i < len(pattern); i++ {
+			if pattern[i] != '%' {
+				return false
+			}
+		}
+		return true
+	}
+
+	pch := pattern[pi]
+
+	if pch == '%' {
+		// % matches zero or more characters
+		// Try matching with zero characters (skip %)
+		if likeMatchRecursive(str, pattern, si, pi+1) {
+			return true
+		}
+		// Try matching with one or more characters (consume one char and try % again)
+		return likeMatchRecursive(str, pattern, si+1, pi)
+	}
+
+	if pch == '_' {
+		// _ matches any single character
+		return likeMatchRecursive(str, pattern, si+1, pi+1)
+	}
+
+	// Handle escape character
+	if pch == '\\' && pi+1 < len(pattern) {
+		pi++
+		pch = pattern[pi]
+	}
+
+	// Check for literal match
+	if str[si] == pch {
+		return likeMatchRecursive(str, pattern, si+1, pi+1)
+	}
+
+	return false
+}
+
+func globMatch(str, pattern string) bool {
+	// GLOB is case-sensitive and uses * for zero or more, ? for exactly one, [] for character classes
+	return globMatchRecursive(str, pattern, 0, 0)
+}
+
+func globMatchRecursive(str string, pattern string, si, pi int) bool {
+	// Check if pattern is exhausted
+	if pi >= len(pattern) {
+		return si >= len(str)
+	}
+
+	// Check if string is exhausted but pattern still has content
+	if si >= len(str) {
+		for i := pi; i < len(pattern); i++ {
+			if pattern[i] != '*' {
+				return false
+			}
+		}
+		return true
+	}
+
+	pch := pattern[pi]
+
+	if pch == '*' {
+		// * matches zero or more characters
+		// Try matching with zero characters (skip *)
+		if globMatchRecursive(str, pattern, si, pi+1) {
+			return true
+		}
+		// Try matching with one or more characters (consume one char and try * again)
+		return globMatchRecursive(str, pattern, si+1, pi)
+	}
+
+	if pch == '?' {
+		// ? matches any single character
+		return globMatchRecursive(str, pattern, si+1, pi+1)
+	}
+
+	// Handle character class [...]
+	if pch == '[' {
+		// Find closing ]
+		closeIdx := -1
+		for i := pi + 1; i < len(pattern); i++ {
+			if pattern[i] == ']' {
+				closeIdx = i
+				break
+			}
+		}
+		if closeIdx > pi+1 {
+			// Check if current char matches any in the class
+			match := false
+			strChar := str[si]
+			negate := false
+			start := pi + 1
+			if pattern[start] == '^' {
+				negate = true
+				start++
+			}
+			for j := start; j < closeIdx; j++ {
+				if j+2 < closeIdx && pattern[j+1] == '-' {
+					// Range
+					low := pattern[j]
+					high := pattern[j+2]
+					if strChar >= low && strChar <= high {
+						match = true
+						break
+					}
+					j += 2
+				} else if pattern[j] == strChar {
+					match = true
+					break
 				}
+			}
+			if negate {
+				match = !match
+			}
+			if match {
+				return globMatchRecursive(str, pattern, si+1, closeIdx+1)
 			}
 			return false
 		}
-
-		if pch == '_' {
-			si++
-			pi++
-			continue
-		}
-
-		if pch == '\\' && pi+1 < len(pattern) {
-			pi++
-			pch = pattern[pi]
-		}
-
-		if si < len(str) && str[si] == pch {
-			si++
-			pi++
-			continue
-		}
-
-		return false
 	}
 
-	for pi < len(pattern) {
-		if pattern[pi] != '%' {
-			return false
-		}
+	// Handle escape character
+	if pch == '\\' && pi+1 < len(pattern) {
 		pi++
+		pch = pattern[pi]
 	}
 
-	return si == len(str)
+	// Check for literal match (case-sensitive)
+	if str[si] == pch {
+		return globMatchRecursive(str, pattern, si+1, pi+1)
+	}
+
+	return false
 }
 
 var ErrValueTooBig = errors.New("value too big")
