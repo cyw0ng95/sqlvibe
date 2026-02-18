@@ -6,7 +6,7 @@ v0.6.0 delivers three major architectural milestones plus comprehensive SQL1999 
 2. **Full VM Integration** - All SQL operations (SELECT, DML, SetOps) through VM
 3. **SQL1999 Conformance** - Comprehensive test coverage for E011-E171 plus F021-F031
 
-**13 Waves Total**:
+**16 Waves Total**:
 - Wave 1: Transaction Management (TM)
 - Wave 2: Set Operations in VM
 - Wave 3: DML Through VM
@@ -20,6 +20,9 @@ v0.6.0 delivers three major architectural milestones plus comprehensive SQL1999 
 - Wave 11: SQL1999 Conformance (E161, E171) - **NEW**
 - Wave 12: SQL1999 Conformance (F021) - **NEW**
 - Wave 13: SQL1999 Conformance (F031) - **NEW**
+- Wave 14: SQL1999 Conformance (F041) - **NEW**
+- Wave 15: SQL1999 Conformance (F051) - **NEW**
+- Wave 16: SQL1999 Conformance (F081) - **NEW**
 
 ## Context
 - **Previous**: v0.5.1 delivered CG/VFS/BTree with bug fixes
@@ -31,7 +34,7 @@ This release enables ACID transactions, completes VM integration, and adds compr
 
 ---
 
-## Achievement Status: **IN PROGRESS - 11 of 11 Waves COMPLETE**
+## Achievement Status: **IN PROGRESS - 11 of 14 Waves COMPLETE**
 
 **Iteration Goal**: Add and compile SQL1999 test cases, identify implementation gaps
 
@@ -42,6 +45,9 @@ This release enables ACID transactions, completes VM integration, and adds compr
 - ✅ Wave 13: SQL1999 Conformance (F031) - **COMPLETE** (6/6 tests compiled)
 - 📋 Wave 2: Set Operations - **PENDING** (no tests yet)
 - 📋 Wave 3: DML Through VM - **PENDING** (no tests yet)
+- 📋 Wave 14: SQL1999 Conformance (F041) - **NEW** (pending)
+- 📋 Wave 15: SQL1999 Conformance (F051) - **NEW** (pending)
+- 📋 Wave 16: SQL1999 Conformance (F081) - **NEW** (pending)
 
 **SQL1999 Test Coverage**: 122/122 tests compiled (100% coverage achieved)
 
@@ -202,7 +208,12 @@ internal/
         ├── E131/  # SQL1999 Query Predicates (Wave 8 - 7 tests)
         ├── E141/  # SQL1999 NULLs (Wave 8 - 8 tests)
         ├── E081/  # SQL1999 Full Query Expressions (Wave 9 - 8 tests)
-        └── E151/  # SQL1999 Transaction Support (Wave 9 - 8 tests)
+        ├── E151/  # SQL1999 Transaction Support (Wave 9 - 8 tests)
+        ├── F021/  # SQL1999 Information Schema (Wave 12 - 5 tests)
+        ├── F031/  # SQL1999 Schema Manipulation (Wave 13 - 6 tests)
+        ├── F041/  # SQL1999 Basic Table Definition (Wave 14 - ~6 tests)
+        ├── F051/  # SQL1999 Basic Data Types (Wave 15 - ~6 tests)
+        └── F081/  # SQL1999 UNION (Wave 16 - ~6 tests)
 ```
 
 ---
@@ -214,13 +225,17 @@ internal/
 - [x] Wave 4-11: SQL1999 test cases added and compiled (111/111 tests)
 - [x] Wave 12: F021 test cases added and compiled (5/5 tests)
 - [x] Wave 13: F031 test cases added and compiled (6/6 tests)
+- [ ] Wave 14: F041 test cases added and compiled (pending)
+- [ ] Wave 15: F051 test cases added and compiled (pending)
+- [ ] Wave 16: F081 test cases added and compiled (pending)
 - [x] Implementation gaps identified and documented
 - [x] Pass/fail/skip statistics documented
 
 **Test Coverage Achieved**:
-- [x] 122/122 SQL1999 tests compiled (100% coverage)
+- [ ] 140+ SQL1999 tests compiled (target coverage with F041, F051, F081)
 - [x] All E-series tests (E011-E171) compiled
 - [x] All F-series tests (F021, F031) compiled
+- [ ] F041, F051, F081 test directories to be created
 
 **Quality Gates**:
 - All tests compile and run without syntax errors
@@ -381,6 +396,36 @@ graph TD
         M6[F031-16 DROP VIEW RESTRICT]
     end
 
+    subgraph W14 ["Wave 14: SQL1999 Conformance (F041) (v0.6.0) - **NEW**"]
+        direction TB
+        N1[F041-01 CREATE TABLE]
+        N2[F041-02 INSERT Values]
+        N3[F041-03 SELECT Queries]
+        N4[F041-04 UPDATE]
+        N5[F041-05 DELETE]
+        N6[F041-06 Table Constraints]
+    end
+
+    subgraph W15 ["Wave 15: SQL1999 Conformance (F051) (v0.6.0) - **NEW**"]
+        direction TB
+        O1[F051-01 INTEGER Type]
+        O2[F051-02 CHARACTER Types]
+        O3[F051-03 VARCHAR Type]
+        O4[F051-04 NUMERIC/DECIMAL]
+        O5[F051-05 DATE/TIME]
+        O6[F051-06 NULL Defaults]
+    end
+
+    subgraph W16 ["Wave 16: SQL1999 Conformance (F081) (v0.6.0) - **NEW**"]
+        direction TB
+        P1[F081-01 UNION ALL]
+        P2[F081-02 UNION DISTINCT]
+        P3[F081-03 UNION ORDER BY]
+        P4[F081-04 UNION WHERE]
+        P5[F081-05 Multiple UNION]
+        P6[F081-06 UNION Column Count]
+    end
+
     W1 --> W2
     W2 --> W3
     W3 --> W4
@@ -393,6 +438,9 @@ graph TD
     W10 --> W11
     W11 --> W12
     W12 --> W13
+    W13 --> W14
+    W14 --> W15
+    W15 --> W16
 ```
 
 ---
@@ -548,6 +596,54 @@ graph TD
 
 ---
 
+## Wave 14: SQL1999 Conformance (F041) - v0.6.0 - **NEW**
+
+**Status**: 🔄 Pending - Test directories NOT YET CREATED
+
+**Overview**: Basic table definition tests:
+- F041-01: CREATE TABLE with various column types
+- F041-02: INSERT with various value types
+- F041-03: Simple SELECT queries
+- F041-04: UPDATE operations
+- F041-05: DELETE operations
+- F041-06: Table with constraints
+
+**Estimated Time**: ~15 hours (once build fixed)
+
+---
+
+## Wave 15: SQL1999 Conformance (F051) - v0.6.0 - **NEW**
+
+**Status**: 🔄 Pending - Test directories NOT YET CREATED
+
+**Overview**: Basic data type tests:
+- F051-01: INTEGER data type
+- F051-02: CHARACTER data types
+- F051-03: VARCHAR data type
+- F051-04: NUMERIC/DECIMAL data types
+- F051-05: DATE/TIME data types
+- F051-06: NULL and default values
+
+**Estimated Time**: ~12 hours (once build fixed)
+
+---
+
+## Wave 16: SQL1999 Conformance (F081) - v0.6.0 - **NEW**
+
+**Status**: 🔄 Pending - Test directories NOT YET CREATED
+
+**Overview**: UNION in query expressions:
+- F081-01: UNION ALL basic
+- F081-02: UNION DISTINCT
+- F081-03: UNION with ORDER BY
+- F081-04: UNION with WHERE clause
+- F081-05: Multiple UNION operations
+- F081-06: UNION with different column counts
+
+**Estimated Time**: ~10 hours (once build fixed)
+
+---
+
 ## Integration Points
 
 ### With TM (Transaction Monitor)
@@ -650,7 +746,7 @@ go test ./... -run "TestSchema"
 
 ---
 
-## Summary of New Test Suites (Waves 10-13)
+## Summary of New Test Suites (Waves 10-16)
 
 **Waves 4-11 Status**: ✅ COMPLETE (111/111 tests compiled)
 
@@ -666,8 +762,12 @@ go test ./... -run "TestSchema"
 | 11 | E161, E171 | ✅ Compiled | 2 | 1/2 | 50% | Low |
 | 12 | F021 | ✅ Compiled | 5 | 0/5 | 0% | High |
 | 13 | F031 | ✅ Compiled | 6 | 0/5* | 0% | High |
+| 14 | F041 | 🔄 PENDING | ~6 | - | - | Medium |
+| 15 | F051 | 🔄 PENDING | ~6 | - | - | Medium |
+| 16 | F081 | 🔄 PENDING | ~6 | - | - | Medium |
 
 **Current Total**: 122 tests compiled (Waves 4-13)
+**Target Total**: ~140+ tests (Waves 4-16)
 *F031 has 6 tests total (1 skipped)
 
 **Implementation Gaps Summary**:
@@ -683,12 +783,14 @@ go test ./... -run "TestSchema"
 - Primary goal: Add and compile SQL1999 test cases to identify implementation gaps
 - Secondary goal: Show clear gap between current implementation and target (SQL1999 compliance)
 - **NOT** a goal to pass all tests - this is gap analysis phase
+- NEW: Add F041, F051, F081 test cases for extended coverage
 
 **Achievements**:
 - 111/111 E-series SQL1999 tests compiled (100% test coverage)
 - Clear categorization of passing/failing/skipping tests
 - Implementation gap analysis by feature category
 - Priority levels assigned to gaps for future work
+- Extended F-series coverage with F021, F031, F041, F051, F081 (pending)
 
 **Implementation Status Summary**:
 - **Complete** (100% pass): Transactions, Schema Manipulation, NULL Handling, Table Creation, Comments
@@ -698,8 +800,9 @@ go test ./... -run "TestSchema"
 **Next Steps (Future Iterations)**:
 1. Fix high-priority gaps (0% pass rate features)
 2. Add F021/F031 test cases for complete coverage
-3. Implement missing features in priority order
-4. Improve partial implementations to reach 100% pass rate
+3. Implement F041, F051, F081 test cases (NEW)
+4. Implement missing features in priority order
+5. Improve partial implementations to reach 100% pass rate
 
 **Note on Test Results**:
 - 52/111 tests passing (47%) is expected for a gap analysis iteration
