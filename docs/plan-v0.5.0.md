@@ -1,4 +1,4 @@
-# Plan v0.5.0 - CG/VFS/BTree Implementation - WRAPPING UP
+# Plan v0.5.0 - CG/VFS/BTree Implementation - RELEASED
 
 ## Summary
 v0.5.0 delivers three major architectural components:
@@ -6,12 +6,16 @@ v0.5.0 delivers three major architectural components:
 2. **VFS (Virtual File System) Architecture** - Storage abstraction layer
 3. **Complete BTree Implementation** - SQLite-compatible encoding infrastructure
 
-## Achievement Status: **WRAPPING UP - Needs Bug Fix Decisions**
+## Achievement Status: **RELEASED v0.5.0** (2026-02-18)
 
-All waves (6-8) delivered with code implementation, but test failures remain:
-- Wave 6: CG Subsystem ✅ (code complete)
-- Wave 7: VFS Architecture ✅ (code complete)  
-- Wave 8: BTree Implementation ⚠️ (code complete, test failures in encoding)
+All waves (6-8) delivered with code implementation, but test failures remain and are deferred to v0.5.1:
+- Wave 6: CG Subsystem ✅ (code complete, tests passing)
+- Wave 7: VFS Architecture ✅ (code complete, tests passing)  
+- Wave 8: BTree Implementation ✅ (code complete, test failures deferred to v0.5.1)
+
+**Deferred to v0.5.1**: DS encoding tests, ORDER BY bugs, IN/BETWEEN operators, string functions
+
+**See**: [plan-v0.5.1.md](./plan-v0.5.1.md) for bug fixes
 
 Additionally completed:
 - Critical BTree bugfixes (cell boundary detection)

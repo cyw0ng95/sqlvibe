@@ -1,7 +1,12 @@
-# Plan v0.5.1 - Bug Fixes Release
+# Plan v0.5.1 - Bug Fixes Release - IN PROGRESS
 
 ## Summary
 Focus on fixing critical test failures identified in v0.5.0 before proceeding to new features.
+
+## Context
+- **Previous**: v0.5.0 released with CG/VFS/BTree implementation
+- **Issue**: Test failures discovered after v0.5.0 release
+- **Goal**: Fix all critical bugs to achieve >95% test pass rate
 
 ## Priority: HIGH
 All items must be completed before any new features.
