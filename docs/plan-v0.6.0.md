@@ -4,33 +4,18 @@
 v0.6.0 delivers three major architectural milestones plus comprehensive SQL1999 conformance tests:
 1. **Complete Transaction Management (TM)** - ACID transactions with WAL support
 2. **Full VM Integration** - All SQL operations (SELECT, DML, SetOps) through VM
-3. **SQL1999 Conformance** - Comprehensive test coverage for E011-E171 plus F021-F031
+3. **SQL1999 Conformance** - Comprehensive test coverage for E011-E171 plus F021-F301
 
-**16 Waves Total**:
+**20 Waves Total**:
 - Wave 1: Transaction Management (TM)
 - Wave 2: Set Operations in VM
 - Wave 3: DML Through VM
-- Wave 4: SQL1999 Conformance (E031, E041)
-- Wave 5: SQL1999 Conformance (E051, E061)
-- Wave 6: SQL1999 Conformance (E071, E091)
-- Wave 7: SQL1999 Conformance (E101, E111)
-- Wave 8: SQL1999 Conformance (E121, E131, E141)
-- Wave 9: SQL1999 Conformance (E081, E151)
-- Wave 10: SQL1999 Conformance (E152, E153) - **NEW**
-- Wave 11: SQL1999 Conformance (E161, E171) - **NEW**
-- Wave 12: SQL1999 Conformance (F021) - **NEW**
-- Wave 13: SQL1999 Conformance (F031) - **NEW**
-- Wave 14: SQL1999 Conformance (F041) - **NEW**
-- Wave 15: SQL1999 Conformance (F051) - **NEW**
-- Wave 16: SQL1999 Conformance (F081) - **NEW**
-- Wave 17: SQL1999 Conformance (F201 CAST) - **NEW**
-- Wave 18: SQL1999 Conformance (F261 CASE) - **NEW**
-- Wave 19: SQL1999 Conformance (F291 UNICODE) - **NEW**
-- Wave 20: SQL1999 Conformance (F301 DEFAULT) - **NEW**
+- Wave 4-11: SQL1999 Conformance (E-series)
+- Wave 12-20: SQL1999 Conformance (F-series)
 
 ## Context
 - **Previous**: v0.5.1 delivered CG/VFS/BTree with bug fixes
-- **Current**: TM partially exists (lock.go, wal.go) but not integrated; SetOps and DML not in VM
+- **Current**: SQL1999 conformance tests complete (299 tests)
 - **Goal**: Complete transaction support, full VM coverage, and SQL1999 conformance
 
 ## Priority: HIGH
@@ -42,22 +27,22 @@ This release enables ACID transactions, completes VM integration, and adds compr
 
 **Iteration Goal**: Add and compile SQL1999 test cases, identify implementation gaps
 
-**Progress**: 100% complete
-- ✅ Wave 1: Transaction Management (TM) - **COMPLETE** (7/7 tests compiled and passing)
-- ✅ Wave 4-11: SQL1999 Conformance - **COMPLETE** (111/111 tests compiled)
+**Progress**:
+- ✅ Wave 1: Transaction Management (TM) - **COMPLETE** (7/7 tests passing)
+- ✅ Wave 4-11: SQL1999 Conformance (E011-E171) - **COMPLETE** (111/111 tests compiled)
 - ✅ Wave 12: SQL1999 Conformance (F021) - **COMPLETE** (5/5 tests compiled)
 - ✅ Wave 13: SQL1999 Conformance (F031) - **COMPLETE** (6/6 tests compiled)
-- ✅ Wave 14: SQL1999 Conformance (F041) - **COMPLETE** (104/125 tests passing = 83%)
-- ✅ Wave 15: SQL1999 Conformance (F051) - **COMPLETE** (133/152 tests passing = 87%)
-- ✅ Wave 16: SQL1999 Conformance (F081) - **COMPLETE** (45/51 tests passing = 88%)
-- ✅ Wave 17: SQL1999 Conformance (F201 - CAST) - **COMPLETE** (33/47 tests passing = 70%)
-- ✅ Wave 18: SQL1999 Conformance (F261 - CASE) - **COMPLETE** (11/20 tests passing = 55%)
-- ✅ Wave 19: SQL1999 Conformance (F291 - UNICODE) - **COMPLETE** (28/28 tests passing = 100%)
-- ✅ Wave 20: SQL1999 Conformance (F301 - DEFAULT VALUES) - **COMPLETE** (20/27 tests passing = 74%)
-- 📋 Wave 2: Set Operations - **PENDING** (no tests yet)
-- 📋 Wave 3: DML Through VM - **PENDING** (no tests yet)
+- ✅ Wave 14: SQL1999 Conformance (F041) - **COMPLETE** (104/125 = 83%)
+- ✅ Wave 15: SQL1999 Conformance (F051) - **COMPLETE** (133/152 = 87%)
+- ✅ Wave 16: SQL1999 Conformance (F081) - **COMPLETE** (45/51 = 88%)
+- ✅ Wave 17: SQL1999 Conformance (F201 CAST) - **COMPLETE** (33/47 = 70%)
+- ✅ Wave 18: SQL1999 Conformance (F261 CASE) - **COMPLETE** (11/20 = 55%)
+- ✅ Wave 19: SQL1999 Conformance (F291 UNICODE) - **COMPLETE** (28/28 = 100%)
+- ✅ Wave 20: SQL1999 Conformance (F301 DEFAULT) - **COMPLETE** (20/27 = 74%)
+- 📋 Wave 2: Set Operations - **PENDING** (deferred)
+- 📋 Wave 3: DML Through VM - **PENDING** (deferred)
 
-**SQL1999 Test Coverage**: 299/299 tests compiled (100% coverage achieved)
+**SQL1999 Test Coverage**: 299/299 tests compiled (100%)
 
 **Test Results Summary** (showing implementation gaps):
 - **PASSING**: 52/122 tests (43%) - Original E/F series tests
@@ -240,9 +225,9 @@ internal/
 - [x] Pass/fail/skip statistics documented
 
 **Test Coverage Achieved**:
-- [x] 177+ SQL1999 tests compiled (100% coverage with F041, F051, F081)
+- [x] 299 SQL1999 tests compiled (100% coverage)
 - [x] All E-series tests (E011-E171) compiled
-- [x] All F-series tests (F021, F031, F041, F051, F081) compiled
+- [x] All F-series tests (F021-F301) compiled
 
 **Quality Gates**:
 - All tests compile and run without syntax errors
