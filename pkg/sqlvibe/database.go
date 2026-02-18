@@ -6,6 +6,7 @@ import (
 
 	"github.com/sqlvibe/sqlvibe/internal/CG"
 	"github.com/sqlvibe/sqlvibe/internal/DS"
+	"github.com/sqlvibe/sqlvibe/internal/IS"
 	"github.com/sqlvibe/sqlvibe/internal/PB"
 	"github.com/sqlvibe/sqlvibe/internal/QE"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
@@ -14,17 +15,18 @@ import (
 )
 
 type Database struct {
-	pm          *DS.PageManager
-	engine      *QE.QueryEngine
-	tx          *Transaction
-	txMgr       *TM.TransactionManager
-	activeTx    *TM.Transaction
-	dbPath      string
-	tables      map[string]map[string]string        // table name -> column name -> type
-	primaryKeys map[string][]string                 // table name -> primary key column names
-	columnOrder map[string][]string                 // table name -> ordered column names
-	data        map[string][]map[string]interface{} // table name -> rows -> column name -> value
-	indexes     map[string]*IndexInfo               // index name -> index info
+	pm           *DS.PageManager
+	engine       *QE.QueryEngine
+	tx           *Transaction
+	txMgr        *TM.TransactionManager
+	activeTx     *TM.Transaction
+	dbPath       string
+	tables       map[string]map[string]string        // table name -> column name -> type
+	primaryKeys  map[string][]string                 // table name -> primary key column names
+	columnOrder  map[string][]string                 // table name -> ordered column names
+	data         map[string][]map[string]interface{} // table name -> rows -> column name -> value
+	indexes      map[string]*IndexInfo               // index name -> index info
+	isRegistry   *IS.Registry                        // information_schema registry
 }
 
 type IndexInfo struct {
@@ -252,6 +254,7 @@ func (db *Database) Exec(sql string) (Result, error) {
 			}
 			return Result{}, fmt.Errorf("table %s already exists", stmt.Name)
 		}
+		
 		schema := make(map[string]QE.ColumnType)
 		colTypes := make(map[string]string)
 		var pkCols []string
@@ -388,8 +391,10 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		}
 
 		var tableName string
+		var schemaName string
 		if stmt.From != nil {
 			tableName = stmt.From.Name
+			schemaName = stmt.From.Schema
 		}
 		if tableName == "" {
 			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
@@ -398,6 +403,12 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		// Handle sqlite_master virtual table
 		if tableName == "sqlite_master" {
 			return db.querySqliteMaster(stmt)
+		}
+
+		// Handle information_schema virtual tables
+		if strings.ToLower(schemaName) == "information_schema" {
+			fullName := schemaName + "." + tableName
+			return db.queryInformationSchema(stmt, fullName)
 		}
 
 		// SetOp (UNION, EXCEPT, INTERSECT) - hybrid implementation
@@ -1407,6 +1418,179 @@ func (db *Database) querySqliteMaster(stmt *QP.SelectStmt) (*Rows, error) {
 	return &Rows{Columns: cols, Data: resultData}, nil
 }
 
+// queryInformationSchema handles queries to information_schema virtual tables
+func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string) (*Rows, error) {
+	// Extract view name from "information_schema.viewname"
+	parts := strings.Split(tableName, ".")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid information_schema table name: %s", tableName)
+	}
+	viewName := strings.ToLower(parts[1])
+	
+	// Generate data based on view type
+	var allResults [][]interface{}
+	var columnNames []string
+	
+	switch viewName {
+	case "columns":
+		columnNames = []string{"column_name", "table_name", "table_schema", "data_type", "is_nullable", "column_default"}
+		// Extract columns from in-memory schema
+		for tblName, colTypes := range db.tables {
+			orderedCols := db.columnOrder[tblName]
+			pkCols := db.primaryKeys[tblName]
+			pkMap := make(map[string]bool)
+			for _, pk := range pkCols {
+				pkMap[pk] = true
+			}
+			for _, colName := range orderedCols {
+				colType := colTypes[colName]
+				isNullable := "YES"
+				// PRIMARY KEY columns cannot be NULL
+				if pkMap[colName] {
+					isNullable = "NO"
+				} else if strings.Contains(strings.ToUpper(colType), "NOT NULL") {
+					isNullable = "NO"
+				}
+				allResults = append(allResults, []interface{}{
+					colName,
+					tblName,
+					"main",
+					colType,
+					isNullable,
+					nil, // column_default (not tracked yet)
+				})
+			}
+		}
+		
+	case "tables":
+		columnNames = []string{"table_name", "table_schema", "table_type"}
+		// Extract tables from in-memory schema
+		for tblName := range db.tables {
+			allResults = append(allResults, []interface{}{
+				tblName,
+				"main",
+				"BASE TABLE",
+			})
+		}
+		
+	case "views":
+		columnNames = []string{"table_name", "table_schema", "view_definition"}
+		// No views tracked yet, return empty
+		
+	case "table_constraints":
+		columnNames = []string{"constraint_name", "table_name", "table_schema", "constraint_type"}
+		// Extract PRIMARY KEY constraints from in-memory schema
+		for tblName, pkCols := range db.primaryKeys {
+			if len(pkCols) > 0 {
+				constraintName := fmt.Sprintf("pk_%s", tblName)
+				allResults = append(allResults, []interface{}{
+					constraintName,
+					tblName,
+					"main",
+					"PRIMARY KEY",
+				})
+			}
+		}
+		
+	case "referential_constraints":
+		columnNames = []string{"constraint_name", "unique_constraint_schema", "unique_constraint_name"}
+		// No foreign keys tracked yet, return empty
+		
+	default:
+		return nil, fmt.Errorf("unknown information_schema view: %s", viewName)
+	}
+	
+	// Filter based on WHERE clause (simple support)
+	filtered := allResults
+	if stmt.Where != nil {
+		filtered = make([][]interface{}, 0)
+		for _, row := range allResults {
+			if db.matchesWhereClause(row, columnNames, stmt.Where) {
+				filtered = append(filtered, row)
+			}
+		}
+	}
+	
+	// Select specific columns or all
+	var selectedCols []string
+	var selectedData [][]interface{}
+	
+	// Check if SELECT *
+	if len(stmt.Columns) == 1 {
+		if cr, ok := stmt.Columns[0].(*QP.ColumnRef); ok && cr.Name == "*" {
+			// SELECT * - return all columns
+			selectedCols = columnNames
+			selectedData = filtered
+		}
+	}
+	
+	if len(selectedCols) == 0 {
+		// SELECT specific columns
+		for _, col := range stmt.Columns {
+			if cr, ok := col.(*QP.ColumnRef); ok {
+				selectedCols = append(selectedCols, cr.Name)
+			}
+		}
+		
+		// Project columns
+		for _, row := range filtered {
+			projectedRow := make([]interface{}, 0)
+			for _, selCol := range selectedCols {
+				// Find column index
+				colIdx := -1
+				for i, cn := range columnNames {
+					if cn == selCol {
+						colIdx = i
+						break
+					}
+				}
+				if colIdx >= 0 && colIdx < len(row) {
+					projectedRow = append(projectedRow, row[colIdx])
+				} else {
+					projectedRow = append(projectedRow, nil)
+				}
+			}
+			selectedData = append(selectedData, projectedRow)
+		}
+	}
+	
+	// Apply ORDER BY if present
+	if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
+		rows := &Rows{Columns: selectedCols, Data: selectedData}
+		sortedRows, err := db.sortResults(rows, stmt.OrderBy)
+		if err != nil {
+			return nil, err
+		}
+		return sortedRows, nil
+	}
+	
+	return &Rows{Columns: selectedCols, Data: selectedData}, nil
+}
+
+// matchesWhereClause checks if a row matches the WHERE clause
+func (db *Database) matchesWhereClause(row []interface{}, columnNames []string, where QP.Expr) bool {
+	// Simple WHERE filtering (only equality checks for now)
+	if binExpr, ok := where.(*QP.BinaryExpr); ok && binExpr.Op == QP.TokenEq {
+		if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
+			if lit, ok := binExpr.Right.(*QP.Literal); ok {
+				// Find column index
+				colIdx := -1
+				for i, cn := range columnNames {
+					if cn == colRef.Name {
+						colIdx = i
+						break
+					}
+				}
+				if colIdx >= 0 && colIdx < len(row) {
+					return row[colIdx] == lit.Value
+				}
+			}
+		}
+	}
+	// Default to include if we can't evaluate
+	return true
+}
+
 func (db *Database) combineRows(left, right map[string]interface{}, stmt *QP.SelectStmt) []interface{} {
 	row := make([]interface{}, 0)
 	for _, col := range stmt.Columns {
@@ -1656,6 +1840,13 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 
 	// SELECT with FROM - use existing VM query execution
 	tableName := stmt.From.Name
+	
+	// Handle information_schema virtual tables
+	if strings.ToLower(stmt.From.Schema) == "information_schema" {
+		fullName := stmt.From.Schema + "." + tableName
+		return db.queryInformationSchema(stmt, fullName)
+	}
+	
 	if db.data[tableName] == nil {
 		return nil, fmt.Errorf("table not found: %s", tableName)
 	}
@@ -1699,6 +1890,13 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 
 func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) {
 	tableName := stmt.From.Name
+	
+	// Handle information_schema virtual tables
+	if strings.ToLower(stmt.From.Schema) == "information_schema" {
+		fullName := stmt.From.Schema + "." + tableName
+		return db.queryInformationSchema(stmt, fullName)
+	}
+	
 	if db.data[tableName] == nil {
 		return nil, fmt.Errorf("table not found: %s", tableName)
 	}
