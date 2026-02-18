@@ -13,10 +13,11 @@ type Compiler struct {
 	ra              *RegisterAllocator
 	stmtWhere       []QP.Expr
 	stmtColumns     []QP.Expr
-	columnIndices   map[string]int // SELECT position: col name -> index in SELECT list
-	TableColIndices map[string]int // TABLE position: col name -> index in table (exported for external use)
-	TableColOrder   []string       // TABLE position: ordered list of column names (for SELECT * expansion)
-	tableCursors    map[string]int // Maps table name/alias to cursor ID (for JOINs)
+	columnIndices   map[string]int            // SELECT position: col name -> index in SELECT list
+	TableColIndices map[string]int            // TABLE position: col name -> index in table (exported for external use)
+	TableColOrder   []string                  // TABLE position: ordered list of column names (for SELECT * expansion)
+	tableCursors    map[string]int            // Maps table name/alias to cursor ID (for JOINs)
+	TableSchemas    map[string]map[string]int // Maps table name -> column name -> column index (for JOINs, exported for external use)
 }
 
 func NewCompiler() *Compiler {
@@ -225,6 +226,29 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 		c.tableCursors[join.Right.Alias] = 1
 	}
 
+	// Set up multi-table schemas for JOIN column resolution
+	c.TableSchemas = make(map[string]map[string]int)
+	// Build schema for left table from TableColIndices (if it's for this table)
+	if c.TableColIndices != nil {
+		leftSchema := make(map[string]int)
+		for colName, colIdx := range c.TableColIndices {
+			leftSchema[colName] = colIdx
+		}
+		c.TableSchemas[leftTableName] = leftSchema
+		if leftTable.Alias != "" {
+			c.TableSchemas[leftTable.Alias] = leftSchema
+		}
+	}
+	// For right table, we need to build schema from scratch
+	// We'll use the combined TableColIndices and figure out which columns belong to which table
+	// This is a temporary solution - ideally we'd have proper schema info
+	rightSchema := make(map[string]int)
+	// For now, we'll populate rightSchema later when we have better schema info
+	c.TableSchemas[rightTableName] = rightSchema
+	if join.Right.Alias != "" {
+		c.TableSchemas[join.Right.Alias] = rightSchema
+	}
+
 	c.columnIndices = make(map[string]int)
 	for i, col := range columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
@@ -272,22 +296,22 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 	// Advance right cursor, if EOF jump to rightDone
 	rightNextPos := len(c.program.Instructions)
 	rightNext := c.program.EmitOp(OpNext, 1, 0)
-	
+
 	// Fixup JOIN condition skips to jump here (to advance right cursor)
 	if join.Cond != nil {
 		c.program.FixupWithPos(skipPos, rightNextPos)
 		c.program.FixupWithPos(nullSkip, rightNextPos)
 	}
-	
+
 	// Loop back to process next right row with same left row
 	c.program.EmitGoto(rightRewindPos + 1)
-	
+
 	// Right cursor exhausted, advance left cursor
 	rightDonePos := len(c.program.Instructions)
 	leftNext := c.program.EmitOp(OpNext, 0, 0)
 	// Restart right cursor for next left row
 	c.program.EmitGoto(rightRewindPos)
-	
+
 	// Left cursor exhausted, we're done
 	leftDonePos := len(c.program.Instructions)
 	c.program.Emit(OpHalt)
@@ -350,24 +374,34 @@ func (c *Compiler) compileLiteral(lit *QP.Literal) int {
 
 func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 	reg := c.ra.Alloc()
-	colIdx := -1 // Use -1 as sentinel for unknown columns
+	colIdx := -1  // Use -1 as sentinel for unknown columns
 	cursorID := 0 // Default cursor ID
-	
+
 	// Determine cursor ID from table qualifier (for JOINs)
 	if col.Table != "" && c.tableCursors != nil {
 		if cid, ok := c.tableCursors[col.Table]; ok {
 			cursorID = cid
 		}
 	}
-	
+
 	if col.Name != "" {
-		// First try table column order (for WHERE clause with schema)
-		if c.TableColIndices != nil {
+		// For JOINs: use multi-table schema if available and table is specified
+		if col.Table != "" && c.TableSchemas != nil {
+			if tableSchema, ok := c.TableSchemas[col.Table]; ok {
+				if idx, ok := tableSchema[col.Name]; ok {
+					colIdx = idx
+				}
+			}
+		}
+
+		// Fall back to single table schema (for non-JOIN queries)
+		if colIdx == -1 && c.TableColIndices != nil {
 			if idx, ok := c.TableColIndices[col.Name]; ok {
 				colIdx = idx
 			}
 		}
-		// Fall back to SELECT position
+
+		// Fall back to SELECT position (for aliases)
 		if colIdx == -1 && c.columnIndices != nil {
 			if idx, ok := c.columnIndices[col.Name]; ok {
 				colIdx = idx
@@ -1066,7 +1100,7 @@ func (c *Compiler) compileSetOp(stmt *QP.SelectStmt) *Program {
 
 	// Determine number of columns from left SELECT
 	numCols := len(stmt.Columns)
-	
+
 	// Strategy depends on operation type
 	switch stmt.SetOp {
 	case "UNION":
@@ -1094,13 +1128,13 @@ func (c *Compiler) compileSetOpUnionAll(stmt *QP.SelectStmt) {
 	leftStmt.SetOp = ""
 	leftStmt.SetOpAll = false
 	leftStmt.SetOpRight = nil
-	
+
 	// Execute left SELECT - results go to vm.results
 	leftCompiler := NewCompiler()
 	leftCompiler.TableColIndices = c.TableColIndices
 	leftCompiler.TableColOrder = c.TableColOrder
 	leftProg := leftCompiler.CompileSelect(&leftStmt)
-	
+
 	// Merge left program instructions, adjusting jump addresses
 	baseAddr := len(c.program.Instructions)
 	for i := 0; i < len(leftProg.Instructions); i++ {
@@ -1121,7 +1155,7 @@ func (c *Compiler) compileSetOpUnionAll(stmt *QP.SelectStmt) {
 	rightCompiler.TableColIndices = c.TableColIndices
 	rightCompiler.TableColOrder = c.TableColOrder
 	rightProg := rightCompiler.CompileSelect(stmt.SetOpRight)
-	
+
 	// Merge right program instructions, adjusting jump addresses
 	baseAddr = len(c.program.Instructions)
 	for i := 0; i < len(rightProg.Instructions); i++ {
@@ -1159,7 +1193,7 @@ func (c *Compiler) compileSetOpUnionDistinct(stmt *QP.SelectStmt, numCols int) {
 	leftCompiler.TableColIndices = c.TableColIndices
 	leftCompiler.TableColOrder = c.TableColOrder
 	leftProg := leftCompiler.CompileSelect(&leftStmt)
-	
+
 	// For each row from left, check if seen, if not add to results and ephemeral table
 	// Replace ResultRow with UnionDistinct logic
 	for i := 1; i < len(leftProg.Instructions)-1; i++ {
@@ -1184,7 +1218,7 @@ func (c *Compiler) compileSetOpUnionDistinct(stmt *QP.SelectStmt, numCols int) {
 	rightCompiler.TableColIndices = c.TableColIndices
 	rightCompiler.TableColOrder = c.TableColOrder
 	rightProg := rightCompiler.CompileSelect(stmt.SetOpRight)
-	
+
 	// For each row from right, check if seen, if not add to results and ephemeral table
 	for i := 1; i < len(rightProg.Instructions)-1; i++ {
 		inst := rightProg.Instructions[i]
@@ -1219,7 +1253,7 @@ func (c *Compiler) compileSetOpExcept(stmt *QP.SelectStmt, numCols int) {
 	rightCompiler.TableColIndices = c.TableColIndices
 	rightCompiler.TableColOrder = c.TableColOrder
 	rightProg := rightCompiler.CompileSelect(stmt.SetOpRight)
-	
+
 	// Replace ResultRow with EphemeralInsert
 	for i := 1; i < len(rightProg.Instructions)-1; i++ {
 		inst := rightProg.Instructions[i]
@@ -1242,7 +1276,7 @@ func (c *Compiler) compileSetOpExcept(stmt *QP.SelectStmt, numCols int) {
 	leftCompiler.TableColIndices = c.TableColIndices
 	leftCompiler.TableColOrder = c.TableColOrder
 	leftProg := leftCompiler.CompileSelect(stmt)
-	
+
 	// For each row from left, check if exists in ephemeral table
 	for i := 1; i < len(leftProg.Instructions)-1; i++ {
 		inst := leftProg.Instructions[i]
@@ -1283,7 +1317,7 @@ func (c *Compiler) compileSetOpIntersect(stmt *QP.SelectStmt, numCols int) {
 	rightCompiler.TableColIndices = c.TableColIndices
 	rightCompiler.TableColOrder = c.TableColOrder
 	rightProg := rightCompiler.CompileSelect(stmt.SetOpRight)
-	
+
 	// Replace ResultRow with EphemeralInsert
 	for i := 1; i < len(rightProg.Instructions)-1; i++ {
 		inst := rightProg.Instructions[i]
@@ -1306,7 +1340,7 @@ func (c *Compiler) compileSetOpIntersect(stmt *QP.SelectStmt, numCols int) {
 	leftCompiler.TableColIndices = c.TableColIndices
 	leftCompiler.TableColOrder = c.TableColOrder
 	leftProg := leftCompiler.CompileSelect(stmt)
-	
+
 	// For each row from left, check if exists in ephemeral table
 	for i := 1; i < len(leftProg.Instructions)-1; i++ {
 		inst := leftProg.Instructions[i]

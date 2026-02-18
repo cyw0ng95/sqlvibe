@@ -2,7 +2,7 @@ package CG
 
 import (
 	"fmt"
-	
+
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
 	VM "github.com/sqlvibe/sqlvibe/internal/VM"
 )
@@ -48,6 +48,16 @@ func (c *Compiler) Program() *VM.Program {
 func (c *Compiler) SetTableSchema(schema map[string]int, schemaOrder []string) {
 	c.vmCompiler.TableColIndices = schema
 	c.vmCompiler.TableColOrder = schemaOrder
+}
+
+// SetMultiTableSchema sets multi-table schema for JOIN queries
+func (c *Compiler) SetMultiTableSchema(schemas map[string]map[string]int) {
+	c.vmCompiler.TableSchemas = schemas
+}
+
+// GetVMCompiler returns the underlying VM compiler (for internal use)
+func (c *Compiler) GetVMCompiler() *VM.Compiler {
+	return c.vmCompiler
 }
 
 // Compile compiles SQL string into bytecode program
