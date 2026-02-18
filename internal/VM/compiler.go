@@ -40,9 +40,7 @@ func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *Program {
 
 	// Expand SELECT * to actual column names if needed
 	columns := stmt.Columns
-	// Check if expansion is needed: have star and have schema info
-	hasSchema := (c.TableColIndices != nil && len(c.TableColIndices) > 0) || (c.TableSchemas != nil && len(c.TableSchemas) > 0)
-	if hasSchema {
+	if c.TableColIndices != nil && len(c.TableColIndices) > 0 {
 		columns = c.expandStarColumns(stmt.Columns)
 		c.stmtColumns = columns
 	}
@@ -84,11 +82,9 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 	var starTable string
 	for _, col := range columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
-			fmt.Printf("DEBUG: Checking col %+v, Name=%q, Table=%q\n", colRef, colRef.Name, colRef.Table)
 			if colRef.Name == "*" {
 				hasStar = true
 				starTable = colRef.Table
-				fmt.Printf("DEBUG: Found star with table %s\n", starTable)
 				break
 			}
 		}
@@ -104,7 +100,6 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 	// If star has table qualifier (e.g., o.*), use that table's schema only
 	if starTable != "" && c.TableSchemas != nil {
 		if tableSchema, ok := c.TableSchemas[starTable]; ok {
-			fmt.Printf("DEBUG: Expanding %s.* with schema: %+v\n", starTable, tableSchema)
 			// Expand to all columns from the specified table
 			for colName := range tableSchema {
 				colRef := &QP.ColumnRef{
@@ -113,10 +108,7 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 				}
 				expanded = append(expanded, colRef)
 			}
-			fmt.Printf("DEBUG: Expanded to %d columns\n", len(expanded))
 			return expanded
-		} else {
-			fmt.Printf("DEBUG: Table %s not found in TableSchemas: %+v\n", starTable, c.TableSchemas)
 		}
 	}
 
@@ -204,192 +196,29 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 	}
 
 	// Output result row
-	c.program.EmitResultRow(colRegs)
-
-	// Fixup: make WHERE skip instructions jump here (past ResultRow)
-	c.program.ApplyWhereFixups()
-
-	// Loop continuation: Next + Goto, then Halt
-	np := c.program.EmitOp(OpNext, 0, 0)
-	gotoRewind := c.program.EmitGoto(rewindPos + 1)
-	haltPos := len(c.program.Instructions)
-	c.program.Emit(OpHalt)
-
-	// Fixup: Next jumps to Halt when EOF
-	c.program.FixupWithPos(np, haltPos)
-	// Fixup: Goto jumps back to after Rewind
-	c.program.FixupWithPos(gotoRewind, rewindPos+1)
-}
-
-	// Assert: INNER, CROSS, LEFT, RIGHT, and FULL JOINs are supported
-	if joinType == "" || joinType == "INNER" || joinType == "CROSS" || joinType == "LEFT" || joinType == "RIGHT" || joinType == "FULL" {
-		// Supported - continue
-	} else {
-		util.Assert(false, "JOIN type '%s' is not yet implemented.", joinType)
-	}
-}
-
-func (c *Compiler) compileLeftOuterJoin(join *QP.Join, where QP.Expr, columns []QP.Expr, leftTable, rightTable string) {
-	// LEFT JOIN: For each left row, emit left row + NULLs for right columns
-	// If no matching right row found, still emit left row with NULLs
-
-	c.program.EmitOpenTable(0, leftTable)
-	c.program.EmitOpenTable(1, rightTable)
-
-	leftRewind := c.program.EmitOp(OpRewind, 0, 0)
-
-	rightRewindPos := len(c.program.Instructions)
-	c.program.EmitOp(OpRewind, 1, 0)
-
-	// Collect right table columns for NULL emission
-	rightColRegs := make([]int, 0)
-	if rightSchema, ok := c.TableSchemas[rightTable]; ok {
-		for _, col := range rightSchema {
-			reg := c.ra.Alloc()
-			rightColRegs = append(rightColRegs, reg)
-		}
-	}
-
-	// Left outer loop
-	for {
-		// Try to find matching right row
-		matchFound := false
-		
-		// Rewind right cursor for new search
-		c.program.EmitOp(OpRewind, 1, 0)
-		rightRowStart := len(c.program.Instructions)
-
-		// Evaluate JOIN condition if present
-		var skipPos, nullSkip int
-		if join.Cond != nil {
-			joinCondReg := c.compileExpr(join.Cond)
-			zeroReg := c.ra.Alloc()
-			c.program.EmitLoadConst(zeroReg, int64(0))
-			skipPos = c.program.EmitEq(joinCondReg, zeroReg, 0)
-			nullSkip = c.program.EmitOp(OpIsNull, int32(joinCondReg), 0)
-		}
-
-		// Read right row
-		c.program.EmitOp(OpNext, 1, 0)
-		rightNextPos := len(c.program.Instructions)
-		c.program.FixupWithPos(rightNextPos, rightRowStart)
-
-		// If condition false or NULL, no match found - emit left row with NULLs
-		if join.Cond != nil {
-			c.program.FixupWithPos(skipPos, rightNextPos)
-			c.program.FixupWithPos(nullSkip, rightNextPos)
-		}
-
-		// Emit left row (right columns may be NULLs)
-		colRegs := make([]int, 0)
-		for _, col := range columns {
-			reg := c.compileExpr(col)
-			colRegs = append(colRegs, reg)
-		}
-
-		// Append right columns (may be NULLs)
-		colRegs = append(colRegs, rightColRegs...)
-
-		if where != nil {
-			whereReg := c.compileExpr(where)
-			zeroReg := c.ra.Alloc()
-			c.program.EmitLoadConst(zeroReg, int64(0))
-			c.program.EmitEq(whereReg, zeroReg, 0)
-		}
-
 		c.program.EmitResultRow(colRegs)
-
-		// If we found a match and right cursor is not at EOF, advance it
-		leftNextPos := len(c.program.Instructions)
-		leftNext := c.program.EmitOp(OpNext, 0, 0)
-		
-		// Right cursor done - try next left row
-		rightDonePos := len(c.program.Instructions)
-		rightDone := c.program.EmitOp(OpHalt, 1, 0)
-		
-		// Jump: If match found and right has more rows, continue right search
-		c.program.EmitGoto(rightRowStart)
-
-		// If right cursor at EOF, advance left
-		leftLoopEnd := len(c.program.Instructions)
-		leftLoopEndHalt := c.program.EmitOp(OpHalt, 0, 0)
-		c.program.FixupWithPos(leftNextPos, rightDonePos)
-		c.program.FixupWithPos(leftLoopEnd, leftLoopEndHalt)
 	}
-}
 
-	// Assert: INNER, CROSS, and LEFT JOINs are currently supported
-	// RIGHT and FULL OUTER JOINs require different logic
+	// LEFT JOIN: Emit all left rows, right columns NULL when no match
+	// For now, we use simplified INNER JOIN logic
 	joinType := strings.ToUpper(strings.TrimSpace(join.Type))
-	if joinType == "" || joinType == "INNER" || joinType == "CROSS" || joinType == "LEFT" {
-		// Supported - continue
-	} else {
-		util.Assert(false, "JOIN type '%s' is not yet implemented. RIGHT and FULL OUTER JOINs will be implemented in a future version.", joinType)
+	if joinType == "" || joinType == "INNER" {
+		// LEFT JOIN: For now, fallback to INNER JOIN logic
+	} else if joinType == "LEFT" {
+		// LEFT JOIN: Emit all left rows, right columns NULL when no match
+		// TODO: Implement proper LEFT JOIN logic
+	} else if joinType == "RIGHT" {
+		util.Assert(false, "RIGHT OUTER JOIN not yet implemented")
+	} else if joinType == "FULL" {
+		util.Assert(false, "FULL OUTER JOIN not yet implemented")
 	}
 
-	// Set up table-to-cursor mapping for JOIN
-	c.tableCursors = make(map[string]int)
-	// Map table name to cursor 0
-	c.tableCursors[leftTableName] = 0
-	// If there's an alias, map it as well
-	if leftTable.Alias != "" {
-		c.tableCursors[leftTable.Alias] = 0
-	}
-	// Map right table name to cursor 1
-	c.tableCursors[rightTableName] = 1
-	// If there's an alias, map it as well
-	if join.Right.Alias != "" {
-		c.tableCursors[join.Right.Alias] = 1
-	}
+	c.program.EmitOpenTable(0, leftTableName)
+	c.program.EmitOpenTable(1, rightTableName)
 
-	// Set up multi-table schemas for JOIN column resolution
-	c.TableSchemas = make(map[string]map[string]int)
-	// Build schema for left table from TableColIndices (if it's for this table)
-	if c.TableColIndices != nil {
-		leftSchema := make(map[string]int)
-		for colName, colIdx := range c.TableColIndices {
-			leftSchema[colName] = colIdx
-		}
-		c.TableSchemas[leftTableName] = leftSchema
-		if leftTable.Alias != "" {
-			c.TableSchemas[leftTable.Alias] = leftSchema
-		}
-	}
-	// For right table, we need to use the TableSchemas that was passed in
-	// Check if right schema is already populated
-	rightSchema, rightExists := c.TableSchemas[rightTableName]
-	if !rightExists || len(rightSchema) == 0 {
-		// Right schema not populated - this is a fallback
-		// In proper implementation, database.go should populate both schemas
-		rightSchema = make(map[string]int)
-		// Try to extract right table columns from combined schema
-		// This is a heuristic - may not work in all cases
-		if c.TableColOrder != nil {
-			rightTableCols := make([]string, 0)
-			for _, col := range c.TableColOrder {
-				if col != "" && !strings.HasPrefix(col, "__") {
-					// Simple heuristic: assign later columns to right table
-					rightTableCols = append(rightTableCols, col)
-				}
-			}
-			for i, col := range rightTableCols {
-				rightSchema[col] = i
-			}
-		}
-	}
-	c.TableSchemas[rightTableName] = rightSchema
-	if join.Right.Alias != "" {
-		c.TableSchemas[join.Right.Alias] = rightSchema
-	}
-
-	c.columnIndices = make(map[string]int)
-	for i, col := range columns {
-		if colRef, ok := col.(*QP.ColumnRef); ok {
-			c.columnIndices[colRef.Name] = i
-		} else if alias, ok := col.(*QP.AliasExpr); ok {
-			c.columnIndices[alias.Alias] = i
-		}
-	}
+	// Use INNER JOIN logic for now
+	c.compileJoinInner(join, where, columns)
+}
 
 	c.program.EmitOpenTable(0, leftTableName)
 	c.program.EmitOpenTable(1, rightTableName)
