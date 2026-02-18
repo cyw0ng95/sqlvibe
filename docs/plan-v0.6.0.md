@@ -4,9 +4,9 @@
 v0.6.0 delivers three major architectural milestones plus comprehensive SQL1999 conformance tests:
 1. **Complete Transaction Management (TM)** - ACID transactions with WAL support
 2. **Full VM Integration** - All SQL operations (SELECT, DML, SetOps) through VM
-3. **SQL1999 Conformance** - Comprehensive test coverage for E011-E141
+3. **SQL1999 Conformance** - Comprehensive test coverage for E011-E171
 
-**9 Waves Total**:
+**11 Waves Total**:
 - Wave 1: Transaction Management (TM)
 - Wave 2: Set Operations in VM
 - Wave 3: DML Through VM
@@ -16,6 +16,8 @@ v0.6.0 delivers three major architectural milestones plus comprehensive SQL1999 
 - Wave 7: SQL1999 Conformance (E101, E111)
 - Wave 8: SQL1999 Conformance (E121, E131, E141)
 - Wave 9: SQL1999 Conformance (E081, E151)
+- Wave 10: SQL1999 Conformance (E152, E153) - **NEW**
+- Wave 11: SQL1999 Conformance (E161, E171) - **NEW**
 
 ## Context
 - **Previous**: v0.5.1 delivered CG/VFS/BTree with bug fixes
@@ -27,13 +29,15 @@ This release enables ACID transactions, completes VM integration, and adds compr
 
 ---
 
-## Achievement Status: **IN PROGRESS - 3 of 9 Waves Complete**
+## Achievement Status: **IN PROGRESS - 3 of 11 Waves Complete**
 
-**Progress**: 33% complete
+**Progress**: 27% complete
 - ✅ Wave 1: Transaction Management - **COMPLETE**
 - ✅ Wave 2: Set Operations - **COMPLETE** 
 - ✅ Wave 3: DML Through VM - **COMPLETE**
-- 📋 Waves 4-9: SQL1999 Conformance - **PENDING**
+- 📋 Waves 4-9: SQL1999 Conformance (E011-E151) - **PENDING**
+- 📋 Wave 10: SQL1999 Conformance (E152, E153) - **PENDING** (NEW)
+- 📋 Wave 11: SQL1999 Conformance (E161, E171) - **PENDING** (NEW)
 
 ---
 
@@ -1048,3 +1052,79 @@ Add SQL1999 conformance tests for E081 (Full Query Expressions - complete SELECT
 - [ ] All new tests pass
 - [ ] SQLite comparison tests pass
 - [ ] No regressions in existing functionality
+
+### Wave 10: SQL1999 Conformance (E152, E153) - v0.6.0 - PENDING
+
+**Status**: 📋 Pending - Test structure created
+
+**Test Suites**:
+- E152: SET TRANSACTION - Transaction isolation levels and modes
+  - E152-01: SET TRANSACTION ISOLATION LEVEL (SERIALIZABLE only)
+  - E152-02: SET TRANSACTION READ ONLY/WRITE
+- E153: Updatable queries with subqueries
+  - UPDATE statements with subqueries in SET clause
+
+**Estimated Tests**: 4-6 tests
+
+**Implementation Notes**:
+- E152-01: May require extending transaction manager to support explicit isolation level setting
+- E152-02: READ ONLY transactions can be optimized (no locks needed for reads)
+- E153: Requires subquery evaluation in UPDATE context
+
+**Files to Modify**:
+- `internal/TM/transaction.go` (add SetIsolationLevel method)
+- `internal/QP/parser.go` (parse SET TRANSACTION)
+- `internal/VM/compiler.go` (compile UPDATE with subqueries)
+- `pkg/sqlvibe/database.go` (execute SET TRANSACTION)
+
+### Wave 11: SQL1999 Conformance (E161, E171) - v0.6.0 - PENDING
+
+**Status**: 📋 Pending - Test structure created
+
+**Test Suites**:
+- E161: SQL comments using double minus (--)
+  - Line comments: `-- comment`
+  - Inline comments: `SELECT * -- comment`
+  - Multiple comments in one statement
+- E171: SQLSTATE support
+  - Error codes conforming to SQL:1999 SQLSTATE
+  - Standard error classes (23000 = integrity constraint violation, etc.)
+
+**Estimated Tests**: 4-6 tests
+
+**Implementation Notes**:
+- E161: Tokenizer needs to recognize and skip `--` comments
+- E171: Requires structured error types with SQLSTATE codes
+- SQLSTATE format: 5-character string (class + subclass)
+- Common classes: 00 = success, 01 = warning, 02 = no data, 23 = integrity constraint
+
+**Files to Modify**:
+- `internal/QP/tokenizer.go` (skip -- comments)
+- `internal/QP/tokenizer_test.go` (test comment handling)
+- `pkg/sqlvibe/errors.go` (new file, define SQLError with SQLSTATE)
+- All error return sites (wrap errors with SQLSTATE codes)
+
+---
+
+## Summary of New Test Suites (Waves 10-11)
+
+| Wave | Test Suites | Feature | Estimated Tests | Priority |
+|------|-------------|---------|----------------|----------|
+| 10 | E152, E153 | Transaction control, Updatable subqueries | 4-6 | Medium |
+| 11 | E161, E171 | Comments, Error codes | 4-6 | Low |
+
+**Total Additional Tests**: 8-12 tests
+**Updated Total**: 11 waves, ~94-98 tests
+
+---
+
+## Notes on Test Coverage
+
+The SQL1999 test suites now cover:
+- **Core SQL features**: E011-E091 (numeric, character, identifiers, schema, queries, predicates, expressions, set ops)
+- **Transaction support**: E101, E111, E121, E131, E141, E151, E152
+- **Metadata**: E031 (identifiers), E081 (privileges), E171 (SQLSTATE)
+- **Updatable queries**: E153
+- **Comments**: E161
+
+This provides comprehensive coverage of SQL:1999 Core features with a focus on query execution, transaction management, and error handling.
