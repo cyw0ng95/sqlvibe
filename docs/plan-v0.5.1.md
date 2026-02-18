@@ -1,4 +1,4 @@
-# Plan v0.5.1 - Bug Fixes Release - IN PROGRESS
+# Plan v0.5.1 - Bug Fixes Release - RELEASED
 
 ## Summary
 Focus on fixing critical test failures identified in v0.5.0 before proceeding to new features.
