@@ -51,8 +51,9 @@ func (c *Compiler) SetTableSchema(schema map[string]int, schemaOrder []string) {
 }
 
 // SetMultiTableSchema sets multi-table schema for JOIN queries
-func (c *Compiler) SetMultiTableSchema(schemas map[string]map[string]int) {
+func (c *Compiler) SetMultiTableSchema(schemas map[string]map[string]int, colOrder []string) {
 	c.vmCompiler.TableSchemas = schemas
+	c.vmCompiler.TableColOrder = colOrder
 }
 
 // GetVMCompiler returns the underlying VM compiler (for internal use)

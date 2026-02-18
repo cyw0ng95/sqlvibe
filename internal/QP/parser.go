@@ -1259,6 +1259,11 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				tableName = tok.Literal
 				colName = p.current().Literal
 				p.advance()
+			} else if p.current().Type == TokenAsterisk {
+				// Handle table.* pattern
+				tableName = tok.Literal
+				colName = "*"
+				p.advance()
 			}
 		}
 

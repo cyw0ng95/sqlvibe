@@ -40,7 +40,7 @@ func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *Program {
 
 	// Expand SELECT * to actual column names if needed
 	columns := stmt.Columns
-	if c.TableColIndices != nil && len(c.TableColIndices) > 0 {
+	if (c.TableColIndices != nil && len(c.TableColIndices) > 0) || (c.TableSchemas != nil && len(c.TableSchemas) > 0) {
 		columns = c.expandStarColumns(stmt.Columns)
 		c.stmtColumns = columns
 	}
@@ -77,14 +77,12 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 		return nil
 	}
 
-	// Check if there's a star column
+	// Check if there's any star column
 	hasStar := false
-	var starTable string
 	for _, col := range columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
 			if colRef.Name == "*" {
 				hasStar = true
-				starTable = colRef.Table
 				break
 			}
 		}
@@ -94,48 +92,89 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 		return columns
 	}
 
-	// Build expanded columns list - use TableColOrder for deterministic ordering
+	// Build expanded columns list by processing each column
 	expanded := make([]QP.Expr, 0)
-
-	// If star has table qualifier (e.g., o.*), use that table's schema only
-	if starTable != "" && c.TableSchemas != nil {
-		if tableSchema, ok := c.TableSchemas[starTable]; ok {
-			// Expand to all columns from the specified table
-			for colName := range tableSchema {
-				colRef := &QP.ColumnRef{
-					Name:  colName,
-					Table: starTable,
+	
+	for _, col := range columns {
+		colRef, isColRef := col.(*QP.ColumnRef)
+		if !isColRef || colRef.Name != "*" {
+			// Not a star column, keep as-is
+			expanded = append(expanded, col)
+			continue
+		}
+		
+		// This is a star column - expand it
+		starTable := colRef.Table
+		
+		// If star has table qualifier (e.g., t1.*), expand to that table's columns only
+		if starTable != "" && c.TableSchemas != nil {
+			if tableSchema, ok := c.TableSchemas[starTable]; ok {
+				// Collect and sort columns by index
+				type colInfo struct {
+					name string
+					idx  int
 				}
-				expanded = append(expanded, colRef)
-			}
-			return expanded
-		}
-	}
-
-	// Use the ordered column list to ensure deterministic output
-	if c.TableColOrder != nil && len(c.TableColOrder) > 0 {
-		for _, colName := range c.TableColOrder {
-			// Skip internal/placeholder columns
-			if colName == "" || strings.HasPrefix(colName, "__") {
+				cols := make([]colInfo, 0, len(tableSchema))
+				for colName, idx := range tableSchema {
+					cols = append(cols, colInfo{name: colName, idx: idx})
+				}
+				// Sort by index
+				for i := 0; i < len(cols); i++ {
+					for j := i + 1; j < len(cols); j++ {
+						if cols[i].idx > cols[j].idx {
+							cols[i], cols[j] = cols[j], cols[i]
+						}
+					}
+				}
+				for _, c := range cols {
+					expanded = append(expanded, &QP.ColumnRef{
+						Name:  c.name,
+						Table: starTable,
+					})
+				}
 				continue
 			}
-			colRef := &QP.ColumnRef{
-				Name: colName,
-			}
-			expanded = append(expanded, colRef)
 		}
-	} else {
-		// Fallback: iterate over TableColIndices (may be non-deterministic)
-		for colName, idx := range c.TableColIndices {
-			// Skip internal/placeholder columns
-			if colName == "" || strings.HasPrefix(colName, "__") {
-				continue
+		
+		// Unqualified * - expand to all columns from all tables
+		// For multi-table queries (JOINs), use TableSchemas
+		if c.TableSchemas != nil && len(c.TableSchemas) > 0 && c.TableColOrder != nil && len(c.TableColOrder) > 0 {
+			for _, colName := range c.TableColOrder {
+				if colName == "" || strings.HasPrefix(colName, "__") {
+					continue
+				}
+				// Find which table this column belongs to
+				var tableName string
+				for tbl, schema := range c.TableSchemas {
+					if _, ok := schema[colName]; ok {
+						tableName = tbl
+						break
+					}
+				}
+				expanded = append(expanded, &QP.ColumnRef{
+					Name:  colName,
+					Table: tableName,
+				})
 			}
-			colRef := &QP.ColumnRef{
-				Name: colName,
+			continue
+		}
+		
+		// Single table case: use TableColOrder or TableColIndices
+		if c.TableColOrder != nil && len(c.TableColOrder) > 0 {
+			for _, colName := range c.TableColOrder {
+				if colName == "" || strings.HasPrefix(colName, "__") {
+					continue
+				}
+				expanded = append(expanded, &QP.ColumnRef{Name: colName})
 			}
-			_ = idx // idx is position in table
-			expanded = append(expanded, colRef)
+		} else if c.TableColIndices != nil {
+			// Fallback: iterate over TableColIndices (may be non-deterministic)
+			for colName := range c.TableColIndices {
+				if colName == "" || strings.HasPrefix(colName, "__") {
+					continue
+				}
+				expanded = append(expanded, &QP.ColumnRef{Name: colName})
+			}
 		}
 	}
 
