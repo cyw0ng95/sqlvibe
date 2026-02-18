@@ -4,9 +4,9 @@
 v0.6.0 delivers three major architectural milestones plus comprehensive SQL1999 conformance tests:
 1. **Complete Transaction Management (TM)** - ACID transactions with WAL support
 2. **Full VM Integration** - All SQL operations (SELECT, DML, SetOps) through VM
-3. **SQL1999 Conformance** - Comprehensive test coverage for E011-E171
+3. **SQL1999 Conformance** - Comprehensive test coverage for E011-E171 plus F021-F031
 
-**11 Waves Total**:
+**13 Waves Total**:
 - Wave 1: Transaction Management (TM)
 - Wave 2: Set Operations in VM
 - Wave 3: DML Through VM
@@ -18,6 +18,8 @@ v0.6.0 delivers three major architectural milestones plus comprehensive SQL1999 
 - Wave 9: SQL1999 Conformance (E081, E151)
 - Wave 10: SQL1999 Conformance (E152, E153) - **NEW**
 - Wave 11: SQL1999 Conformance (E161, E171) - **NEW**
+- Wave 12: SQL1999 Conformance (F021) - **NEW**
+- Wave 13: SQL1999 Conformance (F031) - **NEW**
 
 ## Context
 - **Previous**: v0.5.1 delivered CG/VFS/BTree with bug fixes
@@ -29,15 +31,17 @@ This release enables ACID transactions, completes VM integration, and adds compr
 
 ---
 
-## Achievement Status: **IN PROGRESS - 3 of 11 Waves Complete**
+## Achievement Status: **IN PROGRESS - 3 of 13 Waves Complete**
 
-**Progress**: 27% complete
+**Progress**: 23% complete
 - ✅ Wave 1: Transaction Management - **COMPLETE**
-- ✅ Wave 2: Set Operations - **COMPLETE** 
+- ✅ Wave 2: Set Operations - **COMPLETE**
 - ✅ Wave 3: DML Through VM - **COMPLETE**
 - 📋 Waves 4-9: SQL1999 Conformance (E011-E151) - **PENDING**
 - 📋 Wave 10: SQL1999 Conformance (E152, E153) - **PENDING** (NEW)
 - 📋 Wave 11: SQL1999 Conformance (E161, E171) - **PENDING** (NEW)
+- 📋 Wave 12: SQL1999 Conformance (F021) - **PENDING** (NEW)
+- 📋 Wave 13: SQL1999 Conformance (F031) - **PENDING** (NEW)
 
 ---
 
@@ -109,6 +113,14 @@ This release enables ACID transactions, completes VM integration, and adds compr
 ### Wave 8: SQL1999 Conformance (E121, E131, E141) - v0.6.0 - PENDING
 
 ### Wave 9: SQL1999 Conformance (E081, E151) - v0.6.0 - PENDING
+
+### Wave 10: SQL1999 Conformance (E152, E153) - v0.6.0 - PENDING
+
+### Wave 11: SQL1999 Conformance (E161, E171) - v0.6.0 - PENDING
+
+### Wave 12: SQL1999 Conformance (F021) - v0.6.0 - PENDING
+
+### Wave 13: SQL1999 Conformance (F031) - v0.6.0 - PENDING
 
 ---
 
@@ -259,7 +271,38 @@ graph TD
         I1[E081 Full Query Expressions]
         I2[E151 Transaction Support]
     end
-    
+
+    subgraph W10 ["Wave 10: SQL1999 Conformance (E152, E153) (v0.6.0)"]
+        direction TB
+        J1[E152 SET TRANSACTION]
+        J2[E153 Updatable Queries]
+    end
+
+    subgraph W11 ["Wave 11: SQL1999 Conformance (E161, E171) (v0.6.0)"]
+        direction TB
+        K1[E161 SQL Comments]
+        K2[E171 SQLSTATE Support]
+    end
+
+    subgraph W12 ["Wave 12: SQL1999 Conformance (F021) (v0.6.0)"]
+        direction TB
+        L1[F021-01 COLUMNS View]
+        L2[F021-02 TABLES View]
+        L3[F021-03 VIEWS View]
+        L4[F021-04 TABLE_CONSTRAINTS View]
+        L5[F021-05 REFERENTIAL_CONSTRAINTS View]
+    end
+
+    subgraph W13 ["Wave 13: SQL1999 Conformance (F031) (v0.6.0)"]
+        direction TB
+        M1[F031-01 CREATE TABLE]
+        M2[F031-02 CREATE VIEW]
+        M3[F031-03 GRANT Statement]
+        M4[F031-04 ALTER TABLE ADD COLUMN]
+        M5[F031-13 DROP TABLE RESTRICT]
+        M6[F031-16 DROP VIEW RESTRICT]
+    end
+
     W1 --> W2
     W2 --> W3
     W3 --> W4
@@ -268,6 +311,10 @@ graph TD
     W6 --> W7
     W7 --> W8
     W8 --> W9
+    W9 --> W10
+    W10 --> W11
+    W11 --> W12
+    W12 --> W13
 ```
 
 ---
@@ -930,34 +977,11 @@ Add SQL1999 conformance tests for E081 (Full Query Expressions - complete SELECT
   - `05_test.go` - TestSQL1999_F301_E15105_L1 (RELEASE SAVEPOINT)
   - `06_test.go` - TestSQL1999_F301_E15106_L1 (Transaction isolation levels)
   - `07_test.go` - TestSQL1999_F301_E15107_L1 (Auto-commit)
-  - `08_test.go` - TestSQL1999_F301_E15108_L1 (Transaction constraints)
-
-### Wave 5: SQL1999 Conformance Tests (E051, E061) - v0.6.0
-- Task 5.1: E051 Data Types tests
-- Task 5.2: E061 Predicates tests
-
-### Wave 6: SQL1999 Conformance Tests (E071, E091) - v0.6.0
-- Task 6.1: E071 Subqueries tests
-- Task 6.2: E091 Table Expressions tests
-
-### Wave 7: SQL1999 Conformance Tests (E101, E111) - v0.6.0
-- Task 7.1: E101 SELECT expressions tests
-- Task 7.2: E111 Table creation tests
-
-### Wave 8: SQL1999 Conformance Tests (E121, E131, E141) - v0.6.0
-- Task 8.1: E121 Schema statements tests
-- Task 8.2: E131 Query predicates tests
-- Task 8.3: E141 NULL handling tests
-
-### Wave 9: SQL1999 Conformance Tests (E081, E151) - v0.6.0
-- Task 9.1: E081 Full Query Expressions tests
-- Task 9.2: E151 Transaction Support tests
-
-**Total**: ~62 hours (~58 hours if WAL deferred)
+   - `08_test.go` - TestSQL1999_F301_E15108_L1 (Transaction constraints)
 
 ---
 
-## Dependencies
+## Wave 10: SQL1999 Conformance Tests (E152, E153) - v0.6.0 - PENDING
 
 - Wave 1 (TM) depends on: v0.5.1 complete (TM exists but not integrated)
 - Wave 2 (SetOps) depends on: Wave 1 complete
@@ -968,8 +992,12 @@ Add SQL1999 conformance tests for E081 (Full Query Expressions - complete SELECT
 - Wave 7 (Conformance E101/E111) depends on: Wave 6 complete
 - Wave 8 (Conformance E121/E131/E141) depends on: Wave 7 complete
 - Wave 9 (Conformance E081/E151) depends on: Wave 8 complete
+- Wave 10 (Conformance E152/E153) depends on: Wave 9 complete
+- Wave 11 (Conformance E161/E171) depends on: Wave 10 complete
+- Wave 12 (Conformance F021) depends on: Wave 11 complete
+- Wave 13 (Conformance F031) depends on: Wave 12 complete
 
-**Critical Path**: Wave 1 → Wave 2 → Wave 3 → Wave 4 → Wave 5 → Wave 6 → Wave 7 → Wave 8 → Wave 9
+**Critical Path**: Wave 1 → Wave 2 → Wave 3 → Wave 4 → Wave 5 → Wave 6 → Wave 7 → Wave 8 → Wave 9 → Wave 10 → Wave 11 → Wave 12 → Wave 13
 
 ---
 
@@ -983,6 +1011,9 @@ Add SQL1999 conformance tests for E081 (Full Query Expressions - complete SELECT
 | DML VM performance | Low | Benchmark vs direct execution |
 | Conformance test coverage | Medium | Add comprehensive test cases |
 | Schema tests edge cases | Medium | Test all constraint types |
+| Information schema implementation | High | May need to create virtual views |
+| Schema manipulation edge cases | Medium | Test DROP RESTRICT, ALTER TABLE edge cases |
+| GRANT/REVOKE support | Low | May SKIP if SQLite doesn't support |
 
 ---
 
@@ -994,6 +1025,10 @@ Add SQL1999 conformance tests for E081 (Full Query Expressions - complete SELECT
 4. **WAL is Optional**: Can defer to v0.6.1 if timeline is tight
 5. **All operations through VM**: After this release, no direct execution paths should remain
 6. **Conformance Tests**: E031 (Information Schema) and E041 (Schema Definition) follow the same pattern as E011/E021
+7. **F021 Information Schema**: Tests verify standard information_schema views exist and return correct metadata
+8. **F031 Schema Manipulation**: Tests verify DDL statements work correctly, including RESTRICT behavior
+9. **GRANT Statement**: F031-03 may be marked SKIP as SQLite doesn't implement authorization
+10. **Total Tests**: ~105-109 SQL1999 conformance tests across 13 waves
 
 ---
 
@@ -1046,6 +1081,21 @@ Add SQL1999 conformance tests for E081 (Full Query Expressions - complete SELECT
 - [ ] E141-01 to E141-08: NULLs tests
 - [ ] E081-01 to E081-08: Full Query Expressions tests
 - [ ] E151-01 to E151-08: Transaction Support tests
+- [ ] E152-01 to E152-02: SET TRANSACTION tests
+- [ ] E153-01: Updatable queries tests
+- [ ] E161-01 to E161-02: SQL Comments tests
+- [ ] E171-01: SQLSTATE tests
+- [ ] F021-01: Information Schema COLUMNS view - TestSQL1999_F301_F02101_L1
+- [ ] F021-02: Information Schema TABLES view - TestSQL1999_F301_F02102_L1
+- [ ] F021-03: Information Schema VIEWS view - TestSQL1999_F301_F02103_L1
+- [ ] F021-04: Information Schema TABLE_CONSTRAINTS view - TestSQL1999_F301_F02104_L1
+- [ ] F021-05: Information Schema REFERENTIAL_CONSTRAINTS view - TestSQL1999_F301_F02105_L1
+- [ ] F031-01: CREATE TABLE - TestSQL1999_F301_F03101_L1
+- [ ] F031-02: CREATE VIEW - TestSQL1999_F301_F03102_L1
+- [ ] F031-03: GRANT Statement - TestSQL1999_F301_F03103_L1
+- [ ] F031-04: ALTER TABLE ADD COLUMN - TestSQL1999_F301_F03104_L1
+- [ ] F031-13: DROP TABLE RESTRICT - TestSQL1999_F301_F03113_L1
+- [ ] F031-16: DROP VIEW RESTRICT - TestSQL1999_F301_F03116_L1
 - [ ] All existing tests still pass
 
 ### Overall
@@ -1077,7 +1127,9 @@ Add SQL1999 conformance tests for E081 (Full Query Expressions - complete SELECT
 - `internal/VM/compiler.go` (compile UPDATE with subqueries)
 - `pkg/sqlvibe/database.go` (execute SET TRANSACTION)
 
-### Wave 11: SQL1999 Conformance (E161, E171) - v0.6.0 - PENDING
+---
+
+## Wave 11: SQL1999 Conformance Tests (E161, E171) - v0.6.0 - PENDING
 
 **Status**: 📋 Pending - Test structure created
 
@@ -1106,15 +1158,269 @@ Add SQL1999 conformance tests for E081 (Full Query Expressions - complete SELECT
 
 ---
 
-## Summary of New Test Suites (Waves 10-11)
+**Status**: 📋 Pending - Test structure created
+
+**Test Suites**:
+- E161: SQL comments using double minus (--)
+  - Line comments: `-- comment`
+  - Inline comments: `SELECT * -- comment`
+  - Multiple comments in one statement
+- E171: SQLSTATE support
+  - Error codes conforming to SQL:1999 SQLSTATE
+  - Standard error classes (23000 = integrity constraint violation, etc.)
+
+**Estimated Tests**: 4-6 tests
+
+**Implementation Notes**:
+- E161: Tokenizer needs to recognize and skip `--` comments
+- E171: Requires structured error types with SQLSTATE codes
+- SQLSTATE format: 5-character string (class + subclass)
+- Common classes: 00 = success, 01 = warning, 02 = no data, 23 = integrity constraint
+
+**Files to Modify**:
+- `internal/QP/tokenizer.go` (skip -- comments)
+- `internal/QP/tokenizer_test.go` (test comment handling)
+- `pkg/sqlvibe/errors.go` (new file, define SQLError with SQLSTATE)
+- All error return sites (wrap errors with SQLSTATE codes)
+
+---
+
+## Wave 12: SQL1999 Conformance Tests (F021) - v0.6.0 - PENDING
+
+### Overview
+Add SQL1999 conformance tests for F021 (Basic Information Schema). These tests verify that the database provides standard information schema views for metadata inspection.
+
+**Status**: 📋 Pending
+
+**Test Suites**:
+- F021-01: COLUMNS view - Column metadata
+- F021-02: TABLES view - Table metadata
+- F021-03: VIEWS view - View metadata
+- F021-04: TABLE_CONSTRAINTS view - Constraint metadata
+- F021-05: REFERENTIAL_CONSTRAINTS view - Foreign key metadata
+
+**Estimated Tests**: 5 tests
+
+### Task 12.1: Create F021 Test Directory and Structure
+- **Files**: `internal/TS/SQL1999/F021/` (new)
+- **Description**: Create F021 test directory following E011/E021 pattern
+- **Details**:
+  - Create directory structure: `internal/TS/SQL1999/F021/`
+  - Test files: `01_test.go`, `02_test.go`, `03_test.go`, `04_test.go`, `05_test.go`
+  - Use same package: `package F021`
+  - Use same imports and helpers as E011/E021
+
+### Task 12.2: Implement F021-01 - COLUMNS View
+- **Test**: `TestSQL1999_F301_F02101_L1`
+- **File**: `01_test.go`
+- **Tests**:
+  - Query `information_schema.columns` for basic tables
+  - Verify column_name, data_type, is_nullable, column_default
+  - Test with tables of different types (INTEGER, TEXT, REAL, BLOB)
+  - Test with tables containing constraints (PRIMARY KEY, NOT NULL, DEFAULT)
+  - Filter by table_name and table_schema
+  - Compare results with SQLite
+
+### Task 12.3: Implement F021-02 - TABLES View
+- **Test**: `TestSQL1999_F301_F02102_L1`
+- **File**: `02_test.go`
+- **Tests**:
+  - Query `information_schema.tables` for all tables
+  - Verify table_name, table_schema, table_type
+  - Test table_type: 'BASE TABLE', 'VIEW'
+  - Filter by table_schema = 'main'
+  - Test with multiple tables and views
+  - Compare results with SQLite
+
+### Task 12.4: Implement F021-03 - VIEWS View
+- **Test**: `TestSQL1999_F301_F02103_L1`
+- **File**: `03_test.go`
+- **Tests**:
+  - Create view: `CREATE VIEW v1 AS SELECT * FROM t1`
+  - Query `information_schema.views`
+  - Verify table_name, view_definition
+  - Test multiple views
+  - Test views with complex queries
+  - Compare results with SQLite
+
+### Task 12.5: Implement F021-04 - TABLE_CONSTRAINTS View
+- **Test**: `TestSQL1999_F301_F02104_L1`
+- **File**: `04_test.go`
+- **Tests**:
+  - Create tables with PRIMARY KEY, UNIQUE, CHECK, FOREIGN KEY
+  - Query `information_schema.table_constraints`
+  - Verify constraint_name, constraint_type, table_name
+  - Test multiple constraints per table
+  - Test constraint types: 'PRIMARY KEY', 'UNIQUE', 'CHECK', 'FOREIGN KEY'
+  - Compare results with SQLite
+
+### Task 12.6: Implement F021-05 - REFERENTIAL_CONSTRAINTS View
+- **Test**: `TestSQL1999_F301_F02105_L1`
+- **File**: `05_test.go`
+- **Tests**:
+  - Create tables with FOREIGN KEY relationships
+  - Query `information_schema.referential_constraints`
+  - Verify constraint_name, unique_constraint_schema, unique_constraint_name
+  - Test multiple foreign keys
+  - Test self-referencing foreign keys
+  - Test foreign keys with ON DELETE/UPDATE actions
+  - Compare results with SQLite
+
+### Task 12.7: Run and Verify All F021 Tests
+- **Command**: `go test ./internal/TS/SQL1999/F021/...`
+- **Verify**:
+  - All F021 tests pass
+  - Results match SQLite exactly
+
+**Implementation Notes**:
+- F021 tests require that information_schema views are already implemented
+- SQLite provides information_schema views - we should implement compatible views
+- Views may need to be created in a separate initialization step
+- Some metadata (like view_definition) may differ from SQLite but should be semantically equivalent
+
+**Files to Modify**:
+- `internal/TS/SQL1999/F021/01_test.go` (new)
+- `internal/TS/SQL1999/F021/02_test.go` (new)
+- `internal/TS/SQL1999/F021/03_test.go` (new)
+- `internal/TS/SQL1999/F021/04_test.go` (new)
+- `internal/TS/SQL1999/F021/05_test.go` (new)
+- Database initialization code (to create information_schema views if not present)
+
+---
+
+## Wave 13: SQL1999 Conformance Tests (F031) - v0.6.0 - PENDING
+
+### Overview
+Add SQL1999 conformance tests for F031 (Basic Schema Manipulation). These tests verify DDL (Data Definition Language) statements for creating and modifying database objects.
+
+**Status**: 📋 Pending
+
+**Test Suites**:
+- F031-01: CREATE TABLE statement
+- F031-02: CREATE VIEW statement
+- F031-03: GRANT statement (may be SKIP if not implementing authorization)
+- F031-04: ALTER TABLE ADD COLUMN
+- F031-13: DROP TABLE RESTRICT
+- F031-16: DROP VIEW RESTRICT
+
+**Estimated Tests**: 6 tests
+
+### Task 13.1: Create F031 Test Directory and Structure
+- **Files**: `internal/TS/SQL1999/F031/` (new)
+- **Description**: Create F031 test directory following E011/E021 pattern
+- **Details**:
+  - Create directory structure: `internal/TS/SQL1999/F031/`
+  - Test files: `01_test.go`, `02_test.go`, `03_test.go`, `04_test.go`, `05_test.go`, `06_test.go`
+  - Use same package: `package F031`
+  - Use same imports and helpers as E011/E021
+
+### Task 13.2: Implement F031-01 - CREATE TABLE
+- **Test**: `TestSQL1999_F301_F03101_L1`
+- **File**: `01_test.go`
+- **Tests**:
+  - Basic CREATE TABLE with various data types
+  - CREATE TABLE with PRIMARY KEY constraint
+  - CREATE TABLE with UNIQUE constraint
+  - CREATE TABLE with NOT NULL constraint
+  - CREATE TABLE with DEFAULT values
+  - CREATE TABLE with CHECK constraint
+  - CREATE TABLE with FOREIGN KEY constraint
+  - CREATE TABLE IF NOT EXISTS
+  - CREATE TABLE with multiple constraints
+  - Compare results with SQLite
+
+### Task 13.3: Implement F031-02 - CREATE VIEW
+- **Test**: `TestSQL1999_F301_F03102_L1`
+- **File**: `02_test.go`
+- **Tests**:
+  - Basic CREATE VIEW from single table
+  - CREATE VIEW with WHERE clause
+  - CREATE VIEW with JOIN
+  - CREATE VIEW with aggregation
+  - CREATE VIEW with subquery
+  - CREATE VIEW IF NOT EXISTS
+  - Create view, then query it and compare with SQLite
+  - Test view updates (if updatable views supported)
+
+### Task 13.4: Implement F031-03 - GRANT Statement
+- **Test**: `TestSQL1999_F301_F03103_L1`
+- **File**: `03_test.go`
+- **Tests**:
+  - GRANT SELECT on table
+  - GRANT INSERT, UPDATE, DELETE on table
+  - GRANT ALL PRIVILEGES on table
+  - GRANT CREATE on database
+  - Note: May SKIP if authorization not implemented (SQLite doesn't implement GRANT/REVOKE)
+  - Test with SQLite - if SQLite doesn't support, mark as SKIP
+
+### Task 13.5: Implement F031-04 - ALTER TABLE ADD COLUMN
+- **Test**: `TestSQL1999_F301_F03104_L1`
+- **File**: `04_test.go`
+- **Tests**:
+  - ALTER TABLE t1 ADD COLUMN new_col TEXT
+  - ALTER TABLE t1 ADD COLUMN new_col INTEGER DEFAULT 0
+  - ALTER TABLE t1 ADD COLUMN new_col NOT NULL (if SQLite supports)
+  - ALTER TABLE t1 ADD COLUMN with constraints
+  - Verify existing data after column addition
+  - Multiple ALTER TABLE ADD COLUMN in sequence
+  - Compare results with SQLite
+
+### Task 13.6: Implement F031-13 - DROP TABLE RESTRICT
+- **Test**: `TestSQL1999_F301_F03113_L1`
+- **File**: `05_test.go`
+- **Tests**:
+  - DROP TABLE t1 (simple case)
+  - DROP TABLE IF EXISTS t1
+  - DROP TABLE t1 RESTRICT (when no dependencies)
+  - DROP TABLE with foreign key dependency (should fail with RESTRICT)
+  - Test error messages match SQLite
+  - Compare results with SQLite
+
+### Task 13.7: Implement F031-16 - DROP VIEW RESTRICT
+- **Test**: `TestSQL1999_F301_F03116_L1`
+- **File**: `06_test.go`
+- **Tests**:
+  - DROP VIEW v1 (simple case)
+  - DROP VIEW IF EXISTS v1
+  - DROP VIEW v1 RESTRICT (when no dependencies)
+  - Create view v1 depending on table t1, then drop v1
+  - Test dropping views that other views depend on (should fail with RESTRICT)
+  - Compare results with SQLite
+
+### Task 13.8: Run and Verify All F031 Tests
+- **Command**: `go test ./internal/TS/SQL1999/F031/...`
+- **Verify**:
+  - All F031 tests pass
+  - Results match SQLite exactly
+  - Note which features are SKIP if not implemented
+
+**Implementation Notes**:
+- F031-03 (GRANT) may need to be marked SKIP as SQLite doesn't implement authorization
+- RESTRICT behavior in DROP is the default in SQLite when CASCADE is not specified
+- ALTER TABLE ADD COLUMN may have limitations compared to full SQL:1999
+- Error messages for RESTRICT violations should match SQLite format
+
+**Files to Modify**:
+- `internal/TS/SQL1999/F031/01_test.go` (new)
+- `internal/TS/SQL1999/F031/02_test.go` (new)
+- `internal/TS/SQL1999/F031/03_test.go` (new)
+- `internal/TS/SQL1999/F031/04_test.go` (new)
+- `internal/TS/SQL1999/F031/05_test.go` (new)
+- `internal/TS/SQL1999/F031/06_test.go` (new)
+
+---
+
+## Summary of New Test Suites (Waves 10-13)
 
 | Wave | Test Suites | Feature | Estimated Tests | Priority |
 |------|-------------|---------|----------------|----------|
 | 10 | E152, E153 | Transaction control, Updatable subqueries | 4-6 | Medium |
 | 11 | E161, E171 | Comments, Error codes | 4-6 | Low |
+| 12 | F021 | Information Schema views | 5 | High |
+| 13 | F031 | Schema manipulation DDL | 6 | High |
 
-**Total Additional Tests**: 8-12 tests
-**Updated Total**: 11 waves, ~94-98 tests
+**Total Additional Tests**: 19-23 tests
+**Updated Total**: 13 waves, ~105-109 tests
 
 ---
 
@@ -1123,8 +1429,9 @@ Add SQL1999 conformance tests for E081 (Full Query Expressions - complete SELECT
 The SQL1999 test suites now cover:
 - **Core SQL features**: E011-E091 (numeric, character, identifiers, schema, queries, predicates, expressions, set ops)
 - **Transaction support**: E101, E111, E121, E131, E141, E151, E152
-- **Metadata**: E031 (identifiers), E081 (privileges), E171 (SQLSTATE)
+- **Metadata**: E031 (identifiers), E081 (privileges), F021 (Information Schema), E171 (SQLSTATE)
+- **Schema manipulation**: F031 (Basic DDL)
 - **Updatable queries**: E153
 - **Comments**: E161
 
-This provides comprehensive coverage of SQL:1999 Core features with a focus on query execution, transaction management, and error handling.
+This provides comprehensive coverage of SQL:1999 Core features with a focus on query execution, transaction management, error handling, metadata inspection, and schema manipulation.
