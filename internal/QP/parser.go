@@ -683,18 +683,57 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 						}
 					}
 				}
-				stmt.Columns = append(stmt.Columns, col)
-
-				for p.current().Type == TokenKeyword && p.current().Literal != "PRIMARY" && p.current().Literal != "REFERENCES" {
-					p.advance()
-				}
-				if p.current().Type == TokenKeyword && p.current().Literal == "PRIMARY" {
-					col.PrimaryKey = true
-					p.advance()
-					if p.current().Type == TokenKeyword && p.current().Literal == "KEY" {
+				
+				// Parse column constraints before appending
+				for p.current().Type == TokenKeyword || p.current().Type == TokenNot {
+					var keyword string
+					if p.current().Type == TokenNot {
+						keyword = "NOT"
+					} else {
+						keyword = p.current().Literal
+					}
+					if keyword == "PRIMARY" {
+						col.PrimaryKey = true
 						p.advance()
+						if p.current().Type == TokenKeyword && p.current().Literal == "KEY" {
+							p.advance()
+						}
+					} else if keyword == "NOT" {
+						p.advance()
+						if p.current().Literal == "NULL" {
+							col.Type += " NOT NULL"
+							p.advance()
+						}
+					} else if keyword == "UNIQUE" {
+						col.Type += " UNIQUE"
+						p.advance()
+					} else if keyword == "DEFAULT" {
+						// Skip DEFAULT value for now
+						p.advance()
+						if p.current().Type == TokenString || p.current().Type == TokenNumber {
+							p.advance()
+						}
+					} else if keyword == "REFERENCES" {
+						// Skip FOREIGN KEY reference for now
+						p.advance()
+						if p.current().Type == TokenIdentifier {
+							p.advance()
+							if p.current().Type == TokenLeftParen {
+								for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+									p.advance()
+								}
+								if p.current().Type == TokenRightParen {
+									p.advance()
+								}
+							}
+						}
+					} else {
+						// Stop at unknown keywords or table-level constraints
+						break
 					}
 				}
+				
+				stmt.Columns = append(stmt.Columns, col)
 
 				if p.current().Type != TokenComma {
 					break

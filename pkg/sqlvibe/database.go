@@ -254,6 +254,7 @@ func (db *Database) Exec(sql string) (Result, error) {
 			}
 			return Result{}, fmt.Errorf("table %s already exists", stmt.Name)
 		}
+		
 		schema := make(map[string]QE.ColumnType)
 		colTypes := make(map[string]string)
 		var pkCols []string
@@ -1436,10 +1437,18 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 		// Extract columns from in-memory schema
 		for tblName, colTypes := range db.tables {
 			orderedCols := db.columnOrder[tblName]
+			pkCols := db.primaryKeys[tblName]
+			pkMap := make(map[string]bool)
+			for _, pk := range pkCols {
+				pkMap[pk] = true
+			}
 			for _, colName := range orderedCols {
 				colType := colTypes[colName]
 				isNullable := "YES"
-				if strings.Contains(strings.ToUpper(colType), "NOT NULL") {
+				// PRIMARY KEY columns cannot be NULL
+				if pkMap[colName] {
+					isNullable = "NO"
+				} else if strings.Contains(strings.ToUpper(colType), "NOT NULL") {
 					isNullable = "NO"
 				}
 				allResults = append(allResults, []interface{}{
