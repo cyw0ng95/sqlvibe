@@ -998,6 +998,21 @@ func (db *Database) valuesEqual(a, b interface{}) bool {
 	return false
 }
 
+func toFloat64(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	default:
+		return 0, false
+	}
+}
+
 func (db *Database) compareVals(a, b interface{}) int {
 	if a == nil && b == nil {
 		return 0
@@ -1008,6 +1023,20 @@ func (db *Database) compareVals(a, b interface{}) int {
 	if b == nil {
 		return 1
 	}
+
+	// Normalize numeric types for consistent comparison
+	aFloat, aIsNum := toFloat64(a)
+	bFloat, bIsNum := toFloat64(b)
+	if aIsNum && bIsNum {
+		if aFloat < bFloat {
+			return -1
+		}
+		if aFloat > bFloat {
+			return 1
+		}
+		return 0
+	}
+
 	switch av := a.(type) {
 	case int64:
 		switch bv := b.(type) {
