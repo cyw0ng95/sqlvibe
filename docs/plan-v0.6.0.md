@@ -23,6 +23,10 @@ v0.6.0 delivers three major architectural milestones plus comprehensive SQL1999 
 - Wave 14: SQL1999 Conformance (F041) - **NEW**
 - Wave 15: SQL1999 Conformance (F051) - **NEW**
 - Wave 16: SQL1999 Conformance (F081) - **NEW**
+- Wave 17: SQL1999 Conformance (F201 CAST) - **NEW**
+- Wave 18: SQL1999 Conformance (F261 CASE) - **NEW**
+- Wave 19: SQL1999 Conformance (F291 UNICODE) - **NEW**
+- Wave 20: SQL1999 Conformance (F301 DEFAULT) - **NEW**
 
 ## Context
 - **Previous**: v0.5.1 delivered CG/VFS/BTree with bug fixes
@@ -34,7 +38,7 @@ This release enables ACID transactions, completes VM integration, and adds compr
 
 ---
 
-## Achievement Status: **IN PROGRESS - 14 of 16 Waves COMPLETE**
+## Achievement Status: **IN PROGRESS - 18 of 20 Waves COMPLETE**
 
 **Iteration Goal**: Add and compile SQL1999 test cases, identify implementation gaps
 
@@ -46,10 +50,14 @@ This release enables ACID transactions, completes VM integration, and adds compr
 - ✅ Wave 14: SQL1999 Conformance (F041) - **COMPLETE** (104/125 tests passing = 83%)
 - ✅ Wave 15: SQL1999 Conformance (F051) - **COMPLETE** (133/152 tests passing = 87%)
 - ✅ Wave 16: SQL1999 Conformance (F081) - **COMPLETE** (45/51 tests passing = 88%)
+- ✅ Wave 17: SQL1999 Conformance (F201 - CAST) - **COMPLETE** (33/47 tests passing = 70%)
+- ✅ Wave 18: SQL1999 Conformance (F261 - CASE) - **COMPLETE** (11/20 tests passing = 55%)
+- ✅ Wave 19: SQL1999 Conformance (F291 - UNICODE) - **COMPLETE** (28/28 tests passing = 100%)
+- ✅ Wave 20: SQL1999 Conformance (F301 - DEFAULT VALUES) - **COMPLETE** (20/27 tests passing = 74%)
 - 📋 Wave 2: Set Operations - **PENDING** (no tests yet)
 - 📋 Wave 3: DML Through VM - **PENDING** (no tests yet)
 
-**SQL1999 Test Coverage**: 177/177 tests compiled (100% coverage achieved with F041, F051, F081)
+**SQL1999 Test Coverage**: 299/299 tests compiled (100% coverage achieved)
 
 **Test Results Summary** (showing implementation gaps):
 - **PASSING**: 52/122 tests (43%) - Original E/F series tests
@@ -810,8 +818,12 @@ go test ./... -run "TestSchema"
 | 14 | F041 | ✅ Compiled | 125 | 104/125 | 83% | Medium |
 | 15 | F051 | ✅ Compiled | 152 | 133/152 | 87% | Medium |
 | 16 | F081 | ✅ Compiled | 51 | 45/51 | 88% | Medium |
+| 17 | F201 (CAST) | ✅ Compiled | 47 | 33/47 | 70% | Medium |
+| 18 | F261 (CASE) | ✅ Compiled | 20 | 11/20 | 55% | Medium |
+| 19 | F291 (UNICODE) | ✅ Compiled | 28 | 28/28 | 100% | Medium |
+| 20 | F301 (DEFAULT) | ✅ Compiled | 27 | 20/27 | 74% | Medium |
 
-**Current Total**: 177 tests compiled (Waves 4-16)
+**Current Total**: 299 tests compiled (Waves 4-20)
 *F031 has 6 tests total (1 skipped)
 
 **Implementation Gaps Summary**:
