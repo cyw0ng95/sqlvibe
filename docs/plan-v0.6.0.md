@@ -27,7 +27,13 @@ This release enables ACID transactions, completes VM integration, and adds compr
 
 ---
 
-## Achievement Status: **IN PROGRESS**
+## Achievement Status: **IN PROGRESS - 3 of 9 Waves Complete**
+
+**Progress**: 33% complete
+- ✅ Wave 1: Transaction Management - **COMPLETE**
+- 🔄 Wave 2: Set Operations (VM executor done, compiler pending)
+- ✅ Wave 3: DML Through VM - **COMPLETE**
+- 📋 Waves 4-9: SQL1999 Conformance - **PENDING**
 
 ---
 
