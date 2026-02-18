@@ -1965,8 +1965,12 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	program := compiler.CompileSelect(stmt)
 	vm := VM.NewVMWithContext(program, &dbVmContext{db: db})
 
-	// Open table cursor
-	vm.Cursors().OpenTableAtID(0, tableName, db.data[tableName], tableCols)
+	// Open table cursor (use alias if present, otherwise table name)
+	cursorName := tableName
+	if stmt.From.Alias != "" {
+		cursorName = stmt.From.Alias
+	}
+	vm.Cursors().OpenTableAtID(0, cursorName, db.data[tableName], tableCols)
 
 	err := vm.Run(nil)
 	if err != nil {
@@ -2033,8 +2037,12 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 	vm := VM.NewVMWithContext(program, ctx)
 
-	// Open table cursor
-	vm.Cursors().OpenTableAtID(0, tableName, db.data[tableName], tableCols)
+	// Open table cursor (use alias if present, otherwise table name)
+	cursorName := tableName
+	if stmt.From.Alias != "" {
+		cursorName = stmt.From.Alias
+	}
+	vm.Cursors().OpenTableAtID(0, cursorName, db.data[tableName], tableCols)
 
 	err := vm.Run(nil)
 	if err != nil {
