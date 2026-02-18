@@ -34,9 +34,10 @@ type OrderBy struct {
 }
 
 type TableRef struct {
-	Name  string
-	Alias string
-	Join  *Join
+	Schema string
+	Name   string
+	Alias  string
+	Join   *Join
 }
 
 func (t *TableRef) NodeType() string { return "TableRef" }
@@ -346,6 +347,16 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		p.advance()
 		ref := &TableRef{Name: p.current().Literal}
 		p.advance()
+		
+		// Check for schema.table notation
+		if p.current().Type == TokenDot {
+			p.advance()
+			// Previous name was actually the schema
+			ref.Schema = ref.Name
+			ref.Name = p.current().Literal
+			p.advance()
+		}
+		
 		if p.current().Type == TokenIdentifier {
 			ref.Alias = p.current().Literal
 			p.advance()
@@ -366,6 +377,15 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 
 			rightTable := &TableRef{Name: p.current().Literal}
 			p.advance()
+			
+			// Check for schema.table notation in JOIN
+			if p.current().Type == TokenDot {
+				p.advance()
+				rightTable.Schema = rightTable.Name
+				rightTable.Name = p.current().Literal
+				p.advance()
+			}
+			
 			if p.current().Type == TokenIdentifier {
 				rightTable.Alias = p.current().Literal
 				p.advance()
