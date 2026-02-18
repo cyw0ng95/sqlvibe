@@ -1252,15 +1252,22 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		}
 
 		colName := tok.Literal
+		var tableName string
 		if p.current().Type == TokenDot {
 			p.advance()
 			if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
-				colName = tok.Literal + "." + p.current().Literal
+				tableName = tok.Literal
+				colName = p.current().Literal
+				p.advance()
+			} else if p.current().Type == TokenAsterisk {
+				// Handle table.* pattern
+				tableName = tok.Literal
+				colName = "*"
 				p.advance()
 			}
 		}
 
-		return &ColumnRef{Name: colName}, nil
+		return &ColumnRef{Table: tableName, Name: colName}, nil
 	case TokenAsterisk:
 		p.advance()
 		return &ColumnRef{Name: "*"}, nil

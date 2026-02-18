@@ -1747,7 +1747,7 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	// TableColIndices is only for single-table queries
 	if multiTableSchemas != nil {
 		// Don't set TableColIndices for JOINs - use TableSchemas instead
-		cg.SetMultiTableSchema(multiTableSchemas)
+		cg.SetMultiTableSchema(multiTableSchemas, tableCols)
 	} else {
 		// Single table query - set TableColIndices normally
 		cg.SetTableSchema(make(map[string]int), tableCols)
@@ -1772,10 +1772,43 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	cols := make([]string, 0)
 	for i, col := range stmt.Columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
-			// Handle SELECT * - expand to all table columns
+			// Handle SELECT * - expand to table columns
 			if colRef.Name == "*" {
-				cols = tableCols
-				break
+				if colRef.Table != "" {
+					// Qualified star (e.g., t1.*) - use only that table's columns
+					if multiTableSchemas != nil {
+						if schema, ok := multiTableSchemas[colRef.Table]; ok {
+							// Collect columns from this table in order
+							type colInfo struct {
+								name string
+								idx  int
+							}
+							tableColList := make([]colInfo, 0, len(schema))
+							for colName, idx := range schema {
+								tableColList = append(tableColList, colInfo{name: colName, idx: idx})
+							}
+							// Sort by index
+							for i := 0; i < len(tableColList); i++ {
+								for j := i + 1; j < len(tableColList); j++ {
+									if tableColList[i].idx > tableColList[j].idx {
+										tableColList[i], tableColList[j] = tableColList[j], tableColList[i]
+									}
+								}
+							}
+							for _, c := range tableColList {
+								cols = append(cols, c.name)
+							}
+							continue
+						}
+					}
+					// Fallback for single table with alias
+					cols = append(cols, tableCols...)
+					break
+				} else {
+					// Unqualified star - use all table columns
+					cols = append(cols, tableCols...)
+					continue
+				}
 			}
 			cols = append(cols, colRef.Name)
 		} else if alias, ok := col.(*QP.AliasExpr); ok {

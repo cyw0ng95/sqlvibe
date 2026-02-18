@@ -40,7 +40,7 @@ func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *Program {
 
 	// Expand SELECT * to actual column names if needed
 	columns := stmt.Columns
-	if c.TableColIndices != nil && len(c.TableColIndices) > 0 {
+	if (c.TableColIndices != nil && len(c.TableColIndices) > 0) || (c.TableSchemas != nil && len(c.TableSchemas) > 0) {
 		columns = c.expandStarColumns(stmt.Columns)
 		c.stmtColumns = columns
 	}
@@ -77,14 +77,12 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 		return nil
 	}
 
-	// Check if there's a star column
+	// Check if there's any star column
 	hasStar := false
-	var starTable string
 	for _, col := range columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
 			if colRef.Name == "*" {
 				hasStar = true
-				starTable = colRef.Table
 				break
 			}
 		}
@@ -94,48 +92,89 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 		return columns
 	}
 
-	// Build expanded columns list - use TableColOrder for deterministic ordering
+	// Build expanded columns list by processing each column
 	expanded := make([]QP.Expr, 0)
-
-	// If star has table qualifier (e.g., o.*), use that table's schema only
-	if starTable != "" && c.TableSchemas != nil {
-		if tableSchema, ok := c.TableSchemas[starTable]; ok {
-			// Expand to all columns from the specified table
-			for colName := range tableSchema {
-				colRef := &QP.ColumnRef{
-					Name:  colName,
-					Table: starTable,
+	
+	for _, col := range columns {
+		colRef, isColRef := col.(*QP.ColumnRef)
+		if !isColRef || colRef.Name != "*" {
+			// Not a star column, keep as-is
+			expanded = append(expanded, col)
+			continue
+		}
+		
+		// This is a star column - expand it
+		starTable := colRef.Table
+		
+		// If star has table qualifier (e.g., t1.*), expand to that table's columns only
+		if starTable != "" && c.TableSchemas != nil {
+			if tableSchema, ok := c.TableSchemas[starTable]; ok {
+				// Collect and sort columns by index
+				type colInfo struct {
+					name string
+					idx  int
 				}
-				expanded = append(expanded, colRef)
-			}
-			return expanded
-		}
-	}
-
-	// Use the ordered column list to ensure deterministic output
-	if c.TableColOrder != nil && len(c.TableColOrder) > 0 {
-		for _, colName := range c.TableColOrder {
-			// Skip internal/placeholder columns
-			if colName == "" || strings.HasPrefix(colName, "__") {
+				cols := make([]colInfo, 0, len(tableSchema))
+				for colName, idx := range tableSchema {
+					cols = append(cols, colInfo{name: colName, idx: idx})
+				}
+				// Sort by index
+				for i := 0; i < len(cols); i++ {
+					for j := i + 1; j < len(cols); j++ {
+						if cols[i].idx > cols[j].idx {
+							cols[i], cols[j] = cols[j], cols[i]
+						}
+					}
+				}
+				for _, c := range cols {
+					expanded = append(expanded, &QP.ColumnRef{
+						Name:  c.name,
+						Table: starTable,
+					})
+				}
 				continue
 			}
-			colRef := &QP.ColumnRef{
-				Name: colName,
-			}
-			expanded = append(expanded, colRef)
 		}
-	} else {
-		// Fallback: iterate over TableColIndices (may be non-deterministic)
-		for colName, idx := range c.TableColIndices {
-			// Skip internal/placeholder columns
-			if colName == "" || strings.HasPrefix(colName, "__") {
-				continue
+		
+		// Unqualified * - expand to all columns from all tables
+		// For multi-table queries (JOINs), use TableSchemas
+		if c.TableSchemas != nil && len(c.TableSchemas) > 0 && c.TableColOrder != nil && len(c.TableColOrder) > 0 {
+			for _, colName := range c.TableColOrder {
+				if colName == "" || strings.HasPrefix(colName, "__") {
+					continue
+				}
+				// Find which table this column belongs to
+				var tableName string
+				for tbl, schema := range c.TableSchemas {
+					if _, ok := schema[colName]; ok {
+						tableName = tbl
+						break
+					}
+				}
+				expanded = append(expanded, &QP.ColumnRef{
+					Name:  colName,
+					Table: tableName,
+				})
 			}
-			colRef := &QP.ColumnRef{
-				Name: colName,
+			continue
+		}
+		
+		// Single table case: use TableColOrder or TableColIndices
+		if c.TableColOrder != nil && len(c.TableColOrder) > 0 {
+			for _, colName := range c.TableColOrder {
+				if colName == "" || strings.HasPrefix(colName, "__") {
+					continue
+				}
+				expanded = append(expanded, &QP.ColumnRef{Name: colName})
 			}
-			_ = idx // idx is position in table
-			expanded = append(expanded, colRef)
+		} else if c.TableColIndices != nil {
+			// Fallback: iterate over TableColIndices (may be non-deterministic)
+			for colName := range c.TableColIndices {
+				if colName == "" || strings.HasPrefix(colName, "__") {
+					continue
+				}
+				expanded = append(expanded, &QP.ColumnRef{Name: colName})
+			}
 		}
 	}
 
@@ -196,29 +235,89 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 	}
 
 	// Output result row
-		c.program.EmitResultRow(colRegs)
-	}
+	c.program.EmitResultRow(colRegs)
 
-	// LEFT JOIN: Emit all left rows, right columns NULL when no match
-	// For now, we use simplified INNER JOIN logic
-	joinType := strings.ToUpper(strings.TrimSpace(join.Type))
-	if joinType == "" || joinType == "INNER" {
-		// LEFT JOIN: For now, fallback to INNER JOIN logic
-	} else if joinType == "LEFT" {
-		// LEFT JOIN: Emit all left rows, right columns NULL when no match
-		// TODO: Implement proper LEFT JOIN logic
-	} else if joinType == "RIGHT" {
-		util.Assert(false, "RIGHT OUTER JOIN not yet implemented")
-	} else if joinType == "FULL" {
-		util.Assert(false, "FULL OUTER JOIN not yet implemented")
-	}
+	// Fixup: make WHERE skip instructions jump here (past ResultRow)
+	c.program.ApplyWhereFixups()
 
-	c.program.EmitOpenTable(0, leftTableName)
-	c.program.EmitOpenTable(1, rightTableName)
+	// Loop continuation: Next + Goto, then Halt
+	np := c.program.EmitOp(OpNext, 0, 0)
+	gotoRewind := c.program.EmitGoto(rewindPos + 1)
+	haltPos := len(c.program.Instructions)
+	c.program.Emit(OpHalt)
 
-	// Use INNER JOIN logic for now
-	c.compileJoinInner(join, where, columns)
+	// Fixup: Next jumps to Halt when EOF
+	c.program.FixupWithPos(np, haltPos)
+	// Fixup: Goto jumps back to after Rewind
+	c.program.FixupWithPos(gotoRewind, rewindPos+1)
 }
+
+func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.Expr, columns []QP.Expr) {
+	leftTableName := leftTable.Name
+	rightTableName := join.Right.Name
+
+	if leftTableName == "" || rightTableName == "" {
+		return
+	}
+
+	// Assert: INNER, CROSS, and LEFT JOINs are currently supported
+	// RIGHT and FULL OUTER JOINs require different logic
+	joinType := strings.ToUpper(strings.TrimSpace(join.Type))
+	if joinType == "" || joinType == "INNER" || joinType == "CROSS" || joinType == "LEFT" {
+		// Supported - continue
+	} else {
+		util.Assert(false, "JOIN type '%s' is not yet implemented. RIGHT and FULL OUTER JOINs will be implemented in a future version.", joinType)
+	}
+
+	// Set up table-to-cursor mapping for JOIN
+	c.tableCursors = make(map[string]int)
+	// Map table name to cursor 0
+	c.tableCursors[leftTableName] = 0
+	// If there's an alias, map it as well
+	if leftTable.Alias != "" {
+		c.tableCursors[leftTable.Alias] = 0
+	}
+	// Map right table name to cursor 1
+	c.tableCursors[rightTableName] = 1
+	// If there's an alias, map it as well
+	if join.Right.Alias != "" {
+		c.tableCursors[join.Right.Alias] = 1
+	}
+
+	// Set up multi-table schemas for JOIN column resolution
+	// Only initialize if not already set (database.go sets this for us)
+	if c.TableSchemas == nil {
+		c.TableSchemas = make(map[string]map[string]int)
+		// Build schema for left table from TableColIndices (if it's for this table)
+		if c.TableColIndices != nil {
+			leftSchema := make(map[string]int)
+			for colName, colIdx := range c.TableColIndices {
+				leftSchema[colName] = colIdx
+			}
+			c.TableSchemas[leftTableName] = leftSchema
+			if leftTable.Alias != "" {
+				c.TableSchemas[leftTable.Alias] = leftSchema
+			}
+		}
+		// For right table, we need to build schema from scratch
+		// We'll use the combined TableColIndices and figure out which columns belong to which table
+		// This is a temporary solution - ideally we'd have proper schema info
+		rightSchema := make(map[string]int)
+		// For now, we'll populate rightSchema later when we have better schema info
+		c.TableSchemas[rightTableName] = rightSchema
+		if join.Right.Alias != "" {
+			c.TableSchemas[join.Right.Alias] = rightSchema
+		}
+	}
+
+	c.columnIndices = make(map[string]int)
+	for i, col := range columns {
+		if colRef, ok := col.(*QP.ColumnRef); ok {
+			c.columnIndices[colRef.Name] = i
+		} else if alias, ok := col.(*QP.AliasExpr); ok {
+			c.columnIndices[alias.Alias] = i
+		}
+	}
 
 	c.program.EmitOpenTable(0, leftTableName)
 	c.program.EmitOpenTable(1, rightTableName)
