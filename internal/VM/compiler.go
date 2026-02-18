@@ -394,8 +394,21 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		c.program.EmitOpWithDst(OpBitOr, int32(leftCheck), int32(rightCheck), dst)
 		return dst
 	case QP.TokenLike:
-		// LIKE: use OpLike which stores result in dst
+		// LIKE: use OpLike which stores result in dst (case-insensitive)
 		c.program.EmitOpWithDst(OpLike, int32(leftReg), int32(rightReg), dst)
+		return dst
+	case QP.TokenGlob:
+		// GLOB: use OpGlob which stores result in dst (case-sensitive)
+		c.program.EmitOpWithDst(OpGlob, int32(leftReg), int32(rightReg), dst)
+		return dst
+	case QP.TokenNotLike:
+		// NOT LIKE: compute LIKE then negate
+		likeResult := c.ra.Alloc()
+		c.program.EmitOpWithDst(OpLike, int32(leftReg), int32(rightReg), likeResult)
+		// Negate: result = 1 - likeResult
+		oneReg := c.ra.Alloc()
+		c.program.EmitLoadConst(oneReg, int64(1))
+		c.program.EmitOpWithDst(OpSubtract, int32(oneReg), int32(likeResult), dst)
 		return dst
 	case QP.TokenBetween:
 		// BETWEEN: left >= lower AND left <= upper

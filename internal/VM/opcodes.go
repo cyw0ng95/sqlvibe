@@ -107,6 +107,7 @@ const (
 	OpReplace
 	OpInstr
 	OpLike
+	OpGlob
 
 	// Aggregate functions
 	OpSum
@@ -291,6 +292,7 @@ var OpCodeInfo = map[OpCode]string{
 	OpReplace: "Replace",
 	OpInstr:   "Instr",
 	OpLike:    "Like",
+	OpGlob:    "Glob",
 
 	// Aggregate functions
 	OpSum:   "Sum",

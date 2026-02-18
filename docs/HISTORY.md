@@ -1,5 +1,22 @@
 # sqlvibe Release History
 
+## **v0.5.2** (2026-02-18)
+
+### Summary
+Bug fix release addressing LIKE, GLOB, and SUBSTR issues from v0.5.1.
+
+### Bug Fixes
+- **LIKE**: Rewrote pattern matching algorithm, fixed % and _ wildcards
+- **LIKE**: Added NOT LIKE support (TokenNotLike)
+- **GLOB**: Added OpGlob and globMatch function (case-sensitive)
+- **SUBSTR**: Fixed start=0 edge case
+- **Numeric comparison**: Added toFloat64 helper for consistent int64/float64 comparison
+
+### Known Issues (Deferred)
+- DECIMAL/NUMERIC type ordering (requires DS layer type affinity fix)
+
+---
+
 ## **v0.5.1** (2026-02-18)
 
 ### Summary
