@@ -1,8 +1,6 @@
 package IS
 
 import (
-	"fmt"
-	
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 )
 
@@ -46,6 +44,15 @@ func (se *SchemaExtractor) ExtractColumns(tableName string) ([]ColumnInfo, error
 	return columns, nil
 }
 
+// GetAllColumns extracts all column information from all tables
+func (se *SchemaExtractor) GetAllColumns() ([]ColumnInfo, error) {
+	allColumns := make([]ColumnInfo, 0)
+	
+	// TODO: Iterate through all tables and collect columns
+	
+	return allColumns, nil
+}
+
 // ExtractViews extracts all view information from the database
 func (se *SchemaExtractor) ExtractViews() ([]ViewInfo, error) {
 	views := make([]ViewInfo, 0)
@@ -75,90 +82,20 @@ func (se *SchemaExtractor) ExtractConstraints(tableName string) ([]ConstraintInf
 	return constraints, nil
 }
 
-// IsNullable determines if a column allows NULL values
-func IsNullable(sqliteType string) string string {
-	// Check if type includes NOT NULL constraint
-	if containsWord(sqliteType, "NOT NULL") {
-		return "NO"
-	}
-	return "YES"
+// GetAllConstraints extracts all constraint information from all tables
+func (se *SchemaExtractor) GetAllConstraints() ([]ConstraintInfo, error) {
+	allConstraints := make([]ConstraintInfo, 0)
+	
+	// TODO: Iterate through all tables and collect constraints
+	
+	return allConstraints, nil
 }
 
-// containsWord checks if a string contains a word as a whole word
-func containsWord(s, word string) bool {
-	return containsWordHelper(s, word, 0)
-}
-
-// containsWordHelper checks if a string contains a word at a position
-func containsWordHelper(s, word string, pos int) bool {
-	if pos+len(word) > len(s) {
-		return false
-	}
+// GetReferentialConstraints extracts all foreign key relationships
+func (se *SchemaExtractor) GetReferentialConstraints() ([]ReferentialConstraint, error) {
+	refs := make([]ReferentialConstraint, 0)
 	
-	// Check word boundary before match
-	if pos > 0 && s[pos-1:pos-1] != ' ' && !isLetter(rune(s[pos-1])) {
-		return false
-	}
+	// TODO: Extract FK relationships from CREATE TABLE statements
 	
-	// Check word boundary after match
-	if pos+len(word) < len(s) && s[pos+len(word):pos+len(word)] != ' ' && !isLetter(rune(s[pos+len(word)])) {
-		return false
-	}
-	
-	return s[pos:pos+len(word)] == word
-}
-
-// isLetter checks if a rune is a letter
-func isLetter(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
-}
-	
-	sqliteTypeUpper := ""
-	for _, char := range sqliteType {
-		sqliteTypeUpper += string(char)
-	}
-	
-	if mapped, ok := typeMap[sqliteTypeUpper]; ok {
-		return mapped
-	}
-	
-	// Default fallback
-	return sqliteTypeUpper
-}
-
-// IsNullable determines if a column allows NULL values
-func IsNullable(sqliteType string) string {
-	// Check if type includes NOT NULL constraint
-	if containsWord(sqliteType, "NOT NULL") {
-		return "NO"
-	}
-	return "YES"
-}
-
-// containsWord checks if a string contains a word as a whole word
-func containsWord(s, word string) bool {
-	return containsWordHelper(s, word, 0)
-}
-
-func containsWordHelper(s, word string, pos int) bool {
-	if pos+len(word) > len(s) {
-		return false
-	}
-	
-	// Check if word matches at this position
-	for i := 0; i < len(word); i++ {
-		if pos+i >= len(s) || s[pos+i] != word[i] {
-			return false
-		}
-	}
-	
-	// Check boundaries
-	wordBefore := pos == 0 || s[pos-1] == ' ' || s[pos-1] == '\t'
-	wordAfter := pos+len(word) == len(s) || s[pos+len(word)] == ' ' || s[pos+len(word)] == '\t'
-	
-	if !wordBefore && !wordAfter {
-		return true
-	}
-	
-	return false
+	return refs, nil
 }
