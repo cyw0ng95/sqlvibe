@@ -33,7 +33,24 @@ This release enables ACID transactions, completes VM integration, and adds compr
 
 ## Delivered Components
 
-### Wave 1: Transaction Management (TM) - v0.6.0 - IN PROGRESS
+### Wave 1: Transaction Management (TM) - v0.6.0 - COMPLETE
+
+**Status**: ✅ Complete (except WAL which is deferred to v0.6.1)
+
+**Deliverables**:
+- ✅ Transaction interface (Begin, Commit, Rollback)
+- ✅ TransactionManager with DEFERRED/IMMEDIATE/EXCLUSIVE support
+- ✅ Lock management integration
+- ✅ Parser support for BEGIN/COMMIT/ROLLBACK
+- ✅ Database layer integration
+- ✅ Comprehensive tests (7 tests all passing)
+- ⏸️ WAL integration (deferred to v0.6.1)
+
+**Files Modified**:
+- `internal/TM/transaction.go` (new, 400+ lines)
+- `internal/TM/transaction_test.go` (new, 400+ lines, 7 tests)
+- `internal/QP/parser.go` (added transaction statements)
+- `pkg/sqlvibe/database.go` (integrated TM)
 
 ### Wave 2: Set Operations in VM - v0.6.0 - PENDING
 
@@ -89,10 +106,10 @@ internal/
 ## Success Criteria
 
 ### Wave 1: Transaction Management
-- [ ] TM package integrated with QE engine
-- [ ] BEGIN/COMMIT/ROLLBACK commands work
-- [ ] WAL mode functional (optional, can be deferred)
-- [ ] Lock management integrated with database operations
+- [x] TM package integrated with QE engine
+- [x] BEGIN/COMMIT/ROLLBACK commands work
+- [ ] WAL mode functional (optional, deferred to v0.6.1)
+- [x] Lock management integrated with database operations
 
 ### Wave 2: Set Operations
 - [ ] UNION ALL implemented in VM
