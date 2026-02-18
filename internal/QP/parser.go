@@ -127,6 +127,22 @@ type ExplainStmt struct {
 
 func (e *ExplainStmt) NodeType() string { return "ExplainStmt" }
 
+type BeginStmt struct {
+	Type string // "DEFERRED", "IMMEDIATE", "EXCLUSIVE", or ""
+}
+
+func (b *BeginStmt) NodeType() string { return "BeginStmt" }
+
+type CommitStmt struct {
+}
+
+func (c *CommitStmt) NodeType() string { return "CommitStmt" }
+
+type RollbackStmt struct {
+}
+
+func (r *RollbackStmt) NodeType() string { return "RollbackStmt" }
+
 type Expr interface {
 	exprNode()
 }
@@ -237,6 +253,12 @@ func (p *Parser) Parse() (ASTNode, error) {
 			return p.parsePragma()
 		case "EXPLAIN":
 			return p.parseExplain()
+		case "BEGIN":
+			return p.parseBegin()
+		case "COMMIT":
+			return p.parseCommit()
+		case "ROLLBACK":
+			return p.parseRollback()
 		}
 	case TokenExplain:
 		return p.parseExplain()
@@ -1379,3 +1401,48 @@ func (p *Parser) parseExplain() (ASTNode, error) {
 	_ = isQueryPlan
 	return explain, nil
 }
+
+func (p *Parser) parseBegin() (ASTNode, error) {
+	p.advance() // consume BEGIN
+
+	stmt := &BeginStmt{}
+
+	// Check for transaction type: DEFERRED, IMMEDIATE, or EXCLUSIVE
+	if p.current().Type == TokenKeyword {
+		switch p.current().Literal {
+		case "DEFERRED", "IMMEDIATE", "EXCLUSIVE":
+			stmt.Type = p.current().Literal
+			p.advance()
+		}
+	}
+
+	// Optional TRANSACTION keyword
+	if p.current().Type == TokenKeyword && p.current().Literal == "TRANSACTION" {
+		p.advance()
+	}
+
+	return stmt, nil
+}
+
+func (p *Parser) parseCommit() (ASTNode, error) {
+	p.advance() // consume COMMIT
+
+	// Optional TRANSACTION keyword
+	if p.current().Type == TokenKeyword && p.current().Literal == "TRANSACTION" {
+		p.advance()
+	}
+
+	return &CommitStmt{}, nil
+}
+
+func (p *Parser) parseRollback() (ASTNode, error) {
+	p.advance() // consume ROLLBACK
+
+	// Optional TRANSACTION keyword
+	if p.current().Type == TokenKeyword && p.current().Literal == "TRANSACTION" {
+		p.advance()
+	}
+
+	return &RollbackStmt{}, nil
+}
+
