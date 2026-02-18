@@ -40,6 +40,7 @@ func TestSQL1999_F301_E03103_L1(t *testing.T) {
 		})
 	}
 
+	// Note: information_schema is not supported by SQLite, so we only test sqlvibe
 	queryTests := []struct {
 		name string
 		sql  string
@@ -52,7 +53,11 @@ func TestSQL1999_F301_E03103_L1(t *testing.T) {
 
 	for _, tt := range queryTests {
 		t.Run(tt.name, func(t *testing.T) {
-			SQL1999.CompareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
+			rows := SQL1999.QuerySqlvibeOnly(t, sqlvibeDB, tt.sql, tt.name)
+			if rows == nil {
+				return
+			}
+			// Views may be empty, just verify query succeeds
 		})
 	}
 }

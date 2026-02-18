@@ -172,6 +172,17 @@ func CompareExecResults(t *testing.T, sqlvibeDB *sqlvibe.Database, sqliteDB *sql
 	}
 }
 
+// QuerySqlvibeOnly executes a query only on sqlvibe and validates it succeeds
+// Used for features not supported by SQLite (e.g., information_schema)
+func QuerySqlvibeOnly(t *testing.T, sqlvibeDB *sqlvibe.Database, sql string, testName string) *sqlvibe.Rows {
+	rows, err := sqlvibeDB.Query(sql)
+	if err != nil {
+		t.Errorf("%s: sqlvibe query error: %v", testName, err)
+		return nil
+	}
+	return rows
+}
+
 func compareSingleValue(t *testing.T, sqlvibeDB *sqlvibe.Database, sqliteDB *sql.DB, sql string, testName string) {
 	rows, err := sqlvibeDB.Query(sql)
 	if err != nil {

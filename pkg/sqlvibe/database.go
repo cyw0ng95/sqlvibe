@@ -1496,6 +1496,24 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 		columnNames = []string{"constraint_name", "unique_constraint_schema", "unique_constraint_name"}
 		// No foreign keys tracked yet, return empty
 		
+	case "key_column_usage":
+		columnNames = []string{"constraint_name", "table_name", "table_schema", "column_name", "ordinal_position"}
+		// Extract PRIMARY KEY column usage from in-memory schema
+		for tblName, pkCols := range db.primaryKeys {
+			if len(pkCols) > 0 {
+				constraintName := fmt.Sprintf("pk_%s", tblName)
+				for i, colName := range pkCols {
+					allResults = append(allResults, []interface{}{
+						constraintName,
+						tblName,
+						"main",
+						colName,
+						int64(i + 1), // ordinal position starts at 1
+					})
+				}
+			}
+		}
+		
 	default:
 		return nil, fmt.Errorf("unknown information_schema view: %s", viewName)
 	}
