@@ -1876,12 +1876,17 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	results := vm.Results()
 
 	// Get column names from SELECT
-	cols := make([]string, len(stmt.Columns))
+	cols := make([]string, 0)
 	for i, col := range stmt.Columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
-			cols[i] = colRef.Name
+			// Handle SELECT * - expand to table columns
+			if colRef.Name == "*" {
+				cols = append(cols, tableCols...)
+			} else {
+				cols = append(cols, colRef.Name)
+			}
 		} else {
-			cols[i] = fmt.Sprintf("col%d", i)
+			cols = append(cols, fmt.Sprintf("col%d", i))
 		}
 	}
 

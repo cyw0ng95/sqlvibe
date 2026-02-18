@@ -1160,7 +1160,7 @@ func (c *Compiler) compileSetOp(stmt *QP.SelectStmt) *Program {
 	c.program.Emit(OpInit)
 
 	// Determine number of columns from left SELECT
-	numCols := len(stmt.Columns)
+	numCols := c.resolveColumnCount(stmt.Columns)
 
 	// Strategy depends on operation type
 	switch stmt.SetOp {
@@ -1180,6 +1180,33 @@ func (c *Compiler) compileSetOp(stmt *QP.SelectStmt) *Program {
 
 	c.program.Emit(OpHalt)
 	return c.program
+}
+
+// resolveColumnCount resolves the actual number of columns in a SELECT list
+// If the list contains a star (*), it returns the actual column count from the table schema
+func (c *Compiler) resolveColumnCount(columns []QP.Expr) int {
+	numCols := len(columns)
+	
+	// Check if columns contains a star
+	if numCols == 1 {
+		if colRef, ok := columns[0].(*QP.ColumnRef); ok && colRef.Name == "*" {
+			// Get actual column count from table schema
+			if c.TableColOrder != nil {
+				return len(c.TableColOrder)
+			} else if c.TableColIndices != nil {
+				return len(c.TableColIndices)
+			} else if c.TableSchemas != nil {
+				// For multi-table queries, count all columns
+				totalCols := 0
+				for _, schema := range c.TableSchemas {
+					totalCols += len(schema)
+				}
+				return totalCols
+			}
+		}
+	}
+	
+	return numCols
 }
 
 // compileSetOpUnionAll compiles UNION ALL (no deduplication)
