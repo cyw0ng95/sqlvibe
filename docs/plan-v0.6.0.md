@@ -1,11 +1,20 @@
 # Plan v0.6.0 - Transaction Management & Complete VM Integration
 
 ## Summary
-v0.6.0 delivers two major architectural milestones:
+v0.6.0 delivers three major architectural milestones plus comprehensive SQL1999 conformance tests:
 1. **Complete Transaction Management (TM)** - ACID transactions with WAL support
 2. **Full VM Integration** - All SQL operations (SELECT, DML, SetOps) through VM
+3. **SQL1999 Conformance** - Comprehensive test coverage for E011-E141
 
-Plus comprehensive SQL1999 conformance test coverage.
+**8 Waves Total**:
+- Wave 1: Transaction Management (TM)
+- Wave 2: Set Operations in VM
+- Wave 3: DML Through VM
+- Wave 4: SQL1999 Conformance (E031, E041)
+- Wave 5: SQL1999 Conformance (E051, E061)
+- Wave 6: SQL1999 Conformance (E071, E091)
+- Wave 7: SQL1999 Conformance (E101, E111)
+- Wave 8: SQL1999 Conformance (E121, E131, E141)
 
 ## Context
 - **Previous**: v0.5.1 delivered CG/VFS/BTree with bug fixes
@@ -29,7 +38,15 @@ This release enables ACID transactions, completes VM integration, and adds compr
 
 ### Wave 3: DML Through VM - v0.6.0 - PENDING
 
-### Wave 4: SQL1999 Conformance Tests (E031, E041) - v0.6.0 - PENDING
+### Wave 4: SQL1999 Conformance (E031, E041) - v0.6.0 - PENDING
+
+### Wave 5: SQL1999 Conformance (E051, E061) - v0.6.0 - PENDING
+
+### Wave 6: SQL1999 Conformance (E071, E091) - v0.6.0 - PENDING
+
+### Wave 7: SQL1999 Conformance (E101, E111) - v0.6.0 - PENDING
+
+### Wave 8: SQL1999 Conformance (E121, E131, E141) - v0.6.0 - PENDING
 
 ---
 
@@ -49,8 +66,17 @@ internal/
     └── SQL1999/
         ├── E011/  # SQL1999 Basic (existing)
         ├── E021/  # SQL1999 Character string (existing)
-        ├── E031/  # SQL1999 Information Schema (NEW - 6 test files)
-        └── E041/  # SQL1999 Schema Definition (NEW - 12 test files)
+        ├── E031/  # SQL1999 Information Schema (Wave 4 - 6 tests)
+        ├── E041/  # SQL1999 Schema Definition (Wave 4 - 12 tests)
+        ├── E051/  # SQL1999 Data Types (Wave 5 - 6 tests)
+        ├── E061/  # SQL1999 Predicates (Wave 5 - 8 tests)
+        ├── E071/  # SQL1999 Subqueries (Wave 6 - 6 tests)
+        ├── E091/  # SQL1999 Table Expressions (Wave 6 - 10 tests)
+        ├── E101/  # SQL1999 Query Expressions (Wave 7 - 9 tests)
+        ├── E111/  # SQL1999 Table Creation (Wave 7 - 6 tests)
+        ├── E121/  # SQL1999 Schema Manipulation (Wave 8 - 6 tests)
+        ├── E131/  # SQL1999 Query Predicates (Wave 8 - 7 tests)
+        └── E141/  # SQL1999 NULLs (Wave 8 - 8 tests)
 ```
 
 ---
@@ -74,13 +100,28 @@ internal/
 - [ ] UPDATE through VM compilation
 - [ ] DELETE through VM compilation
 
-### Wave 4: SQL1999 Conformance Tests
-- [ ] E031 Information Schema tests (treated as E011 level)
-- [ ] E041 Schema Definition tests (treated as E021 level)
-- [ ] All E011 tests pass
-- [ ] All E021 tests pass
-- [ ] All E031 tests pass
-- [ ] All E041 tests pass
+### Wave 4: SQL1999 Conformance (E031, E041)
+- [ ] E031 Information Schema tests pass
+- [ ] E041 Schema Definition tests pass
+- [ ] All E011 tests pass (existing)
+- [ ] All E021 tests pass (existing)
+
+### Wave 5: SQL1999 Conformance (E051, E061)
+- [ ] E051 Data Types tests pass
+- [ ] E061 Predicates tests pass
+
+### Wave 6: SQL1999 Conformance (E071, E091)
+- [ ] E071 Subqueries tests pass
+- [ ] E091 Table Expressions tests pass
+
+### Wave 7: SQL1999 Conformance (E101, E111)
+- [ ] E101 Query Expressions tests pass
+- [ ] E111 Table Creation tests pass
+
+### Wave 8: SQL1999 Conformance (E121, E131, E141)
+- [ ] E121 Schema Manipulation tests pass
+- [ ] E131 Query Predicates tests pass
+- [ ] E141 NULLs tests pass
 
 ---
 
@@ -113,15 +154,44 @@ graph TD
         C4[Add DML opcodes to VM]
     end
     
-    subgraph W4 ["Wave 4: SQL1999 Conformance (v0.6.0)"]
+    subgraph W4 ["Wave 4: SQL1999 Conformance (E031, E041) (v0.6.0)"]
         direction TB
-        D1[Create E031 Information Schema tests]
-        D2[Create E041 Schema Definition tests]
+        D1[E031 Information Schema]
+        D2[E041 Schema Definition]
+    end
+    
+    subgraph W5 ["Wave 5: SQL1999 Conformance (E051, E061) (v0.6.0)"]
+        direction TB
+        E1[E051 Data Types]
+        E2[E061 Predicates]
+    end
+    
+    subgraph W6 ["Wave 6: SQL1999 Conformance (E071, E091) (v0.6.0)"]
+        direction TB
+        F1[E071 Subqueries]
+        F2[E091 Table Expressions]
+    end
+    
+    subgraph W7 ["Wave 7: SQL1999 Conformance (E101, E111) (v0.6.0)"]
+        direction TB
+        G1[E101 Query Expressions]
+        G2[E111 Table Creation]
+    end
+    
+    subgraph W8 ["Wave 8: SQL1999 Conformance (E121, E131, E141) (v0.6.0)"]
+        direction TB
+        H1[E121 Schema Manipulation]
+        H2[E131 Query Predicates]
+        H3[E141 NULLs]
     end
     
     W1 --> W2
     W2 --> W3
     W3 --> W4
+    W4 --> W5
+    W5 --> W6
+    W6 --> W7
+    W7 --> W8
 ```
 
 ---
@@ -614,6 +684,162 @@ go test ./... -run "TestSchema"
 
 **Subtotal**: ~13 hours
 
+---
+
+## Wave 5: SQL1999 Conformance Tests (E051, E061) - v0.6.0
+
+### Overview
+Add SQL1999 conformance tests for E051 (Data Types) and E061 (Basic Predicates and Comparison Operators).
+
+### Task 5.1: Create E051 Test Directory and Implement Tests
+- **Files**: `internal/TS/SQL1999/E051/` (new)
+- **Description**: Data Types conformance tests
+- **Test Files**:
+  - `01_test.go` - TestSQL1999_F301_E05101_L1 (Numeric types)
+  - `02_test.go` - TestSQL1999_F301_E05102_L1 (Character types)
+  - `03_test.go` - TestSQL1999_F301_E05103_L1 (Binary types)
+  - `04_test.go` - TestSQL1999_F301_E05104_L1 (Datetime types)
+  - `05_test.go` - TestSQL1999_F301_E05105_L1 (Boolean type)
+  - `06_test.go` - TestSQL1999_F301_E05106_L1 (Type coercion)
+
+### Task 5.2: Create E061 Test Directory and Implement Tests
+- **Files**: `internal/TS/SQL1999/E061/` (new)
+- **Description**: Basic Predicates conformance tests
+- **Test Files**:
+  - `01_test.go` - TestSQL1999_F301_E06101_L1 (Comparison predicates)
+  - `02_test.go` - TestSQL1999_F301_E06102_L1 (BETWEEN predicate)
+  - `03_test.go` - TestSQL1999_F301_E06103_L1 (IN predicate)
+  - `04_test.go` - TestSQL1999_F301_E06104_L1 (LIKE predicate)
+  - `05_test.go` - TestSQL1999_F301_E06105_L1 (NULL predicate IS [NOT] NULL)
+  - `06_test.go` - TestSQL1999_F301_E06106_L1 (EXISTS predicate)
+  - `07_test.go` - TestSQL1999_F301_E06107_L1 (UNIQUE predicate)
+  - `08_test.go` - TestSQL1999_F301_E06108_L1 (MATCH predicate)
+
+---
+
+## Wave 6: SQL1999 Conformance Tests (E071, E091) - v0.6.0
+
+### Overview
+Add SQL1999 conformance tests for E071 (Query Expressions - Subqueries) and E091 (Table Expressions - FROM clause, JOINs).
+
+### Task 6.1: Create E071 Test Directory and Implement Tests
+- **Files**: `internal/TS/SQL1999/E071/` (new)
+- **Description**: Subquery conformance tests
+- **Test Files**:
+  - `01_test.go` - TestSQL1999_F301_E07101_L1 (Scalar subquery)
+  - `02_test.go` - TestSQL1999_F301_E07102_L1 (Subquery in WHERE)
+  - `03_test.go` - TestSQL1999_F301_E07103_L1 (Subquery in FROM)
+  - `04_test.go` - TestSQL1999_F301_E07104_L1 (Correlated subquery)
+  - `05_test.go` - TestSQL1999_F301_E07105_L1 (Subquery with ALL/ANY)
+  - `06_test.go` - TestSQL1999_F301_E07106_L1 (Nested subqueries)
+
+### Task 6.2: Create E091 Test Directory and Implement Tests
+- **Files**: `internal/TS/SQL1999/E091/` (new)
+- **Description**: Table expressions and JOINs conformance tests
+- **Test Files**:
+  - `01_test.go` - TestSQL1999_F301_E09101_L1 (Simple FROM clause)
+  - `02_test.go` - TestSQL1999_F301_E09102_L1 (INNER JOIN)
+  - `03_test.go` - TestSQL1999_F301_E09103_L1 (LEFT OUTER JOIN)
+  - `04_test.go` - TestSQL1999_F301_E09104_L1 (RIGHT OUTER JOIN)
+  - `05_test.go` - TestSQL1999_F301_E09105_L1 (FULL OUTER JOIN)
+  - `06_test.go` - TestSQL1999_F301_E09106_L1 (CROSS JOIN)
+  - `07_test.go` - TestSQL1999_F301_E09107_L1 (NATURAL JOIN)
+  - `08_test.go` - TestSQL1999_F301_E09108_L1 (JOIN USING clause)
+  - `09_test.go` - TestSQL1999_F301_E09109_L1 (Multiple JOINs)
+  - `10_test.go` - TestSQL1999_F301_E09110_L1 (Self-join)
+
+---
+
+## Wave 7: SQL1999 Conformance Tests (E101, E111) - v0.6.0
+
+### Overview
+Add SQL1999 conformance tests for E101 (Basic Query Expressions) and E111 (Simple Table Creation).
+
+### Task 7.1: Create E101 Test Directory and Implement Tests
+- **Files**: `internal/TS/SQL1999/E101/` (new)
+- **Description**: SELECT query expression conformance tests
+- **Test Files**:
+  - `01_test.go` - TestSQL1999_F301_E10101_L1 (Simple SELECT)
+  - `02_test.go` - TestSQL1999_F301_E10102_L1 (SELECT DISTINCT)
+  - `03_test.go` - TestSQL1999_F301_E10103_L1 (SELECT ALL)
+  - `04_test.go` - TestSQL1999_F301_E10104_L1 (Column aliases)
+  - `05_test.go` - TestSQL1999_F301_E10105_L1 (Qualified column names)
+  - `06_test.go` - TestSQL1999_F301_E10106_L1 (Asterisk in SELECT list)
+  - `07_test.go` - TestSQL1999_F301_E10107_L1 (Table.* qualification)
+  - `08_test.go` - TestSQL1999_F301_E10108_L1 (SELECT with expression)
+  - `09_test.go` - TestSQL1999_F301_E10109_L1 (Duplicate column names)
+
+### Task 7.2: Create E111 Test Directory and Implement Tests
+- **Files**: `internal/TS/SQL1999/E111/` (new)
+- **Description**: Simple table creation conformance tests
+- **Test Files**:
+  - `01_test.go` - TestSQL1999_F301_E11101_L1 (CREATE TABLE basic)
+  - `02_test.go` - TestSQL1999_F301_E11102_L1 (Column definitions)
+  - `03_test.go` - TestSQL1999_F301_E11103_L1 (Column constraints)
+  - `04_test.go` - TestSQL1999_F301_E11104_L1 (Table constraints)
+  - `05_test.go` - TestSQL1999_F301_E11105_L1 (DEFAULT clause)
+  - `06_test.go` - TestSQL1999_F301_E11106_L1 (Column type specifications)
+
+---
+
+## Wave 8: SQL1999 Conformance Tests (E121, E131, E141) - v0.6.0
+
+### Overview
+Add SQL1999 conformance tests for E121 (Basic Schema Manipulation), E131 (Query Predicates), and E141 (NULLs).
+
+### Task 8.1: Create E121 Test Directory and Implement Tests
+- **Files**: `internal/TS/SQL1999/E121/` (new)
+- **Description**: Basic schema manipulation conformance tests
+- **Test Files**:
+  - `01_test.go` - TestSQL1999_F301_E12101_L1 (DROP TABLE)
+  - `02_test.go` - TestSQL1999_F301_E12102_L1 (DROP INDEX)
+  - `03_test.go` - TestSQL1999_F301_E12103_L1 (ALTER TABLE ADD COLUMN)
+  - `04_test.go` - TestSQL1999_F301_E12104_L1 (CREATE INDEX)
+  - `05_test.go` - TestSQL1999_F301_E12105_L1 (DROP VIEW)
+  - `06_test.go` - TestSQL1999_F301_E12106_L1 (CREATE SCHEMA)
+
+### Task 8.2: Create E131 Test Directory and Implement Tests
+- **Files**: `internal/TS/SQL1999/E131/` (new)
+- **Description**: Query predicate conformance tests
+- **Test Files**:
+  - `01_test.go` - TestSQL1999_F301_E13101_L1 (WHERE clause)
+  - `02_test.go` - TestSQL1999_F301_E13102_L1 (GROUP BY)
+  - `03_test.go` - TestSQL1999_F301_E13103_L1 (HAVING)
+  - `04_test.go` - TestSQL1999_F301_E13104_L1 (ORDER BY)
+  - `05_test.go` - TestSQL1999_F301_E13105_L1 (LIMIT)
+  - `06_test.go` - TestSQL1999_F301_E13106_L1 (OFFSET)
+  - `07_test.go` - TestSQL1999_F301_E13107_L1 (Combined predicates)
+
+### Task 8.3: Create E141 Test Directory and Implement Tests
+- **Files**: `internal/TS/SQL1999/E141/` (new)
+- **Description**: NULL handling conformance tests
+- **Test Files**:
+  - `01_test.go` - TestSQL1999_F301_E14101_L1 (NULL in comparisons)
+  - `02_test.go` - TestSQL1999_F301_E14102_L1 (IS NULL predicate)
+  - `03_test.go` - TestSQL1999_F301_E14103_L1 (IS NOT NULL predicate)
+  - `04_test.go` - TestSQL1999_F301_E14104_L1 (NULL in expressions)
+  - `05_test.go` - TestSQL1999_F301_E14105_L1 (NULL in aggregate functions)
+  - `06_test.go` - TestSQL1999_F301_E14106_L1 (NULLS FIRST/LAST in ORDER BY)
+  - `07_test.go` - TestSQL1999_F301_E14107_L1 (COALESCE function)
+  - `08_test.go` - TestSQL1999_F301_E14108_L1 (IFNULL/NULLIF functions)
+
+### Wave 5: SQL1999 Conformance Tests (E051, E061) - v0.6.0
+- Task 5.1: E051 Data Types tests
+- Task 5.2: E061 Predicates tests
+
+### Wave 6: SQL1999 Conformance Tests (E071, E091) - v0.6.0
+- Task 6.1: E071 Subqueries tests
+- Task 6.2: E091 Table Expressions tests
+
+### Wave 7: SQL1999 Conformance Tests (E101, E111) - v0.6.0
+- Task 7.1: E101 SELECT expressions tests
+- Task 7.2: E111 Table creation tests
+
+### Wave 8: SQL1999 Conformance Tests (E121, E131, E141) - v0.6.0
+- Task 8.1: E121 Schema statements tests
+- Task 8.2: E131 Query predicates tests
+- Task 8.3: E141 NULL handling tests
+
 **Total**: ~56 hours (~52 hours if WAL deferred)
 
 ---
@@ -623,9 +849,13 @@ go test ./... -run "TestSchema"
 - Wave 1 (TM) depends on: v0.5.1 complete (TM exists but not integrated)
 - Wave 2 (SetOps) depends on: Wave 1 complete
 - Wave 3 (DML) depends on: Wave 1 complete
-- Wave 4 (Conformance Tests) depends on: Waves 1-3 complete (features must exist to test)
+- Wave 4 (Conformance E031/E041) depends on: Waves 1-3 complete (features must exist to test)
+- Wave 5 (Conformance E051/E061) depends on: Wave 4 complete
+- Wave 6 (Conformance E071/E091) depends on: Wave 5 complete
+- Wave 7 (Conformance E101/E111) depends on: Wave 6 complete
+- Wave 8 (Conformance E121/E131/E141) depends on: Wave 7 complete
 
-**Critical Path**: Wave 1 → Wave 2 → Wave 3 → Wave 4
+**Critical Path**: Wave 1 → Wave 2 → Wave 3 → Wave 4 → Wave 5 → Wave 6 → Wave 7 → Wave 8
 
 ---
 
@@ -691,6 +921,15 @@ go test ./... -run "TestSchema"
 - [ ] E041-10: CREATE VIEW - TestSQL1999_F301_E04110_L1
 - [ ] E041-11: DROP VIEW - TestSQL1999_F301_E04111_L1
 - [ ] E041-12: CREATE TABLE AS SELECT - TestSQL1999_F301_E04112_L1
+- [ ] E051-01 to E051-06: Data Types tests
+- [ ] E061-01 to E061-08: Predicates tests
+- [ ] E071-01 to E071-06: Subqueries tests
+- [ ] E091-01 to E091-10: Table Expressions tests
+- [ ] E101-01 to E101-09: Query Expressions tests
+- [ ] E111-01 to E111-06: Table Creation tests
+- [ ] E121-01 to E121-06: Schema Manipulation tests
+- [ ] E131-01 to E131-07: Query Predicates tests
+- [ ] E141-01 to E141-08: NULLs tests
 - [ ] All existing tests still pass
 
 ### Overall
