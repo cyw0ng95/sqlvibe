@@ -54,17 +54,20 @@ This release enables ACID transactions, completes VM integration, and adds compr
 
 ### Wave 2: Set Operations in VM - v0.6.0 - IN PROGRESS
 
-**Status**: 🔄 In Progress (Task 2.1 complete, requires significant VM work)
+**Status**: 🔄 In Progress (VM executor complete, compiler integration pending)
 
 **Deliverables**:
 - ✅ SetOp opcodes defined (OpUnionAll, OpUnionDistinct, OpExcept, OpIntersect)
 - ✅ Ephemeral table opcodes defined (OpEphemeralCreate, OpEphemeralInsert, OpEphemeralFind)
-- ⏸️ Implementation pending - requires VM executor updates and CG compiler work
+- ✅ VM executor implementation complete (all opcodes functional)
+- ⏸️ Compiler integration pending - requires CG to generate SetOp bytecode
 
 **Files Modified**:
 - `internal/VM/opcodes.go` (added 7 new opcodes)
+- `internal/VM/engine.go` (added ephemeralTbls support)
+- `internal/VM/exec.go` (implemented all 7 SetOp opcodes)
 
-**Note**: Full implementation of Wave 2 requires significant VM architecture work. Consider prioritizing Wave 3 (DML) or Wave 4+ (SQL1999 conformance tests) which may have higher immediate value.
+**Note**: VM executor is complete. Compiler integration (CG layer) requires significant work to compile SelectStmt.SetOp to bytecode. This can be completed in a focused effort or deferred based on priority.
 
 ### Wave 3: DML Through VM - v0.6.0 - PENDING
 
@@ -124,10 +127,10 @@ internal/
 - [x] Lock management integrated with database operations
 
 ### Wave 2: Set Operations
-- [ ] UNION ALL implemented in VM (pending VM executor work)
-- [ ] UNION (DISTINCT) implemented in VM (pending VM executor work)
-- [ ] EXCEPT implemented in VM (pending VM executor work)
-- [ ] INTERSECT implemented in VM (pending VM executor work)
+- [x] SetOp opcodes defined in VM
+- [x] VM executor implementation complete (OpEphemeralCreate/Insert/Find, OpUnionAll/Distinct, OpExcept, OpIntersect)
+- [ ] Compiler integration (CG layer to generate SetOp bytecode) - pending
+- [ ] SetOp tests - pending compiler integration
 
 ### Wave 3: DML Through VM
 - [ ] INSERT through VM compilation
