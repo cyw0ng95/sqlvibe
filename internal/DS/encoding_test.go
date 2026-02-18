@@ -18,16 +18,16 @@ func TestVarintEncoding(t *testing.T) {
 		{"negative", -1, 9},
 		{"max_int64", 9223372036854775807, 9},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := make([]byte, 10)
 			n := PutVarint(buf, tt.value)
-			
+
 			if n != tt.want {
 				t.Errorf("PutVarint() bytes = %d, want %d", n, tt.want)
 			}
-			
+
 			// Decode and verify
 			got, bytesRead := GetVarint(buf)
 			if bytesRead != n {
@@ -42,12 +42,12 @@ func TestVarintEncoding(t *testing.T) {
 
 func TestVarintLen(t *testing.T) {
 	tests := []int64{0, 1, 127, 128, 16383, 16384, -1, -128, 9223372036854775807}
-	
+
 	for _, v := range tests {
 		buf := make([]byte, 10)
 		n := PutVarint(buf, v)
 		length := VarintLen(v)
-		
+
 		if length != n {
 			t.Errorf("VarintLen(%d) = %d, want %d", v, length, n)
 		}
@@ -67,19 +67,19 @@ func TestSerialTypes(t *testing.T) {
 		{"int8", int64(100), SerialTypeInt8, 1},
 		{"int16", int64(1000), SerialTypeInt16, 2},
 		{"int32", int64(100000), SerialTypeInt32, 4},
-		{"int64", int64(10000000000), SerialTypeInt64, 8},
+		{"int64", int64(200000000000000), SerialTypeInt64, 8},
 		{"float", float64(3.14), SerialTypeFloat64, 8},
 		{"text", "hello", 13 + 2*5, 5},
 		{"blob", []byte{1, 2, 3}, 12 + 2*3, 3},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			st := GetSerialType(tt.value)
 			if st != tt.wantType {
 				t.Errorf("GetSerialType() = %d, want %d", st, tt.wantType)
 			}
-			
+
 			length := SerialTypeLen(st)
 			if length != tt.wantLength {
 				t.Errorf("SerialTypeLen() = %d, want %d", length, tt.wantLength)
@@ -110,27 +110,27 @@ func TestRecordEncoding(t *testing.T) {
 			values: []interface{}{},
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Encode
 			encoded := EncodeRecord(tt.values)
-			
+
 			// Decode
 			decoded, n, err := DecodeRecord(encoded)
 			if err != nil {
 				t.Fatalf("DecodeRecord() error = %v", err)
 			}
-			
+
 			if n != len(encoded) {
 				t.Errorf("DecodeRecord() consumed %d bytes, want %d", n, len(encoded))
 			}
-			
+
 			// Compare values
 			if len(decoded) != len(tt.values) {
 				t.Fatalf("DecodeRecord() returned %d values, want %d", len(decoded), len(tt.values))
 			}
-			
+
 			for i := range tt.values {
 				if !valuesEqual(decoded[i], tt.values[i]) {
 					t.Errorf("DecodeRecord()[%d] = %v, want %v", i, decoded[i], tt.values[i])
@@ -147,7 +147,7 @@ func valuesEqual(a, b interface{}) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	
+
 	switch av := a.(type) {
 	case int64:
 		if bv, ok := b.(int64); ok {
@@ -172,7 +172,7 @@ func valuesEqual(a, b interface{}) bool {
 			return bytes.Equal(av, bv)
 		}
 	}
-	
+
 	return false
 }
 
@@ -186,7 +186,7 @@ func BenchmarkVarintEncode(b *testing.B) {
 func BenchmarkVarintDecode(b *testing.B) {
 	buf := make([]byte, 10)
 	PutVarint(buf, 12345678)
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		GetVarint(buf)
@@ -195,7 +195,7 @@ func BenchmarkVarintDecode(b *testing.B) {
 
 func BenchmarkRecordEncode(b *testing.B) {
 	values := []interface{}{int64(1), "hello world", int64(42), float64(3.14159)}
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		EncodeRecord(values)
@@ -205,7 +205,7 @@ func BenchmarkRecordEncode(b *testing.B) {
 func BenchmarkRecordDecode(b *testing.B) {
 	values := []interface{}{int64(1), "hello world", int64(42), float64(3.14159)}
 	encoded := EncodeRecord(values)
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		DecodeRecord(encoded)
