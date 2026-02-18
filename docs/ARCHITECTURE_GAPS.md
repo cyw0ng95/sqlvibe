@@ -4,32 +4,35 @@
 
 Analysis of the 1,331 SQL1999 test cases reveals **4 fundamental architectural gaps** in the compiler that cause 311 tests (23%) to fail with 0% pass rate in their respective suites.
 
+**Status**: Gap 1 (UNION with *) has been fixed. 8 tests now passing.
+
 ## Critical Gaps
 
-### Gap 1: UNION with SELECT Star (`SELECT *`)
+### Gap 1: UNION with SELECT Star (`SELECT *`) - ✅ FIXED
 
-**Affected Tests**: E081 (8 tests) - 0% pass rate
+**Affected Tests**: E081 (8 tests) - **100% pass rate** (was 0%)
 
-**Root Cause**: `internal/VM/compiler.go:1163`
-```go
-numCols := len(stmt.Columns)  // Returns 1 for "*", not actual column count
-```
+**Root Cause**: `pkg/sqlvibe/database.go:1879-1886` - The `execSelectStmt` function extracted column names from `stmt.Columns` without expanding `*` to actual column names.
 
-**Impact**: When executing `SELECT * FROM t1 UNION SELECT * FROM t2`:
+**Impact**: When executing `SELECT * FROM t1 UNION SELECT * FROM t1`:
 - `stmt.Columns` contains `[*QP.ColumnRef{Name: "*"}]`
-- `len(stmt.Columns)` returns 1
-- Query returns wrong number of columns
+- Column names were set to `["*"]` instead of `["a", "b"]`
+- Results had correct data but wrong column names
 
-**Fix Required**: Resolve column count from table schema when Columns contains star:
+**Fix Applied** (Commit 5e3abda):
+Modified `pkg/sqlvibe/database.go` in `execSelectStmt` function to expand star columns:
 ```go
-numCols := len(stmt.Columns)
-if numCols == 1 {
-    if star, ok := stmt.Columns[0].(*QP.ColumnRef); ok && star.Name == "*" {
-        // Get actual column count from table schema
-        numCols = c.getColumnCountFromTable(stmt.From)
+if colRef, ok := col.(*QP.ColumnRef); ok {
+    // Handle SELECT * - expand to table columns
+    if colRef.Name == "*" {
+        cols = append(cols, tableCols...)
+    } else {
+        cols = append(cols, colRef.Name)
     }
 }
 ```
+
+**Verification**: All 8 E081 tests now passing ✅
 
 ---
 
@@ -73,46 +76,54 @@ if stmt.GroupBy != nil {
 
 ---
 
-### Gap 4: UPDATE Execution Not Working
+### Gap 4: UPDATE with Subqueries Not Working
 
 **Affected Tests**: E153 (1 test) - 0% pass rate
 
-**Root Cause**: `internal/VM/compiler.go` - UPDATE compiles but doesn't execute
+**Root Cause**: UPDATE with subquery in SET clause - `UPDATE t1 SET val = (SELECT MAX(val) FROM t1) WHERE id = 1`
 
-**Impact**: UPDATE returns nil instead of updated values
+**Impact**: 
+- Simple UPDATE works correctly (verified with manual test)
+- UPDATE with subquery in SET clause returns nil instead of subquery result
+- Subquery evaluation in UPDATE context not implemented
 
-**Fix Required**: Debug UPDATE bytecode execution
+**Fix Required**: 
+1. Detect subquery expressions in UPDATE SET clause
+2. Compile and execute subquery to get value
+3. Use subquery result in UPDATE operation
+
+**Note**: This is actually about subquery evaluation in UPDATE context, not basic UPDATE execution.
 
 ---
 
 ## Test Failure Summary
 
-| Suite | Tests | Pass Rate | Root Gap |
-|-------|-------|-----------|-----------|
-| E081 | 8 | 0% | UNION with * |
-| E131 | 7 | 0% | GROUP BY not implemented |
-| E153 | 1 | 0% | UPDATE not working |
-| E171 | 1 | 0% | SQLSTATE not implemented |
+| Suite | Tests | Pass Rate | Root Gap | Status |
+|-------|-------|-----------|-----------|--------|
+| E081 | 8 | 100% ✅ | UNION with * | FIXED |
+| E131 | 7 | 0% | GROUP BY not implemented | TODO |
+| E153 | 1 | 0% | UPDATE with subqueries | TODO |
+| E171 | 1 | 0% | SQLSTATE not implemented | TODO |
 
 ---
 
 ## Priority Fix Order
 
-1. **P0 - UNION with *** - Simple fix, unblocks E081
-2. **P0 - GROUP BY** - Medium complexity, unblocks E131
+1. **P0 - UNION with *** - ✅ DONE (Commit 5e3abda)
+2. **P0 - GROUP BY** - Complex, requires VM overhaul
 3. **P1 - HAVING** - Depends on GROUP BY
-4. **P2 - UPDATE** - Debug execution
+4. **P2 - UPDATE with subqueries** - Requires subquery evaluation support
 
 ---
 
 ## Impact Analysis
 
-| Fix | Tests Fixed | Pass Rate Impact |
-|-----|-------------|-----------------|
-| UNION * | +8 | +0.6% |
-| GROUP BY | +7 | +0.5% |
-| UPDATE | +1 | +0.1% |
-| **Total** | **+16** | **+1.2%** |
+| Fix | Tests Fixed | Pass Rate Impact | Status |
+|-----|-------------|-----------------|--------|
+| UNION * | +8 | +0.6% | ✅ DONE |
+| GROUP BY | +7 | +0.5% | TODO |
+| UPDATE subquery | +1 | +0.1% | TODO |
+| **Total Possible** | **+16** | **+1.2%** | **50% done** |
 
 ---
 
