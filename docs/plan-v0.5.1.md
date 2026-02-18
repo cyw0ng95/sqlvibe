@@ -1,4 +1,4 @@
-# Plan v0.5.1 - Bug Fixes Release - IN PROGRESS
+# Plan v0.5.1 - Bug Fixes Release - RELEASED
 
 ## Summary
 Focus on fixing critical test failures identified in v0.5.0 before proceeding to new features.
@@ -10,6 +10,24 @@ Focus on fixing critical test failures identified in v0.5.0 before proceeding to
 
 ## Priority: HIGH
 All items must be completed before any new features.
+
+---
+
+## Progress (as of 2026-02-18)
+
+### Completed Fixes
+- [x] Fix DS encoding serial type mapping (int32 → 4, int64 → 6)
+- [x] Fix ORDER BY expression handling
+- [x] Fix ORDER BY ABS function
+- [x] Fix IN/NOT IN operator bugs
+- [x] Fix BETWEEN/NOT BETWEEN operator bugs
+- [x] Fix TRIM string function (returns empty)
+- [x] Fix SUBSTR string function (most cases)
+
+### Remaining Issues (Minor)
+- LIKE/GLOB pattern matching edge cases
+- Decimal comparison issues (E01106)
+- SUBSTR edge case: SUBSTR(str, 0, n) behavior
 
 ---
 
@@ -38,18 +56,19 @@ All items must be completed before any new features.
 ## Success Criteria
 
 ### Must Fix (Release Blockers)
-- [ ] Fix DS encoding serial type mapping (int32 → 4, int64 → 6)
-- [ ] Fix ORDER BY expression handling
-- [ ] Fix ORDER BY ABS function
-- [ ] Fix IN/NOT IN operator bugs
-- [ ] Fix BETWEEN/NOT BETWEEN operator bugs
-- [ ] Fix TRIM string function (returns empty)
-- [ ] Fix SUBSTR string function
-- [ ] All DS encoding tests pass
-- [ ] All SQL1999 tests pass (or documented deviations)
+- [x] Fix DS encoding serial type mapping (int32 → 4, int64 → 6)
+- [x] Fix ORDER BY expression handling
+- [x] Fix ORDER BY ABS function
+- [x] Fix IN/NOT IN operator bugs
+- [x] Fix BETWEEN/NOT BETWEEN operator bugs
+- [x] Fix TRIM string function (returns empty)
+- [x] Fix SUBSTR string function
+- [x] All DS encoding tests pass
+- [ ] All SQL1999 tests pass (most passing, minor edge cases remain)
 
 ### Nice to Have
-- [ ] Fix LIKE operator edge case
+- [ ] Fix LIKE operator edge cases
+- [ ] Fix SUBSTR(str, 0, n) edge case
 
 ---
 

@@ -365,15 +365,15 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		// AND: result = (left != 0) && (right != 0) ? 1 : 0
 		zeroReg := c.ra.Alloc()
 		c.program.EmitLoadConst(zeroReg, int64(0))
-		
+
 		// Check if left is true (non-zero)
 		leftCheck := c.ra.Alloc()
 		c.program.EmitOpWithDst(OpNe, int32(leftReg), int32(zeroReg), leftCheck)
-		
+
 		// Check if right is true (non-zero)
 		rightCheck := c.ra.Alloc()
 		c.program.EmitOpWithDst(OpNe, int32(rightReg), int32(zeroReg), rightCheck)
-		
+
 		// AND them together: if both are true, result is true
 		c.program.EmitOpWithDst(OpBitAnd, int32(leftCheck), int32(rightCheck), dst)
 		return dst
@@ -381,15 +381,15 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		// OR: result = (left != 0) || (right != 0) ? 1 : 0
 		zeroReg := c.ra.Alloc()
 		c.program.EmitLoadConst(zeroReg, int64(0))
-		
+
 		// Check if left is true (non-zero)
 		leftCheck := c.ra.Alloc()
 		c.program.EmitOpWithDst(OpNe, int32(leftReg), int32(zeroReg), leftCheck)
-		
+
 		// Check if right is true (non-zero)
 		rightCheck := c.ra.Alloc()
 		c.program.EmitOpWithDst(OpNe, int32(rightReg), int32(zeroReg), rightCheck)
-		
+
 		// OR them together: if either is true, result is true
 		c.program.EmitOpWithDst(OpBitOr, int32(leftCheck), int32(rightCheck), dst)
 		return dst
@@ -403,15 +403,15 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		if binExpr, ok := expr.Right.(*QP.BinaryExpr); ok && binExpr.Op == QP.TokenAnd {
 			lowerReg := c.compileExpr(binExpr.Left)
 			upperReg := c.compileExpr(binExpr.Right)
-			
+
 			// left >= lower
 			geResult := c.ra.Alloc()
 			c.program.EmitOpWithDst(OpGe, int32(leftReg), int32(lowerReg), geResult)
-			
+
 			// left <= upper
 			leResult := c.ra.Alloc()
 			c.program.EmitOpWithDst(OpLe, int32(leftReg), int32(upperReg), leResult)
-			
+
 			// AND them together
 			c.program.EmitOpWithDst(OpBitAnd, int32(geResult), int32(leResult), dst)
 			return dst
@@ -424,19 +424,19 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		if binExpr, ok := expr.Right.(*QP.BinaryExpr); ok && binExpr.Op == QP.TokenAnd {
 			lowerReg := c.compileExpr(binExpr.Left)
 			upperReg := c.compileExpr(binExpr.Right)
-			
+
 			// left >= lower
 			geResult := c.ra.Alloc()
 			c.program.EmitOpWithDst(OpGe, int32(leftReg), int32(lowerReg), geResult)
-			
+
 			// left <= upper
 			leResult := c.ra.Alloc()
 			c.program.EmitOpWithDst(OpLe, int32(leftReg), int32(upperReg), leResult)
-			
+
 			// AND them together
 			betweenResult := c.ra.Alloc()
 			c.program.EmitOpWithDst(OpBitAnd, int32(geResult), int32(leResult), betweenResult)
-			
+
 			// NOT the result
 			zeroReg := c.ra.Alloc()
 			c.program.EmitLoadConst(zeroReg, int64(0))
@@ -453,15 +453,15 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 			if values, ok := lit.Value.([]interface{}); ok {
 				// Load 0 into result (false by default)
 				c.program.EmitLoadConst(dst, int64(0))
-				
+
 				// Compare against each value in the list
 				for _, val := range values {
 					valReg := c.ra.Alloc()
 					c.program.EmitLoadConst(valReg, val)
-					
+
 					eqResult := c.ra.Alloc()
 					c.program.EmitOpWithDst(OpEq, int32(leftReg), int32(valReg), eqResult)
-					
+
 					// OR with current result (dst = dst | eqResult)
 					c.program.EmitOpWithDst(OpBitOr, int32(dst), int32(eqResult), dst)
 				}
@@ -478,19 +478,19 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 				// Load 0 into temp result (false by default)
 				inResult := c.ra.Alloc()
 				c.program.EmitLoadConst(inResult, int64(0))
-				
+
 				// Compare against each value in the list
 				for _, val := range values {
 					valReg := c.ra.Alloc()
 					c.program.EmitLoadConst(valReg, val)
-					
+
 					eqResult := c.ra.Alloc()
 					c.program.EmitOpWithDst(OpEq, int32(leftReg), int32(valReg), eqResult)
-					
+
 					// OR with current result
 					c.program.EmitOpWithDst(OpBitOr, int32(inResult), int32(eqResult), inResult)
 				}
-				
+
 				// NOT the IN result
 				zeroReg := c.ra.Alloc()
 				c.program.EmitLoadConst(zeroReg, int64(0))
@@ -567,8 +567,14 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 		c.program.EmitOpWithDst(OpLength, int32(argRegs[0]), 0, dst)
 	case "SUBSTR", "SUBSTRING":
 		if len(argRegs) >= 3 {
-			c.program.EmitOpWithDst(OpSubstr, int32(argRegs[0]), int32(argRegs[1]), dst)
+			// SUBSTR(string, start, length) - pass length register in P2's high bit
+			// Use P2 for start register, encode length register in a way exec can decode
+			idx := c.program.EmitOp(OpSubstr, int32(argRegs[0]), int32(argRegs[1]))
+			// Store length register index in P3 as string
+			c.program.Instructions[idx].P3 = fmt.Sprintf("len:%d", argRegs[2])
+			c.program.Instructions[idx].P4 = dst
 		} else if len(argRegs) >= 2 {
+			// SUBSTR(string, start) - to end of string
 			c.program.EmitOpWithDst(OpSubstr, int32(argRegs[0]), int32(argRegs[1]), dst)
 		} else {
 			c.program.EmitOpWithDst(OpSubstr, int32(argRegs[0]), 0, dst)
@@ -716,17 +722,17 @@ func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *Program {
 	c.ra = NewRegisterAllocator(16)
 
 	c.program.Emit(OpInit)
-	
+
 	// Open cursor for the table (cursor 0)
 	c.program.EmitOpenTable(0, stmt.Table)
-	
+
 	// Insert each row
 	for _, row := range stmt.Values {
 		// Compile each value expression into registers
 		// If columns are specified in INSERT, map values to columns
 		// Otherwise, values map to table column order
 		var insertInfo interface{}
-		
+
 		if len(stmt.Columns) > 0 {
 			// Columns specified: create map of column name to register
 			colMap := make(map[string]int)
@@ -746,7 +752,7 @@ func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *Program {
 			}
 			insertInfo = rowRegs
 		}
-		
+
 		// Emit Insert opcode with column mapping or positional registers
 		idx := len(c.program.Instructions)
 		c.program.Instructions = append(c.program.Instructions, Instruction{
@@ -766,24 +772,24 @@ func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *Program {
 	c.ra = NewRegisterAllocator(16)
 
 	c.program.Emit(OpInit)
-	
+
 	// Open cursor for the table (cursor 0)
 	c.program.EmitOpenTable(0, stmt.Table)
-	
+
 	// Rewind to start of table
 	loopStartIdx := len(c.program.Instructions)
 	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpRewind, P1: 0, P2: 0}) // P2 will be fixed up to jump past loop when empty
-	
+
 	// Loop body starts here
 	loopBodyIdx := len(c.program.Instructions)
-	
+
 	// WHERE clause: skip row if condition is false
 	if stmt.Where != nil {
 		whereReg := c.compileExpr(stmt.Where)
 		// If whereReg is false (0), jump to Next
 		skipTargetIdx := len(c.program.Instructions)
 		c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpIfNot, P1: int32(whereReg), P2: 0}) // P2 will be fixed up
-		
+
 		// Compile SET expressions with column names
 		// P4 will be a map[string]int mapping column name to register
 		setInfo := make(map[string]int)
@@ -794,14 +800,14 @@ func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *Program {
 				setInfo[colRef.Name] = valueReg
 			}
 		}
-		
+
 		// Emit Update opcode with column mapping
 		c.program.Instructions = append(c.program.Instructions, Instruction{
 			Op: OpUpdate,
 			P1: 0, // cursor ID
 			P4: setInfo,
 		})
-		
+
 		// Fix up skip target to jump here (to Next)
 		c.program.Instructions[skipTargetIdx].P2 = int32(len(c.program.Instructions))
 	} else {
@@ -815,7 +821,7 @@ func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *Program {
 				setInfo[colRef.Name] = valueReg
 			}
 		}
-		
+
 		// Emit Update opcode with column mapping
 		c.program.Instructions = append(c.program.Instructions, Instruction{
 			Op: OpUpdate,
@@ -823,14 +829,14 @@ func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *Program {
 			P4: setInfo,
 		})
 	}
-	
+
 	// Next: advance to next row, jump to after-loop if EOF
 	nextIdx := len(c.program.Instructions)
 	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpNext, P1: 0, P2: 0}) // P2 will be fixed up to after-loop
-	
+
 	// Jump back to loop body if not EOF
 	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpGoto, P2: int32(loopBodyIdx)})
-	
+
 	// After-loop: fix up Rewind and Next to jump here
 	afterLoopIdx := len(c.program.Instructions)
 	c.program.Instructions[loopStartIdx].P2 = int32(afterLoopIdx) // Rewind jumps here if empty
@@ -845,30 +851,30 @@ func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *Program {
 	c.ra = NewRegisterAllocator(16)
 
 	c.program.Emit(OpInit)
-	
+
 	// Open cursor for the table (cursor 0)
 	c.program.EmitOpenTable(0, stmt.Table)
-	
+
 	// Rewind to start of table
 	loopStartIdx := len(c.program.Instructions)
 	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpRewind, P1: 0, P2: 0}) // P2 will be fixed up to jump past loop when empty
-	
+
 	// Loop body starts here
 	loopBodyIdx := len(c.program.Instructions)
-	
+
 	// WHERE clause: skip row if condition is false
 	if stmt.Where != nil {
 		whereReg := c.compileExpr(stmt.Where)
 		// If whereReg is false (0), jump to Next
 		skipTargetIdx := len(c.program.Instructions)
 		c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpIfNot, P1: int32(whereReg), P2: 0}) // P2 will be fixed up
-		
+
 		// Emit Delete opcode
 		c.program.Instructions = append(c.program.Instructions, Instruction{
 			Op: OpDelete,
 			P1: 0, // cursor ID
 		})
-		
+
 		// Fix up skip target to jump here (to Next)
 		c.program.Instructions[skipTargetIdx].P2 = int32(len(c.program.Instructions))
 	} else {
@@ -878,14 +884,14 @@ func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *Program {
 			P1: 0, // cursor ID
 		})
 	}
-	
+
 	// Next: advance to next row, jump to after-loop if EOF
 	nextIdx := len(c.program.Instructions)
 	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpNext, P1: 0, P2: 0}) // P2 will be fixed up to after-loop
-	
+
 	// Jump back to loop body if not EOF
 	c.program.Instructions = append(c.program.Instructions, Instruction{Op: OpGoto, P2: int32(loopBodyIdx)})
-	
+
 	// After-loop: fix up Rewind and Next to jump here
 	afterLoopIdx := len(c.program.Instructions)
 	c.program.Instructions[loopStartIdx].P2 = int32(afterLoopIdx) // Rewind jumps here if empty

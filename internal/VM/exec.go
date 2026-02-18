@@ -148,7 +148,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpEq:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			
+
 			// Handle NULL comparisons - any comparison with NULL returns NULL
 			if lhs == nil || rhs == nil {
 				if inst.P4 != nil {
@@ -158,9 +158,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 				}
 				continue
 			}
-			
+
 			result := compareVals(lhs, rhs) == 0
-			
+
 			// Store result as 0 or 1 if P4 is a destination register
 			if inst.P4 != nil {
 				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
@@ -181,7 +181,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpNe:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			
+
 			// Handle NULL comparisons - any comparison with NULL returns NULL
 			if lhs == nil || rhs == nil {
 				if inst.P4 != nil {
@@ -191,9 +191,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 				}
 				continue
 			}
-			
+
 			result := compareVals(lhs, rhs) != 0
-			
+
 			// Store result as 0 or 1 if P4 is a destination register
 			if inst.P4 != nil {
 				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
@@ -214,7 +214,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpLt:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			
+
 			// Handle NULL comparisons - any comparison with NULL returns NULL
 			if lhs == nil || rhs == nil {
 				if inst.P4 != nil {
@@ -224,9 +224,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 				}
 				continue
 			}
-			
+
 			result := compareVals(lhs, rhs) < 0
-			
+
 			// Store result as 0 or 1 if P4 is a destination register
 			if inst.P4 != nil {
 				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
@@ -247,7 +247,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpLe:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			
+
 			// Handle NULL comparisons - any comparison with NULL returns NULL
 			if lhs == nil || rhs == nil {
 				if inst.P4 != nil {
@@ -257,9 +257,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 				}
 				continue
 			}
-			
+
 			result := compareVals(lhs, rhs) <= 0
-			
+
 			// Store result as 0 or 1 if P4 is a destination register
 			if inst.P4 != nil {
 				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
@@ -280,7 +280,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpGt:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			
+
 			// Handle NULL comparisons - any comparison with NULL returns NULL
 			if lhs == nil || rhs == nil {
 				if inst.P4 != nil {
@@ -290,9 +290,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 				}
 				continue
 			}
-			
+
 			result := compareVals(lhs, rhs) > 0
-			
+
 			// Store result as 0 or 1 if P4 is a destination register
 			if inst.P4 != nil {
 				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
@@ -313,7 +313,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpGe:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			
+
 			// Handle NULL comparisons - any comparison with NULL returns NULL
 			if lhs == nil || rhs == nil {
 				if inst.P4 != nil {
@@ -323,9 +323,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 				}
 				continue
 			}
-			
+
 			result := compareVals(lhs, rhs) >= 0
-			
+
 			// Store result as 0 or 1 if P4 is a destination register
 			if inst.P4 != nil {
 				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
@@ -347,7 +347,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
 			result := (lhs == nil && rhs == nil) || (lhs != nil && rhs != nil && compareVals(lhs, rhs) == 0)
-			
+
 			// P4 can be either a register (for storing result) or a jump target
 			if inst.P4 != nil {
 				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
@@ -370,7 +370,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
 			result := (lhs == nil && rhs != nil) || (lhs != nil && rhs == nil) || (lhs != nil && rhs != nil && compareVals(lhs, rhs) != 0)
-			
+
 			// P4 can be either a register (for storing result) or a jump target
 			if inst.P4 != nil {
 				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
@@ -466,6 +466,13 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpBitAnd:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
+			// If either operand is NULL, result is NULL
+			if lhs == nil || rhs == nil {
+				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
+					vm.registers[dst] = nil
+				}
+				continue
+			}
 			if dst, ok := inst.P4.(int); ok {
 				// Bitwise AND: convert to int64 and AND
 				lhsInt := toInt64(lhs)
@@ -477,6 +484,13 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpBitOr:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
+			// If either operand is NULL, result is NULL
+			if lhs == nil || rhs == nil {
+				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
+					vm.registers[dst] = nil
+				}
+				continue
+			}
 			if dst, ok := inst.P4.(int); ok {
 				// Bitwise OR: convert to int64 and OR
 				lhsInt := toInt64(lhs)
@@ -510,6 +524,14 @@ func (vm *VM) Exec(ctx interface{}) error {
 					start = v
 				}
 			}
+			// Check P3 for length register (format: "len:<register>")
+			if strings.HasPrefix(inst.P3, "len:") {
+				if lenReg, err := strconv.Atoi(inst.P3[4:]); err == nil {
+					if v, ok := vm.registers[lenReg].(int64); ok {
+						length = v
+					}
+				}
+			}
 			if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = stringSubstr(src, start, length)
 			}
@@ -539,8 +561,11 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpTrim, OpLTrim, OpRTrim:
 			src := vm.registers[inst.P1]
 			chars := " "
-			if v, ok := vm.registers[inst.P2].(string); ok {
-				chars = v
+			// P2=0 means no characters specified, use default space
+			if inst.P2 != 0 {
+				if v, ok := vm.registers[inst.P2].(string); ok {
+					chars = v
+				}
 			}
 			if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = getTrim(src, chars, inst.Op == OpTrim, inst.Op == OpLTrim, inst.Op == OpRTrim)
@@ -822,10 +847,10 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if cursor == nil {
 				return fmt.Errorf("OpInsert: cursor %d not found", cursorID)
 			}
-			
+
 			// Build row from registers
 			row := make(map[string]interface{})
-			
+
 			// Check if P4 is a map (columns specified) or slice (positional)
 			switch v := inst.P4.(type) {
 			case map[string]int:
@@ -844,7 +869,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			default:
 				return fmt.Errorf("OpInsert: invalid P4 type")
 			}
-			
+
 			// Insert via context
 			if vm.ctx != nil {
 				err := vm.ctx.InsertRow(cursor.TableName, row)
@@ -864,23 +889,23 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if cursor == nil {
 				return fmt.Errorf("OpUpdate: cursor %d not found", cursorID)
 			}
-			
+
 			setInfo, ok := inst.P4.(map[string]int)
 			if !ok {
 				return fmt.Errorf("OpUpdate: invalid P4 type, expected map[string]int")
 			}
-			
+
 			// Get the current row and update specified columns
 			if cursor.Index < 0 || cursor.Index >= len(cursor.Data) {
 				return fmt.Errorf("OpUpdate: invalid cursor position %d", cursor.Index)
 			}
 			row := cursor.Data[cursor.Index]
-			
+
 			// Update only the columns specified in SET clause
 			for colName, regIdx := range setInfo {
 				row[colName] = vm.registers[regIdx]
 			}
-			
+
 			// Update via context
 			if vm.ctx != nil {
 				err := vm.ctx.UpdateRow(cursor.TableName, cursor.Index, row)
@@ -899,7 +924,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if cursor == nil {
 				return fmt.Errorf("OpDelete: cursor %d not found", cursorID)
 			}
-			
+
 			// Delete via context
 			if vm.ctx != nil {
 				err := vm.ctx.DeleteRow(cursor.TableName, cursor.Index)
@@ -1153,16 +1178,31 @@ func stringSubstr(s interface{}, start, length int64) interface{} {
 	ss := fmt.Sprintf("%v", s)
 	runes := []rune(ss)
 
-	startIdx := int(start) - 1
+	// Handle negative start - count from end
+	startIdx := int(start)
 	if startIdx < 0 {
-		startIdx = 0
+		startIdx = len(runes) + startIdx
+		if startIdx < 0 {
+			startIdx = 0
+		}
+	} else {
+		// SQLite treats 0 as 1
+		if startIdx == 0 {
+			startIdx = 1
+		}
+		startIdx = startIdx - 1 // Convert to 0-based
 	}
+
 	if startIdx >= len(runes) {
 		return ""
 	}
 
 	endIdx := len(runes)
-	if length >= 0 {
+	// SQLite: if length is 0, return empty string
+	if length == 0 {
+		return ""
+	}
+	if length > 0 {
 		endIdx = startIdx + int(length)
 		if endIdx > len(runes) {
 			endIdx = len(runes)

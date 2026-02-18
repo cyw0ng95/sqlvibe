@@ -529,43 +529,64 @@ func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error)
 		return rows, nil
 	}
 
-	colMap := make(map[string]int)
-	for i, col := range rows.Columns {
-		colMap[col] = i
+	cols := rows.Columns
+	data := rows.Data
+
+	// Pre-evaluate ORDER BY expressions for each row
+	// This is needed for non-ColumnRef expressions (e.g., val * -1, ABS(val))
+	orderByValues := make([][]interface{}, len(orderBy))
+	for obIdx, ob := range orderBy {
+		orderByValues[obIdx] = make([]interface{}, len(data))
+		for rowIdx, row := range data {
+			// Convert row slice to map for EvalExpr
+			rowMap := make(map[string]interface{})
+			for colIdx, colName := range cols {
+				rowMap[colName] = row[colIdx]
+			}
+			orderByValues[obIdx][rowIdx] = db.engine.EvalExpr(rowMap, ob.Expr)
+		}
 	}
 
-	sorted := make([][]interface{}, len(rows.Data))
-	copy(sorted, rows.Data)
+	sorted := make([][]interface{}, len(data))
+	copy(sorted, data)
 
 	for i := range sorted {
 		for j := i + 1; j < len(sorted); j++ {
-			for _, ob := range orderBy {
-				colName := ""
+			for obIdx, ob := range orderBy {
+				var keyValI, keyValJ interface{}
 				if colRef, ok := ob.Expr.(*QP.ColumnRef); ok {
-					colName = colRef.Name
-				}
-				if colIdx, ok := colMap[colName]; ok {
-					a := sorted[i][colIdx]
-					b := sorted[j][colIdx]
-					cmp := compareValues(a, b)
-					if ob.Desc {
-						cmp = -cmp
+					for ci, cn := range cols {
+						if cn == colRef.Name {
+							keyValI = sorted[i][ci]
+							keyValJ = sorted[j][ci]
+							break
+						}
 					}
-					// Swap if row i should come after row j (cmp > 0 for ascending means a > b)
-					// For DESC: we want descending, so swap when original a < b (after negating, cmp > 0)
-					if cmp > 0 {
-						sorted[i], sorted[j] = sorted[j], sorted[i]
-						break
-					} else if cmp < 0 {
-						break
-					}
-					// cmp == 0, continue to next ORDER BY column
+				} else {
+					// Use pre-evaluated expression values
+					keyValI = orderByValues[obIdx][i]
+					keyValJ = orderByValues[obIdx][j]
 				}
+				cmp := compareValues(keyValI, keyValJ)
+				if ob.Desc {
+					cmp = -cmp
+				}
+				if cmp > 0 {
+					sorted[i], sorted[j] = sorted[j], sorted[i]
+					// Also swap the pre-evaluated values to maintain consistency
+					for obIdx2 := range orderBy {
+						orderByValues[obIdx2][i], orderByValues[obIdx2][j] = orderByValues[obIdx2][j], orderByValues[obIdx2][i]
+					}
+					break
+				} else if cmp < 0 {
+					break
+				}
+				// if cmp == 0, continue to next ORDER BY column
 			}
 		}
 	}
 
-	return &Rows{Columns: rows.Columns, Data: sorted}, nil
+	return &Rows{Columns: cols, Data: sorted}, nil
 }
 
 func compareValues(a, b interface{}) int {
@@ -1215,7 +1236,6 @@ func (db *Database) serializeRow(row map[string]interface{}) []byte {
 	return result
 }
 
-
 func (db *Database) querySqliteMaster(stmt *QP.SelectStmt) (*Rows, error) {
 	allResults := make([]map[string]interface{}, 0)
 	for tableName := range db.tables {
@@ -1337,7 +1357,7 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 	if ctx.db.data[tableName] == nil {
 		ctx.db.data[tableName] = make([]map[string]interface{}, 0)
 	}
-	
+
 	// Check primary key constraints
 	pkCols := ctx.db.primaryKeys[tableName]
 	if len(pkCols) > 0 {
@@ -1350,14 +1370,14 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 			}
 		}
 	}
-	
+
 	ctx.db.data[tableName] = append(ctx.db.data[tableName], row)
-	
+
 	// Update storage engine
 	rowID := int64(len(ctx.db.data[tableName]))
 	serialized := ctx.db.serializeRow(row)
 	ctx.db.engine.Insert(tableName, uint64(rowID), serialized)
-	
+
 	return nil
 }
 
@@ -1515,39 +1535,38 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 }
 
 func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
-// Ensure table exists
-if db.data[tableName] == nil {
-db.data[tableName] = make([]map[string]interface{}, 0)
-}
+	// Ensure table exists
+	if db.data[tableName] == nil {
+		db.data[tableName] = make([]map[string]interface{}, 0)
+	}
 
-// Get table column order
-tableCols := db.columnOrder[tableName]
-if tableCols == nil {
-tableCols = db.getOrderedColumns(tableName)
-}
+	// Get table column order
+	tableCols := db.columnOrder[tableName]
+	if tableCols == nil {
+		tableCols = db.getOrderedColumns(tableName)
+	}
 
-// Compile the DML statement
-program, err := CG.CompileWithSchema(sql, tableCols)
-if err != nil {
-return Result{}, err
-}
+	// Compile the DML statement
+	program, err := CG.CompileWithSchema(sql, tableCols)
+	if err != nil {
+		return Result{}, err
+	}
 
-// Create VM context
-ctx := &dbVmContext{db: db}
-vm := VM.NewVMWithContext(program, ctx)
+	// Create VM context
+	ctx := &dbVmContext{db: db}
+	vm := VM.NewVMWithContext(program, ctx)
 
-// Open table cursor
-if db.data[tableName] != nil {
-vm.Cursors().OpenTableAtID(0, tableName, db.data[tableName], tableCols)
-}
+	// Open table cursor
+	if db.data[tableName] != nil {
+		vm.Cursors().OpenTableAtID(0, tableName, db.data[tableName], tableCols)
+	}
 
+	// Execute the VM program
+	err = vm.Run(nil)
+	if err != nil {
+		return Result{}, err
+	}
 
-// Execute the VM program
-err = vm.Run(nil)
-if err != nil {
-return Result{}, err
-}
-
-// Get rows affected from VM
-return Result{RowsAffected: vm.RowsAffected()}, nil
+	// Get rows affected from VM
+	return Result{RowsAffected: vm.RowsAffected()}, nil
 }

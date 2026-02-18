@@ -1,5 +1,25 @@
 # sqlvibe Release History
 
+## **v0.5.1** (2026-02-18)
+
+### Summary
+Bug fix release addressing critical issues from v0.5.0.
+
+### Bug Fixes
+- **DS Encoding**: Fixed serial type mapping (removed Int24, SQLite doesn't use it)
+- **ORDER BY**: Fixed expression evaluation using EvalExpr for non-column references
+- **IN/NOT IN**: Fixed NULL propagation in OpBitOr/OpBitAnd operators
+- **BETWEEN**: Fixed NULL handling same as IN operators
+- **TRIM**: Fixed default characters when P2=0 (now means space)
+- **SUBSTR**: Fixed length parameter handling and negative/zero edge cases
+
+### Known Issues (Remaining)
+- LIKE/GLOB pattern matching edge cases
+- DECIMAL/NUMERIC type handling
+- SUBSTR(str, 0, n) edge case
+
+---
+
 ## **v0.5.0** (2026-02-18)
 
 ### Summary
