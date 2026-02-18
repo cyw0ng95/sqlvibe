@@ -246,26 +246,29 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 	}
 
 	// Set up multi-table schemas for JOIN column resolution
-	c.TableSchemas = make(map[string]map[string]int)
-	// Build schema for left table from TableColIndices (if it's for this table)
-	if c.TableColIndices != nil {
-		leftSchema := make(map[string]int)
-		for colName, colIdx := range c.TableColIndices {
-			leftSchema[colName] = colIdx
+	// Only initialize if not already set (database.go sets this for us)
+	if c.TableSchemas == nil {
+		c.TableSchemas = make(map[string]map[string]int)
+		// Build schema for left table from TableColIndices (if it's for this table)
+		if c.TableColIndices != nil {
+			leftSchema := make(map[string]int)
+			for colName, colIdx := range c.TableColIndices {
+				leftSchema[colName] = colIdx
+			}
+			c.TableSchemas[leftTableName] = leftSchema
+			if leftTable.Alias != "" {
+				c.TableSchemas[leftTable.Alias] = leftSchema
+			}
 		}
-		c.TableSchemas[leftTableName] = leftSchema
-		if leftTable.Alias != "" {
-			c.TableSchemas[leftTable.Alias] = leftSchema
+		// For right table, we need to build schema from scratch
+		// We'll use the combined TableColIndices and figure out which columns belong to which table
+		// This is a temporary solution - ideally we'd have proper schema info
+		rightSchema := make(map[string]int)
+		// For now, we'll populate rightSchema later when we have better schema info
+		c.TableSchemas[rightTableName] = rightSchema
+		if join.Right.Alias != "" {
+			c.TableSchemas[join.Right.Alias] = rightSchema
 		}
-	}
-	// For right table, we need to build schema from scratch
-	// We'll use the combined TableColIndices and figure out which columns belong to which table
-	// This is a temporary solution - ideally we'd have proper schema info
-	rightSchema := make(map[string]int)
-	// For now, we'll populate rightSchema later when we have better schema info
-	c.TableSchemas[rightTableName] = rightSchema
-	if join.Right.Alias != "" {
-		c.TableSchemas[join.Right.Alias] = rightSchema
 	}
 
 	c.columnIndices = make(map[string]int)
