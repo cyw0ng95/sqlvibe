@@ -79,10 +79,14 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 
 	// Check if there's a star column
 	hasStar := false
+	var starTable string
 	for _, col := range columns {
-		if colRef, ok := col.(*QP.ColumnRef); ok && colRef.Name == "*" {
-			hasStar = true
-			break
+		if colRef, ok := col.(*QP.ColumnRef); ok {
+			if colRef.Name == "*" {
+				hasStar = true
+				starTable = colRef.Table
+				break
+			}
 		}
 	}
 
@@ -92,6 +96,21 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 
 	// Build expanded columns list - use TableColOrder for deterministic ordering
 	expanded := make([]QP.Expr, 0)
+
+	// If star has table qualifier (e.g., o.*), use that table's schema only
+	if starTable != "" && c.TableSchemas != nil {
+		if tableSchema, ok := c.TableSchemas[starTable]; ok {
+			// Expand to all columns from the specified table
+			for colName := range tableSchema {
+				colRef := &QP.ColumnRef{
+					Name:  colName,
+					Table: starTable,
+				}
+				expanded = append(expanded, colRef)
+			}
+			return expanded
+		}
+	}
 
 	// Use the ordered column list to ensure deterministic output
 	if c.TableColOrder != nil && len(c.TableColOrder) > 0 {

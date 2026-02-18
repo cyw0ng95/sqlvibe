@@ -408,21 +408,21 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			leftStmt.SetOp = ""
 			leftStmt.SetOpAll = false
 			leftStmt.SetOpRight = nil
-			
+
 			leftRows, err := db.execSelectStmt(&leftStmt)
 			if err != nil {
 				return nil, fmt.Errorf("SetOp left query failed: %w", err)
 			}
-			
+
 			// Compile and execute right query
 			rightRows, err := db.execSelectStmt(stmt.SetOpRight)
 			if err != nil {
 				return nil, fmt.Errorf("SetOp right query failed: %w", err)
 			}
-			
+
 			// Combine results using SetOp logic
 			combinedData := db.applySetOp(leftRows.Data, rightRows.Data, stmt.SetOp, stmt.SetOpAll)
-			
+
 			// Apply ORDER BY and LIMIT if present
 			rows := &Rows{Columns: leftRows.Columns, Data: combinedData}
 			if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
@@ -437,7 +437,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 					return nil, err
 				}
 			}
-			
+
 			return rows, nil
 		}
 
@@ -1520,13 +1520,13 @@ func (db *Database) execSetOp(stmt *QP.SelectStmt, originalSQL string) (*Rows, e
 	// For now, use the existing direct execution path
 	// This works but bypasses VM compilation for SetOps
 	// TODO: Complete full VM bytecode compilation and merging
-	
+
 	// Create temporary left SELECT (without SetOp)
 	leftStmt := *stmt
 	leftStmt.SetOp = ""
 	leftStmt.SetOpAll = false
 	leftStmt.SetOpRight = nil
-	
+
 	// Execute left side through VM if possible, otherwise direct
 	var leftRows *Rows
 	var err error
@@ -1539,7 +1539,7 @@ func (db *Database) execSetOp(stmt *QP.SelectStmt, originalSQL string) (*Rows, e
 	if err != nil {
 		return nil, fmt.Errorf("SetOp left side error: %w", err)
 	}
-	
+
 	// Execute right side
 	var rightRows *Rows
 	if stmt.SetOpRight != nil {
@@ -1552,10 +1552,10 @@ func (db *Database) execSetOp(stmt *QP.SelectStmt, originalSQL string) (*Rows, e
 			return nil, fmt.Errorf("SetOp right side error: %w", err)
 		}
 	}
-	
+
 	// Apply set operation using existing functions
 	result := db.applySetOp(leftRows.Data, rightRows.Data, stmt.SetOp, stmt.SetOpAll)
-	
+
 	return &Rows{
 		Columns: leftRows.Columns,
 		Data:    result,
@@ -1638,52 +1638,52 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 		// SELECT without FROM - compile and execute directly
 		compiler := CG.NewCompiler()
 		program := compiler.CompileSelect(stmt)
-		
+
 		vm := VM.NewVMWithContext(program, &dbVmContext{db: db})
 		err := vm.Run(nil)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		results := vm.Results()
 		cols := make([]string, len(stmt.Columns))
 		for i := range stmt.Columns {
 			cols[i] = fmt.Sprintf("col%d", i)
 		}
-		
+
 		return &Rows{Columns: cols, Data: results}, nil
 	}
-	
+
 	// SELECT with FROM - use existing VM query execution
 	tableName := stmt.From.Name
 	if db.data[tableName] == nil {
 		return nil, fmt.Errorf("table not found: %s", tableName)
 	}
-	
+
 	tableCols := db.columnOrder[tableName]
 	if tableCols == nil {
 		tableCols = db.getOrderedColumns(tableName)
 	}
-	
+
 	compiler := CG.NewCompiler()
 	compiler.SetTableSchema(make(map[string]int), tableCols)
 	for i, colName := range tableCols {
 		compiler.SetTableSchema(map[string]int{colName: i}, tableCols)
 	}
-	
+
 	program := compiler.CompileSelect(stmt)
 	vm := VM.NewVMWithContext(program, &dbVmContext{db: db})
-	
+
 	// Open table cursor
 	vm.Cursors().OpenTableAtID(0, tableName, db.data[tableName], tableCols)
-	
+
 	err := vm.Run(nil)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	results := vm.Results()
-	
+
 	// Get column names from SELECT
 	cols := make([]string, len(stmt.Columns))
 	for i, col := range stmt.Columns {
@@ -1693,7 +1693,7 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 			cols[i] = fmt.Sprintf("col%d", i)
 		}
 	}
-	
+
 	return &Rows{Columns: cols, Data: results}, nil
 }
 
@@ -1706,11 +1706,32 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	// Get table column order for proper column mapping
 	// For JOINs, combine columns from both tables
 	var tableCols []string
+	var multiTableSchemas map[string]map[string]int
 	if stmt.From.Join != nil && stmt.From.Join.Right != nil {
 		leftCols := db.columnOrder[tableName]
 		rightCols := db.columnOrder[stmt.From.Join.Right.Name]
 		if leftCols != nil && rightCols != nil {
 			tableCols = append(leftCols, rightCols...)
+
+			// Build multi-table schemas for JOIN
+			multiTableSchemas = make(map[string]map[string]int)
+			leftSchema := make(map[string]int)
+			for i, col := range leftCols {
+				leftSchema[col] = i
+			}
+			rightSchema := make(map[string]int)
+			for i, col := range rightCols {
+				rightSchema[col] = i
+			}
+			multiTableSchemas[tableName] = leftSchema
+			multiTableSchemas[stmt.From.Join.Right.Name] = rightSchema
+			// Handle aliases
+			if stmt.From.Alias != "" {
+				multiTableSchemas[stmt.From.Alias] = leftSchema
+			}
+			if stmt.From.Join.Right.Alias != "" {
+				multiTableSchemas[stmt.From.Join.Right.Alias] = rightSchema
+			}
 		} else if leftCols != nil {
 			tableCols = leftCols
 		} else if rightCols != nil {
@@ -1719,15 +1740,24 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	} else {
 		tableCols = db.columnOrder[tableName]
 	}
-	program, err := CG.CompileWithSchema(sql, tableCols)
-	if err != nil {
-		return nil, err
+
+	// Compile with schema information
+	cg := CG.NewCompiler()
+	cg.SetTableSchema(make(map[string]int), tableCols)
+	for i, col := range tableCols {
+		cg.GetVMCompiler().TableColIndices[col] = i
 	}
+	// Set multi-table schemas for JOIN queries
+	if multiTableSchemas != nil {
+		cg.SetMultiTableSchema(multiTableSchemas)
+	}
+
+	program := cg.CompileSelect(stmt)
 
 	ctx := &dbVmContext{db: db}
 	vm := VM.NewVMWithContext(program, ctx)
 
-	err = vm.Run(nil)
+	err := vm.Run(nil)
 	if err != nil {
 		return nil, err
 	}
