@@ -29,18 +29,19 @@ type VmContext interface {
 }
 
 type VM struct {
-	program      *Program
-	pc           int
-	registers    []interface{}
-	cursors      *CursorArray
-	subReturn    []int
-	affinity     int
-	undo         [][]interface{}
-	errorcnt     int
-	err          error
-	ctx          VmContext
-	results      [][]interface{}
-	rowsAffected int64
+	program       *Program
+	pc            int
+	registers     []interface{}
+	cursors       *CursorArray
+	subReturn     []int
+	affinity      int
+	undo          [][]interface{}
+	errorcnt      int
+	err           error
+	ctx           VmContext
+	results       [][]interface{}
+	rowsAffected  int64
+	ephemeralTbls map[int]map[string]bool // ephemeral tables for SetOps (table_id -> row_key -> exists)
 }
 
 func NewVM(program *Program) *VM {
@@ -53,16 +54,17 @@ func NewVMWithContext(program *Program, ctx VmContext) *VM {
 		numRegs = 32
 	}
 	return &VM{
-		program:   program,
-		pc:        0,
-		registers: make([]interface{}, numRegs),
-		cursors:   NewCursorArray(),
-		subReturn: make([]int, 0),
-		undo:      make([][]interface{}, 0),
-		errorcnt:  0,
-		err:       nil,
-		ctx:       ctx,
-		results:   make([][]interface{}, 0),
+		program:       program,
+		pc:            0,
+		registers:     make([]interface{}, numRegs),
+		cursors:       NewCursorArray(),
+		subReturn:     make([]int, 0),
+		undo:          make([][]interface{}, 0),
+		errorcnt:      0,
+		err:           nil,
+		ctx:           ctx,
+		results:       make([][]interface{}, 0),
+		ephemeralTbls: make(map[int]map[string]bool),
 	}
 }
 
@@ -86,6 +88,7 @@ func (vm *VM) Reset() {
 	vm.err = nil
 	vm.results = make([][]interface{}, 0)
 	vm.rowsAffected = 0
+	vm.ephemeralTbls = make(map[int]map[string]bool)
 }
 
 func (vm *VM) PC() int {
