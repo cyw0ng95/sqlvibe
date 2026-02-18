@@ -211,8 +211,7 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 	c.program.EmitOpenTable(0, leftTableName)
 	c.program.EmitOpenTable(1, rightTableName)
 
-	leftRewindPos := len(c.program.Instructions)
-	c.program.EmitOp(OpRewind, 0, 0)
+	leftRewind := c.program.EmitOp(OpRewind, 0, 0)
 
 	rightRewindPos := len(c.program.Instructions)
 	c.program.EmitOp(OpRewind, 1, 0)
@@ -243,18 +242,25 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 
 	c.program.EmitResultRow(colRegs)
 
+	// Advance right cursor, if EOF jump to rightDone
 	rightNext := c.program.EmitOp(OpNext, 1, 0)
-	gotoRightRewind := c.program.EmitGoto(rightRewindPos + 1)
+	// Loop back to process next right row with same left row
+	c.program.EmitGoto(rightRewindPos + 1)
+	
+	// Right cursor exhausted, advance left cursor
 	rightDonePos := len(c.program.Instructions)
-
-	c.program.EmitOp(OpNext, 0, 0)
-	gotoLeftRewind := c.program.EmitGoto(leftRewindPos + 1)
-	_ = gotoLeftRewind
+	leftNext := c.program.EmitOp(OpNext, 0, 0)
+	// Restart right cursor for next left row
+	c.program.EmitGoto(rightRewindPos)
+	
+	// Left cursor exhausted, we're done
+	leftDonePos := len(c.program.Instructions)
 	c.program.Emit(OpHalt)
 
+	// Fixup jump targets
+	c.program.FixupWithPos(leftRewind, leftDonePos)
 	c.program.FixupWithPos(rightNext, rightDonePos)
-	c.program.FixupWithPos(gotoRightRewind, rightRewindPos+1)
-	c.program.FixupWithPos(gotoLeftRewind, leftRewindPos+1)
+	c.program.FixupWithPos(leftNext, leftDonePos)
 }
 
 func (c *Compiler) compileWhere(where QP.Expr) {
