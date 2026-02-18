@@ -825,6 +825,33 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpScalarSubquery:
+			// Execute a scalar subquery and store the result in a register
+			// P1 = destination register
+			// P4 = SelectStmt to execute
+			dstReg := int(inst.P1)
+			
+			// Try to execute the subquery through the context
+			if vm.ctx != nil {
+				// Use type assertion to check if context supports subquery execution
+				type SubqueryExecutor interface {
+					ExecuteSubquery(subquery interface{}) (interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryExecutor); ok {
+					if result, err := executor.ExecuteSubquery(inst.P4); err == nil {
+						vm.registers[dstReg] = result
+					} else {
+						vm.registers[dstReg] = nil
+					}
+				} else {
+					vm.registers[dstReg] = nil
+				}
+			} else {
+				vm.registers[dstReg] = nil
+			}
+			continue
+
 		case OpOpenRead:
 			cursorID := int(inst.P1)
 			tableName := inst.P3

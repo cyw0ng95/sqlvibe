@@ -420,6 +420,9 @@ func (c *Compiler) compileExpr(expr QP.Expr) int {
 	case *QP.CastExpr:
 		return c.compileCastExpr(e)
 
+	case *QP.SubqueryExpr:
+		return c.compileSubqueryExpr(e)
+
 	default:
 		reg := c.ra.Alloc()
 		c.program.EmitLoadConst(reg, nil)
@@ -874,6 +877,22 @@ func (c *Compiler) compileCastExpr(cast *QP.CastExpr) int {
 	c.program.EmitCopy(srcReg, dst)
 
 	return dst
+}
+
+func (c *Compiler) compileSubqueryExpr(subq *QP.SubqueryExpr) int {
+	// Allocate a register for the subquery result
+	resultReg := c.ra.Alloc()
+	
+	// Emit OpScalarSubquery instruction
+	// P1 = destination register
+	// P4 = the SELECT statement to execute
+	c.program.Instructions = append(c.program.Instructions, Instruction{
+		Op: OpScalarSubquery,
+		P1: int32(resultReg),
+		P4: subq.Select,
+	})
+	
+	return resultReg
 }
 
 func (c *Compiler) Program() *Program {

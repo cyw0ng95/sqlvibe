@@ -179,6 +179,9 @@ const (
 	OpArrayToList
 	OpStrGroupConcat
 
+	// Subquery
+	OpScalarSubquery
+
 	// Misc
 	OpSql
 	OpCursorHint
@@ -372,6 +375,9 @@ var OpCodeInfo = map[OpCode]string{
 	OpListToArray:    "ListToArray",
 	OpArrayToList:    "ArrayToList",
 	OpStrGroupConcat: "GroupConcat",
+
+	// Subquery
+	OpScalarSubquery: "ScalarSubquery",
 
 	// Misc
 	OpSql:        "Sql",
