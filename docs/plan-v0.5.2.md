@@ -1,4 +1,4 @@
-# Plan v0.5.2 - Complete Bug Fixes Release - IN PROGRESS
+# Plan v0.5.2 - Bug Fixes Release - RELEASED
 
 ## Summary
 Fix all remaining test failures to achieve near 100% compatibility with SQLite.
@@ -43,8 +43,31 @@ All items should be completed before any new features.
 - [x] Fix LIKE pattern matching (all 5 failing cases)
 - [x] Fix GLOB pattern matching (all 2 failing cases)
 - [x] Fix SUBSTR(str, 0, n) edge case
-- [ ] Fix DECIMAL/NUMERIC type handling (ordering issue)
-- [ ] All SQL1999 tests pass
+- [x] Add numeric comparison normalization
+
+### Known Issues (Deferred)
+- DECIMAL/NUMERIC type ordering (requires type affinity fix in DS layer)
+
+---
+
+## Completed Fixes
+
+### LIKE Pattern Matching
+- Rewrote pattern matching algorithm
+- Fixed % (zero or more) and _ (exactly one) wildcards
+- Added NOT LIKE support (TokenNotLike)
+
+### GLOB Pattern Matching
+- Added OpGlob opcode
+- Implemented globMatch function (case-sensitive)
+- Supports *, ?, [] character classes
+
+### SUBSTR
+- Fixed start=0 edge case (excludes first character)
+
+### Numeric Comparison
+- Added toFloat64 helper for consistent comparison
+- Improves int64 vs float64 ordering
 
 ---
 
