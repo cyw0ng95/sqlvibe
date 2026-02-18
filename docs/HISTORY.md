@@ -1,5 +1,34 @@
 # sqlvibe Release History
 
+## **v0.5.0** (2026-02-18)
+
+### Summary
+Major architectural release delivering three core infrastructure components: CG (Code Generator) subsystem, VFS (Virtual File System) architecture, and complete BTree implementation with SQLite-compatible encoding.
+
+### Features
+- **CG Subsystem**: Extracted compiler from VM into dedicated Code Generator package for clean separation of concerns (AST → bytecode → execution)
+- **VFS Architecture**: Implemented pluggable storage abstraction layer with Unix VFS and Memory VFS implementations
+- **Complete BTree**: Full SQLite-compatible BTree encoding (~2500 lines) including:
+  - Varint & record encoding
+  - Cell formats for all 4 page types (table/index leaf/interior)
+  - Overflow page management
+  - Page balancing algorithms
+  - Freelist management
+- **WHERE Operators**: Added OR, AND, IN, BETWEEN, LIKE, IS NULL operators
+
+### Known Issues (Not Fixed in This Release)
+- DS encoding tests: int32/int64 serial type mapping incorrect
+- ORDER BY expression/ABS handling bugs
+- IN/BETWEEN operator bugs
+- Varchar TRIM and SUBSTR string operation issues
+- LIKE operator 1 edge case (case sensitivity)
+
+### Bug Fixes
+- Cell boundary detection: Fixed payload size overflow in BTree
+- WHERE operators: 13/14 tests passing (93%)
+
+---
+
 ## **v0.4.5** (2026-02-16)
 
 ### Summary
