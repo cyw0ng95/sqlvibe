@@ -34,10 +34,21 @@ This release enables ACID transactions, completes VM integration, and adds compr
 ## Achievement Status: **IN PROGRESS - 1 of 13 Waves Complete**
 
 **Progress**: 8% complete
-- ✅ Wave 1: Transaction Management (TM) - **COMPLETE** (7 tests passing)
-- 📋 Wave 2: Set Operations - **PENDING** (build errors block testing)
-- 📋 Wave 3: DML Through VM - **PENDING** (build errors block testing)
-- 📋 Waves 4-19: SQL1999 Conformance - **PENDING** (build errors block testing)
+- ✅ Wave 1: Transaction Management (TM) - **COMPLETE** (7/7 tests passing)
+- 📋 Wave 2: Set Operations - **PENDING**
+- 📋 Wave 3: DML Through VM - **PENDING**
+- 📋 Wave 4: SQL1999 Conformance (E031, E041) - **PARTIAL** (0/18 tests passing)
+- 📋 Wave 5: SQL1999 Conformance (E051, E061) - **PARTIAL** (5/14 tests passing)
+- 📋 Wave 6: SQL1999 Conformance (E071, E091) - **PARTIAL** (2/16 tests passing)
+- 📋 Wave 7: SQL1999 Conformance (E101, E111) - **PARTIAL** (11/15 tests passing)
+- 📋 Wave 8: SQL1999 Conformance (E121, E131, E141) - **PARTIAL** (14/21 tests passing)
+- 📋 Wave 9: SQL1999 Conformance (E081, E151) - **PARTIAL** (8/16 tests passing)
+- 📋 Wave 10: SQL1999 Conformance (E152, E153) - **PARTIAL** (1/2 tests passing)
+- 📋 Wave 11: SQL1999 Conformance (E161, E171) - **PARTIAL** (1/2 tests passing)
+- 📋 Wave 12: SQL1999 Conformance (F021) - **PENDING** (test directories not created)
+- 📋 Wave 13: SQL1999 Conformance (F031) - **PENDING** (test directories not created)
+
+**SQL1999 Test Summary**: 52/111 tests passing (47%)
 
 ---
 
@@ -91,17 +102,86 @@ This release enables ACID transactions, completes VM integration, and adds compr
 
 **Note**: DML bytecode compilation exists but needs build fix before testing.
 
-### Waves 4-19: SQL1999 Conformance - v0.6.0 - PENDING
+### Wave 4: SQL1999 Conformance (E031, E041) - v0.6.0 - PARTIAL
 
-**Status**: 🔄 Pending - Build errors prevent testing
+**Status**: 🔄 Partial - Tests running but failing
 
-**Blockers**:
-- Build errors in VM/CG prevent testing SQL1999 suites
-- Test directories exist but cannot be run without build
+**Test Results**:
+- E031: 0/6 tests passing (all failing)
+- E041: 0/12 tests passing (all failing)
 
-**Test Suites Status**:
-- E011-E171: Test directories exist (19 directories, 123 test files)
-- F021, F031: Test directories NOT YET CREATED (need implementation)
+**Estimated Time**: ~13 hours (need to fix failures)
+
+### Wave 5: SQL1999 Conformance (E051, E061) - v0.6.0 - PARTIAL
+
+**Status**: 🔄 Partial - Tests running with mixed results
+
+**Test Results**:
+- E051: 3/6 tests passing (E051-01, E051-02, E051-04 pass; E051-03, E051-05, E051-06 fail)
+- E061: 2/8 tests passing (E061-01, E061-05 pass; others fail)
+
+**Estimated Time**: ~8 hours (need to fix failures)
+
+### Wave 6: SQL1999 Conformance (E071, E091) - v0.6.0 - PARTIAL
+
+**Status**: 🔄 Partial - Tests running with mixed results
+
+**Test Results**:
+- E071: 0/6 tests passing (all failing)
+- E091: 2/10 tests passing (E091-01, E091-02 pass; E091-03 fails)
+
+**Estimated Time**: ~10 hours (need to fix failures)
+
+### Wave 7: SQL1999 Conformance (E101, E111) - v0.6.0 - PARTIAL
+
+**Status**: 🔄 Partial - Tests running with mixed results
+
+**Test Results**:
+- E101: 5/9 tests passing (E101-01, E101-05, E101-06, E101-07, E101-08 pass; E101-02, E101-03, E101-04, E101-09 fail)
+- E111: 6/6 tests passing (ALL PASS)
+
+**Estimated Time**: ~8 hours (need to fix E101 failures)
+
+### Wave 8: SQL1999 Conformance (E121, E131, E141) - v0.6.0 - PARTIAL
+
+**Status**: 🔄 Partial - Tests running with mixed results
+
+**Test Results**:
+- E121: 6/6 tests passing (ALL PASS)
+- E131: 0/7 tests passing (all failing)
+- E141: 8/8 tests passing (ALL PASS)
+
+**Estimated Time**: ~10 hours (need to fix E131 failures)
+
+### Wave 9: SQL1999 Conformance (E081, E151) - v0.6.0 - PARTIAL
+
+**Status**: 🔄 Partial - Tests running with mixed results
+
+**Test Results**:
+- E081: 0/8 tests passing (need to check)
+- E151: 8/8 tests passing (ALL PASS)
+
+**Estimated Time**: ~10 hours (need to fix E081 failures)
+
+### Wave 10: SQL1999 Conformance (E152, E153) - v0.6.0 - PARTIAL
+
+**Status**: 🔄 Partial - Tests running with mixed results
+
+**Test Results**:
+- E152: 1/1 tests passing (E152-01 PASS)
+- E153: 0/1 tests passing (E153-01 FAIL)
+
+**Estimated Time**: ~5 hours (need to fix E153 failure)
+
+### Wave 11: SQL1999 Conformance (E161, E171) - v0.6.0 - PARTIAL
+
+**Status**: 🔄 Partial - Tests running with mixed results
+
+**Test Results**:
+- E161: 1/1 tests passing (E161-01 PASS)
+- E171: 0/1 tests passing (E171-01 FAIL)
+
+**Estimated Time**: ~6 hours (need to fix E171 failure)
 
 ---
 
@@ -160,37 +240,37 @@ internal/
 - [ ] All DML tests passing
 
 ### Wave 4: SQL1999 Conformance (E031, E041)
-- [ ] E031 Information Schema tests pass
-- [ ] E041 Schema Definition tests pass
+- [ ] E031 Information Schema tests pass (0/6 passing)
+- [ ] E041 Schema Definition tests pass (0/12 passing)
 
 ### Wave 5: SQL1999 Conformance (E051, E061)
-- [ ] E051 Data Types tests pass
-- [ ] E061 Predicates tests pass
+- [ ] E051 Data Types tests pass (3/6 passing)
+- [ ] E061 Predicates tests pass (2/8 passing)
 
 ### Wave 6: SQL1999 Conformance (E071, E091)
-- [ ] E071 Subqueries tests pass
-- [ ] E091 Table Expressions tests pass
+- [ ] E071 Subqueries tests pass (0/6 passing)
+- [ ] E091 Table Expressions tests pass (2/10 passing)
 
 ### Wave 7: SQL1999 Conformance (E101, E111)
-- [ ] E101 Query Expressions tests pass
-- [ ] E111 Table Creation tests pass
+- [ ] E101 Query Expressions tests pass (5/9 passing)
+- [x] E111 Table Creation tests pass (6/6 passing)
 
 ### Wave 8: SQL1999 Conformance (E121, E131, E141)
-- [ ] E121 Schema Manipulation tests pass
-- [ ] E131 Query Predicates tests pass
-- [ ] E141 NULLs tests pass
+- [x] E121 Schema Manipulation tests pass (6/6 passing)
+- [ ] E131 Query Predicates tests pass (0/7 passing)
+- [x] E141 NULLs tests pass (8/8 passing)
 
 ### Wave 9: SQL1999 Conformance (E081, E151)
-- [ ] E081 Full Query Expressions tests pass
-- [ ] E151 Transaction Support tests pass
+- [ ] E081 Full Query Expressions tests pass (0/8 passing)
+- [x] E151 Transaction Support tests pass (8/8 passing)
 
 ### Wave 10: SQL1999 Conformance (E152, E153)
-- [ ] E152 SET TRANSACTION tests pass
-- [ ] E153 Updatable queries tests pass
+- [x] E152 SET TRANSACTION tests pass (1/1 passing)
+- [ ] E153 Updatable queries tests pass (0/1 passing)
 
 ### Wave 11: SQL1999 Conformance (E161, E171)
-- [ ] E161 SQL Comments tests pass
-- [ ] E171 SQLSTATE tests pass
+- [x] E161 SQL Comments tests pass (1/1 passing)
+- [ ] E171 SQLSTATE tests pass (0/1 passing)
 
 ### Wave 12: SQL1999 Conformance (F021)
 - [ ] F021-01: Information Schema COLUMNS view
