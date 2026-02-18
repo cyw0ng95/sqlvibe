@@ -89,9 +89,20 @@ func main() {
 			}
 			if rows != nil && rows.Columns != nil {
 				fmt.Println(strings.Join(rows.Columns, " | "))
+				for _, row := range rows.Data {
+					fmt.Println(strings.Join(formatRow(row), " | "))
+				}
 			}
 		}
 	}
+}
+
+func formatRow(row []interface{}) []string {
+	result := make([]string, len(row))
+	for i, v := range row {
+		result[i] = fmt.Sprintf("%v", v)
+	}
+	return result
 }
 
 func handleMetaCommand(line string) bool {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
+	VMpkg "github.com/sqlvibe/sqlvibe/internal/VM"
 )
 
 var (
@@ -20,7 +21,7 @@ var (
 )
 
 type QueryEngine struct {
-	vm         *VM
+	vm         *VMpkg.VM
 	pm         *DS.PageManager
 	tables     map[string]*TableReader
 	cursors    map[int]*Cursor
@@ -100,11 +101,14 @@ func (qe *QueryEngine) OpenCursor(tableName string) (int, error) {
 	}
 
 	qe.cursorID++
-	btree, _ := table.btree.First()
+	btreeCursor := table.btree.NewCursor()
+	if err := btreeCursor.First(); err != nil {
+		return -1, err
+	}
 	cursor := &Cursor{
 		ID:     qe.cursorID,
 		Table:  table,
-		btree:  btree,
+		btree:  btreeCursor,
 		Row:    -1,
 		Closed: false,
 	}
@@ -138,7 +142,11 @@ func (qe *QueryEngine) NextRow(cursorID int) (map[string]interface{}, error) {
 	}
 
 	if cursor.btree != nil {
-		key, _, err := cursor.btree.Next()
+		if !cursor.btree.Valid() {
+			return nil, nil
+		}
+		
+		key, err := cursor.btree.Key()
 		if err != nil {
 			return nil, err
 		}
@@ -397,22 +405,22 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		exprEval := &ExprEvaluator{}
 		switch e.Op {
 		case QP.TokenPlus:
-			result, _ := exprEval.BinaryOp(OpAdd, leftVal, rightVal)
+			result, _ := exprEval.BinaryOp(VMpkg.OpAdd, leftVal, rightVal)
 			return result
 		case QP.TokenMinus:
-			result, _ := exprEval.BinaryOp(OpSubtract, leftVal, rightVal)
+			result, _ := exprEval.BinaryOp(VMpkg.OpSubtract, leftVal, rightVal)
 			return result
 		case QP.TokenAsterisk:
-			result, _ := exprEval.BinaryOp(OpMultiply, leftVal, rightVal)
+			result, _ := exprEval.BinaryOp(VMpkg.OpMultiply, leftVal, rightVal)
 			return result
 		case QP.TokenSlash:
-			result, _ := exprEval.BinaryOp(OpDivide, leftVal, rightVal)
+			result, _ := exprEval.BinaryOp(VMpkg.OpDivide, leftVal, rightVal)
 			return result
 		case QP.TokenPercent:
-			result, _ := exprEval.BinaryOp(OpRemainder, leftVal, rightVal)
+			result, _ := exprEval.BinaryOp(VMpkg.OpRemainder, leftVal, rightVal)
 			return result
 		case QP.TokenConcat:
-			result, _ := exprEval.BinaryOp(OpConcat, leftVal, rightVal)
+			result, _ := exprEval.BinaryOp(VMpkg.OpConcat, leftVal, rightVal)
 			return result
 		case QP.TokenAnd:
 			if leftVal == nil || rightVal == nil {

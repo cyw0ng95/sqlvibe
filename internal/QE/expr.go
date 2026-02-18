@@ -4,13 +4,15 @@ import (
 	"math"
 	"math/big"
 	"strconv"
+
+	VMpkg "github.com/sqlvibe/sqlvibe/internal/VM"
 )
 
 type ExprEvaluator struct {
-	vm *VM
+	vm *VMpkg.VM
 }
 
-func NewExprEvaluator(vm *VM) *ExprEvaluator {
+func NewExprEvaluator(vm *VMpkg.VM) *ExprEvaluator {
 	return &ExprEvaluator{vm: vm}
 }
 
@@ -33,7 +35,7 @@ func (e *ExprEvaluator) Eval(expr interface{}) (interface{}, error) {
 	}
 }
 
-func (e *ExprEvaluator) Compare(op OpCode, a, b interface{}) (int, error) {
+func (e *ExprEvaluator) Compare(op VMpkg.OpCode, a, b interface{}) (int, error) {
 	aVal, bVal := e.toFloat64(a), e.toFloat64(b)
 	if aVal < bVal {
 		return -1, nil
@@ -60,19 +62,19 @@ func (e *ExprEvaluator) toFloat64(v interface{}) float64 {
 	}
 }
 
-func (e *ExprEvaluator) BinaryOp(op OpCode, a, b interface{}) (interface{}, error) {
+func (e *ExprEvaluator) BinaryOp(op VMpkg.OpCode, a, b interface{}) (interface{}, error) {
 	switch op {
-	case OpAdd:
+	case VMpkg.OpAdd:
 		return e.add(a, b), nil
-	case OpSubtract:
+	case VMpkg.OpSubtract:
 		return e.sub(a, b), nil
-	case OpMultiply:
+	case VMpkg.OpMultiply:
 		return e.mul(a, b), nil
-	case OpDivide:
+	case VMpkg.OpDivide:
 		return e.div(a, b), nil
-	case OpRemainder:
+	case VMpkg.OpRemainder:
 		return e.mod(a, b), nil
-	case OpConcat:
+	case VMpkg.OpConcat:
 		if a == nil || b == nil {
 			return nil, nil
 		}

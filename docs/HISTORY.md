@@ -1,5 +1,71 @@
 # sqlvibe Release History
 
+## **v0.5.2** (2026-02-18)
+
+### Summary
+Bug fix release addressing LIKE, GLOB, and SUBSTR issues from v0.5.1.
+
+### Bug Fixes
+- **LIKE**: Rewrote pattern matching algorithm, fixed % and _ wildcards
+- **LIKE**: Added NOT LIKE support (TokenNotLike)
+- **GLOB**: Added OpGlob and globMatch function (case-sensitive)
+- **SUBSTR**: Fixed start=0 edge case
+- **Numeric comparison**: Added toFloat64 helper for consistent int64/float64 comparison
+
+### Known Issues (Deferred)
+- DECIMAL/NUMERIC type ordering (requires DS layer type affinity fix)
+
+---
+
+## **v0.5.1** (2026-02-18)
+
+### Summary
+Bug fix release addressing critical issues from v0.5.0.
+
+### Bug Fixes
+- **DS Encoding**: Fixed serial type mapping (removed Int24, SQLite doesn't use it)
+- **ORDER BY**: Fixed expression evaluation using EvalExpr for non-column references
+- **IN/NOT IN**: Fixed NULL propagation in OpBitOr/OpBitAnd operators
+- **BETWEEN**: Fixed NULL handling same as IN operators
+- **TRIM**: Fixed default characters when P2=0 (now means space)
+- **SUBSTR**: Fixed length parameter handling and negative/zero edge cases
+
+### Known Issues (Remaining)
+- LIKE/GLOB pattern matching edge cases
+- DECIMAL/NUMERIC type handling
+- SUBSTR(str, 0, n) edge case
+
+---
+
+## **v0.5.0** (2026-02-18)
+
+### Summary
+Major architectural release delivering three core infrastructure components: CG (Code Generator) subsystem, VFS (Virtual File System) architecture, and complete BTree implementation with SQLite-compatible encoding.
+
+### Features
+- **CG Subsystem**: Extracted compiler from VM into dedicated Code Generator package for clean separation of concerns (AST → bytecode → execution)
+- **VFS Architecture**: Implemented pluggable storage abstraction layer with Unix VFS and Memory VFS implementations
+- **Complete BTree**: Full SQLite-compatible BTree encoding (~2500 lines) including:
+  - Varint & record encoding
+  - Cell formats for all 4 page types (table/index leaf/interior)
+  - Overflow page management
+  - Page balancing algorithms
+  - Freelist management
+- **WHERE Operators**: Added OR, AND, IN, BETWEEN, LIKE, IS NULL operators
+
+### Known Issues (Not Fixed in This Release)
+- DS encoding tests: int32/int64 serial type mapping incorrect
+- ORDER BY expression/ABS handling bugs
+- IN/BETWEEN operator bugs
+- Varchar TRIM and SUBSTR string operation issues
+- LIKE operator 1 edge case (case sensitivity)
+
+### Bug Fixes
+- Cell boundary detection: Fixed payload size overflow in BTree
+- WHERE operators: 13/14 tests passing (93%)
+
+---
+
 ## **v0.4.5** (2026-02-16)
 
 ### Summary

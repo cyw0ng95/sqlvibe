@@ -1,124 +1,205 @@
 package DS
 
 import (
-	"path/filepath"
+	"bytes"
 	"testing"
-
-	"github.com/sqlvibe/sqlvibe/internal/PB"
 )
 
-func TestBTreeCreate(t *testing.T) {
-	tmpDir := t.TempDir()
-	testPath := filepath.Join(tmpDir, "test.db")
-
-	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
+func TestBTree_NewAndBasics(t *testing.T) {
+	pm := setupTestPageManager(t, 4096)
+	
+	// Allocate root page
+	rootPage, err := pm.AllocatePage()
 	if err != nil {
-		t.Fatalf("failed to open file: %v", err)
-	}
-	defer file.Close()
-
-	pm, err := NewPageManager(file, 4096)
-	if err != nil {
-		t.Fatalf("failed to create page manager: %v", err)
+		t.Fatalf("failed to allocate root page: %v", err)
 	}
 
-	bt := NewBTree(pm, 0, true)
+	bt := NewBTree(pm, rootPage, true)
+
+	if bt.RootPage() != rootPage {
+		t.Errorf("expected root page %d, got %d", rootPage, bt.RootPage())
+	}
+
 	if !bt.IsTable() {
 		t.Error("expected table B-Tree")
 	}
-	if bt.RootPage() != 0 {
-		t.Error("expected root page 0 for new B-Tree")
+}
+
+func TestBTree_SearchEmpty(t *testing.T) {
+	pm := setupTestPageManager(t, 4096)
+	bt := NewBTree(pm, 0, true) // Empty tree
+
+	result, err := bt.Search([]byte{1, 2, 3})
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+
+	if result != nil {
+		t.Error("expected nil result for empty tree")
 	}
 }
 
-func TestBTreeInsert(t *testing.T) {
-	tmpDir := t.TempDir()
-	testPath := filepath.Join(tmpDir, "test.db")
-
-	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
-	if err != nil {
-		t.Fatalf("failed to open file: %v", err)
-	}
-	defer file.Close()
-
-	pm, err := NewPageManager(file, 4096)
-	if err != nil {
-		t.Fatalf("failed to create page manager: %v", err)
-	}
-
+func TestBTree_InsertAndSearch(t *testing.T) {
+	pm := setupTestPageManager(t, 4096)
 	bt := NewBTree(pm, 0, true)
 
-	err = bt.Insert([]byte{0x01}, []byte("value1"))
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
+	// Insert a key-value pair
+	key := make([]byte, 9)
+	PutVarint(key, 42)
+	value := []byte("Hello, World!")
+
+	if err := bt.Insert(key, value); err != nil {
+		t.Fatalf("insert failed: %v", err)
 	}
 
-	if bt.RootPage() == 0 {
-		t.Error("root page should not be 0 after insert")
+	// Search for the key
+	result, err := bt.Search(key)
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+
+	if !bytes.Equal(result, value) {
+		t.Errorf("expected value %v, got %v", value, result)
+	}
+
+	// Search for non-existent key
+	key2 := make([]byte, 9)
+	PutVarint(key2, 100)
+	result2, err := bt.Search(key2)
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+
+	if result2 != nil {
+		t.Error("expected nil for non-existent key")
 	}
 }
 
-func TestBTreeSearch(t *testing.T) {
-	tmpDir := t.TempDir()
-	testPath := filepath.Join(tmpDir, "test.db")
-
-	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
-	if err != nil {
-		t.Fatalf("failed to open file: %v", err)
-	}
-	defer file.Close()
-
-	pm, err := NewPageManager(file, 4096)
-	if err != nil {
-		t.Fatalf("failed to create page manager: %v", err)
-	}
-
+func TestBTree_MultipleInserts(t *testing.T) {
+	pm := setupTestPageManager(t, 4096)
 	bt := NewBTree(pm, 0, true)
 
-	bt.Insert([]byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("value1"))
-	bt.Insert([]byte{0, 0, 0, 0, 0, 0, 0, 2}, []byte("value2"))
-
-	result, err := bt.Search([]byte{0, 0, 0, 0, 0, 0, 0, 1})
-	if err != nil {
-		t.Fatalf("failed to search: %v", err)
+	// Insert multiple key-value pairs
+	entries := []struct {
+		rowid int64
+		value string
+	}{
+		{1, "Alice"},
+		{2, "Bob"},
+		{3, "Charlie"},
+		{5, "Eve"},
+		{4, "David"}, // Insert out of order
 	}
-	if string(result) != "value1" {
-		t.Errorf("expected value1, got %s", string(result))
+
+	for _, entry := range entries {
+		key := make([]byte, 9)
+		PutVarint(key, entry.rowid)
+		if err := bt.Insert(key, []byte(entry.value)); err != nil {
+			t.Fatalf("insert rowid=%d failed: %v", entry.rowid, err)
+		}
+	}
+
+	// Search for all inserted keys
+	for _, entry := range entries {
+		key := make([]byte, 9)
+		PutVarint(key, entry.rowid)
+		result, err := bt.Search(key)
+		if err != nil {
+			t.Fatalf("search rowid=%d failed: %v", entry.rowid, err)
+		}
+
+		if !bytes.Equal(result, []byte(entry.value)) {
+			t.Errorf("rowid=%d: expected %s, got %s", entry.rowid, entry.value, string(result))
+		}
 	}
 }
 
-func TestBTreeCursor(t *testing.T) {
-	tmpDir := t.TempDir()
-	testPath := filepath.Join(tmpDir, "test.db")
-
-	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
-	if err != nil {
-		t.Fatalf("failed to open file: %v", err)
-	}
-	defer file.Close()
-
-	pm, err := NewPageManager(file, 4096)
-	if err != nil {
-		t.Fatalf("failed to create page manager: %v", err)
-	}
-
+func TestBTree_Cursor(t *testing.T) {
+	pm := setupTestPageManager(t, 4096)
 	bt := NewBTree(pm, 0, true)
 
-	bt.Insert([]byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("value1"))
-	bt.Insert([]byte{0, 0, 0, 0, 0, 0, 0, 2}, []byte("value2"))
+	// Insert some data
+	for i := int64(1); i <= 5; i++ {
+		key := make([]byte, 9)
+		PutVarint(key, i)
+		value := []byte{byte(i)}
+		if err := bt.Insert(key, value); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
 
-	cursor, err := bt.First()
-	if err != nil {
-		t.Fatalf("failed to get first: %v", err)
+	// Create cursor and iterate
+	cursor := bt.NewCursor()
+	if err := cursor.First(); err != nil {
+		t.Fatalf("cursor.First() failed: %v", err)
 	}
-	if cursor == nil {
-		t.Fatal("cursor should not be nil")
-	}
-	defer cursor.Close()
 
-	key, val, err := cursor.Next()
-	if err != nil {
-		t.Fatalf("failed to get next: %v", err)
+	if !cursor.Valid() {
+		t.Fatal("cursor should be valid after First()")
 	}
-	t.Logf("key=%x, val=%s", key, val)
+
+	// Read first entry
+	key, err := cursor.Key()
+	if err != nil {
+		t.Fatalf("cursor.Key() failed: %v", err)
+	}
+
+	firstRowid, _ := GetVarint(key)
+	if firstRowid != 1 {
+		t.Errorf("expected first rowid=1, got %d", firstRowid)
+	}
+
+	value, err := cursor.Value()
+	if err != nil {
+		t.Fatalf("cursor.Value() failed: %v", err)
+	}
+
+	if len(value) != 1 || value[0] != 1 {
+		t.Errorf("expected value [1], got %v", value)
+	}
+}
+
+func TestBTree_CursorEmpty(t *testing.T) {
+	pm := setupTestPageManager(t, 4096)
+	bt := NewBTree(pm, 0, true)
+
+	cursor := bt.NewCursor()
+	if err := cursor.First(); err != nil {
+		t.Fatalf("cursor.First() on empty tree failed: %v", err)
+	}
+
+	if cursor.Valid() {
+		t.Error("cursor should not be valid on empty tree")
+	}
+}
+
+func TestBTree_IndexTree(t *testing.T) {
+	pm := setupTestPageManager(t, 4096)
+	bt := NewBTree(pm, 0, false) // Index tree
+
+	// Insert index entries
+	keys := [][]byte{
+		[]byte("apple"),
+		[]byte("banana"),
+		[]byte("cherry"),
+	}
+
+	for _, key := range keys {
+		if err := bt.Insert(key, nil); err != nil {
+			t.Fatalf("insert key=%s failed: %v", string(key), err)
+		}
+	}
+
+	// Search for keys
+	for _, key := range keys {
+		result, err := bt.Search(key)
+		if err != nil {
+			t.Fatalf("search key=%s failed: %v", string(key), err)
+		}
+
+		// Index trees return the key itself
+		if !bytes.Equal(result, key) {
+			t.Errorf("key=%s: expected %v, got %v", string(key), key, result)
+		}
+	}
 }
