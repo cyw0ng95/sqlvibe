@@ -2234,7 +2234,32 @@ if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
 for i, expr := range aggInfo.NonAggCols {
 if nonAggCol, ok := expr.(*QP.ColumnRef); ok && nonAggCol.Name == colRef.Name {
 left := state.NonAggValues[i]
-right := vm.evaluateExprOnRow(nil, nil, binExpr.Right)
+
+// Evaluate the right side - handle subqueries specially
+var right interface{}
+if subqExpr, ok := binExpr.Right.(*QP.SubqueryExpr); ok {
+// Execute the subquery through the context
+if vm.ctx != nil {
+type SubqueryExecutor interface {
+ExecuteSubquery(subquery interface{}) (interface{}, error)
+}
+
+if executor, ok := vm.ctx.(SubqueryExecutor); ok {
+if result, err := executor.ExecuteSubquery(subqExpr.Select); err == nil {
+right = result
+} else {
+right = nil
+}
+} else {
+right = nil
+}
+} else {
+right = nil
+}
+} else {
+right = vm.evaluateExprOnRow(nil, nil, binExpr.Right)
+}
+
 result := vm.evaluateBinaryOp(left, right, binExpr.Op)
 if boolVal, ok := result.(bool); ok {
 return boolVal
