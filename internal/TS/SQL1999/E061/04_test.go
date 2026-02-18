@@ -1,0 +1,60 @@
+package E061
+
+import (
+	"database/sql"
+	"testing"
+
+	"github.com/sqlvibe/sqlvibe/internal/TS/SQL1999"
+	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
+)
+
+func TestSQL1999_F301_E06104_L1(t *testing.T) {
+	sqlvibePath := ":memory:"
+	sqlitePath := ":memory:"
+
+	sqlvibeDB, err := sqlvibe.Open(sqlvibePath)
+	if err != nil {
+		t.Fatalf("Failed to open sqlvibe: %v", err)
+	}
+	defer sqlvibeDB.Close()
+
+	sqliteDB, err := sql.Open("sqlite", sqlitePath)
+	if err != nil {
+		t.Fatalf("Failed to open sqlite: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	createTests := []struct {
+		name string
+		sql  string
+	}{
+		{"CreateTable", "CREATE TABLE t1 (a TEXT)"},
+		{"InsertValues", "INSERT INTO t1 VALUES ('apple'), ('banana'), ('application'), ('orange'), ('apex')"},
+	}
+
+	for _, tt := range createTests {
+		t.Run(tt.name, func(t *testing.T) {
+			SQL1999.CompareExecResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
+		})
+	}
+
+	queryTests := []struct {
+		name string
+		sql  string
+	}{
+		{"LIKEPattern", "SELECT * FROM t1 WHERE a LIKE 'ap%'"},
+		{"LIKEPatternAny", "SELECT * FROM t1 WHERE a LIKE '%a%'"},
+		{"LIKEPatternSingle", "SELECT * FROM t1 WHERE a LIKE 'a____e'"},
+		{"NOTLIKEPattern", "SELECT * FROM t1 WHERE a NOT LIKE 'ap%'"},
+		{"LIKECaseSensitive", "SELECT * FROM t1 WHERE a LIKE 'APP%'"},
+		{"LIKEExactMatch", "SELECT * FROM t1 WHERE a LIKE 'apple'"},
+		{"LIKEWithEscape", "SELECT * FROM t1 WHERE a LIKE 'a%%e' ESCAPE '%'"},
+		{"LIKEMultiplePatterns", "SELECT * FROM t1 WHERE a LIKE 'a%' OR a LIKE 'o%'"},
+	}
+
+	for _, tt := range queryTests {
+		t.Run(tt.name, func(t *testing.T) {
+			SQL1999.CompareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
+		})
+	}
+}
