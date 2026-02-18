@@ -362,45 +362,160 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 	case QP.TokenGe:
 		c.program.EmitOpWithDst(OpGe, int32(leftReg), int32(rightReg), dst)
 	case QP.TokenAnd:
-		leftBool := c.ra.Alloc()
-		c.program.EmitOp(OpNotNull, int32(leftReg), 0)
+		// AND: result = (left != 0) && (right != 0) ? 1 : 0
 		zeroReg := c.ra.Alloc()
 		c.program.EmitLoadConst(zeroReg, int64(0))
-		c.program.EmitLoadConst(leftBool, int64(0))
-		c.program.EmitCopy(leftReg, dst)
+		
+		// Check if left is true (non-zero)
+		leftCheck := c.ra.Alloc()
+		c.program.EmitOpWithDst(OpNe, int32(leftReg), int32(zeroReg), leftCheck)
+		
+		// Check if right is true (non-zero)
+		rightCheck := c.ra.Alloc()
+		c.program.EmitOpWithDst(OpNe, int32(rightReg), int32(zeroReg), rightCheck)
+		
+		// AND them together: if both are true, result is true
+		c.program.EmitOpWithDst(OpBitAnd, int32(leftCheck), int32(rightCheck), dst)
 		return dst
 	case QP.TokenOr:
+		// OR: result = (left != 0) || (right != 0) ? 1 : 0
 		zeroReg := c.ra.Alloc()
 		c.program.EmitLoadConst(zeroReg, int64(0))
-		leftTrue := c.program.EmitOp(OpNe, int32(leftReg), int32(zeroReg))
-		c.program.Fixup(leftTrue)
-		rightTrue := c.program.EmitOp(OpNe, int32(rightReg), int32(zeroReg))
-		c.program.Fixup(rightTrue)
-		c.program.EmitCopy(rightReg, dst)
+		
+		// Check if left is true (non-zero)
+		leftCheck := c.ra.Alloc()
+		c.program.EmitOpWithDst(OpNe, int32(leftReg), int32(zeroReg), leftCheck)
+		
+		// Check if right is true (non-zero)
+		rightCheck := c.ra.Alloc()
+		c.program.EmitOpWithDst(OpNe, int32(rightReg), int32(zeroReg), rightCheck)
+		
+		// OR them together: if either is true, result is true
+		c.program.EmitOpWithDst(OpBitOr, int32(leftCheck), int32(rightCheck), dst)
 		return dst
 	case QP.TokenLike:
-		likeDst := c.ra.Alloc()
-		c.program.EmitOp(OpLike, int32(leftReg), int32(rightReg))
-		_ = likeDst
-		c.program.EmitLoadConst(dst, nil)
-	case QP.TokenBetween, QP.TokenNotBetween:
-		c.program.EmitLoadConst(dst, int64(1))
-		_ = rightReg
-		_ = leftReg
-	case QP.TokenIn, QP.TokenNotIn, QP.TokenInSubquery:
+		// LIKE: use OpLike which stores result in dst
+		c.program.EmitOpWithDst(OpLike, int32(leftReg), int32(rightReg), dst)
+		return dst
+	case QP.TokenBetween:
+		// BETWEEN: left >= lower AND left <= upper
+		// Right side should be BinaryExpr with Op: TokenAnd containing lower and upper
+		if binExpr, ok := expr.Right.(*QP.BinaryExpr); ok && binExpr.Op == QP.TokenAnd {
+			lowerReg := c.compileExpr(binExpr.Left)
+			upperReg := c.compileExpr(binExpr.Right)
+			
+			// left >= lower
+			geResult := c.ra.Alloc()
+			c.program.EmitOpWithDst(OpGe, int32(leftReg), int32(lowerReg), geResult)
+			
+			// left <= upper
+			leResult := c.ra.Alloc()
+			c.program.EmitOpWithDst(OpLe, int32(leftReg), int32(upperReg), leResult)
+			
+			// AND them together
+			c.program.EmitOpWithDst(OpBitAnd, int32(geResult), int32(leResult), dst)
+			return dst
+		}
+		// Fallback
 		c.program.EmitLoadConst(dst, int64(0))
-		_ = rightReg
-		_ = leftReg
+		return dst
+	case QP.TokenNotBetween:
+		// NOT BETWEEN: NOT (left >= lower AND left <= upper)
+		if binExpr, ok := expr.Right.(*QP.BinaryExpr); ok && binExpr.Op == QP.TokenAnd {
+			lowerReg := c.compileExpr(binExpr.Left)
+			upperReg := c.compileExpr(binExpr.Right)
+			
+			// left >= lower
+			geResult := c.ra.Alloc()
+			c.program.EmitOpWithDst(OpGe, int32(leftReg), int32(lowerReg), geResult)
+			
+			// left <= upper
+			leResult := c.ra.Alloc()
+			c.program.EmitOpWithDst(OpLe, int32(leftReg), int32(upperReg), leResult)
+			
+			// AND them together
+			betweenResult := c.ra.Alloc()
+			c.program.EmitOpWithDst(OpBitAnd, int32(geResult), int32(leResult), betweenResult)
+			
+			// NOT the result
+			zeroReg := c.ra.Alloc()
+			c.program.EmitLoadConst(zeroReg, int64(0))
+			c.program.EmitOpWithDst(OpEq, int32(betweenResult), int32(zeroReg), dst)
+			return dst
+		}
+		// Fallback
+		c.program.EmitLoadConst(dst, int64(1))
+		return dst
+	case QP.TokenIn:
+		// IN (list): check if left matches any value in the list
+		// Right side should be a Literal with a slice of values
+		if lit, ok := expr.Right.(*QP.Literal); ok {
+			if values, ok := lit.Value.([]interface{}); ok {
+				// Load 0 into result (false by default)
+				c.program.EmitLoadConst(dst, int64(0))
+				
+				// Compare against each value in the list
+				for _, val := range values {
+					valReg := c.ra.Alloc()
+					c.program.EmitLoadConst(valReg, val)
+					
+					eqResult := c.ra.Alloc()
+					c.program.EmitOpWithDst(OpEq, int32(leftReg), int32(valReg), eqResult)
+					
+					// OR with current result (dst = dst | eqResult)
+					c.program.EmitOpWithDst(OpBitOr, int32(dst), int32(eqResult), dst)
+				}
+				return dst
+			}
+		}
+		// Fallback
+		c.program.EmitLoadConst(dst, int64(0))
+		return dst
+	case QP.TokenNotIn:
+		// NOT IN (list): NOT (check if left matches any value in the list)
+		if lit, ok := expr.Right.(*QP.Literal); ok {
+			if values, ok := lit.Value.([]interface{}); ok {
+				// Load 0 into temp result (false by default)
+				inResult := c.ra.Alloc()
+				c.program.EmitLoadConst(inResult, int64(0))
+				
+				// Compare against each value in the list
+				for _, val := range values {
+					valReg := c.ra.Alloc()
+					c.program.EmitLoadConst(valReg, val)
+					
+					eqResult := c.ra.Alloc()
+					c.program.EmitOpWithDst(OpEq, int32(leftReg), int32(valReg), eqResult)
+					
+					// OR with current result
+					c.program.EmitOpWithDst(OpBitOr, int32(inResult), int32(eqResult), inResult)
+				}
+				
+				// NOT the IN result
+				zeroReg := c.ra.Alloc()
+				c.program.EmitLoadConst(zeroReg, int64(0))
+				c.program.EmitOpWithDst(OpEq, int32(inResult), int32(zeroReg), dst)
+				return dst
+			}
+		}
+		// Fallback
+		c.program.EmitLoadConst(dst, int64(1))
+		return dst
+	case QP.TokenInSubquery:
+		c.program.EmitLoadConst(dst, int64(0))
+		return dst
 	case QP.TokenIs:
+		// IS NULL: compare with NULL
 		nullReg := c.ra.Alloc()
 		c.program.EmitLoadConst(nullReg, nil)
-		c.program.EmitOp(OpIs, int32(leftReg), int32(nullReg))
-		return leftReg
+		c.program.EmitOpWithDst(OpIs, int32(leftReg), int32(nullReg), dst)
+		return dst
 	case QP.TokenIsNot:
+		// IS NOT NULL: compare with NULL
 		nullReg := c.ra.Alloc()
 		c.program.EmitLoadConst(nullReg, nil)
-		c.program.EmitOp(OpIsNot, int32(leftReg), int32(nullReg))
-		return leftReg
+		c.program.EmitOpWithDst(OpIsNot, int32(leftReg), int32(nullReg), dst)
+		return dst
 	default:
 		c.program.EmitLoadConst(dst, nil)
 	}

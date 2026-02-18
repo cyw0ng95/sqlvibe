@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/sqlvibe/sqlvibe/internal/CG"
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/PB"
 	"github.com/sqlvibe/sqlvibe/internal/QE"
@@ -642,7 +643,7 @@ func (db *Database) handleExplain(stmt *QP.ExplainStmt, sql string) (*Rows, erro
 		innerSQL = strings.TrimPrefix(innerSQL, "EXPLAIN")
 		innerSQL = strings.TrimSpace(innerSQL)
 
-		program, err := VM.CompileWithSchema(innerSQL, nil)
+		program, err := CG.CompileWithSchema(innerSQL, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1410,7 +1411,7 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 		tableName = stmt.Table
 	}
 
-	program, err := VM.Compile(sql)
+	program, err := CG.Compile(sql)
 	if err != nil {
 		return nil, fmt.Errorf("VM compile error: %v", err)
 	}
@@ -1469,7 +1470,7 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	} else {
 		tableCols = db.columnOrder[tableName]
 	}
-	program, err := VM.CompileWithSchema(sql, tableCols)
+	program, err := CG.CompileWithSchema(sql, tableCols)
 	if err != nil {
 		return nil, err
 	}
@@ -1526,7 +1527,7 @@ tableCols = db.getOrderedColumns(tableName)
 }
 
 // Compile the DML statement
-program, err := VM.CompileWithSchema(sql, tableCols)
+program, err := CG.CompileWithSchema(sql, tableCols)
 if err != nil {
 return Result{}, err
 }

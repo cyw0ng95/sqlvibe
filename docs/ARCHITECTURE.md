@@ -20,17 +20,20 @@
 │                           Core Subsystems                                    │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  ┌──────────────────────┐    ┌──────────────────────┐                     │
-│  │   Query Processing   │───▶│  Query Execution     │                     │
-│  │       (QP)           │    │       (QE)           │                     │
-│  │                      │    │                      │                     │
-│  │  - Tokenizer         │    │  - VM Executor       │                     │
-│  │  - Parser            │    │  - Operator Engine   │                     │
-│  │  - Planner           │    │  - Result Set       │                     │
-│  │  - Optimizer         │    │                      │                     │
-│  └──────────────────────┘    └──────────────────────┘                     │
-│              │                                  │                           │
-│              ▼                                  ▼                           │
+│  ┌──────────────────────┐    ┌──────────────────────┐    ┌──────────────┐ │
+│  │   Query Processing   │───▶│  Code Generator     │───▶│  Virtual     │ │
+│  │       (QP)           │    │       (CG)          │    │  Machine     │ │
+│  │                      │    │                     │    │     (VM)     │ │
+│  │  - Tokenizer         │    │  - Expression       │    │              │ │
+│  │  - Parser            │    │    Compiler         │    │  - Bytecode  │ │
+│  │  - Planner           │    │  - DML Compiler     │    │    Executor  │ │
+│  │  - AST Generator     │    │  - Aggregate        │    │  - Register  │ │
+│  │                      │    │    Compiler         │    │    Manager   │ │
+│  │                      │    │  - Optimizer        │    │  - Cursor    │ │
+│  │                      │    │    (future)         │    │    Manager   │ │
+│  └──────────────────────┘    └──────────────────────┘    └──────────────┘ │
+│                                                                             │
+│              ▼                                                              │
 │  ┌──────────────────────────────────────────────────────────────────┐       │
 │  │                     Transaction Monitor (TM)                    │       │
 │  │                                                                  │       │
@@ -53,7 +56,7 @@
 │  ┌──────────────────────────────────────────────────────────────────┐       │
 │  │                   Platform Bridges (PB)                         │       │
 │  │                                                                  │       │
-│  │  - OS File Operations Abstraction                               │       │
+│  │  - VFS Implementations (Unix, Windows, Memory)                  │       │
 │  │  - File Locking                                                 │       │
 │  │  - Memory Management (mmap)                                     │       │
 │  └──────────────────────────────────────────────────────────────────┘       │
@@ -62,9 +65,9 @@
 │  ┌──────────────────────────────────────────────────────────────────┐       │
 │  │                  System Framework (SF)                           │       │
 │  │                                                                  │       │
+│  │  - VFS Interface                                                 │       │
 │  │  - Logging Infrastructure                                        │       │
 │  │  - Error Handling                                               │       │
-│  │  - Configuration Management                                      │       │
 │  └──────────────────────────────────────────────────────────────────┘       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -206,8 +209,12 @@ func SetLevel(level Level)
 | `manager.go` | Page I/O coordination and allocation |
 | `btree.go` | B-Tree implementation for tables/indexes |
 | `cache.go` | Page cache / buffer pool |
-| `table.go` | Table-specific B-Tree operations (TODO) |
-| `index.go` | Index management (TODO) |
+| `cell.go` | Cell format encoding/decoding |
+| `encoding.go` | Varint and record encoding |
+| `cursor.go` | BTree cursor for iteration |
+| `balance.go` | Page balancing algorithms |
+| `overflow.go` | Overflow page handling |
+| `freelist.go` | Freelist management |
 
 **Database File Format** (SQLite-compatible):
 
@@ -252,6 +259,98 @@ func SetLevel(level Level)
 | Freelist | 0xfe | Freelist page |
 | Pointer Map | 0xfd | Pointer map page |
 
+**B-Tree Page Structure**:
+
+Each BTree page starts with a header:
+
+*Leaf Page Header (8 bytes)*:
+```
+Offset  Size  Description
+------  ----  -----------
+0       1     Page type (0x0d for table leaf, 0x0a for index leaf)
+1       2     First freeblock offset (0 if none)
+3       2     Number of cells on page
+5       2     Start of cell content area (0 means 65536)
+7       1     Fragmented free bytes
+```
+
+*Interior Page Header (12 bytes)*:
+```
+Offset  Size  Description
+------  ----  -----------
+0       1     Page type (0x05 for table interior, 0x02 for index interior)
+1       2     First freeblock offset
+3       2     Number of cells
+5       2     Start of cell content area
+7       1     Fragmented free bytes
+8       4     Right-most pointer (page number)
+```
+
+**Cell Formats**:
+
+- **Table Leaf Cell**: Payload size (varint) + Rowid (varint) + Payload bytes + [Overflow page]
+- **Table Interior Cell**: Left child page (4 bytes) + Rowid (varint)
+- **Index Leaf Cell**: Payload size (varint) + Payload bytes + [Overflow page]
+- **Index Interior Cell**: Left child page (4 bytes) + Payload size (varint) + Payload bytes + [Overflow page]
+
+**Varint Encoding**:
+
+SQLite uses variable-length integers (1-9 bytes for 64-bit values):
+- First 7 bits of each byte are data
+- MSB indicates if more bytes follow
+- Maximum 9 bytes (8 bytes with 7 bits + 1 byte with 8 bits)
+
+**Record Format**:
+
+```
+Header size (varint)
+Serial type codes (varint for each column)
+Data for each column
+```
+
+**Serial Type Codes**:
+- 0: NULL, 1-6: Integers (various sizes), 7: IEEE float
+- 8,9: Constants 0,1 (schema v4+)
+- N≥12 and even: BLOB (N-12)/2 bytes
+- N≥13 and odd: TEXT (N-13)/2 bytes
+
+**Overflow Pages**:
+
+When payload exceeds page capacity:
+1. **Local Payload**: Portion stored on BTree page
+2. **Overflow Chain**: Remainder in linked overflow pages
+
+*Overflow Page Format*:
+```
+Next overflow page number (4 bytes, 0 if last)
+Payload continuation bytes
+```
+
+*Local Payload Calculation*:
+- U = usable page size (page_size - reserved_space)
+- M = ((U-12)*32/255)-23  (min local)
+- X = U-35                  (max local)
+
+**Page Balancing**:
+
+Operations triggered on insert/delete:
+- **Split**: Divide overfull page into two pages
+- **Merge**: Combine underfull sibling pages
+- **Redistribute**: Move cells between siblings
+
+**Freelist Management**:
+
+Free pages managed via freelist trunk and leaf pages:
+- **Trunk Page**: Contains next trunk pointer and array of leaf page numbers
+- Operations: Allocate (pop), Deallocate (push), Compact
+
+**BTree Cursor**:
+
+Maintains position for tree traversal:
+- Path from root to current page (stack)
+- Current page and cell index
+- Operations: First(), Last(), Seek(key), Next(), Previous()
+
 **B-Tree Implementation**:
 
 ```go
@@ -263,10 +362,10 @@ type BTree struct {
 }
 
 type Page struct {
-    Type     PageType
-    Size     uint16
+    Type       PageType
+    Size       uint16
     FreeOffset uint16
-    Cells    []Cell
+    Cells      []Cell
     // ... page-specific data
 }
 
@@ -278,11 +377,16 @@ type Cell struct {
 ```
 
 **Key Design Decisions**:
-- Use copy-on-write B-Tree for MVCC support
-- Implement page-level locking with latch crabbing
+- SQLite-compatible file format for maximum compatibility
+- Page size configurable (512-65536 bytes, power of 2)
 - Support both INTKEY (table) and INDEXKEY (index) modes
 - Handle overflow pages for large values
-- Maintain free list for space reuse
+- Maintain freelist for space reuse
+- Implement page balancing to maintain tree properties
+
+**References**:
+- **SQLite File Format**: https://www.sqlite.org/fileformat2.html
+- **SQLite BTree Module**: https://www.sqlite.org/btreemodule.html
 
 ---
 
@@ -472,7 +576,172 @@ type ExecutionPlan struct {
 
 ---
 
-### 2.6 Transaction Monitor (TM)
+
+### 2.6 Code Generator (CG)
+
+**Purpose**: Compile AST to bytecode for VM execution
+
+**Components**:
+
+| Component | Responsibility |
+|-----------|----------------|
+| `compiler.go` | Main compiler and SELECT statement compilation |
+| `expr.go` | Expression compilation (literals, binary ops, functions) |
+| `dml.go` | DML statement compilation (INSERT, UPDATE, DELETE) |
+| `aggregate.go` | Aggregate function compilation (COUNT, SUM, AVG, etc.) |
+| `optimizer.go` | Bytecode optimization passes (future) |
+
+**Compilation Pipeline**:
+
+```
+QP.AST (SelectStmt, InsertStmt, etc.)
+    │
+    ▼
+┌────────────────────────────────────┐
+│       CG.Compiler                  │
+├────────────────────────────────────┤
+│  CompileSelect()                   │
+│  CompileInsert()                   │
+│  CompileUpdate()                   │
+│  CompileDelete()                   │
+│  CompileAggregate()                │
+│                                    │
+│  compileExpr()      ───┐           │
+│  compileBinaryExpr()   │           │
+│  compileFuncCall()     │ Internal  │
+│  compileColumnRef()    │ helpers   │
+│  compileLiteral()  ────┘           │
+└────────────────────────────────────┘
+    │
+    ▼
+VM.Program (Bytecode Instructions)
+```
+
+**Interface Design**:
+```go
+type Compiler struct {
+    vmCompiler *VM.Compiler
+}
+
+func NewCompiler() *Compiler
+func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program
+func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *VM.Program
+func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *VM.Program
+func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *VM.Program
+func Compile(sql string) (*VM.Program, error)
+func CompileWithSchema(sql string, tableColumns []string) (*VM.Program, error)
+```
+
+**Key Design Decisions**:
+- Separate compilation from execution (CG vs VM)
+- Support table schema for SELECT * expansion
+- Generate register-based bytecode
+- Enable future optimization passes
+
+---
+
+### 2.7 Virtual Machine (VM)
+
+**Purpose**: Execute bytecode programs produced by CG
+
+**Components**:
+
+| Component | Responsibility |
+|-----------|----------------|
+| `engine.go` | VM engine core and execution context |
+| `exec.go` | Instruction dispatcher and opcode handlers |
+| `opcodes.go` | Opcode definitions (100+ opcodes) |
+| `program.go` | Bytecode program representation |
+| `registers.go` | Register allocator |
+| `cursor.go` | Cursor management for table/index access |
+
+**VM Architecture**:
+
+```
+VM.Program (Bytecode)
+    │
+    ▼
+┌────────────────────────────────────┐
+│         VM.Engine                  │
+├────────────────────────────────────┤
+│  Registers: []interface{}          │
+│  Cursors:   *CursorArray          │
+│  PC:        int                    │
+│  Results:   [][]interface{}        │
+└────────────────────────────────────┘
+    │
+    ▼
+┌────────────────────────────────────┐
+│     Instruction Dispatcher         │
+├────────────────────────────────────┤
+│  switch inst.Op {                  │
+│    case OpOpenRead: ...            │
+│    case OpColumn: ...              │
+│    case OpEq: ...                  │
+│    case OpResultRow: ...           │
+│    case OpNext: ...                │
+│    case OpHalt: ...                │
+│  }                                 │
+└────────────────────────────────────┘
+    │
+    ▼
+Results / Side Effects
+```
+
+**Key Opcodes**:
+
+| Category | Opcodes |
+|----------|---------|
+| **Cursor Ops** | OpOpenRead, OpOpenWrite, OpRewind, OpNext, OpClose |
+| **Data Ops** | OpColumn, OpInsert, OpUpdate, OpDelete |
+| **Control Flow** | OpGoto, OpIf, OpIfNot, OpHalt |
+| **Comparison** | OpEq, OpNe, OpLt, OpLe, OpGt, OpGe |
+| **Arithmetic** | OpAdd, OpSubtract, OpMultiply, OpDivide, OpRemainder |
+| **String** | OpConcat, OpSubstr, OpUpper, OpLower, OpTrim |
+| **Aggregate** | OpCount, OpSum, OpAvg, OpMin, OpMax |
+| **Result** | OpResultRow, OpLoadConst, OpCopy |
+
+**Instruction Format**:
+```go
+type Instruction struct {
+    Op OpCode         // Opcode
+    P1 int32          // First operand (often register or cursor ID)
+    P2 int32          // Second operand
+    P3 interface{}    // Third operand (string or other type)
+    P4 interface{}    // Fourth operand (destination register or jump target)
+}
+```
+
+**Execution Example**:
+```
+// SELECT id, name FROM users WHERE age > 18
+
+OpInit                      // Initialize
+OpOpenRead 0, "users"       // Open cursor 0 for users table
+OpRewind 0                  // Position cursor at start
+OpColumn 0, 2, r0           // Load age into r0
+OpLoadConst r1, 18          // Load 18 into r1
+OpGt r0, r1, r2             // Compare: r2 = (age > 18)
+OpLoadConst r3, 0           // Load 0 into r3
+OpEq r2, r3, skipRow        // If r2 == 0, jump to skipRow
+OpColumn 0, 0, r4           // Load id into r4
+OpColumn 0, 1, r5           // Load name into r5
+OpResultRow [r4, r5]        // Emit result row
+skipRow:
+OpNext 0, loop              // Advance cursor, loop if more rows
+OpHalt                      // Done
+```
+
+**Key Design Decisions**:
+- Register-based VM (vs stack-based) for performance
+- Cursor abstraction for table/index access
+- SQLite-compatible opcode set
+- Support for WHERE clause jump targets vs register destinations
+
+---
+
+
+### 2.8 Transaction Monitor (TM)
 
 **Purpose**: ACID transaction management and concurrency control
 
