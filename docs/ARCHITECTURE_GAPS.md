@@ -76,23 +76,33 @@ if stmt.GroupBy != nil {
 
 ---
 
-### Gap 4: UPDATE with Subqueries Not Working
+### Gap 4: UPDATE with Subqueries - ✅ FIXED (Infrastructure)
 
-**Affected Tests**: E153 (1 test) - 0% pass rate
+**Affected Tests**: E153 (1 test) - Still 0% pass rate (requires Gap 2)
 
 **Root Cause**: UPDATE with subquery in SET clause - `UPDATE t1 SET val = (SELECT MAX(val) FROM t1) WHERE id = 1`
 
+**Fix Applied** (Commit 6024662):
+1. Added `OpScalarSubquery` opcode to VM
+2. Implemented `compileSubqueryExpr` to handle SubqueryExpr in expressions
+3. Added `ExecuteSubquery` method to `dbVmContext` for runtime subquery execution
+4. Scalar subqueries now execute and return first column of first row
+
 **Impact**: 
-- Simple UPDATE works correctly (verified with manual test)
-- UPDATE with subquery in SET clause returns nil instead of subquery result
-- Subquery evaluation in UPDATE context not implemented
+- ✅ UPDATE with scalar subqueries works correctly (verified with manual testing)
+- ✅ Example: `UPDATE t1 SET val = (SELECT newval FROM t2) WHERE id = 1` now works
+- ❌ E153 test still fails because it uses `MAX(val)`, which requires aggregates (Gap 2)
 
-**Fix Required**: 
-1. Detect subquery expressions in UPDATE SET clause
-2. Compile and execute subquery to get value
-3. Use subquery result in UPDATE operation
+**Verification**:
+```sql
+-- This now works:
+UPDATE t1 SET val = (SELECT newval FROM t2) WHERE id = 1
 
-**Note**: This is actually about subquery evaluation in UPDATE context, not basic UPDATE execution.
+-- This still fails (needs Gap 2):
+UPDATE t1 SET val = (SELECT MAX(val) FROM t1) WHERE id = 1
+```
+
+**Note**: The infrastructure for subqueries is complete. E153 test failure is due to missing aggregate function support, not subquery support.
 
 ---
 
@@ -102,7 +112,7 @@ if stmt.GroupBy != nil {
 |-------|-------|-----------|-----------|--------|
 | E081 | 8 | 100% ✅ | UNION with * | FIXED |
 | E131 | 7 | 0% | GROUP BY not implemented | TODO |
-| E153 | 1 | 0% | UPDATE with subqueries | TODO |
+| E153 | 1 | 0% | Aggregate in subquery (MAX) | Needs Gap 2 |
 | E171 | 1 | 0% | SQLSTATE not implemented | TODO |
 
 ---
@@ -110,9 +120,9 @@ if stmt.GroupBy != nil {
 ## Priority Fix Order
 
 1. **P0 - UNION with *** - ✅ DONE (Commit 5e3abda)
-2. **P0 - GROUP BY** - Complex, requires VM overhaul
-3. **P1 - HAVING** - Depends on GROUP BY
-4. **P2 - UPDATE with subqueries** - Requires subquery evaluation support
+2. **P2 - UPDATE with subqueries** - ✅ DONE (Commit 6024662) - Infrastructure complete
+3. **P0 - GROUP BY** - Complex, requires VM overhaul
+4. **P1 - HAVING** - Depends on GROUP BY
 
 ---
 
@@ -121,17 +131,25 @@ if stmt.GroupBy != nil {
 | Fix | Tests Fixed | Pass Rate Impact | Status |
 |-----|-------------|-----------------|--------|
 | UNION * | +8 | +0.6% | ✅ DONE |
-| GROUP BY | +7 | +0.5% | TODO |
-| UPDATE subquery | +1 | +0.1% | TODO |
-| **Total Possible** | **+16** | **+1.2%** | **50% done** |
+| UPDATE subquery infra | +0* | +0%* | ✅ DONE |
+| GROUP BY + aggregates | +7 (E131) +1 (E153) | +0.6% | TODO |
+| **Total Done** | **+8** | **+0.6%** | **50% infrastructure** |
+
+\* UPDATE subquery infrastructure is complete, but E153 test requires aggregate functions from Gap 2.
 
 ---
 
-## Files to Modify
+## Files Modified
 
-1. `internal/VM/compiler.go` - Main fixes
-2. `internal/VM/opcodes.go` - Add GROUP BY opcode
-3. `internal/VM/exec.go` - Implement GROUP BY execution
+**Gap 1 (UNION with *):**
+1. `pkg/sqlvibe/database.go` - Fixed star expansion in execSelectStmt
+2. `internal/VM/compiler.go` - Added resolveColumnCount helper
+
+**Gap 4 (UPDATE subqueries):**
+1. `internal/VM/opcodes.go` - Added OpScalarSubquery opcode
+2. `internal/VM/compiler.go` - Added compileSubqueryExpr function
+3. `internal/VM/exec.go` - Implemented OpScalarSubquery execution
+4. `pkg/sqlvibe/database.go` - Added ExecuteSubquery method to dbVmContext
 
 ---
 
