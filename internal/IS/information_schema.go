@@ -67,6 +67,138 @@ type ReferentialConstraint struct {
 
 // MetadataProvider extracts metadata from the database
 type MetadataProvider struct {
+	btree     *DS.BTree
+	extractor *SchemaExtractor
+}
+
+// NewMetadataProvider creates a new metadata provider
+func NewMetadataProvider(btree *DS.BTree) *MetadataProvider {
+	return &MetadataProvider{
+		btree:     btree,
+		extractor: NewSchemaExtractor(btree),
+	}
+}
+
+// ColumnInfo represents information about a column
+type ColumnInfo struct {
+	ColumnName    string
+	TableName     string
+	TableSchema   string
+	DataType      string
+	IsNullable    string
+	ColumnDefault string
+}
+
+// ViewInfo represents information about a view
+type ViewInfo struct {
+	TableName      string
+	TableSchema    string
+	ViewDefinition string
+}
+
+// ConstraintInfo represents information about a constraint
+type ConstraintInfo struct {
+	ConstraintName string
+	TableName      string
+	TableSchema    string
+	ConstraintType string
+}
+
+// ReferentialConstraint represents information about a foreign key relationship
+type ReferentialConstraint struct {
+	ConstraintName         string
+	UniqueConstraintSchema string
+	UniqueConstraintName   string
+}
+
+// SchemaExtractor extracts metadata from database
+type SchemaExtractor struct {
+	extractor *SchemaExtractor
+}
+
+// MetadataProvider provides metadata information schema queries
+type MetadataProvider struct {
+	btree     *DS.BTree
+	extractor *SchemaExtractor
+}
+
+// NewMetadataProvider creates a new metadata provider
+func NewMetadataProvider(btree *DS.BTree) *MetadataProvider {
+	return &MetadataProvider{
+		btree:     btree,
+		extractor: NewSchemaExtractor(btree),
+	}
+}
+
+// GetTables returns all tables and views in database
+func (mp *MetadataProvider) GetTables() ([]TableInfo, error) {
+	return mp.extractor.ExtractTables()
+}
+
+// GetColumns returns all columns for a given table
+func (mp *MetadataProvider) GetColumns(tableName string) ([]ColumnInfo, error) {
+	return mp.extractor.ExtractColumns(tableName)
+}
+
+// GetAllColumns returns all columns for all tables
+func (mp *MetadataProvider) GetAllColumns() ([]ColumnInfo, error) {
+	return mp.extractor.GetAllColumns()
+}
+
+// GetViews returns all views in the database
+func (mp *MetadataProvider) GetViews() ([]ViewInfo, error) {
+	return mp.extractor.ExtractViews()
+}
+
+// GetConstraints returns all constraints for a given table
+func (mp *MetadataProvider) GetConstraints(tableName string) ([]ConstraintInfo, error) {
+	return mp.extractor.ExtractConstraints(tableName)
+}
+
+// GetAllConstraints returns all constraints for all tables
+func (mp *MetadataProvider) GetAllConstraints() ([]ConstraintInfo, error) {
+	return mp.extractor.GetAllConstraints()
+}
+
+// GetReferentialConstraints returns all foreign key relationships
+func (mp *MetadataProvider) GetReferentialConstraints() ([]ReferentialConstraint, error) {
+	return mp.extractor.GetReferentialConstraints()
+}
+
+// ColumnInfo represents information about a column
+type ColumnInfo struct {
+	ColumnName    string
+	TableName     string
+	TableSchema   string
+	DataType      string
+	IsNullable    string
+	ColumnDefault string
+}
+
+// ViewInfo represents information about a view
+type ViewInfo struct {
+	TableName      string
+	TableSchema    string
+	ViewDefinition string
+}
+
+// ConstraintInfo represents information about a constraint
+type ConstraintInfo struct {
+	ConstraintName string
+	TableName      string
+	TableSchema    string
+	ConstraintType string
+}
+
+// ReferentialConstraint represents information about a foreign key relationship
+type ReferentialConstraint struct {
+	ConstraintName         string
+	UniqueConstraintSchema string
+	UniqueConstraintName   string
+}
+
+// MetadataProvider extracts metadata from the database
+type MetadataProvider struct {
 	ds *DS.BTree
 }
 
