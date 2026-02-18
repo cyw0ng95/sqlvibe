@@ -853,6 +853,136 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpExistsSubquery:
+			// Execute EXISTS subquery: returns 1 if subquery returns any rows, 0 otherwise
+			// P1 = destination register
+			// P4 = SelectStmt to execute
+			dstReg := int(inst.P1)
+			
+			if vm.ctx != nil {
+				type SubqueryRowsExecutor interface {
+					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+					if rows, err := executor.ExecuteSubqueryRows(inst.P4); err == nil && len(rows) > 0 {
+						vm.registers[dstReg] = int64(1)
+					} else {
+						vm.registers[dstReg] = int64(0)
+					}
+				} else {
+					vm.registers[dstReg] = int64(0)
+				}
+			} else {
+				vm.registers[dstReg] = int64(0)
+			}
+			continue
+
+		case OpNotExistsSubquery:
+			// Execute NOT EXISTS subquery: returns 1 if subquery returns no rows, 0 otherwise
+			// P1 = destination register
+			// P4 = SelectStmt to execute
+			dstReg := int(inst.P1)
+			
+			if vm.ctx != nil {
+				type SubqueryRowsExecutor interface {
+					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+					if rows, err := executor.ExecuteSubqueryRows(inst.P4); err == nil && len(rows) > 0 {
+						vm.registers[dstReg] = int64(0) // rows exist, so NOT EXISTS is false
+					} else {
+						vm.registers[dstReg] = int64(1) // no rows, so NOT EXISTS is true
+					}
+				} else {
+					vm.registers[dstReg] = int64(1)
+				}
+			} else {
+				vm.registers[dstReg] = int64(1)
+			}
+			continue
+
+		case OpInSubquery:
+			// Execute IN subquery: check if value is in the result set
+			// P1 = destination register
+			// P2 = value register to check
+			// P4 = SelectStmt to execute
+			dstReg := int(inst.P1)
+			valueReg := int(inst.P2)
+			value := vm.registers[valueReg]
+			
+			if vm.ctx != nil {
+				type SubqueryRowsExecutor interface {
+					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+					if rows, err := executor.ExecuteSubqueryRows(inst.P4); err == nil {
+						// Check if value matches any row's first column
+						found := false
+						for _, row := range rows {
+							if len(row) > 0 && compareVals(value, row[0]) == 0 {
+								found = true
+								break
+							}
+						}
+						if found {
+							vm.registers[dstReg] = int64(1)
+						} else {
+							vm.registers[dstReg] = int64(0)
+						}
+					} else {
+						vm.registers[dstReg] = int64(0)
+					}
+				} else {
+					vm.registers[dstReg] = int64(0)
+				}
+			} else {
+				vm.registers[dstReg] = int64(0)
+			}
+			continue
+
+		case OpNotInSubquery:
+			// Execute NOT IN subquery: check if value is NOT in the result set
+			// P1 = destination register
+			// P2 = value register to check
+			// P4 = SelectStmt to execute
+			dstReg := int(inst.P1)
+			valueReg := int(inst.P2)
+			value := vm.registers[valueReg]
+			
+			if vm.ctx != nil {
+				type SubqueryRowsExecutor interface {
+					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+					if rows, err := executor.ExecuteSubqueryRows(inst.P4); err == nil {
+						// Check if value matches any row's first column
+						found := false
+						for _, row := range rows {
+							if len(row) > 0 && compareVals(value, row[0]) == 0 {
+								found = true
+								break
+							}
+						}
+						if found {
+							vm.registers[dstReg] = int64(0) // found, so NOT IN is false
+						} else {
+							vm.registers[dstReg] = int64(1) // not found, so NOT IN is true
+						}
+					} else {
+						vm.registers[dstReg] = int64(1)
+					}
+				} else {
+					vm.registers[dstReg] = int64(1)
+				}
+			} else {
+				vm.registers[dstReg] = int64(1)
+			}
+			continue
+
 		case OpAggregate:
 			// Execute aggregate query with GROUP BY
 			// P1 = cursor ID
@@ -1923,11 +2053,11 @@ case "AVG":
 // AVG = SUM / COUNT, we accumulate SUM here
 state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
 case "MIN":
-if state.Mins[aggIdx] == nil || vm.compareValues(value, state.Mins[aggIdx]) < 0 {
+if state.Mins[aggIdx] == nil || vm.compareVals(value, state.Mins[aggIdx]) < 0 {
 state.Mins[aggIdx] = value
 }
 case "MAX":
-if state.Maxs[aggIdx] == nil || vm.compareValues(value, state.Maxs[aggIdx]) > 0 {
+if state.Maxs[aggIdx] == nil || vm.compareVals(value, state.Maxs[aggIdx]) > 0 {
 state.Maxs[aggIdx] = value
 }
 }
@@ -2070,17 +2200,17 @@ return vm.addValues(left, right)
 case QP.TokenMinus:
 return vm.subtractValues(left, right)
 case QP.TokenGt:
-return vm.compareValues(left, right) > 0
+return vm.compareVals(left, right) > 0
 case QP.TokenGe:
-return vm.compareValues(left, right) >= 0
+return vm.compareVals(left, right) >= 0
 case QP.TokenLt:
-return vm.compareValues(left, right) < 0
+return vm.compareVals(left, right) < 0
 case QP.TokenLe:
-return vm.compareValues(left, right) <= 0
+return vm.compareVals(left, right) <= 0
 case QP.TokenEq:
-return vm.compareValues(left, right) == 0
+return vm.compareVals(left, right) == 0
 case QP.TokenNe:
-return vm.compareValues(left, right) != 0
+return vm.compareVals(left, right) != 0
 default:
 return nil
 }
@@ -2214,7 +2344,7 @@ return nil
 }
 
 // compareValues compares two values (-1, 0, 1)
-func (vm *VM) compareValues(a, b interface{}) int {
+func (vm *VM) compareVals(a, b interface{}) int {
 if a == nil && b == nil {
 return 0
 }

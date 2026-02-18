@@ -1740,6 +1740,24 @@ func (ctx *dbVmContext) ExecuteSubquery(subquery interface{}) (interface{}, erro
 	return nil, nil
 }
 
+// ExecuteSubqueryRows executes a subquery and returns all rows
+func (ctx *dbVmContext) ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error) {
+	// Type assert to *QP.SelectStmt
+	selectStmt, ok := subquery.(*QP.SelectStmt)
+	if !ok {
+		return nil, fmt.Errorf("subquery is not a SelectStmt")
+	}
+	
+	// Execute the subquery using execSelectStmt
+	rows, err := ctx.db.execSelectStmt(selectStmt)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Return all rows
+	return rows.Data, nil
+}
+
 // execSetOp executes SET operations (UNION, EXCEPT, INTERSECT) by running left and right separately
 func (db *Database) execSetOp(stmt *QP.SelectStmt, originalSQL string) (*Rows, error) {
 	// For now, use the existing direct execution path

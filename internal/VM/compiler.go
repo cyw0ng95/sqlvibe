@@ -638,6 +638,17 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		c.program.EmitLoadConst(dst, int64(0))
 		return dst
 	case QP.TokenNotIn:
+		// NOT IN: check if it's a subquery or list
+		if subqExpr, ok := expr.Right.(*QP.SubqueryExpr); ok {
+			// NOT IN (subquery)
+			c.program.Instructions = append(c.program.Instructions, Instruction{
+				Op: OpNotInSubquery,
+				P1: int32(dst),
+				P2: int32(leftReg),
+				P4: subqExpr.Select,
+			})
+			return dst
+		}
 		// NOT IN (list): NOT (check if left matches any value in the list)
 		if lit, ok := expr.Right.(*QP.Literal); ok {
 			if values, ok := lit.Value.([]interface{}); ok {
@@ -668,6 +679,37 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		c.program.EmitLoadConst(dst, int64(1))
 		return dst
 	case QP.TokenInSubquery:
+		// IN (subquery): check if left value is in the result set of the subquery
+		// expr.Right should be SubqueryExpr
+		if subqExpr, ok := expr.Right.(*QP.SubqueryExpr); ok {
+			// Emit OpInSubquery
+			// P1 = destination register (result: 1 if in, 0 if not)
+			// P2 = value register to check
+			// P4 = subquery SELECT statement
+			c.program.Instructions = append(c.program.Instructions, Instruction{
+				Op: OpInSubquery,
+				P1: int32(dst),
+				P2: int32(leftReg),
+				P4: subqExpr.Select,
+			})
+			return dst
+		}
+		c.program.EmitLoadConst(dst, int64(0))
+		return dst
+	case QP.TokenExists:
+		// EXISTS (subquery): check if subquery returns any rows
+		// expr.Left should be SubqueryExpr
+		if subqExpr, ok := expr.Left.(*QP.SubqueryExpr); ok {
+			// Emit OpExistsSubquery
+			// P1 = destination register (result: 1 if exists, 0 if not)
+			// P4 = subquery SELECT statement
+			c.program.Instructions = append(c.program.Instructions, Instruction{
+				Op: OpExistsSubquery,
+				P1: int32(dst),
+				P4: subqExpr.Select,
+			})
+			return dst
+		}
 		c.program.EmitLoadConst(dst, int64(0))
 		return dst
 	case QP.TokenIs:
@@ -690,8 +732,24 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 }
 
 func (c *Compiler) compileUnaryExpr(expr *QP.UnaryExpr) int {
-	srcReg := c.compileExpr(expr.Expr)
 	dst := c.ra.Alloc()
+
+	// Special case: NOT EXISTS -> emit OpNotExistsSubquery directly
+	if expr.Op == QP.TokenNot {
+		if binExpr, ok := expr.Expr.(*QP.BinaryExpr); ok && binExpr.Op == QP.TokenExists {
+			if subqExpr, ok := binExpr.Left.(*QP.SubqueryExpr); ok {
+				// Emit OpNotExistsSubquery
+				c.program.Instructions = append(c.program.Instructions, Instruction{
+					Op: OpNotExistsSubquery,
+					P1: int32(dst),
+					P4: subqExpr.Select,
+				})
+				return dst
+			}
+		}
+	}
+
+	srcReg := c.compileExpr(expr.Expr)
 
 	switch expr.Op {
 	case QP.TokenMinus:
