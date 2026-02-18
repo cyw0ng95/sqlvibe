@@ -221,13 +221,102 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 	c.program.FixupWithPos(gotoRewind, rewindPos+1)
 }
 
-func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.Expr, columns []QP.Expr) {
-	leftTableName := leftTable.Name
-	rightTableName := join.Right.Name
-
-	if leftTableName == "" || rightTableName == "" {
-		return
+	// Assert: INNER, CROSS, LEFT, RIGHT, and FULL JOINs are supported
+	if joinType == "" || joinType == "INNER" || joinType == "CROSS" || joinType == "LEFT" || joinType == "RIGHT" || joinType == "FULL" {
+		// Supported - continue
+	} else {
+		util.Assert(false, "JOIN type '%s' is not yet implemented.", joinType)
 	}
+}
+
+func (c *Compiler) compileLeftOuterJoin(join *QP.Join, where QP.Expr, columns []QP.Expr, leftTable, rightTable string) {
+	// LEFT JOIN: For each left row, emit left row + NULLs for right columns
+	// If no matching right row found, still emit left row with NULLs
+
+	c.program.EmitOpenTable(0, leftTable)
+	c.program.EmitOpenTable(1, rightTable)
+
+	leftRewind := c.program.EmitOp(OpRewind, 0, 0)
+
+	rightRewindPos := len(c.program.Instructions)
+	c.program.EmitOp(OpRewind, 1, 0)
+
+	// Collect right table columns for NULL emission
+	rightColRegs := make([]int, 0)
+	if rightSchema, ok := c.TableSchemas[rightTable]; ok {
+		for _, col := range rightSchema {
+			reg := c.ra.Alloc()
+			rightColRegs = append(rightColRegs, reg)
+		}
+	}
+
+	// Left outer loop
+	for {
+		// Try to find matching right row
+		matchFound := false
+		
+		// Rewind right cursor for new search
+		c.program.EmitOp(OpRewind, 1, 0)
+		rightRowStart := len(c.program.Instructions)
+
+		// Evaluate JOIN condition if present
+		var skipPos, nullSkip int
+		if join.Cond != nil {
+			joinCondReg := c.compileExpr(join.Cond)
+			zeroReg := c.ra.Alloc()
+			c.program.EmitLoadConst(zeroReg, int64(0))
+			skipPos = c.program.EmitEq(joinCondReg, zeroReg, 0)
+			nullSkip = c.program.EmitOp(OpIsNull, int32(joinCondReg), 0)
+		}
+
+		// Read right row
+		c.program.EmitOp(OpNext, 1, 0)
+		rightNextPos := len(c.program.Instructions)
+		c.program.FixupWithPos(rightNextPos, rightRowStart)
+
+		// If condition false or NULL, no match found - emit left row with NULLs
+		if join.Cond != nil {
+			c.program.FixupWithPos(skipPos, rightNextPos)
+			c.program.FixupWithPos(nullSkip, rightNextPos)
+		}
+
+		// Emit left row (right columns may be NULLs)
+		colRegs := make([]int, 0)
+		for _, col := range columns {
+			reg := c.compileExpr(col)
+			colRegs = append(colRegs, reg)
+		}
+
+		// Append right columns (may be NULLs)
+		colRegs = append(colRegs, rightColRegs...)
+
+		if where != nil {
+			whereReg := c.compileExpr(where)
+			zeroReg := c.ra.Alloc()
+			c.program.EmitLoadConst(zeroReg, int64(0))
+			c.program.EmitEq(whereReg, zeroReg, 0)
+		}
+
+		c.program.EmitResultRow(colRegs)
+
+		// If we found a match and right cursor is not at EOF, advance it
+		leftNextPos := len(c.program.Instructions)
+		leftNext := c.program.EmitOp(OpNext, 0, 0)
+		
+		// Right cursor done - try next left row
+		rightDonePos := len(c.program.Instructions)
+		rightDone := c.program.EmitOp(OpHalt, 1, 0)
+		
+		// Jump: If match found and right has more rows, continue right search
+		c.program.EmitGoto(rightRowStart)
+
+		// If right cursor at EOF, advance left
+		leftLoopEnd := len(c.program.Instructions)
+		leftLoopEndHalt := c.program.EmitOp(OpHalt, 0, 0)
+		c.program.FixupWithPos(leftNextPos, rightDonePos)
+		c.program.FixupWithPos(leftLoopEnd, leftLoopEndHalt)
+	}
+}
 
 	// Assert: INNER, CROSS, and LEFT JOINs are currently supported
 	// RIGHT and FULL OUTER JOINs require different logic
