@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 type Compiler struct {
@@ -15,6 +16,7 @@ type Compiler struct {
 	columnIndices   map[string]int // SELECT position: col name -> index in SELECT list
 	TableColIndices map[string]int // TABLE position: col name -> index in table (exported for external use)
 	TableColOrder   []string       // TABLE position: ordered list of column names (for SELECT * expansion)
+	tableCursors    map[string]int // Maps table name/alias to cursor ID (for JOINs)
 }
 
 func NewCompiler() *Compiler {
@@ -199,6 +201,30 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 		return
 	}
 
+	// Assert: Only INNER and CROSS JOINs are currently supported
+	// LEFT/RIGHT/FULL OUTER JOINs require different logic (emitting NULLs for non-matches)
+	joinType := strings.ToUpper(strings.TrimSpace(join.Type))
+	if joinType == "" || joinType == "INNER" || joinType == "CROSS" {
+		// Supported - continue
+	} else {
+		util.Assert(false, "JOIN type '%s' is not yet implemented. Only INNER and CROSS JOINs are supported. LEFT/RIGHT/FULL OUTER JOINs will be implemented in a future version.", joinType)
+	}
+
+	// Set up table-to-cursor mapping for JOIN
+	c.tableCursors = make(map[string]int)
+	// Map table name to cursor 0
+	c.tableCursors[leftTableName] = 0
+	// If there's an alias, map it as well
+	if leftTable.Alias != "" {
+		c.tableCursors[leftTable.Alias] = 0
+	}
+	// Map right table name to cursor 1
+	c.tableCursors[rightTableName] = 1
+	// If there's an alias, map it as well
+	if join.Right.Alias != "" {
+		c.tableCursors[join.Right.Alias] = 1
+	}
+
 	c.columnIndices = make(map[string]int)
 	for i, col := range columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
@@ -211,21 +237,21 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 	c.program.EmitOpenTable(0, leftTableName)
 	c.program.EmitOpenTable(1, rightTableName)
 
-	leftRewindPos := len(c.program.Instructions)
-	c.program.EmitOp(OpRewind, 0, 0)
+	leftRewind := c.program.EmitOp(OpRewind, 0, 0)
 
 	rightRewindPos := len(c.program.Instructions)
 	c.program.EmitOp(OpRewind, 1, 0)
 
-	joinCondReg := -1
+	// Evaluate JOIN condition if present
+	var skipPos, nullSkip int
 	if join.Cond != nil {
-		joinCondReg = c.compileExpr(join.Cond)
+		joinCondReg := c.compileExpr(join.Cond)
 		zeroReg := c.ra.Alloc()
 		c.program.EmitLoadConst(zeroReg, int64(0))
-		skipPos := c.program.EmitEq(joinCondReg, zeroReg, 0)
-		nullSkip := c.program.EmitOp(OpIsNull, int32(joinCondReg), 0)
-		_ = skipPos
-		_ = nullSkip
+		// If condition is false (0), skip this row combination
+		skipPos = c.program.EmitEq(joinCondReg, zeroReg, 0)
+		// If condition is NULL, also skip
+		nullSkip = c.program.EmitOp(OpIsNull, int32(joinCondReg), 0)
 	}
 
 	colRegs := make([]int, 0)
@@ -243,18 +269,33 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 
 	c.program.EmitResultRow(colRegs)
 
+	// Advance right cursor, if EOF jump to rightDone
+	rightNextPos := len(c.program.Instructions)
 	rightNext := c.program.EmitOp(OpNext, 1, 0)
-	gotoRightRewind := c.program.EmitGoto(rightRewindPos + 1)
+	
+	// Fixup JOIN condition skips to jump here (to advance right cursor)
+	if join.Cond != nil {
+		c.program.FixupWithPos(skipPos, rightNextPos)
+		c.program.FixupWithPos(nullSkip, rightNextPos)
+	}
+	
+	// Loop back to process next right row with same left row
+	c.program.EmitGoto(rightRewindPos + 1)
+	
+	// Right cursor exhausted, advance left cursor
 	rightDonePos := len(c.program.Instructions)
-
-	c.program.EmitOp(OpNext, 0, 0)
-	gotoLeftRewind := c.program.EmitGoto(leftRewindPos + 1)
-	_ = gotoLeftRewind
+	leftNext := c.program.EmitOp(OpNext, 0, 0)
+	// Restart right cursor for next left row
+	c.program.EmitGoto(rightRewindPos)
+	
+	// Left cursor exhausted, we're done
+	leftDonePos := len(c.program.Instructions)
 	c.program.Emit(OpHalt)
 
+	// Fixup jump targets
+	c.program.FixupWithPos(leftRewind, leftDonePos)
 	c.program.FixupWithPos(rightNext, rightDonePos)
-	c.program.FixupWithPos(gotoRightRewind, rightRewindPos+1)
-	c.program.FixupWithPos(gotoLeftRewind, leftRewindPos+1)
+	c.program.FixupWithPos(leftNext, leftDonePos)
 }
 
 func (c *Compiler) compileWhere(where QP.Expr) {
@@ -310,6 +351,15 @@ func (c *Compiler) compileLiteral(lit *QP.Literal) int {
 func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 	reg := c.ra.Alloc()
 	colIdx := -1 // Use -1 as sentinel for unknown columns
+	cursorID := 0 // Default cursor ID
+	
+	// Determine cursor ID from table qualifier (for JOINs)
+	if col.Table != "" && c.tableCursors != nil {
+		if cid, ok := c.tableCursors[col.Table]; ok {
+			cursorID = cid
+		}
+	}
+	
 	if col.Name != "" {
 		// First try table column order (for WHERE clause with schema)
 		if c.TableColIndices != nil {
@@ -329,7 +379,7 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 		c.program.EmitLoadConst(reg, nil)
 		return reg
 	}
-	c.program.EmitColumn(reg, 0, colIdx)
+	c.program.EmitColumn(reg, cursorID, colIdx)
 	return reg
 }
 

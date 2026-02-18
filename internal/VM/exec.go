@@ -7,10 +7,23 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+	
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
+// MaxVMIterations is the maximum number of VM instructions that can be executed
+// before the VM panics with an assertion error. This prevents infinite loops.
+const MaxVMIterations = 1000000
+
 func (vm *VM) Exec(ctx interface{}) error {
+	iterationCount := 0
 	for {
+		// Check for infinite loop
+		iterationCount++
+		if iterationCount > MaxVMIterations {
+			util.Assert(false, "VM execution exceeded %d iterations - possible infinite loop detected. This usually indicates a bug in the query compiler (e.g., incorrect jump targets in JOIN compilation).", MaxVMIterations)
+		}
+		
 		inst := vm.GetInstruction()
 
 		switch inst.Op {

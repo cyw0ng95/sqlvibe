@@ -48,13 +48,20 @@ type Result struct {
 type Rows struct {
 	Columns []string
 	Data    [][]interface{}
-	pos     int
+	pos     int  // Current position, starts at 0
+	started bool // Whether Next() has been called
 }
 
 func (r *Rows) Next() bool {
 	if r.Data == nil {
 		return false
 	}
+	// On first call, don't advance pos (it's already at 0)
+	if !r.started {
+		r.started = true
+		return len(r.Data) > 0
+	}
+	// On subsequent calls, advance pos
 	r.pos++
 	return r.pos < len(r.Data)
 }
