@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 type Compiler struct {
@@ -198,6 +199,15 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 
 	if leftTableName == "" || rightTableName == "" {
 		return
+	}
+
+	// Assert: Only INNER and CROSS JOINs are currently supported
+	// LEFT/RIGHT/FULL OUTER JOINs require different logic (emitting NULLs for non-matches)
+	joinType := strings.ToUpper(strings.TrimSpace(join.Type))
+	if joinType == "" || joinType == "INNER" || joinType == "CROSS" {
+		// Supported - continue
+	} else {
+		util.Assert(false, "JOIN type '%s' is not yet implemented. Only INNER and CROSS JOINs are supported. LEFT/RIGHT/FULL OUTER JOINs will be implemented in a future version.", joinType)
 	}
 
 	// Set up table-to-cursor mapping for JOIN
