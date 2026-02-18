@@ -1,45 +1,61 @@
 # SQL1999 Testsuite Failure Analysis
 
-**Date**: 2026-02-18  
-**Total Tests**: 1034  
-**Passed**: 829 (80.2%)  
-**Failed**: 203 (19.6%)  
-**Hung**: 1 test (E091/03)
+**Date**: 2026-02-18 (Updated)
+**Total Test Suites**: 16
+**Total Subtests**: 91
+**Passed**: 45 (49.5%)
+**Failed**: 38 (41.8%)
+**Skipped**: 8 (8.8%)
+**Hung**: 0 (LEFT OUTER JOIN now fails immediately with panic)
+
+**Note**: E101 suite has syntax error in 07_test.go (setup failed)
 
 ## Summary by Test Suite
 
-| Suite | Feature | Passed | Failed | Total | Pass Rate |
-|-------|---------|--------|--------|-------|-----------|
-| E011  | Numeric Data Types | 261 | 1 | 264 | 98.9% |
-| E021  | Character String Types | 181 | 0 | 187 | 96.8% |
-| E031  | Identifiers | 25 | 38 | 63 | 39.7% |
-| E041  | Basic Query Spec | 155 | 65 | 220 | 70.5% |
-| E051  | Basic Query Spec | 105 | 14 | 119 | 88.2% |
-| E061  | Basic Predicates | 56 | 26 | 82 | 68.3% |
-| E071  | Basic Query Expressions | 17 | 36 | 53 | 32.1% |
-| E081  | Privileges | 0 | 8 | 8 | 0% |
-| E091  | Set Functions | 1 | 1 | 3 | 33.3% |
-| E101  | Basic Data Manipulation | - | - | - | Setup Failed |
-| E111  | Single Row SELECT | 6 | 0 | 6 | 100% |
-| E121  | Basic Cursor Support | 6 | 0 | 6 | 100% |
-| E131  | Null Value Support | 0 | 7 | 7 | 0% |
-| E141  | Basic Integrity Constraints | 8 | 0 | 8 | 100% |
-| E151  | Transaction Support | 8 | 0 | 8 | 100% |
+| Suite | Feature | Total | Passed | Failed | Skipped | Pass Rate |
+|-------|---------|-------|--------|--------|---------|-----------|
+| E011  | Numeric Data Types | 6 | 4 | 2 | 0 | 66.7% |
+| E021  | Character String Types | 12 | 7 | 0 | 5 | 100% (of executed) |
+| E031  | Identifiers | 6 | 0 | 6 | 0 | 0% |
+| E041  | Basic Query Spec | 12 | 0 | 12 | 0 | 0% |
+| E051  | Basic Query Spec | 6 | 3 | 3 | 0 | 50% |
+| E061  | Basic Predicates | 8 | 2 | 6 | 0 | 25% |
+| E071  | Basic Query Expressions | 6 | 0 | 6 | 0 | 0% |
+| E081  | Privileges | 8 | 0 | 8 | 0 | 0% |
+| E091  | Set Functions | 3 | 1 | 2 | 0 | 33.3% |
+| E101  | Basic Data Manipulation | - | - | - | - | Setup Failed (syntax error) |
+| E111  | Single Row SELECT | 6 | 6 | 0 | 0 | 100% |
+| E121  | Basic Cursor Support | 6 | 6 | 0 | 0 | 100% |
+| E131  | Null Value Support | 7 | 0 | 7 | 0 | 0% |
+| E141  | Basic Integrity Constraints | 8 | 8 | 0 | 0 | 100% |
+| E151  | Transaction Support | 8 | 8 | 0 | 0 | 100% |
+| E152  | INSERT Statement | 1 | 1 | 0 | 0 | 100% |
+| E153  | UPDATE/DELETE Statement | 1 | 0 | 1 | 0 | 0% |
+| E161  | Schema Management | 1 | 1 | 0 | 0 | 100% |
+| E171  | View Support | 1 | 0 | 1 | 0 | 0% |
 
 ## Critical Issues
 
-### 1. **HUNG TEST: E091/03 - LEFT OUTER JOIN** (CRITICAL)
-- **Status**: HANGS (timeout after 57.4s)
+### 1. **E101 Syntax Error** (BLOCKING)
+- **Status**: SETUP FAILED
+- **File**: `internal/TS/SQL1999/E101/07_test.go:6:45`
+- **Error**: `string literal not terminated`
+- **Impact**: Entire E101 suite cannot run
+- **Fix Required**: Fix unterminated string literal in test file
+
+### 2. **LEFT OUTER JOIN Not Implemented** (CRITICAL)
+- **Status**: FAILS (panic, no longer hangs)
 - **Test**: `TestSQL1999_F301_E09103_L1`
 - **Cause**: LEFT OUTER JOIN not implemented in VM compiler
+- **Error**: `panic: Assertion failed: JOIN type 'LEFT' is not yet implemented`
 - **SQL**: `SELECT * FROM t1 LEFT OUTER JOIN t2 ON t1.a = t2.x`
-- **Impact**: Blocks E091 suite execution
-- **Fix Required**: Implement LEFT JOIN logic (emit rows with NULLs for non-matching right table)
+- **Impact**: Blocks E091 suite and many JOIN tests
+- **Fix Required**: Implement LEFT/RIGHT/FULL OUTER JOIN logic
 
-### 2. **JOIN Column Reading Issues** (CRITICAL)
+### 3. **JOIN Column Reading Issues** (CRITICAL)
 - **Status**: FAILED
 - **Affected**: E041/04 and other JOIN tests
-- **Symptoms**: 
+- **Symptoms**:
   - INNER JOIN returns 0 rows
   - CROSS JOIN returns rows but with NULL values for right table columns
 - **Root Cause**: Compiler doesn't have per-table schema information for JOINs
@@ -49,62 +65,108 @@
   - `OpColumn` reads from `cursor.Columns[colIdx]` but colIdx is from wrong table
 - **Fix Required**: Pass multi-table schema to compiler or implement dynamic column lookup
 
-### 3. **Rows.Next() Iterator Bug** (FIXED)
-- **Status**: FIXED in commit a68a29c
-- **Issue**: First row was skipped when using iterator API
-- **Cause**: `pos` started at 0, first `Next()` incremented to 1
-- **Solution**: Added `started` flag to track first call
+### 4. **information_schema Tables Not Implemented** (HIGH)
+- **Status**: FAILED
+- **Affected**: E031 (all 6 tests fail)
+- **Cause**: `information_schema.tables`, `information_schema.key_column_usage`, and other metadata tables not implemented
+- **Impact**: All E031 identifier tests fail
+- **Fix Required**: Implement information_schema virtual tables
 
-## Detailed Failure Analysis
+## Detailed Failure Analysis by Suite
 
-### E031: Identifiers (38 failures, 39.7% pass rate)
-- **Primary Issue**: information_schema table queries
-- Most failures are queries against `information_schema.key_column_usage` and `information_schema.referential_constraints`
-- These are metadata tables not yet implemented
+### E011: Numeric Data Types (2 failures, 66.7% pass rate)
+- **E01101**: SKIP - MinInt64 display issue (known failure)
+- **E01102**: SKIP - Float math edge cases (known failure)
+- **E01103**: PASS - DECIMAL/NUMERIC types and precision
+- **E01104**: PASS - Numeric operators
+- **E01105**: PASS - Numeric comparisons
+- **E01106**: FAIL - Mixed type arithmetic (SumMixed, AvgMixed fail)
 
-### E041: Basic Query Spec (65 failures, 70.5% pass rate)
-- **JOIN Issues**: All JOIN-related tests fail due to column reading bug
-  - E04104: Foreign Key + JOIN tests
-  - Symptoms: INNER JOIN returns 0 rows, column count mismatches
-- **BLOB Handling**: Some BLOB column tests fail
-- **Column Aliasing**: Issues with qualified column names (`table.column`)
+### E021: Character String Types (0 failures, 100% of executed pass rate)
+- **E02101-E02103**: PASS - Basic string operations
+- **E02104-E02105, E02108-E02111**: SKIP - Advanced string features not implemented
+- **E02106-E02107, E02112**: PASS - String comparisons and functions
 
-### E051: Basic Query Spec (14 failures, 88.2% pass rate)
-- Generally good pass rate
-- Some edge cases with type coercion
-- Minor SELECT clause issues
+### E031: Identifiers (6 failures, 0% pass rate)
+- **All tests fail**: Query `information_schema.tables` and related metadata tables
+- **Root cause**: information_schema virtual tables not implemented
 
-### E061: Basic Predicates (26 failures, 68.3% pass rate)
-- MATCH operator not fully working
-- Some complex predicate combinations fail
-- WHERE clause edge cases
+### E041: Basic Query Spec (12 failures, 0% pass rate)
+- **E04101-E04112**: ALL FAIL
+- **Primary issues**:
+  - JOIN queries fail due to column reading bug
+  - Foreign key JOINs don't work
+  - Query planning issues for complex FROM clauses
+- **E04104** specifically: JOIN with Foreign Keys
 
-### E071: Basic Query Expressions (36 failures, 32.1% pass rate)
-- **Subquery Issues**: Nested subqueries failing
-- **Set Operations**: Some UNION/INTERSECT/EXCEPT cases fail
-- Complex query expressions
+### E051: Basic Query Spec (3 failures, 50% pass rate)
+- **E05101-E05102**: PASS
+- **E05103**: FAIL - Query issues
+- **E05104**: PASS
+- **E05105-E05106**: FAIL - Query issues
+- **Likely causes**: Type coercion, SELECT clause edge cases
 
-### E081: Privileges (0% pass rate)
-- **Not Implemented**: Privilege system not implemented
-- All 8 tests fail
-- GRANT/REVOKE statements not supported
+### E061: Basic Predicates (6 failures, 25% pass rate)
+- **E06101**: PASS
+- **E06102-E06104**: FAIL - Complex predicates
+- **E06105**: PASS
+- **E06106-E06108**: FAIL - Predicate edge cases
+- **Issues**: MATCH operator, complex WHERE clauses, NULL comparisons
 
-### E091: Set Functions (1 failure + 1 hung)
-- E09101: PASS - Basic set functions work
-- E09102: FAIL - Advanced set function cases
-- E09103: HUNG - LEFT OUTER JOIN test
+### E071: Basic Query Expressions (6 failures, 0% pass rate)
+- **E07101-E07106**: ALL FAIL
+- **Issues**:
+  - Subquery compilation problems
+  - Set operations (UNION, INTERSECT, EXCEPT)
+  - Complex query expressions
+  - Nested queries
 
-### E131: Null Value Support (0% pass rate)
-- All 7 tests fail
-- NULL handling in various contexts needs improvement
-- NULL in expressions, comparisons, aggregates
+### E081: Privileges (8 failures, 0% pass rate)
+- **All tests fail**: GRANT/REVOKE not implemented
+- **Not implemented**: Privilege system
+- **Impact**: Entire feature not supported
+
+### E091: Set Functions (2 failures, 33.3% pass rate)
+- **E09101**: PASS - Basic set functions work
+- **E09102**: FAIL - Advanced set function cases
+- **E09103**: FAIL/panic - LEFT OUTER JOIN (not implemented)
+
+### E111: Single Row SELECT (6/6 passed, 100% pass rate)
+- **All tests pass**: Single row SELECT works correctly
+
+### E121: Basic Cursor Support (6/6 passed, 100% pass rate)
+- **All tests pass**: Cursor operations work correctly
+
+### E131: Null Value Support (7 failures, 0% pass rate)
+- **E1311-E1317**: ALL FAIL
+- **Issues**: NULL handling in expressions, comparisons, aggregates
+
+### E141: Basic Integrity Constraints (8/8 passed, 100% pass rate)
+- **All tests pass**: Integrity constraints work correctly
+
+### E151: Transaction Support (8/8 passed, 100% pass rate)
+- **All tests pass**: Transaction operations work correctly
+
+### E152: INSERT Statement (1/1 passed, 100% pass rate)
+- **All tests pass**: INSERT operations work correctly
+
+### E153: UPDATE/DELETE Statement (1 failure, 0% pass rate)
+- **E1531**: FAIL
+- **Issue**: UPDATE/DELETE statement handling
+
+### E161: Schema Management (1/1 passed, 100% pass rate)
+- **All tests pass**: Schema operations work correctly
+
+### E171: View Support (1 failure, 0% pass rate)
+- **E1711**: FAIL
+- **Issue**: Views not implemented
 
 ## Bugs Fixed
 
 ### 1. JOIN Infinite Loop (commit 96affab)
 - **Issue**: JOIN queries hung indefinitely
 - **Cause**: Incorrect nested loop control flow in `compileJoin`
-- **Fix**: 
+- **Fix**:
   - Properly set up jump targets for OpRewind, OpNext
   - Fixed rightDonePos calculation
   - Added proper leftDone handling
@@ -118,29 +180,35 @@
 
 ## Recommendations
 
-### High Priority (P0)
-1. **Fix JOIN column reading** - Implement multi-table schema handling in compiler
-2. **Implement LEFT/RIGHT OUTER JOIN** - Required for E091/03 and other tests
-3. **Fix E131 NULL handling** - Critical for SQL compliance
-
-### Medium Priority (P1)
+### Critical Priority (P0) - Blockers
+1. **Fix E101 syntax error** - Simple fix, unblocks entire E101 suite
+2. **Implement LEFT/RIGHT/FULL OUTER JOIN** - Required for E091/03 and many JOIN tests
+3. **Fix JOIN column reading** - Implement multi-table schema handling in compiler
 4. **Implement information_schema tables** - Required for E031 metadata queries
-5. **Fix subquery compilation** - Needed for E071 complex expressions
-6. **Improve BLOB handling** - Some E041 tests failing
 
-### Low Priority (P2)
-7. **Implement privilege system (E081)** - GRANT/REVOKE support
-8. **Edge case fixes** - Various small issues across suites
+### High Priority (P1)
+5. **Fix subquery compilation** - Needed for E071 complex expressions (0% pass rate)
+6. **Fix NULL handling** - Critical for SQL compliance (E131: 0% pass rate)
+7. **Fix E051 query issues** - Basic query spec should have better pass rate
+
+### Medium Priority (P2)
+8. **Improve E061 predicates** - MATCH operator and complex predicates
+9. **Fix E153 UPDATE/DELETE** - Basic DML operations
+10. **Implement views (E171)** - View support
+
+### Low Priority (P3)
+11. **Implement privilege system (E081)** - GRANT/REVOKE support (not core database functionality)
 
 ## Test Execution Notes
 
-- Total test suites: 15
-- Suites with 100% pass: 4 (E111, E121, E141, E151)
-- Suites with >90% pass: 2 (E011, E051)
-- Suites with <50% pass: 4 (E031, E071, E081, E131)
-- Hung tests: 1 (E091/03)
+- Total test suites: 16
+- Suites with 100% pass: 5 (E111, E121, E141, E151, E152, E161)
+- Suites with 100% pass: 6 including E161
+- Suites with 0% pass: 7 (E031, E041, E071, E081, E091, E131, E171)
+- Hung tests: 0 (LEFT OUTER JOIN now panics immediately)
+- Skipped tests: 8 (E02101, E02102, E02104, E02105, E02108, E02109, E02110, E02111)
 
-## Files Modified
+## Files Modified for Analysis
 
 1. `internal/VM/compiler.go`:
    - Fixed JOIN loop control flow
@@ -152,8 +220,46 @@
 
 ## Next Steps
 
-1. Implement multi-table schema support in compiler for JOIN fixes
-2. Implement LEFT/RIGHT OUTER JOIN logic
-3. Add information_schema tables
-4. Fix NULL handling issues in E131
-5. Re-run full testsuite to verify fixes
+### Immediate (v0.5.0)
+1. Fix E101/07_test.go syntax error (5 minutes)
+2. Implement LEFT/RIGHT/FULL OUTER JOIN in VM compiler (2-3 days)
+3. Fix JOIN column reading by implementing multi-table schema support (1-2 days)
+4. Implement information_schema virtual tables (2-3 days)
+
+### Short Term (v0.5.1)
+5. Fix subquery compilation for E071 (2-3 days)
+6. Improve NULL handling for E131 (2-3 days)
+7. Fix E051 query issues (1 day)
+
+### Medium Term (v0.6.0)
+8. Implement views (E171) (3-5 days)
+9. Fix E153 UPDATE/DELETE (1-2 days)
+10. Improve E061 predicate handling (1-2 days)
+
+### Long Term (v0.7.0+)
+11. Implement privilege system (E081) (1-2 weeks)
+
+## Expected Pass Rate After Fixes
+
+| Version | Target Pass Rate |
+|---------|-----------------|
+| v0.5.0 (Immediate) | ~75% |
+| v0.5.1 (Short Term) | ~85% |
+| v0.6.0 (Medium Term) | ~90% |
+| v0.7.0+ (Long Term) | ~95%+ |
+
+## Running the Tests
+
+```bash
+# Run all SQL1999 tests
+go test ./internal/TS/SQL1999/... -v
+
+# Run specific suite
+go test ./internal/TS/SQL1999/E011/... -v
+
+# Run specific test
+go test ./internal/TS/SQL1999/E091/... -v -run TestSQL1999_F301_E09103_L1
+
+# Count tests
+go test ./internal/TS/SQL1999/... -v 2>&1 | grep -E "^--- (PASS|FAIL):" | wc -l
+```
