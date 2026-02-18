@@ -221,13 +221,13 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 		return
 	}
 
-	// Assert: Only INNER and CROSS JOINs are currently supported
-	// LEFT/RIGHT/FULL OUTER JOINs require different logic (emitting NULLs for non-matches)
+	// Assert: INNER, CROSS, and LEFT JOINs are currently supported
+	// RIGHT and FULL OUTER JOINs require different logic
 	joinType := strings.ToUpper(strings.TrimSpace(join.Type))
-	if joinType == "" || joinType == "INNER" || joinType == "CROSS" {
+	if joinType == "" || joinType == "INNER" || joinType == "CROSS" || joinType == "LEFT" {
 		// Supported - continue
 	} else {
-		util.Assert(false, "JOIN type '%s' is not yet implemented. Only INNER and CROSS JOINs are supported. LEFT/RIGHT/FULL OUTER JOINs will be implemented in a future version.", joinType)
+		util.Assert(false, "JOIN type '%s' is not yet implemented. RIGHT and FULL OUTER JOINs will be implemented in a future version.", joinType)
 	}
 
 	// Set up table-to-cursor mapping for JOIN
