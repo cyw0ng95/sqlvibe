@@ -25,6 +25,11 @@ func NewCompiler() *Compiler {
 }
 
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *Program {
+	// Handle SET operations (UNION, EXCEPT, INTERSECT)
+	if stmt.SetOp != "" && stmt.SetOpRight != nil {
+		return c.compileSetOp(stmt)
+	}
+
 	c.program = NewProgram()
 	c.ra = NewRegisterAllocator(16)
 	c.stmtWhere = nil
@@ -1000,6 +1005,281 @@ func hasAggregates(stmt *QP.SelectStmt) bool {
 		}
 	}
 	return stmt.GroupBy != nil
+}
+
+// compileSetOp compiles SET operations (UNION, EXCEPT, INTERSECT)
+func (c *Compiler) compileSetOp(stmt *QP.SelectStmt) *Program {
+	c.program = NewProgram()
+	c.ra = NewRegisterAllocator(32) // More registers for SetOp
+
+	c.program.Emit(OpInit)
+
+	// Determine number of columns from left SELECT
+	numCols := len(stmt.Columns)
+	
+	// Strategy depends on operation type
+	switch stmt.SetOp {
+	case "UNION":
+		if stmt.SetOpAll {
+			// UNION ALL: Execute left, then right, results combined automatically
+			c.compileSetOpUnionAll(stmt)
+		} else {
+			// UNION DISTINCT: Use ephemeral table for deduplication
+			c.compileSetOpUnionDistinct(stmt, numCols)
+		}
+	case "EXCEPT":
+		c.compileSetOpExcept(stmt, numCols)
+	case "INTERSECT":
+		c.compileSetOpIntersect(stmt, numCols)
+	}
+
+	c.program.Emit(OpHalt)
+	return c.program
+}
+
+// compileSetOpUnionAll compiles UNION ALL (no deduplication)
+func (c *Compiler) compileSetOpUnionAll(stmt *QP.SelectStmt) {
+	// Create a temporary statement without SetOp for left side
+	leftStmt := *stmt
+	leftStmt.SetOp = ""
+	leftStmt.SetOpAll = false
+	leftStmt.SetOpRight = nil
+	
+	// Execute left SELECT - results go to vm.results
+	leftCompiler := NewCompiler()
+	leftCompiler.TableColIndices = c.TableColIndices
+	leftCompiler.TableColOrder = c.TableColOrder
+	leftProg := leftCompiler.CompileSelect(&leftStmt)
+	
+	// Merge left program instructions, adjusting jump addresses
+	baseAddr := len(c.program.Instructions)
+	for i := 0; i < len(leftProg.Instructions); i++ {
+		inst := leftProg.Instructions[i]
+		// Skip Init and Halt
+		if inst.Op == OpInit || inst.Op == OpHalt {
+			continue
+		}
+		// Adjust jump addresses
+		if inst.Op.IsJump() && inst.P2 > 0 {
+			inst.P2 = inst.P2 + int32(baseAddr)
+		}
+		c.program.Instructions = append(c.program.Instructions, inst)
+	}
+
+	// Execute right SELECT - results also go to vm.results
+	rightCompiler := NewCompiler()
+	rightCompiler.TableColIndices = c.TableColIndices
+	rightCompiler.TableColOrder = c.TableColOrder
+	rightProg := rightCompiler.CompileSelect(stmt.SetOpRight)
+	
+	// Merge right program instructions, adjusting jump addresses
+	baseAddr = len(c.program.Instructions)
+	for i := 0; i < len(rightProg.Instructions); i++ {
+		inst := rightProg.Instructions[i]
+		// Skip Init and Halt
+		if inst.Op == OpInit || inst.Op == OpHalt {
+			continue
+		}
+		// Adjust jump addresses
+		if inst.Op.IsJump() && inst.P2 > 0 {
+			inst.P2 = inst.P2 + int32(baseAddr)
+		}
+		c.program.Instructions = append(c.program.Instructions, inst)
+	}
+}
+
+// compileSetOpUnionDistinct compiles UNION (with deduplication)
+func (c *Compiler) compileSetOpUnionDistinct(stmt *QP.SelectStmt, numCols int) {
+	ephemeralTableID := 1
+
+	// Create ephemeral table for tracking seen rows
+	c.program.Instructions = append(c.program.Instructions, Instruction{
+		Op: OpEphemeralCreate,
+		P1: int32(ephemeralTableID),
+	})
+
+	// Create a temporary statement without SetOp for left side
+	leftStmt := *stmt
+	leftStmt.SetOp = ""
+	leftStmt.SetOpAll = false
+	leftStmt.SetOpRight = nil
+
+	// Compile and execute left SELECT
+	leftCompiler := NewCompiler()
+	leftCompiler.TableColIndices = c.TableColIndices
+	leftCompiler.TableColOrder = c.TableColOrder
+	leftProg := leftCompiler.CompileSelect(&leftStmt)
+	
+	// For each row from left, check if seen, if not add to results and ephemeral table
+	// Replace ResultRow with UnionDistinct logic
+	for i := 1; i < len(leftProg.Instructions)-1; i++ {
+		inst := leftProg.Instructions[i]
+		if inst.Op == OpResultRow {
+			// Get register array
+			if regs, ok := inst.P4.([]int); ok {
+				// Use OpUnionDistinct to handle deduplication
+				c.program.Instructions = append(c.program.Instructions, Instruction{
+					Op: OpUnionDistinct,
+					P1: int32(ephemeralTableID),
+					P4: regs,
+				})
+			}
+		} else {
+			c.program.Instructions = append(c.program.Instructions, inst)
+		}
+	}
+
+	// Compile and execute right SELECT
+	rightCompiler := NewCompiler()
+	rightCompiler.TableColIndices = c.TableColIndices
+	rightCompiler.TableColOrder = c.TableColOrder
+	rightProg := rightCompiler.CompileSelect(stmt.SetOpRight)
+	
+	// For each row from right, check if seen, if not add to results and ephemeral table
+	for i := 1; i < len(rightProg.Instructions)-1; i++ {
+		inst := rightProg.Instructions[i]
+		if inst.Op == OpResultRow {
+			// Get register array
+			if regs, ok := inst.P4.([]int); ok {
+				// Use OpUnionDistinct to handle deduplication
+				c.program.Instructions = append(c.program.Instructions, Instruction{
+					Op: OpUnionDistinct,
+					P1: int32(ephemeralTableID),
+					P4: regs,
+				})
+			}
+		} else {
+			c.program.Instructions = append(c.program.Instructions, inst)
+		}
+	}
+}
+
+// compileSetOpExcept compiles EXCEPT (left minus right)
+func (c *Compiler) compileSetOpExcept(stmt *QP.SelectStmt, numCols int) {
+	ephemeralTableID := 1
+
+	// Create ephemeral table for right-side rows
+	c.program.Instructions = append(c.program.Instructions, Instruction{
+		Op: OpEphemeralCreate,
+		P1: int32(ephemeralTableID),
+	})
+
+	// Execute right SELECT and populate ephemeral table
+	rightCompiler := NewCompiler()
+	rightCompiler.TableColIndices = c.TableColIndices
+	rightCompiler.TableColOrder = c.TableColOrder
+	rightProg := rightCompiler.CompileSelect(stmt.SetOpRight)
+	
+	// Replace ResultRow with EphemeralInsert
+	for i := 1; i < len(rightProg.Instructions)-1; i++ {
+		inst := rightProg.Instructions[i]
+		if inst.Op == OpResultRow {
+			// Insert into ephemeral table instead of results
+			if regs, ok := inst.P4.([]int); ok {
+				c.program.Instructions = append(c.program.Instructions, Instruction{
+					Op: OpEphemeralInsert,
+					P1: int32(ephemeralTableID),
+					P4: regs,
+				})
+			}
+		} else {
+			c.program.Instructions = append(c.program.Instructions, inst)
+		}
+	}
+
+	// Execute left SELECT, outputting only rows not in ephemeral table
+	leftCompiler := NewCompiler()
+	leftCompiler.TableColIndices = c.TableColIndices
+	leftCompiler.TableColOrder = c.TableColOrder
+	leftProg := leftCompiler.CompileSelect(stmt)
+	
+	// For each row from left, check if exists in ephemeral table
+	for i := 1; i < len(leftProg.Instructions)-1; i++ {
+		inst := leftProg.Instructions[i]
+		if inst.Op == OpResultRow {
+			if regs, ok := inst.P4.([]int); ok {
+				// Check if row exists in right side (ephemeral table)
+				skipLabel := len(c.program.Instructions) + 2
+				c.program.Instructions = append(c.program.Instructions, Instruction{
+					Op: OpExcept,
+					P1: int32(ephemeralTableID),
+					P2: int32(skipLabel), // Jump past ResultRow if in right
+					P4: regs,
+				})
+				// If not skipped, output the row
+				c.program.Instructions = append(c.program.Instructions, Instruction{
+					Op: OpResultRow,
+					P4: regs,
+				})
+			}
+		} else {
+			c.program.Instructions = append(c.program.Instructions, inst)
+		}
+	}
+}
+
+// compileSetOpIntersect compiles INTERSECT (common rows)
+func (c *Compiler) compileSetOpIntersect(stmt *QP.SelectStmt, numCols int) {
+	ephemeralTableID := 1
+
+	// Create ephemeral table for right-side rows
+	c.program.Instructions = append(c.program.Instructions, Instruction{
+		Op: OpEphemeralCreate,
+		P1: int32(ephemeralTableID),
+	})
+
+	// Execute right SELECT and populate ephemeral table
+	rightCompiler := NewCompiler()
+	rightCompiler.TableColIndices = c.TableColIndices
+	rightCompiler.TableColOrder = c.TableColOrder
+	rightProg := rightCompiler.CompileSelect(stmt.SetOpRight)
+	
+	// Replace ResultRow with EphemeralInsert
+	for i := 1; i < len(rightProg.Instructions)-1; i++ {
+		inst := rightProg.Instructions[i]
+		if inst.Op == OpResultRow {
+			// Insert into ephemeral table instead of results
+			if regs, ok := inst.P4.([]int); ok {
+				c.program.Instructions = append(c.program.Instructions, Instruction{
+					Op: OpEphemeralInsert,
+					P1: int32(ephemeralTableID),
+					P4: regs,
+				})
+			}
+		} else {
+			c.program.Instructions = append(c.program.Instructions, inst)
+		}
+	}
+
+	// Execute left SELECT, outputting only rows that ARE in ephemeral table
+	leftCompiler := NewCompiler()
+	leftCompiler.TableColIndices = c.TableColIndices
+	leftCompiler.TableColOrder = c.TableColOrder
+	leftProg := leftCompiler.CompileSelect(stmt)
+	
+	// For each row from left, check if exists in ephemeral table
+	for i := 1; i < len(leftProg.Instructions)-1; i++ {
+		inst := leftProg.Instructions[i]
+		if inst.Op == OpResultRow {
+			if regs, ok := inst.P4.([]int); ok {
+				// Check if row exists in right side (ephemeral table)
+				skipLabel := len(c.program.Instructions) + 2
+				c.program.Instructions = append(c.program.Instructions, Instruction{
+					Op: OpIntersect,
+					P1: int32(ephemeralTableID),
+					P2: int32(skipLabel), // Jump past ResultRow if NOT in right
+					P4: regs,
+				})
+				// If not skipped, output the row
+				c.program.Instructions = append(c.program.Instructions, Instruction{
+					Op: OpResultRow,
+					P4: regs,
+				})
+			}
+		} else {
+			c.program.Instructions = append(c.program.Instructions, inst)
+		}
+	}
 }
 
 func MustCompile(sql string) *Program {

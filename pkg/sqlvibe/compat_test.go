@@ -201,8 +201,8 @@ func valueEqual(a, b interface{}) bool {
 
 	// If both are numeric types, compare as floats
 	if isNumeric(av) && isNumeric(bv) {
-		af := toFloat64(av)
-		bf := toFloat64(bv)
+		af := reflectToFloat64(av)
+		bf := reflectToFloat64(bv)
 		return af == bf
 	}
 
@@ -223,8 +223,8 @@ func isNumeric(v reflect.Value) bool {
 	return false
 }
 
-// toFloat64 converts a numeric value to float64
-func toFloat64(v reflect.Value) float64 {
+// reflectToFloat64 converts a numeric reflect.Value to float64
+func reflectToFloat64(v reflect.Value) float64 {
 	switch v.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return float64(v.Int())

@@ -964,10 +964,145 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpEphemeralCreate:
+			// Create an ephemeral table for set operations
+			tableID := int(inst.P1)
+			vm.ephemeralTbls[tableID] = make(map[string]bool)
+			continue
+
+		case OpEphemeralInsert:
+			// Insert a row into ephemeral table
+			tableID := int(inst.P1)
+			// P4 contains the register array for the row
+			if regs, ok := inst.P4.([]int); ok {
+				row := make([]interface{}, len(regs))
+				for i, reg := range regs {
+					row[i] = vm.registers[reg]
+				}
+				key := makeRowKey(row)
+				if tbl, exists := vm.ephemeralTbls[tableID]; exists {
+					tbl[key] = true
+				}
+			}
+			continue
+
+		case OpEphemeralFind:
+			// Check if a row exists in ephemeral table
+			tableID := int(inst.P1)
+			targetAddr := int(inst.P2)
+			// P4 contains the register array for the row
+			if regs, ok := inst.P4.([]int); ok {
+				row := make([]interface{}, len(regs))
+				for i, reg := range regs {
+					row[i] = vm.registers[reg]
+				}
+				key := makeRowKey(row)
+				if tbl, exists := vm.ephemeralTbls[tableID]; exists {
+					if tbl[key] {
+						// Row found - jump to target
+						if targetAddr > 0 {
+							vm.pc = targetAddr
+						}
+					}
+				}
+			}
+			continue
+
+		case OpUnionAll:
+			// Union ALL: combine two result sets keeping duplicates
+			// P1 = left result register array
+			// P2 = right result register array
+			// Results are already in vm.results from previous operations
+			// This opcode is typically not needed as results stream directly
+			continue
+
+		case OpUnionDistinct:
+			// Union DISTINCT: combine two result sets removing duplicates
+			// Use ephemeral table to track seen rows
+			// P1 = ephemeral table ID
+			// P4 = register array for current row
+			if regs, ok := inst.P4.([]int); ok {
+				row := make([]interface{}, len(regs))
+				for i, reg := range regs {
+					row[i] = vm.registers[reg]
+				}
+				key := makeRowKey(row)
+				tableID := int(inst.P1)
+				if tbl, exists := vm.ephemeralTbls[tableID]; exists {
+					if !tbl[key] {
+						// New row - add to results
+						tbl[key] = true
+						vm.results = append(vm.results, row)
+					}
+				}
+			}
+			continue
+
+		case OpExcept:
+			// EXCEPT: rows in left but not in right
+			// P1 = ephemeral table ID (contains right-side rows)
+			// P2 = jump address if row should be excluded
+			// P4 = register array for current row
+			if regs, ok := inst.P4.([]int); ok {
+				row := make([]interface{}, len(regs))
+				for i, reg := range regs {
+					row[i] = vm.registers[reg]
+				}
+				key := makeRowKey(row)
+				tableID := int(inst.P1)
+				if tbl, exists := vm.ephemeralTbls[tableID]; exists {
+					if tbl[key] {
+						// Row exists in right side - skip it
+						if inst.P2 > 0 {
+							vm.pc = int(inst.P2)
+						}
+					}
+				}
+			}
+			continue
+
+		case OpIntersect:
+			// INTERSECT: rows that exist in both left and right
+			// P1 = ephemeral table ID (contains right-side rows)
+			// P2 = jump address if row should be excluded
+			// P4 = register array for current row
+			if regs, ok := inst.P4.([]int); ok {
+				row := make([]interface{}, len(regs))
+				for i, reg := range regs {
+					row[i] = vm.registers[reg]
+				}
+				key := makeRowKey(row)
+				tableID := int(inst.P1)
+				if tbl, exists := vm.ephemeralTbls[tableID]; exists {
+					if !tbl[key] {
+						// Row doesn't exist in right side - skip it
+						if inst.P2 > 0 {
+							vm.pc = int(inst.P2)
+						}
+					} else {
+						// Mark as used for DISTINCT handling
+						tbl[key] = false
+					}
+				}
+			}
+			continue
+
 		default:
 			return fmt.Errorf("unimplemented opcode: %v", inst.Op)
 		}
 	}
+}
+
+// makeRowKey creates a unique key for a row for deduplication
+func makeRowKey(row []interface{}) string {
+	key := ""
+	for i, v := range row {
+		if i > 0 {
+			key += "|"
+		}
+		key += fmt.Sprintf("%v", v)
+	}
+	return key
 }
 
 func compareVals(a, b interface{}) int {
