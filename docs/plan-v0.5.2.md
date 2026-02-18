@@ -1,4 +1,4 @@
-# Plan v0.5.2 - Complete Bug Fixes Release
+# Plan v0.5.2 - Complete Bug Fixes Release - IN PROGRESS
 
 ## Summary
 Fix all remaining test failures to achieve near 100% compatibility with SQLite.
@@ -40,10 +40,10 @@ All items should be completed before any new features.
 ## Success Criteria
 
 ### Must Fix (Release Blockers)
-- [ ] Fix LIKE pattern matching (all 5 failing cases)
-- [ ] Fix GLOB pattern matching (all 2 failing cases)
-- [ ] Fix DECIMAL/NUMERIC type handling
-- [ ] Fix SUBSTR(str, 0, n) edge case
+- [x] Fix LIKE pattern matching (all 5 failing cases)
+- [x] Fix GLOB pattern matching (all 2 failing cases)
+- [x] Fix SUBSTR(str, 0, n) edge case
+- [ ] Fix DECIMAL/NUMERIC type handling (ordering issue)
 - [ ] All SQL1999 tests pass
 
 ---
