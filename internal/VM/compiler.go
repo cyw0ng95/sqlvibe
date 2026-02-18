@@ -196,29 +196,86 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 	}
 
 	// Output result row
-		c.program.EmitResultRow(colRegs)
-	}
+	c.program.EmitResultRow(colRegs)
 
-	// LEFT JOIN: Emit all left rows, right columns NULL when no match
-	// For now, we use simplified INNER JOIN logic
-	joinType := strings.ToUpper(strings.TrimSpace(join.Type))
-	if joinType == "" || joinType == "INNER" {
-		// LEFT JOIN: For now, fallback to INNER JOIN logic
-	} else if joinType == "LEFT" {
-		// LEFT JOIN: Emit all left rows, right columns NULL when no match
-		// TODO: Implement proper LEFT JOIN logic
-	} else if joinType == "RIGHT" {
-		util.Assert(false, "RIGHT OUTER JOIN not yet implemented")
-	} else if joinType == "FULL" {
-		util.Assert(false, "FULL OUTER JOIN not yet implemented")
-	}
+	// Fixup: make WHERE skip instructions jump here (past ResultRow)
+	c.program.ApplyWhereFixups()
 
-	c.program.EmitOpenTable(0, leftTableName)
-	c.program.EmitOpenTable(1, rightTableName)
+	// Loop continuation: Next + Goto, then Halt
+	np := c.program.EmitOp(OpNext, 0, 0)
+	gotoRewind := c.program.EmitGoto(rewindPos + 1)
+	haltPos := len(c.program.Instructions)
+	c.program.Emit(OpHalt)
 
-	// Use INNER JOIN logic for now
-	c.compileJoinInner(join, where, columns)
+	// Fixup: Next jumps to Halt when EOF
+	c.program.FixupWithPos(np, haltPos)
+	// Fixup: Goto jumps back to after Rewind
+	c.program.FixupWithPos(gotoRewind, rewindPos+1)
 }
+
+func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.Expr, columns []QP.Expr) {
+	leftTableName := leftTable.Name
+	rightTableName := join.Right.Name
+
+	if leftTableName == "" || rightTableName == "" {
+		return
+	}
+
+	// Assert: INNER, CROSS, and LEFT JOINs are currently supported
+	// RIGHT and FULL OUTER JOINs require different logic
+	joinType := strings.ToUpper(strings.TrimSpace(join.Type))
+	if joinType == "" || joinType == "INNER" || joinType == "CROSS" || joinType == "LEFT" {
+		// Supported - continue
+	} else {
+		util.Assert(false, "JOIN type '%s' is not yet implemented. RIGHT and FULL OUTER JOINs will be implemented in a future version.", joinType)
+	}
+
+	// Set up table-to-cursor mapping for JOIN
+	c.tableCursors = make(map[string]int)
+	// Map table name to cursor 0
+	c.tableCursors[leftTableName] = 0
+	// If there's an alias, map it as well
+	if leftTable.Alias != "" {
+		c.tableCursors[leftTable.Alias] = 0
+	}
+	// Map right table name to cursor 1
+	c.tableCursors[rightTableName] = 1
+	// If there's an alias, map it as well
+	if join.Right.Alias != "" {
+		c.tableCursors[join.Right.Alias] = 1
+	}
+
+	// Set up multi-table schemas for JOIN column resolution
+	c.TableSchemas = make(map[string]map[string]int)
+	// Build schema for left table from TableColIndices (if it's for this table)
+	if c.TableColIndices != nil {
+		leftSchema := make(map[string]int)
+		for colName, colIdx := range c.TableColIndices {
+			leftSchema[colName] = colIdx
+		}
+		c.TableSchemas[leftTableName] = leftSchema
+		if leftTable.Alias != "" {
+			c.TableSchemas[leftTable.Alias] = leftSchema
+		}
+	}
+	// For right table, we need to build schema from scratch
+	// We'll use the combined TableColIndices and figure out which columns belong to which table
+	// This is a temporary solution - ideally we'd have proper schema info
+	rightSchema := make(map[string]int)
+	// For now, we'll populate rightSchema later when we have better schema info
+	c.TableSchemas[rightTableName] = rightSchema
+	if join.Right.Alias != "" {
+		c.TableSchemas[join.Right.Alias] = rightSchema
+	}
+
+	c.columnIndices = make(map[string]int)
+	for i, col := range columns {
+		if colRef, ok := col.(*QP.ColumnRef); ok {
+			c.columnIndices[colRef.Name] = i
+		} else if alias, ok := col.(*QP.AliasExpr); ok {
+			c.columnIndices[alias.Alias] = i
+		}
+	}
 
 	c.program.EmitOpenTable(0, leftTableName)
 	c.program.EmitOpenTable(1, rightTableName)
