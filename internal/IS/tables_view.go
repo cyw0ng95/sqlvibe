@@ -18,26 +18,33 @@ func NewTABLESView(btree *DS.BTree) *TABLESView {
 	}
 }
 
-// Query returns all tables/views from the database
+// Query returns all tables/views from database
 func (tv *TABLESView) Query(schema, tableName string) ([]TableInfo, error) {
 	if schema != "" && schema != TableSchemaMain {
 		return nil, nil
 	}
 
 	if tableName != "" {
-		return tv.mp.GetTables()
+		tables, _ := tv.mp.GetTables()
+		for _, table := range tables {
+			if table.TableName == tableName {
+				return []TableInfo{table}, nil
+			}
+		}
+		return nil, nil
 	}
 
-	allTables := make([]TableInfo, 0)
+	allTables, _ := tv.mp.GetTables()
 
-	// Filter by schema and type if needed
-	for _, table := range tv.mp.GetTables() {
+	// Filter by schema if needed
+	filteredTables := make([]TableInfo, 0)
+	for _, table := range allTables {
 		if schema == "" || table.TableSchema == schema {
-			allTables = append(allTables, table)
+			filteredTables = append(filteredTables, table)
 		}
 	}
 
-	return allTables, nil
+	return filteredTables, nil
 }
 
 // ToSQL converts table info to database/sql compatible format
@@ -51,7 +58,7 @@ func (ti TableInfo) ToSQL() []any {
 
 // Table returns all tables in database/sql format
 func (tv *TABLESView) Table(db *sql.DB) (*sql.Rows, error) {
-	tables, err := tv.Query("", "")
+	_, err := tv.Query("", "")
 	if err != nil {
 		return nil, err
 	}
