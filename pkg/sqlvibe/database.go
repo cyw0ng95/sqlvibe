@@ -9,6 +9,7 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/PB"
 	"github.com/sqlvibe/sqlvibe/internal/QE"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/sqlvibe/sqlvibe/internal/TM"
 	"github.com/sqlvibe/sqlvibe/internal/VM"
 )
 
@@ -16,6 +17,9 @@ type Database struct {
 	pm          *DS.PageManager
 	engine      *QE.QueryEngine
 	tx          *Transaction
+	txMgr       *TM.TransactionManager
+	activeTx    *TM.Transaction
+	dbPath      string
 	tables      map[string]map[string]string        // table name -> column name -> type
 	primaryKeys map[string][]string                 // table name -> primary key column names
 	columnOrder map[string][]string                 // table name -> ordered column names
@@ -140,10 +144,14 @@ func Open(path string) (*Database, error) {
 
 	data := make(map[string][]map[string]interface{})
 	engine := QE.NewQueryEngine(pm, data)
+	txMgr := TM.NewTransactionManager(pm)
 
 	return &Database{
 		pm:          pm,
 		engine:      engine,
+		txMgr:       txMgr,
+		activeTx:    nil,
+		dbPath:      path,
 		tables:      make(map[string]map[string]string),
 		primaryKeys: make(map[string][]string),
 		columnOrder: make(map[string][]string),
@@ -296,6 +304,43 @@ func (db *Database) Exec(sql string) (Result, error) {
 	case "DropIndexStmt":
 		stmt := ast.(*QP.DropIndexStmt)
 		delete(db.indexes, stmt.Name)
+		return Result{}, nil
+	case "BeginStmt":
+		stmt := ast.(*QP.BeginStmt)
+		if db.activeTx != nil {
+			return Result{}, fmt.Errorf("transaction already active")
+		}
+		txType := TM.TransactionDeferred
+		if stmt.Type == "IMMEDIATE" {
+			txType = TM.TransactionImmediate
+		} else if stmt.Type == "EXCLUSIVE" {
+			txType = TM.TransactionExclusive
+		}
+		tx, err := db.txMgr.Begin(db.dbPath, txType)
+		if err != nil {
+			return Result{}, fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		db.activeTx = tx
+		return Result{}, nil
+	case "CommitStmt":
+		if db.activeTx == nil {
+			return Result{}, fmt.Errorf("no transaction active")
+		}
+		err := db.txMgr.CommitTransaction(db.activeTx.ID)
+		if err != nil {
+			return Result{}, fmt.Errorf("failed to commit transaction: %w", err)
+		}
+		db.activeTx = nil
+		return Result{}, nil
+	case "RollbackStmt":
+		if db.activeTx == nil {
+			return Result{}, fmt.Errorf("no transaction active")
+		}
+		err := db.txMgr.RollbackTransaction(db.activeTx.ID)
+		if err != nil {
+			return Result{}, fmt.Errorf("failed to rollback transaction: %w", err)
+		}
+		db.activeTx = nil
 		return Result{}, nil
 	}
 
