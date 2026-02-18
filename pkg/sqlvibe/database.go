@@ -1743,13 +1743,17 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 
 	// Compile with schema information
 	cg := CG.NewCompiler()
-	cg.SetTableSchema(make(map[string]int), tableCols)
-	for i, col := range tableCols {
-		cg.GetVMCompiler().TableColIndices[col] = i
-	}
-	// Set multi-table schemas for JOIN queries
+	// For JOINs, use TableSchemas (multi-table), NOT combined TableColIndices
+	// TableColIndices is only for single-table queries
 	if multiTableSchemas != nil {
+		// Don't set TableColIndices for JOINs - use TableSchemas instead
 		cg.SetMultiTableSchema(multiTableSchemas)
+	} else {
+		// Single table query - set TableColIndices normally
+		cg.SetTableSchema(make(map[string]int), tableCols)
+		for i, col := range tableCols {
+			cg.GetVMCompiler().TableColIndices[col] = i
+		}
 	}
 
 	program := cg.CompileSelect(stmt)

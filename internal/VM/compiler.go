@@ -258,11 +258,28 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 			c.TableSchemas[leftTable.Alias] = leftSchema
 		}
 	}
-	// For right table, we need to build schema from scratch
-	// We'll use the combined TableColIndices and figure out which columns belong to which table
-	// This is a temporary solution - ideally we'd have proper schema info
-	rightSchema := make(map[string]int)
-	// For now, we'll populate rightSchema later when we have better schema info
+	// For right table, we need to use the TableSchemas that was passed in
+	// Check if right schema is already populated
+	rightSchema, rightExists := c.TableSchemas[rightTableName]
+	if !rightExists || len(rightSchema) == 0 {
+		// Right schema not populated - this is a fallback
+		// In proper implementation, database.go should populate both schemas
+		rightSchema = make(map[string]int)
+		// Try to extract right table columns from combined schema
+		// This is a heuristic - may not work in all cases
+		if c.TableColOrder != nil {
+			rightTableCols := make([]string, 0)
+			for _, col := range c.TableColOrder {
+				if col != "" && !strings.HasPrefix(col, "__") {
+					// Simple heuristic: assign later columns to right table
+					rightTableCols = append(rightTableCols, col)
+				}
+			}
+			for i, col := range rightTableCols {
+				rightSchema[col] = i
+			}
+		}
+	}
 	c.TableSchemas[rightTableName] = rightSchema
 	if join.Right.Alias != "" {
 		c.TableSchemas[join.Right.Alias] = rightSchema
