@@ -21,6 +21,10 @@ func NewCompiler() *Compiler {
 }
 
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program {
+	// Check if this is an aggregate query
+	if hasAggregates(stmt) {
+		return c.vmCompiler.CompileAggregate(stmt)
+	}
 	return c.vmCompiler.CompileSelect(stmt)
 }
 

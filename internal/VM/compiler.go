@@ -420,6 +420,9 @@ func (c *Compiler) compileExpr(expr QP.Expr) int {
 	case *QP.CastExpr:
 		return c.compileCastExpr(e)
 
+	case *QP.SubqueryExpr:
+		return c.compileSubqueryExpr(e)
+
 	default:
 		reg := c.ra.Alloc()
 		c.program.EmitLoadConst(reg, nil)
@@ -876,6 +879,22 @@ func (c *Compiler) compileCastExpr(cast *QP.CastExpr) int {
 	return dst
 }
 
+func (c *Compiler) compileSubqueryExpr(subq *QP.SubqueryExpr) int {
+	// Allocate a register for the subquery result
+	resultReg := c.ra.Alloc()
+	
+	// Emit OpScalarSubquery instruction
+	// P1 = destination register
+	// P4 = the SELECT statement to execute
+	c.program.Instructions = append(c.program.Instructions, Instruction{
+		Op: OpScalarSubquery,
+		P1: int32(resultReg),
+		P4: subq.Select,
+	})
+	
+	return resultReg
+}
+
 func (c *Compiler) Program() *Program {
 	return c.program
 }
@@ -1066,34 +1085,85 @@ func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *Program {
 
 func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *Program {
 	c.program = NewProgram()
-	c.ra = NewRegisterAllocator(16)
+	c.ra = NewRegisterAllocator(32) // More registers for aggregates
 
 	c.program.Emit(OpInit)
 
-	if stmt.GroupBy != nil {
-		groupRegs := make([]int, 0)
-		for _, gb := range stmt.GroupBy {
-			reg := c.compileExpr(gb)
-			groupRegs = append(groupRegs, reg)
-		}
-		_ = groupRegs
+	// Open cursor for the table
+	tableName := ""
+	if stmt.From != nil {
+		tableName = stmt.From.Name
+	}
+	if tableName != "" {
+		c.program.EmitOpenTable(0, tableName)
 	}
 
+	// Strategy: Scan all rows, accumulate aggregates, emit results
+	// P4 will contain aggregate information for the VM to execute
+	
+	// Build aggregate information structure
+	aggInfo := &AggregateInfo{
+		GroupByExprs: make([]QP.Expr, 0),
+		Aggregates:   make([]AggregateDef, 0),
+		NonAggCols:   make([]QP.Expr, 0),
+		HavingExpr:   stmt.Having,
+	}
+	
+	// Collect GROUP BY expressions
+	if stmt.GroupBy != nil {
+		aggInfo.GroupByExprs = stmt.GroupBy
+	}
+	
+	// Analyze SELECT columns for aggregates and non-aggregate expressions
 	for _, col := range stmt.Columns {
 		if fc, ok := col.(*QP.FuncCall); ok {
 			switch fc.Name {
 			case "COUNT", "SUM", "AVG", "MIN", "MAX":
-				argRegs := make([]int, 0)
-				for _, arg := range fc.Args {
-					argRegs = append(argRegs, c.compileExpr(arg))
+				// This is an aggregate
+				aggDef := AggregateDef{
+					Function: fc.Name,
+					Args:     fc.Args,
 				}
-				_ = argRegs
+				aggInfo.Aggregates = append(aggInfo.Aggregates, aggDef)
+			default:
+				// Non-aggregate function - treat as non-agg column
+				aggInfo.NonAggCols = append(aggInfo.NonAggCols, col)
 			}
+		} else {
+			// Non-aggregate column
+			aggInfo.NonAggCols = append(aggInfo.NonAggCols, col)
 		}
 	}
+	
+	// Emit OpAggregate instruction with all the information
+	// The VM will execute this by:
+	// 1. Scanning all rows
+	// 2. Grouping by GROUP BY expressions
+	// 3. Accumulating aggregates per group
+	// 4. Emitting result rows (one per group)
+	// 5. Filtering by HAVING clause if present
+	c.program.Instructions = append(c.program.Instructions, Instruction{
+		Op: OpAggregate,
+		P1: 0, // cursor ID
+		P4: aggInfo,
+	})
 
 	c.program.Emit(OpHalt)
 	return c.program
+}
+
+// AggregateInfo contains information about aggregate queries
+type AggregateInfo struct {
+	GroupByExprs []QP.Expr      // GROUP BY expressions
+	Aggregates   []AggregateDef // Aggregate functions in SELECT
+	NonAggCols   []QP.Expr      // Non-aggregate columns in SELECT
+	HavingExpr   QP.Expr        // HAVING clause expression
+}
+
+// AggregateDef defines an aggregate function
+type AggregateDef struct {
+	Function string     // COUNT, SUM, AVG, MIN, MAX
+	Args     []QP.Expr  // Arguments to the aggregate
 }
 
 func Compile(sql string) (*Program, error) {
@@ -1160,7 +1230,7 @@ func (c *Compiler) compileSetOp(stmt *QP.SelectStmt) *Program {
 	c.program.Emit(OpInit)
 
 	// Determine number of columns from left SELECT
-	numCols := len(stmt.Columns)
+	numCols := c.resolveColumnCount(stmt.Columns)
 
 	// Strategy depends on operation type
 	switch stmt.SetOp {
@@ -1180,6 +1250,33 @@ func (c *Compiler) compileSetOp(stmt *QP.SelectStmt) *Program {
 
 	c.program.Emit(OpHalt)
 	return c.program
+}
+
+// resolveColumnCount resolves the actual number of columns in a SELECT list
+// If the list contains a star (*), it returns the actual column count from the table schema
+func (c *Compiler) resolveColumnCount(columns []QP.Expr) int {
+	numCols := len(columns)
+	
+	// Check if columns contains a star
+	if numCols == 1 {
+		if colRef, ok := columns[0].(*QP.ColumnRef); ok && colRef.Name == "*" {
+			// Get actual column count from table schema
+			if c.TableColOrder != nil {
+				return len(c.TableColOrder)
+			} else if c.TableColIndices != nil {
+				return len(c.TableColIndices)
+			} else if c.TableSchemas != nil {
+				// For multi-table queries, count all columns
+				totalCols := 0
+				for _, schema := range c.TableSchemas {
+					totalCols += len(schema)
+				}
+				return totalCols
+			}
+		}
+	}
+	
+	return numCols
 }
 
 // compileSetOpUnionAll compiles UNION ALL (no deduplication)

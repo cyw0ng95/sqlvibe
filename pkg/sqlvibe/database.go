@@ -1699,6 +1699,29 @@ func (ctx *dbVmContext) DeleteRow(tableName string, rowIndex int) error {
 	return nil
 }
 
+// ExecuteSubquery executes a scalar subquery and returns a single value
+func (ctx *dbVmContext) ExecuteSubquery(subquery interface{}) (interface{}, error) {
+	// Type assert to *QP.SelectStmt
+	selectStmt, ok := subquery.(*QP.SelectStmt)
+	if !ok {
+		return nil, fmt.Errorf("subquery is not a SelectStmt")
+	}
+	
+	// Execute the subquery using execSelectStmt
+	rows, err := ctx.db.execSelectStmt(selectStmt)
+	if err != nil {
+		return nil, err
+	}
+	
+	// For a scalar subquery, return the first column of the first row
+	if len(rows.Data) > 0 && len(rows.Data[0]) > 0 {
+		return rows.Data[0][0], nil
+	}
+	
+	// If no rows, return nil
+	return nil, nil
+}
+
 // execSetOp executes SET operations (UNION, EXCEPT, INTERSECT) by running left and right separately
 func (db *Database) execSetOp(stmt *QP.SelectStmt, originalSQL string) (*Rows, error) {
 	// For now, use the existing direct execution path
@@ -1876,12 +1899,17 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	results := vm.Results()
 
 	// Get column names from SELECT
-	cols := make([]string, len(stmt.Columns))
+	cols := make([]string, 0)
 	for i, col := range stmt.Columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
-			cols[i] = colRef.Name
+			// Handle SELECT * - expand to table columns
+			if colRef.Name == "*" {
+				cols = append(cols, tableCols...)
+			} else {
+				cols = append(cols, colRef.Name)
+			}
 		} else {
-			cols[i] = fmt.Sprintf("col%d", i)
+			cols = append(cols, fmt.Sprintf("col%d", i))
 		}
 	}
 

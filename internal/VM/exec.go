@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 	
+	QP "github.com/sqlvibe/sqlvibe/internal/QP"
 	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
@@ -823,6 +824,53 @@ func (vm *VM) Exec(ctx interface{}) error {
 					}
 				}
 			}
+			continue
+
+		case OpScalarSubquery:
+			// Execute a scalar subquery and store the result in a register
+			// P1 = destination register
+			// P4 = SelectStmt to execute
+			dstReg := int(inst.P1)
+			
+			// Try to execute the subquery through the context
+			if vm.ctx != nil {
+				// Use type assertion to check if context supports subquery execution
+				type SubqueryExecutor interface {
+					ExecuteSubquery(subquery interface{}) (interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryExecutor); ok {
+					if result, err := executor.ExecuteSubquery(inst.P4); err == nil {
+						vm.registers[dstReg] = result
+					} else {
+						vm.registers[dstReg] = nil
+					}
+				} else {
+					vm.registers[dstReg] = nil
+				}
+			} else {
+				vm.registers[dstReg] = nil
+			}
+			continue
+
+		case OpAggregate:
+			// Execute aggregate query with GROUP BY
+			// P1 = cursor ID
+			// P4 = AggregateInfo structure
+			cursorID := int(inst.P1)
+			cursor := vm.cursors.Get(cursorID)
+			
+			if cursor == nil || cursor.Data == nil {
+				continue
+			}
+			
+			aggInfo, ok := inst.P4.(*AggregateInfo)
+			if !ok {
+				continue
+			}
+			
+			// Execute aggregation: scan all rows, group, accumulate, emit
+			vm.executeAggregation(cursor, aggInfo)
 			continue
 
 		case OpOpenRead:
@@ -1832,3 +1880,401 @@ func globMatchRecursive(str string, pattern string, si, pi int) bool {
 }
 
 var ErrValueTooBig = errors.New("value too big")
+
+// executeAggregation performs GROUP BY and aggregate function execution
+func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
+// Map from group key (string) to aggregate state
+groups := make(map[string]*AggregateState)
+
+// Scan all rows and accumulate aggregates per group
+for rowIdx := 0; rowIdx < len(cursor.Data); rowIdx++ {
+row := cursor.Data[rowIdx]
+
+// Compute group key from GROUP BY expressions
+groupKey := vm.computeGroupKey(row, cursor.Columns, aggInfo.GroupByExprs)
+
+// Get or create aggregate state for this group
+state, exists := groups[groupKey]
+if !exists {
+state = &AggregateState{
+GroupKey:       groupKey,
+Count:          0,
+Sums:           make([]interface{}, len(aggInfo.Aggregates)),
+Mins:           make([]interface{}, len(aggInfo.Aggregates)),
+Maxs:           make([]interface{}, len(aggInfo.Aggregates)),
+NonAggValues:   make([]interface{}, len(aggInfo.NonAggCols)),
+}
+groups[groupKey] = state
+}
+
+// Update aggregate state
+state.Count++
+
+// Evaluate aggregate functions
+for aggIdx, aggDef := range aggInfo.Aggregates {
+value := vm.evaluateAggregateArg(row, cursor.Columns, aggDef.Args)
+
+switch aggDef.Function {
+case "COUNT":
+// COUNT is already tracked by state.Count
+case "SUM":
+state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
+case "AVG":
+// AVG = SUM / COUNT, we accumulate SUM here
+state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
+case "MIN":
+if state.Mins[aggIdx] == nil || vm.compareValues(value, state.Mins[aggIdx]) < 0 {
+state.Mins[aggIdx] = value
+}
+case "MAX":
+if state.Maxs[aggIdx] == nil || vm.compareValues(value, state.Maxs[aggIdx]) > 0 {
+state.Maxs[aggIdx] = value
+}
+}
+}
+
+// Store first non-aggregate column values for this group
+if !exists {
+for i, expr := range aggInfo.NonAggCols {
+state.NonAggValues[i] = vm.evaluateExprOnRow(row, cursor.Columns, expr)
+}
+}
+}
+
+// Emit result rows (one per group)
+// Sort groups by key for deterministic output
+	groupKeys := make([]string, 0, len(groups))
+	for key := range groups {
+		groupKeys = append(groupKeys, key)
+	}
+	// Sort the keys
+	for i := 0; i < len(groupKeys); i++ {
+		for j := i + 1; j < len(groupKeys); j++ {
+			if groupKeys[i] > groupKeys[j] {
+				groupKeys[i], groupKeys[j] = groupKeys[j], groupKeys[i]
+			}
+		}
+	}
+	
+	for _, key := range groupKeys {
+		state := groups[key]
+// Build result row: non-agg columns + aggregates
+resultRow := make([]interface{}, 0)
+
+// Add non-aggregate columns
+for _, val := range state.NonAggValues {
+resultRow = append(resultRow, val)
+}
+
+// Add aggregates
+for aggIdx, aggDef := range aggInfo.Aggregates {
+var aggValue interface{}
+
+switch aggDef.Function {
+case "COUNT":
+aggValue = int64(state.Count)
+case "SUM":
+aggValue = state.Sums[aggIdx]
+case "AVG":
+if state.Count > 0 && state.Sums[aggIdx] != nil {
+aggValue = vm.divideValues(state.Sums[aggIdx], int64(state.Count))
+}
+case "MIN":
+aggValue = state.Mins[aggIdx]
+case "MAX":
+aggValue = state.Maxs[aggIdx]
+}
+
+resultRow = append(resultRow, aggValue)
+}
+
+// Apply HAVING filter if present
+if aggInfo.HavingExpr != nil {
+// Evaluate HAVING on the result row
+// For simplicity, check if any non-agg column matches the HAVING condition
+if !vm.evaluateHaving(state, aggInfo) {
+continue
+}
+}
+
+vm.results = append(vm.results, resultRow)
+}
+}
+
+// AggregateState tracks aggregate values for a group
+type AggregateState struct {
+GroupKey     string
+Count        int
+Sums         []interface{}
+Mins         []interface{}
+Maxs         []interface{}
+NonAggValues []interface{}
+}
+
+// computeGroupKey generates a string key from GROUP BY expressions
+func (vm *VM) computeGroupKey(row map[string]interface{}, columns []string, groupByExprs []QP.Expr) string {
+if len(groupByExprs) == 0 {
+return "" // Single group for aggregates without GROUP BY
+}
+
+keyParts := make([]string, 0)
+for _, expr := range groupByExprs {
+value := vm.evaluateExprOnRow(row, columns, expr)
+keyParts = append(keyParts, fmt.Sprintf("%v", value))
+}
+return strings.Join(keyParts, "|")
+}
+
+// evaluateAggregateArg evaluates the argument of an aggregate function
+func (vm *VM) evaluateAggregateArg(row map[string]interface{}, columns []string, args []QP.Expr) interface{} {
+if len(args) == 0 {
+return nil
+}
+
+// For COUNT(*), return 1
+if len(args) == 1 {
+if colRef, ok := args[0].(*QP.ColumnRef); ok && colRef.Name == "*" {
+return int64(1)
+}
+}
+
+return vm.evaluateExprOnRow(row, columns, args[0])
+}
+
+// evaluateExprOnRow evaluates an expression against a row
+func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, expr QP.Expr) interface{} {
+if expr == nil {
+return nil
+}
+
+switch e := expr.(type) {
+case *QP.Literal:
+return e.Value
+case *QP.ColumnRef:
+return row[e.Name]
+case *QP.BinaryExpr:
+left := vm.evaluateExprOnRow(row, columns, e.Left)
+right := vm.evaluateExprOnRow(row, columns, e.Right)
+return vm.evaluateBinaryOp(left, right, e.Op)
+default:
+return nil
+}
+}
+
+// evaluateBinaryOp evaluates a binary operation
+func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interface{} {
+// Simple implementation for common operators
+switch op {
+case QP.TokenPlus:
+return vm.addValues(left, right)
+case QP.TokenMinus:
+return vm.subtractValues(left, right)
+case QP.TokenGt:
+return vm.compareValues(left, right) > 0
+case QP.TokenGe:
+return vm.compareValues(left, right) >= 0
+case QP.TokenLt:
+return vm.compareValues(left, right) < 0
+case QP.TokenLe:
+return vm.compareValues(left, right) <= 0
+case QP.TokenEq:
+return vm.compareValues(left, right) == 0
+case QP.TokenNe:
+return vm.compareValues(left, right) != 0
+default:
+return nil
+}
+}
+
+// evaluateHaving checks if a group passes the HAVING filter
+func (vm *VM) evaluateHaving(state *AggregateState, aggInfo *AggregateInfo) bool {
+// For now, implement simple HAVING logic
+// Full implementation would need to evaluate the HAVING expression with aggregate values
+// This is a simplified version that assumes HAVING uses non-agg columns
+
+if aggInfo.HavingExpr == nil {
+return true
+}
+
+// Try to evaluate the HAVING expression
+// For simplicity, check if it's a comparison on a non-agg column
+if binExpr, ok := aggInfo.HavingExpr.(*QP.BinaryExpr); ok {
+if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
+// Find the column value in NonAggValues
+for i, expr := range aggInfo.NonAggCols {
+if nonAggCol, ok := expr.(*QP.ColumnRef); ok && nonAggCol.Name == colRef.Name {
+left := state.NonAggValues[i]
+right := vm.evaluateExprOnRow(nil, nil, binExpr.Right)
+result := vm.evaluateBinaryOp(left, right, binExpr.Op)
+if boolVal, ok := result.(bool); ok {
+return boolVal
+}
+}
+}
+}
+}
+
+return true
+}
+
+// addValues adds two values (handles nil and type conversion)
+func (vm *VM) addValues(a, b interface{}) interface{} {
+if a == nil {
+return b
+}
+if b == nil {
+return a
+}
+
+aInt, aIsInt := a.(int64)
+bInt, bIsInt := b.(int64)
+if aIsInt && bIsInt {
+return aInt + bInt
+}
+
+aFloat, aIsFloat := a.(float64)
+bFloat, bIsFloat := b.(float64)
+if aIsFloat && bIsFloat {
+return aFloat + bFloat
+}
+if aIsInt && bIsFloat {
+return float64(aInt) + bFloat
+}
+if aIsFloat && bIsInt {
+return aFloat + float64(bInt)
+}
+
+return nil
+}
+
+// subtractValues subtracts two values
+func (vm *VM) subtractValues(a, b interface{}) interface{} {
+if a == nil || b == nil {
+return nil
+}
+
+aInt, aIsInt := a.(int64)
+bInt, bIsInt := b.(int64)
+if aIsInt && bIsInt {
+return aInt - bInt
+}
+
+aFloat, aIsFloat := a.(float64)
+bFloat, bIsFloat := b.(float64)
+if aIsFloat && bIsFloat {
+return aFloat - bFloat
+}
+if aIsInt && bIsFloat {
+return float64(aInt) - bFloat
+}
+if aIsFloat && bIsInt {
+return aFloat - float64(bInt)
+}
+
+return nil
+}
+
+// divideValues divides two values
+func (vm *VM) divideValues(a, b interface{}) interface{} {
+if a == nil || b == nil {
+return nil
+}
+
+aInt, aIsInt := a.(int64)
+bInt, bIsInt := b.(int64)
+if aIsInt && bIsInt {
+if bInt == 0 {
+return nil
+}
+return float64(aInt) / float64(bInt)
+}
+
+aFloat, aIsFloat := a.(float64)
+bFloat, bIsFloat := b.(float64)
+if aIsFloat && bIsFloat {
+if bFloat == 0 {
+return nil
+}
+return aFloat / bFloat
+}
+if aIsInt && bIsFloat {
+if bFloat == 0 {
+return nil
+}
+return float64(aInt) / bFloat
+}
+if aIsFloat && bIsInt {
+if bInt == 0 {
+return nil
+}
+return aFloat / float64(bInt)
+}
+
+return nil
+}
+
+// compareValues compares two values (-1, 0, 1)
+func (vm *VM) compareValues(a, b interface{}) int {
+if a == nil && b == nil {
+return 0
+}
+if a == nil {
+return -1
+}
+if b == nil {
+return 1
+}
+
+aInt, aIsInt := a.(int64)
+bInt, bIsInt := b.(int64)
+if aIsInt && bIsInt {
+if aInt < bInt {
+return -1
+} else if aInt > bInt {
+return 1
+}
+return 0
+}
+
+aFloat, aIsFloat := a.(float64)
+bFloat, bIsFloat := b.(float64)
+if aIsFloat && bIsFloat {
+if aFloat < bFloat {
+return -1
+} else if aFloat > bFloat {
+return 1
+}
+return 0
+}
+if aIsInt && bIsFloat {
+aFloat = float64(aInt)
+if aFloat < bFloat {
+return -1
+} else if aFloat > bFloat {
+return 1
+}
+return 0
+}
+if aIsFloat && bIsInt {
+bFloat = float64(bInt)
+if aFloat < bFloat {
+return -1
+} else if aFloat > bFloat {
+return 1
+}
+return 0
+}
+
+aStr, aIsStr := a.(string)
+bStr, bIsStr := b.(string)
+if aIsStr && bIsStr {
+if aStr < bStr {
+return -1
+} else if aStr > bStr {
+return 1
+}
+return 0
+}
+
+return 0
+}
