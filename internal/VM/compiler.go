@@ -477,7 +477,8 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 		c.program.EmitLoadConst(reg, nil)
 		return reg
 	}
-	c.program.EmitColumn(reg, cursorID, colIdx)
+	// Pass table qualifier in P3 for correlation check
+	c.program.EmitColumnWithTable(reg, cursorID, colIdx, col.Table)
 	return reg
 }
 

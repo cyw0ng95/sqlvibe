@@ -813,8 +813,42 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpColumn:
 			cursorID := int(inst.P1)
 			colIdx := int(inst.P2)
+			tableQualifier := inst.P3 // Table qualifier if present (string)
 			dst := inst.P4
 			cursor := vm.cursors.Get(cursorID)
+			
+			// For correlation: if we have a table qualifier and outer context,
+			// check if this might be an outer reference
+			shouldTryOuter := false
+			if tableQualifier != "" && vm.ctx != nil && cursor != nil {
+				// If the table qualifier doesn't match the current cursor's table name,
+				// or if the current table is aliased differently, try outer context
+				if cursor.TableName == "" || tableQualifier != cursor.TableName {
+					shouldTryOuter = true
+				}
+			}
+			
+			// Try to resolve from outer context first if needed
+			if shouldTryOuter {
+				type OuterContextProvider interface {
+					GetOuterRowValue(columnName string) (interface{}, bool)
+				}
+				
+				if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
+					if colIdx >= 0 && colIdx < len(cursor.Columns) {
+						colName := cursor.Columns[colIdx]
+						// Try to get from outer context
+						if val, found := outerCtx.GetOuterRowValue(colName); found {
+							if dstReg, ok := dst.(int); ok {
+								vm.registers[dstReg] = val
+								continue
+							}
+						}
+					}
+				}
+			}
+			
+			// Default: load from current cursor
 			if cursor != nil && cursor.Data != nil && cursor.Index >= 0 && cursor.Index < len(cursor.Data) {
 				row := cursor.Data[cursor.Index]
 				if colIdx >= 0 && colIdx < len(cursor.Columns) {
