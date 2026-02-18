@@ -52,7 +52,19 @@ This release enables ACID transactions, completes VM integration, and adds compr
 - `internal/QP/parser.go` (added transaction statements)
 - `pkg/sqlvibe/database.go` (integrated TM)
 
-### Wave 2: Set Operations in VM - v0.6.0 - PENDING
+### Wave 2: Set Operations in VM - v0.6.0 - IN PROGRESS
+
+**Status**: 🔄 In Progress (Task 2.1 complete, requires significant VM work)
+
+**Deliverables**:
+- ✅ SetOp opcodes defined (OpUnionAll, OpUnionDistinct, OpExcept, OpIntersect)
+- ✅ Ephemeral table opcodes defined (OpEphemeralCreate, OpEphemeralInsert, OpEphemeralFind)
+- ⏸️ Implementation pending - requires VM executor updates and CG compiler work
+
+**Files Modified**:
+- `internal/VM/opcodes.go` (added 7 new opcodes)
+
+**Note**: Full implementation of Wave 2 requires significant VM architecture work. Consider prioritizing Wave 3 (DML) or Wave 4+ (SQL1999 conformance tests) which may have higher immediate value.
 
 ### Wave 3: DML Through VM - v0.6.0 - PENDING
 
@@ -112,10 +124,10 @@ internal/
 - [x] Lock management integrated with database operations
 
 ### Wave 2: Set Operations
-- [ ] UNION ALL implemented in VM
-- [ ] UNION (DISTINCT) implemented in VM
-- [ ] EXCEPT implemented in VM
-- [ ] INTERSECT implemented in VM
+- [ ] UNION ALL implemented in VM (pending VM executor work)
+- [ ] UNION (DISTINCT) implemented in VM (pending VM executor work)
+- [ ] EXCEPT implemented in VM (pending VM executor work)
+- [ ] INTERSECT implemented in VM (pending VM executor work)
 
 ### Wave 3: DML Through VM
 - [ ] INSERT through VM compilation
