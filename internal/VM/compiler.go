@@ -40,7 +40,9 @@ func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *Program {
 
 	// Expand SELECT * to actual column names if needed
 	columns := stmt.Columns
-	if c.TableColIndices != nil && len(c.TableColIndices) > 0 {
+	// Check if expansion is needed: have star and have schema info
+	hasSchema := (c.TableColIndices != nil && len(c.TableColIndices) > 0) || (c.TableSchemas != nil && len(c.TableSchemas) > 0)
+	if hasSchema {
 		columns = c.expandStarColumns(stmt.Columns)
 		c.stmtColumns = columns
 	}
@@ -82,9 +84,11 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 	var starTable string
 	for _, col := range columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
+			fmt.Printf("DEBUG: Checking col %+v, Name=%q, Table=%q\n", colRef, colRef.Name, colRef.Table)
 			if colRef.Name == "*" {
 				hasStar = true
 				starTable = colRef.Table
+				fmt.Printf("DEBUG: Found star with table %s\n", starTable)
 				break
 			}
 		}
@@ -100,6 +104,7 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 	// If star has table qualifier (e.g., o.*), use that table's schema only
 	if starTable != "" && c.TableSchemas != nil {
 		if tableSchema, ok := c.TableSchemas[starTable]; ok {
+			fmt.Printf("DEBUG: Expanding %s.* with schema: %+v\n", starTable, tableSchema)
 			// Expand to all columns from the specified table
 			for colName := range tableSchema {
 				colRef := &QP.ColumnRef{
@@ -108,7 +113,10 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 				}
 				expanded = append(expanded, colRef)
 			}
+			fmt.Printf("DEBUG: Expanded to %d columns\n", len(expanded))
 			return expanded
+		} else {
+			fmt.Printf("DEBUG: Table %s not found in TableSchemas: %+v\n", starTable, c.TableSchemas)
 		}
 	}
 
