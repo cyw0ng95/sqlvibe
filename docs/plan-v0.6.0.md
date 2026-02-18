@@ -6,7 +6,7 @@ v0.6.0 delivers three major architectural milestones plus comprehensive SQL1999 
 2. **Full VM Integration** - All SQL operations (SELECT, DML, SetOps) through VM
 3. **SQL1999 Conformance** - Comprehensive test coverage for E011-E141
 
-**8 Waves Total**:
+**9 Waves Total**:
 - Wave 1: Transaction Management (TM)
 - Wave 2: Set Operations in VM
 - Wave 3: DML Through VM
@@ -15,6 +15,7 @@ v0.6.0 delivers three major architectural milestones plus comprehensive SQL1999 
 - Wave 6: SQL1999 Conformance (E071, E091)
 - Wave 7: SQL1999 Conformance (E101, E111)
 - Wave 8: SQL1999 Conformance (E121, E131, E141)
+- Wave 9: SQL1999 Conformance (E081, E151)
 
 ## Context
 - **Previous**: v0.5.1 delivered CG/VFS/BTree with bug fixes
@@ -48,6 +49,8 @@ This release enables ACID transactions, completes VM integration, and adds compr
 
 ### Wave 8: SQL1999 Conformance (E121, E131, E141) - v0.6.0 - PENDING
 
+### Wave 9: SQL1999 Conformance (E081, E151) - v0.6.0 - PENDING
+
 ---
 
 ## Package Structure After v0.6.0
@@ -76,7 +79,9 @@ internal/
         ├── E111/  # SQL1999 Table Creation (Wave 7 - 6 tests)
         ├── E121/  # SQL1999 Schema Manipulation (Wave 8 - 6 tests)
         ├── E131/  # SQL1999 Query Predicates (Wave 8 - 7 tests)
-        └── E141/  # SQL1999 NULLs (Wave 8 - 8 tests)
+        ├── E141/  # SQL1999 NULLs (Wave 8 - 8 tests)
+        ├── E081/  # SQL1999 Full Query Expressions (Wave 9 - 8 tests)
+        └── E151/  # SQL1999 Transaction Support (Wave 9 - 8 tests)
 ```
 
 ---
@@ -122,6 +127,10 @@ internal/
 - [ ] E121 Schema Manipulation tests pass
 - [ ] E131 Query Predicates tests pass
 - [ ] E141 NULLs tests pass
+
+### Wave 9: SQL1999 Conformance (E081, E151)
+- [ ] E081 Full Query Expressions tests pass
+- [ ] E151 Transaction Support tests pass
 
 ---
 
@@ -185,6 +194,12 @@ graph TD
         H3[E141 NULLs]
     end
     
+    subgraph W9 ["Wave 9: SQL1999 Conformance (E081, E151) (v0.6.0)"]
+        direction TB
+        I1[E081 Full Query Expressions]
+        I2[E151 Transaction Support]
+    end
+    
     W1 --> W2
     W2 --> W3
     W3 --> W4
@@ -192,6 +207,7 @@ graph TD
     W5 --> W6
     W6 --> W7
     W7 --> W8
+    W8 --> W9
 ```
 
 ---
@@ -823,6 +839,39 @@ Add SQL1999 conformance tests for E121 (Basic Schema Manipulation), E131 (Query 
   - `07_test.go` - TestSQL1999_F301_E14107_L1 (COALESCE function)
   - `08_test.go` - TestSQL1999_F301_E14108_L1 (IFNULL/NULLIF functions)
 
+---
+
+## Wave 9: SQL1999 Conformance Tests (E081, E151) - v0.6.0
+
+### Overview
+Add SQL1999 conformance tests for E081 (Full Query Expressions - complete SELECT) and E151 (Transaction Support).
+
+### Task 9.1: Create E081 Test Directory and Implement Tests
+- **Files**: `internal/TS/SQL1999/E081/` (new)
+- **Description**: Full query expression conformance tests (complete SELECT statement)
+- **Test Files**:
+  - `01_test.go` - TestSQL1999_F301_E08101_L1 (Complete SELECT syntax)
+  - `02_test.go` - TestSQL1999_F301_E08102_L1 (SELECT with all clauses)
+  - `03_test.go` - TestSQL1999_F301_E08103_L1 (SELECT INTO)
+  - `04_test.go` - TestSQL1999_F301_E08104_L1 (UNION/INTERSECT/EXCEPT)
+  - `05_test.go` - TestSQL1999_F301_E08105_L1 (Table value constructor)
+  - `06_test.go` - TestSQL1999_F301_E08106_L1 (ROW constructor)
+  - `07_test.go` - TestSQL1999_F301_E08107_L1 (Query expression)
+  - `08_test.go` - TestSQL1999_F301_E08108_L1 (Order of evaluation)
+
+### Task 9.2: Create E151 Test Directory and Implement Tests
+- **Files**: `internal/TS/SQL1999/E151/` (new)
+- **Description**: Transaction support conformance tests
+- **Test Files**:
+  - `01_test.go` - TestSQL1999_F301_E15101_L1 (COMMIT statement)
+  - `02_test.go` - TestSQL1999_F301_E15102_L1 (ROLLBACK statement)
+  - `03_test.go` - TestSQL1999_F301_E15103_L1 (SET TRANSACTION)
+  - `04_test.go` - TestSQL1999_F301_E15104_L1 (SAVEPOINT)
+  - `05_test.go` - TestSQL1999_F301_E15105_L1 (RELEASE SAVEPOINT)
+  - `06_test.go` - TestSQL1999_F301_E15106_L1 (Transaction isolation levels)
+  - `07_test.go` - TestSQL1999_F301_E15107_L1 (Auto-commit)
+  - `08_test.go` - TestSQL1999_F301_E15108_L1 (Transaction constraints)
+
 ### Wave 5: SQL1999 Conformance Tests (E051, E061) - v0.6.0
 - Task 5.1: E051 Data Types tests
 - Task 5.2: E061 Predicates tests
@@ -840,7 +889,11 @@ Add SQL1999 conformance tests for E121 (Basic Schema Manipulation), E131 (Query 
 - Task 8.2: E131 Query predicates tests
 - Task 8.3: E141 NULL handling tests
 
-**Total**: ~56 hours (~52 hours if WAL deferred)
+### Wave 9: SQL1999 Conformance Tests (E081, E151) - v0.6.0
+- Task 9.1: E081 Full Query Expressions tests
+- Task 9.2: E151 Transaction Support tests
+
+**Total**: ~62 hours (~58 hours if WAL deferred)
 
 ---
 
@@ -854,8 +907,9 @@ Add SQL1999 conformance tests for E121 (Basic Schema Manipulation), E131 (Query 
 - Wave 6 (Conformance E071/E091) depends on: Wave 5 complete
 - Wave 7 (Conformance E101/E111) depends on: Wave 6 complete
 - Wave 8 (Conformance E121/E131/E141) depends on: Wave 7 complete
+- Wave 9 (Conformance E081/E151) depends on: Wave 8 complete
 
-**Critical Path**: Wave 1 → Wave 2 → Wave 3 → Wave 4 → Wave 5 → Wave 6 → Wave 7 → Wave 8
+**Critical Path**: Wave 1 → Wave 2 → Wave 3 → Wave 4 → Wave 5 → Wave 6 → Wave 7 → Wave 8 → Wave 9
 
 ---
 
@@ -930,6 +984,8 @@ Add SQL1999 conformance tests for E121 (Basic Schema Manipulation), E131 (Query 
 - [ ] E121-01 to E121-06: Schema Manipulation tests
 - [ ] E131-01 to E131-07: Query Predicates tests
 - [ ] E141-01 to E141-08: NULLs tests
+- [ ] E081-01 to E081-08: Full Query Expressions tests
+- [ ] E151-01 to E151-08: Transaction Support tests
 - [ ] All existing tests still pass
 
 ### Overall
