@@ -25,6 +25,7 @@ type Database struct {
 	primaryKeys    map[string][]string                 // table name -> primary key column names
 	columnOrder    map[string][]string                 // table name -> ordered column names
 	columnDefaults map[string]map[string]interface{}   // table name -> column name -> default value
+	columnNotNull  map[string]map[string]bool          // table name -> column name -> NOT NULL
 	data           map[string][]map[string]interface{} // table name -> rows -> column name -> value
 	indexes        map[string]*IndexInfo               // index name -> index info
 	isRegistry     *IS.Registry                        // information_schema registry
@@ -166,6 +167,7 @@ func Open(path string) (*Database, error) {
 		primaryKeys:    make(map[string][]string),
 		columnOrder:    make(map[string][]string),
 		columnDefaults: make(map[string]map[string]interface{}),
+		columnNotNull:  make(map[string]map[string]bool),
 		data:           data,
 		indexes:        make(map[string]*IndexInfo),
 	}, nil
@@ -261,6 +263,7 @@ func (db *Database) Exec(sql string) (Result, error) {
 		colTypes := make(map[string]string)
 		var pkCols []string
 		db.columnDefaults[stmt.Name] = make(map[string]interface{})
+		db.columnNotNull[stmt.Name] = make(map[string]bool)
 		for _, col := range stmt.Columns {
 			schema[col.Name] = QE.ColumnType{Name: col.Name, Type: col.Type}
 			colTypes[col.Name] = col.Type
@@ -269,6 +272,9 @@ func (db *Database) Exec(sql string) (Result, error) {
 			}
 			if col.Default != nil {
 				db.columnDefaults[stmt.Name][col.Name] = col.Default
+			}
+			if col.NotNull {
+				db.columnNotNull[stmt.Name][col.Name] = true
 			}
 		}
 		db.engine.RegisterTable(stmt.Name, schema)
@@ -1704,6 +1710,16 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 				} else {
 					row[colName] = defaultVal
 				}
+			}
+		}
+	}
+
+	// Check NOT NULL constraints
+	tableNotNull := ctx.db.columnNotNull[tableName]
+	for colName, isNotNull := range tableNotNull {
+		if isNotNull {
+			if val, exists := row[colName]; !exists || val == nil {
+				return fmt.Errorf("NOT NULL constraint failed: %s.%s", tableName, colName)
 			}
 		}
 	}

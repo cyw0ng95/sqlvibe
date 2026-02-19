@@ -701,7 +701,7 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 					} else if keyword == "NOT" {
 						p.advance()
 						if p.current().Literal == "NULL" {
-							col.Type += " NOT NULL"
+							col.NotNull = true
 							p.advance()
 						}
 					} else if keyword == "UNIQUE" {
