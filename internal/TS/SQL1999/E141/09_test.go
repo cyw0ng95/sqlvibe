@@ -68,4 +68,4 @@ func TestSQL1999_F301_E14109_L1(t *testing.T) {
 			SQL1999.CompareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
-
+}
