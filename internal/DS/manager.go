@@ -4,12 +4,15 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/PB"
 )
 
+const DefaultCacheSize = 100
+
 type PageManager struct {
 	file     PB.File
 	pageSize int
 	numPages uint32
 	header   *DatabaseHeader
 	freeList []uint32
+	cache    *Cache
 }
 
 func NewPageManager(file PB.File, pageSize int) (*PageManager, error) {
@@ -18,6 +21,37 @@ func NewPageManager(file PB.File, pageSize int) (*PageManager, error) {
 		pageSize: pageSize,
 		numPages: 0,
 		freeList: make([]uint32, 0),
+		cache:    NewCache(DefaultCacheSize),
+	}
+
+	size, err := file.Size()
+	if err != nil {
+		return nil, err
+	}
+
+	if size == 0 {
+		pm.header = NewDatabaseHeader(uint16(pageSize))
+		if err := pm.writeHeader(); err != nil {
+			return nil, err
+		}
+		pm.numPages = 1
+	} else {
+		pm.numPages = uint32(size / int64(pageSize))
+		if err := pm.readHeader(); err != nil {
+			return nil, err
+		}
+	}
+
+	return pm, nil
+}
+
+func NewPageManagerWithCache(file PB.File, pageSize int, cacheSize int) (*PageManager, error) {
+	pm := &PageManager{
+		file:     file,
+		pageSize: pageSize,
+		numPages: 0,
+		freeList: make([]uint32, 0),
+		cache:    NewCache(cacheSize),
 	}
 
 	size, err := file.Size()
@@ -58,6 +92,10 @@ func (pm *PageManager) ReadPage(pageNum uint32) (*Page, error) {
 		return nil, ErrInvalidPage
 	}
 
+	if cachedPage, ok := pm.cache.Get(pageNum); ok {
+		return cachedPage, nil
+	}
+
 	page := NewPage(pageNum, pm.pageSize)
 	offset := int64(pageNum-1) * int64(pm.pageSize)
 
@@ -77,6 +115,7 @@ func (pm *PageManager) ReadPage(pageNum uint32) (*Page, error) {
 		page.Type = PageType(page.Data[0])
 	}
 
+	pm.cache.Set(page)
 	return page, nil
 }
 
@@ -87,6 +126,7 @@ func (pm *PageManager) WritePage(page *Page) error {
 		return err
 	}
 	page.IsDirty = false
+	pm.cache.SetDirty(page.Num, false)
 	return nil
 }
 
@@ -94,6 +134,7 @@ func (pm *PageManager) AllocatePage() (uint32, error) {
 	if len(pm.freeList) > 0 {
 		pageNum := pm.freeList[len(pm.freeList)-1]
 		pm.freeList = pm.freeList[:len(pm.freeList)-1]
+		pm.cache.Remove(pageNum)
 		return pageNum, nil
 	}
 
@@ -118,6 +159,7 @@ func (pm *PageManager) FreePage(pageNum uint32) error {
 	if pageNum == 0 || pageNum > pm.numPages {
 		return ErrInvalidPage
 	}
+	pm.cache.Remove(pageNum)
 	pm.freeList = append(pm.freeList, pageNum)
 	return nil
 }
@@ -150,4 +192,14 @@ func (pm *PageManager) writeHeader() error {
 	}
 	_, err := pm.file.WriteAt(headerData, 0)
 	return err
+}
+
+func (pm *PageManager) CacheStats() (hits, misses int, hitRate float64) {
+	hits, misses = pm.cache.Stats()
+	hitRate = pm.cache.HitRate()
+	return
+}
+
+func (pm *PageManager) CacheSize() int {
+	return pm.cache.Size()
 }
