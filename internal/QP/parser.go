@@ -559,6 +559,12 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 	}
 	stmt.Table = p.current().Literal
 	p.advance()
+	// Handle schema.table notation
+	if p.current().Type == TokenDot {
+		p.advance()
+		stmt.Table = p.current().Literal
+		p.advance()
+	}
 
 	if p.current().Type == TokenLeftParen {
 		p.advance()

@@ -534,6 +534,15 @@ func literalToString(val interface{}) string {
 }
 
 func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
+	// Check if table exists (strip schema prefix if present)
+	checkName := tableName
+	if idx := strings.Index(tableName, "."); idx >= 0 {
+		checkName = tableName[idx+1:]
+	}
+	if _, exists := db.tables[checkName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName)
+	}
+
 	// Ensure table exists via DS context
 	ctx := newDsVmContext(db)
 	tableData, err := ctx.GetTableData(tableName)
