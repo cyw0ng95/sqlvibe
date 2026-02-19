@@ -15,18 +15,19 @@ import (
 )
 
 type Database struct {
-	pm           *DS.PageManager
-	engine       *QE.QueryEngine
-	tx           *Transaction
-	txMgr        *TM.TransactionManager
-	activeTx     *TM.Transaction
-	dbPath       string
-	tables       map[string]map[string]string        // table name -> column name -> type
-	primaryKeys  map[string][]string                 // table name -> primary key column names
-	columnOrder  map[string][]string                 // table name -> ordered column names
-	data         map[string][]map[string]interface{} // table name -> rows -> column name -> value
-	indexes      map[string]*IndexInfo               // index name -> index info
-	isRegistry   *IS.Registry                        // information_schema registry
+	pm             *DS.PageManager
+	engine         *QE.QueryEngine
+	tx             *Transaction
+	txMgr          *TM.TransactionManager
+	activeTx       *TM.Transaction
+	dbPath         string
+	tables         map[string]map[string]string        // table name -> column name -> type
+	primaryKeys    map[string][]string                 // table name -> primary key column names
+	columnOrder    map[string][]string                 // table name -> ordered column names
+	columnDefaults map[string]map[string]interface{}   // table name -> column name -> default value
+	data           map[string][]map[string]interface{} // table name -> rows -> column name -> value
+	indexes        map[string]*IndexInfo               // index name -> index info
+	isRegistry     *IS.Registry                        // information_schema registry
 }
 
 type IndexInfo struct {
@@ -156,16 +157,17 @@ func Open(path string) (*Database, error) {
 	txMgr := TM.NewTransactionManager(pm)
 
 	return &Database{
-		pm:          pm,
-		engine:      engine,
-		txMgr:       txMgr,
-		activeTx:    nil,
-		dbPath:      path,
-		tables:      make(map[string]map[string]string),
-		primaryKeys: make(map[string][]string),
-		columnOrder: make(map[string][]string),
-		data:        data,
-		indexes:     make(map[string]*IndexInfo),
+		pm:             pm,
+		engine:         engine,
+		txMgr:          txMgr,
+		activeTx:       nil,
+		dbPath:         path,
+		tables:         make(map[string]map[string]string),
+		primaryKeys:    make(map[string][]string),
+		columnOrder:    make(map[string][]string),
+		columnDefaults: make(map[string]map[string]interface{}),
+		data:           data,
+		indexes:        make(map[string]*IndexInfo),
 	}, nil
 }
 
@@ -254,15 +256,19 @@ func (db *Database) Exec(sql string) (Result, error) {
 			}
 			return Result{}, fmt.Errorf("table %s already exists", stmt.Name)
 		}
-		
+
 		schema := make(map[string]QE.ColumnType)
 		colTypes := make(map[string]string)
 		var pkCols []string
+		db.columnDefaults[stmt.Name] = make(map[string]interface{})
 		for _, col := range stmt.Columns {
 			schema[col.Name] = QE.ColumnType{Name: col.Name, Type: col.Type}
 			colTypes[col.Name] = col.Type
 			if col.PrimaryKey {
 				pkCols = append(pkCols, col.Name)
+			}
+			if col.Default != nil {
+				db.columnDefaults[stmt.Name][col.Name] = col.Default
 			}
 		}
 		db.engine.RegisterTable(stmt.Name, schema)
@@ -291,6 +297,7 @@ func (db *Database) Exec(sql string) (Result, error) {
 			delete(db.tables, stmt.Name)
 			delete(db.data, stmt.Name)
 			delete(db.primaryKeys, stmt.Name)
+			delete(db.columnDefaults, stmt.Name)
 		}
 		return Result{}, nil
 	case "CreateIndexStmt":
@@ -1426,11 +1433,11 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 		return nil, fmt.Errorf("invalid information_schema table name: %s", tableName)
 	}
 	viewName := strings.ToLower(parts[1])
-	
+
 	// Generate data based on view type
 	var allResults [][]interface{}
 	var columnNames []string
-	
+
 	switch viewName {
 	case "columns":
 		columnNames = []string{"column_name", "table_name", "table_schema", "data_type", "is_nullable", "column_default"}
@@ -1461,7 +1468,7 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 				})
 			}
 		}
-		
+
 	case "tables":
 		columnNames = []string{"table_name", "table_schema", "table_type"}
 		// Extract tables from in-memory schema
@@ -1472,11 +1479,11 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 				"BASE TABLE",
 			})
 		}
-		
+
 	case "views":
 		columnNames = []string{"table_name", "table_schema", "view_definition"}
 		// No views tracked yet, return empty
-		
+
 	case "table_constraints":
 		columnNames = []string{"constraint_name", "table_name", "table_schema", "constraint_type"}
 		// Extract PRIMARY KEY constraints from in-memory schema
@@ -1491,11 +1498,11 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 				})
 			}
 		}
-		
+
 	case "referential_constraints":
 		columnNames = []string{"constraint_name", "unique_constraint_schema", "unique_constraint_name"}
 		// No foreign keys tracked yet, return empty
-		
+
 	case "key_column_usage":
 		columnNames = []string{"constraint_name", "table_name", "table_schema", "column_name", "ordinal_position"}
 		// Extract PRIMARY KEY column usage from in-memory schema
@@ -1513,11 +1520,11 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 				}
 			}
 		}
-		
+
 	default:
 		return nil, fmt.Errorf("unknown information_schema view: %s", viewName)
 	}
-	
+
 	// Filter based on WHERE clause (simple support)
 	filtered := allResults
 	if stmt.Where != nil {
@@ -1528,11 +1535,11 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 			}
 		}
 	}
-	
+
 	// Select specific columns or all
 	var selectedCols []string
 	var selectedData [][]interface{}
-	
+
 	// Check if SELECT *
 	if len(stmt.Columns) == 1 {
 		if cr, ok := stmt.Columns[0].(*QP.ColumnRef); ok && cr.Name == "*" {
@@ -1541,7 +1548,7 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 			selectedData = filtered
 		}
 	}
-	
+
 	if len(selectedCols) == 0 {
 		// SELECT specific columns
 		for _, col := range stmt.Columns {
@@ -1549,7 +1556,7 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 				selectedCols = append(selectedCols, cr.Name)
 			}
 		}
-		
+
 		// Project columns
 		for _, row := range filtered {
 			projectedRow := make([]interface{}, 0)
@@ -1571,7 +1578,7 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 			selectedData = append(selectedData, projectedRow)
 		}
 	}
-	
+
 	// Apply ORDER BY if present
 	if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
 		rows := &Rows{Columns: selectedCols, Data: selectedData}
@@ -1581,7 +1588,7 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 		}
 		return sortedRows, nil
 	}
-	
+
 	return &Rows{Columns: selectedCols, Data: selectedData}, nil
 }
 
@@ -1677,6 +1684,21 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		ctx.db.data[tableName] = make([]map[string]interface{}, 0)
 	}
 
+	// Apply defaults for NULL values
+	tableDefaults := ctx.db.columnDefaults[tableName]
+	for colName, defaultVal := range tableDefaults {
+		if val, exists := row[colName]; exists {
+			if val == nil {
+				// Extract value from Literal if needed
+				if lit, ok := defaultVal.(*QP.Literal); ok {
+					row[colName] = lit.Value
+				} else {
+					row[colName] = defaultVal
+				}
+			}
+		}
+	}
+
 	// Check primary key constraints
 	pkCols := ctx.db.primaryKeys[tableName]
 	if len(pkCols) > 0 {
@@ -1724,18 +1746,18 @@ func (ctx *dbVmContext) ExecuteSubquery(subquery interface{}) (interface{}, erro
 	if !ok {
 		return nil, fmt.Errorf("subquery is not a SelectStmt")
 	}
-	
+
 	// Execute the subquery using execSelectStmt
 	rows, err := ctx.db.execSelectStmt(selectStmt)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// For a scalar subquery, return the first column of the first row
 	if len(rows.Data) > 0 && len(rows.Data[0]) > 0 {
 		return rows.Data[0][0], nil
 	}
-	
+
 	// If no rows, return nil
 	return nil, nil
 }
@@ -1747,13 +1769,13 @@ func (ctx *dbVmContext) ExecuteSubqueryRows(subquery interface{}) ([][]interface
 	if !ok {
 		return nil, fmt.Errorf("subquery is not a SelectStmt")
 	}
-	
+
 	// Execute the subquery using execSelectStmt
 	rows, err := ctx.db.execSelectStmt(selectStmt)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Return all rows
 	return rows.Data, nil
 }
@@ -1765,18 +1787,18 @@ func (ctx *dbVmContext) ExecuteSubqueryWithContext(subquery interface{}, outerRo
 	if !ok {
 		return nil, fmt.Errorf("subquery is not a SelectStmt")
 	}
-	
+
 	// Execute the subquery with outer row context
 	rows, err := ctx.db.execSelectStmtWithContext(selectStmt, outerRow)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// For a scalar subquery, return the first column of the first row
 	if len(rows.Data) > 0 && len(rows.Data[0]) > 0 {
 		return rows.Data[0][0], nil
 	}
-	
+
 	// If no rows, return nil
 	return nil, nil
 }
@@ -1788,13 +1810,13 @@ func (ctx *dbVmContext) ExecuteSubqueryRowsWithContext(subquery interface{}, out
 	if !ok {
 		return nil, fmt.Errorf("subquery is not a SelectStmt")
 	}
-	
+
 	// Execute the subquery with outer row context
 	rows, err := ctx.db.execSelectStmtWithContext(selectStmt, outerRow)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Return all rows
 	return rows.Data, nil
 }
@@ -1940,13 +1962,13 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 
 	// SELECT with FROM - use existing VM query execution
 	tableName := stmt.From.Name
-	
+
 	// Handle information_schema virtual tables
 	if strings.ToLower(stmt.From.Schema) == "information_schema" {
 		fullName := stmt.From.Schema + "." + tableName
 		return db.queryInformationSchema(stmt, fullName)
 	}
-	
+
 	if db.data[tableName] == nil {
 		return nil, fmt.Errorf("table not found: %s", tableName)
 	}
@@ -2016,13 +2038,13 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 
 	// SELECT with FROM - use existing VM query execution with context
 	tableName := stmt.From.Name
-	
+
 	// Handle information_schema virtual tables
 	if strings.ToLower(stmt.From.Schema) == "information_schema" {
 		fullName := stmt.From.Schema + "." + tableName
 		return db.queryInformationSchema(stmt, fullName)
 	}
-	
+
 	if db.data[tableName] == nil {
 		return nil, fmt.Errorf("table not found: %s", tableName)
 	}
@@ -2041,14 +2063,14 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	compiler.SetTableSchema(colIndices, tableCols)
 
 	program := compiler.CompileSelect(stmt)
-	
+
 	// Create context with outer row
 	ctx := &dbVmContextWithOuter{
 		db:       db,
 		outerRow: outerRow,
 	}
 	vm := VM.NewVMWithContext(program, ctx)
-	
+
 	// Reset VM state before opening cursor manually
 	vm.Reset()
 	vm.SetPC(0)
@@ -2157,13 +2179,13 @@ func (ctx *dbVmContextWithOuter) ExecuteSubqueryRowsWithContext(subquery interfa
 
 func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) {
 	tableName := stmt.From.Name
-	
+
 	// Handle information_schema virtual tables
 	if strings.ToLower(stmt.From.Schema) == "information_schema" {
 		fullName := stmt.From.Schema + "." + tableName
 		return db.queryInformationSchema(stmt, fullName)
 	}
-	
+
 	if db.data[tableName] == nil {
 		return nil, fmt.Errorf("table not found: %s", tableName)
 	}
@@ -2295,6 +2317,109 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	return &Rows{Columns: cols, Data: results}, nil
 }
 
+func (db *Database) applyDefaults(sql string, tableName string, tableCols []string) string {
+	upperSQL := strings.ToUpper(sql)
+	if !strings.HasPrefix(upperSQL, "INSERT") {
+		return sql
+	}
+
+	tableDefaults := db.columnDefaults[tableName]
+	if len(tableDefaults) == 0 {
+		return sql
+	}
+
+	tokens, err := QP.NewTokenizer(sql).Tokenize()
+	if err != nil {
+		return sql
+	}
+	parser := QP.NewParser(tokens)
+	stmt, err := parser.Parse()
+	if err != nil {
+		return sql
+	}
+
+	insertStmt, ok := stmt.(*QP.InsertStmt)
+	if !ok {
+		return sql
+	}
+
+	if len(insertStmt.Columns) == 0 {
+		if strings.Contains(upperSQL, "DEFAULT VALUES") {
+			var vals []string
+			for _, col := range tableCols {
+				if _, hasDef := tableDefaults[col]; hasDef {
+					vals = append(vals, "NULL")
+				} else {
+					vals = append(vals, "NULL")
+				}
+			}
+			return fmt.Sprintf("INSERT INTO %s VALUES (%s)", tableName, strings.Join(vals, ", "))
+		}
+		return sql
+	}
+
+	colSet := make(map[string]bool)
+	for _, col := range insertStmt.Columns {
+		colSet[col] = true
+	}
+
+	var missingWithDefaults []string
+	for _, col := range tableCols {
+		if !colSet[col] {
+			if _, hasDef := tableDefaults[col]; hasDef {
+				missingWithDefaults = append(missingWithDefaults, col)
+			}
+		}
+	}
+
+	if len(missingWithDefaults) == 0 {
+		return sql
+	}
+
+	newCols := append([]string{}, insertStmt.Columns...)
+	newCols = append(newCols, missingWithDefaults...)
+
+	var newVals []string
+	for _, row := range insertStmt.Values {
+		var rowVals []string
+		for _, val := range row {
+			rowVals = append(rowVals, literalToString(val))
+		}
+		for range missingWithDefaults {
+			rowVals = append(rowVals, "NULL")
+		}
+		newVals = append(newVals, "("+strings.Join(rowVals, ", ")+")")
+	}
+
+	result := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
+		tableName,
+		strings.Join(newCols, ", "),
+		strings.Join(newVals, ", "))
+	return result
+}
+
+func literalToString(val interface{}) string {
+	// Handle QP.Literal wrapper
+	if lit, ok := val.(*QP.Literal); ok {
+		val = lit.Value
+	}
+	switch v := val.(type) {
+	case int64:
+		return fmt.Sprintf("%d", v)
+	case float64:
+		return fmt.Sprintf("%v", v)
+	case string:
+		return "'" + strings.ReplaceAll(v, "'", "''") + "'"
+	case bool:
+		if v {
+			return "1"
+		}
+		return "0"
+	default:
+		return "NULL"
+	}
+}
+
 func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
 	// Ensure table exists
 	if db.data[tableName] == nil {
@@ -2307,8 +2432,11 @@ func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
 		tableCols = db.getOrderedColumns(tableName)
 	}
 
+	// Pre-process INSERT to add defaults for missing columns
+	processedSQL := db.applyDefaults(sql, tableName, tableCols)
+
 	// Compile the DML statement
-	program, err := CG.CompileWithSchema(sql, tableCols)
+	program, err := CG.CompileWithSchema(processedSQL, tableCols)
 	if err != nil {
 		return Result{}, err
 	}
