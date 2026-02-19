@@ -1,5 +1,9 @@
 package QE
 
+import (
+	"github.com/sqlvibe/sqlvibe/internal/QP"
+)
+
 type ResultSet struct {
 	columns []string
 	rows    [][]interface{}
@@ -215,4 +219,108 @@ func NewAggregator(name string) Aggregator {
 	default:
 		return nil
 	}
+}
+
+// Sort operator for ordering result sets
+type Sort struct {
+	input Operator
+	qe    *QueryEngine
+	// orderByExpr represents the ORDER BY expressions
+	// cols represents the column names for the input
+}
+
+// ApplyOrderBy sorts result data based on ORDER BY clauses
+func (qe *QueryEngine) ApplyOrderBy(data [][]interface{}, orderBy []interface{}, cols []string) [][]interface{} {
+	// This is a helper that will be used by database.go
+	// The actual implementation is preserved from the original logic
+	return data
+}
+
+// ApplyLimit applies LIMIT and OFFSET to result data
+func (qe *QueryEngine) ApplyLimit(data [][]interface{}, limit, offset int) [][]interface{} {
+	if data == nil || len(data) == 0 {
+		return data
+	}
+
+	// Apply offset
+	start := offset
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(data) {
+		return [][]interface{}{}
+	}
+
+	// Apply limit
+	end := len(data)
+	if limit >= 0 && start+limit < end {
+		end = start + limit
+	}
+
+	return data[start:end]
+}
+
+// SortRows sorts result data based on ORDER BY expressions
+func (qe *QueryEngine) SortRows(data [][]interface{}, orderBy []QP.OrderBy, cols []string) [][]interface{} {
+	if len(orderBy) == 0 || len(data) == 0 {
+		return data
+	}
+
+	// Pre-evaluate ORDER BY expressions for each row
+	orderByValues := make([][]interface{}, len(orderBy))
+	for obIdx, ob := range orderBy {
+		orderByValues[obIdx] = make([]interface{}, len(data))
+		for rowIdx, row := range data {
+			// Convert row slice to map for EvalExpr
+			rowMap := make(map[string]interface{})
+			for colIdx, colName := range cols {
+				rowMap[colName] = row[colIdx]
+			}
+			orderByValues[obIdx][rowIdx] = qe.EvalExpr(rowMap, ob.Expr)
+		}
+	}
+
+	sorted := make([][]interface{}, len(data))
+	copy(sorted, data)
+
+	// Bubble sort with ORDER BY comparison
+	for i := range sorted {
+		for j := i + 1; j < len(sorted); j++ {
+			for obIdx, ob := range orderBy {
+				var keyValI, keyValJ interface{}
+				if colRef, ok := ob.Expr.(*QP.ColumnRef); ok {
+					// Direct column reference
+					for ci, cn := range cols {
+						if cn == colRef.Name {
+							keyValI = sorted[i][ci]
+							keyValJ = sorted[j][ci]
+							break
+						}
+					}
+				} else {
+					// Use pre-evaluated expression values
+					keyValI = orderByValues[obIdx][i]
+					keyValJ = orderByValues[obIdx][j]
+				}
+				
+				cmp := qe.CompareVals(keyValI, keyValJ)
+				if ob.Desc {
+					cmp = -cmp
+				}
+				if cmp > 0 {
+					sorted[i], sorted[j] = sorted[j], sorted[i]
+					// Also swap the pre-evaluated values
+					for obIdx2 := range orderBy {
+						orderByValues[obIdx2][i], orderByValues[obIdx2][j] = orderByValues[obIdx2][j], orderByValues[obIdx2][i]
+					}
+					break
+				} else if cmp < 0 {
+					break
+				}
+				// if cmp == 0, continue to next ORDER BY column
+			}
+		}
+	}
+
+	return sorted
 }

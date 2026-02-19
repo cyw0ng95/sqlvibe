@@ -1425,6 +1425,13 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			p.advance()
 			if p.current().Type == TokenLeftParen {
 				p.advance()
+				
+				// Handle DISTINCT or ALL keywords in aggregate functions
+				// Skip these keywords as they don't affect the basic aggregation
+				if (p.current().Type == TokenKeyword && p.current().Literal == "DISTINCT") || p.current().Type == TokenAll {
+					p.advance()
+				}
+				
 				args := make([]Expr, 0)
 				for !p.isEOF() && p.current().Type != TokenRightParen {
 					arg, err := p.parseExpr()

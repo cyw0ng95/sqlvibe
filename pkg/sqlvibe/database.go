@@ -544,118 +544,11 @@ func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error)
 		return rows, nil
 	}
 
-	cols := rows.Columns
-	data := rows.Data
-
-	// Pre-evaluate ORDER BY expressions for each row
-	// This is needed for non-ColumnRef expressions (e.g., val * -1, ABS(val))
-	orderByValues := make([][]interface{}, len(orderBy))
-	for obIdx, ob := range orderBy {
-		orderByValues[obIdx] = make([]interface{}, len(data))
-		for rowIdx, row := range data {
-			// Convert row slice to map for EvalExpr
-			rowMap := make(map[string]interface{})
-			for colIdx, colName := range cols {
-				rowMap[colName] = row[colIdx]
-			}
-			orderByValues[obIdx][rowIdx] = db.engine.EvalExpr(rowMap, ob.Expr)
-		}
-	}
-
-	sorted := make([][]interface{}, len(data))
-	copy(sorted, data)
-
-	for i := range sorted {
-		for j := i + 1; j < len(sorted); j++ {
-			for obIdx, ob := range orderBy {
-				var keyValI, keyValJ interface{}
-				if colRef, ok := ob.Expr.(*QP.ColumnRef); ok {
-					for ci, cn := range cols {
-						if cn == colRef.Name {
-							keyValI = sorted[i][ci]
-							keyValJ = sorted[j][ci]
-							break
-						}
-					}
-				} else {
-					// Use pre-evaluated expression values
-					keyValI = orderByValues[obIdx][i]
-					keyValJ = orderByValues[obIdx][j]
-				}
-				cmp := compareValues(keyValI, keyValJ)
-				if ob.Desc {
-					cmp = -cmp
-				}
-				if cmp > 0 {
-					sorted[i], sorted[j] = sorted[j], sorted[i]
-					// Also swap the pre-evaluated values to maintain consistency
-					for obIdx2 := range orderBy {
-						orderByValues[obIdx2][i], orderByValues[obIdx2][j] = orderByValues[obIdx2][j], orderByValues[obIdx2][i]
-					}
-					break
-				} else if cmp < 0 {
-					break
-				}
-				// if cmp == 0, continue to next ORDER BY column
-			}
-		}
-	}
-
-	return &Rows{Columns: cols, Data: sorted}, nil
+	sorted := db.engine.SortRows(rows.Data, orderBy, rows.Columns)
+	return &Rows{Columns: rows.Columns, Data: sorted}, nil
 }
 
 
-func compareValues(a, b interface{}) int {
-	if a == nil && b == nil {
-		return 0
-	}
-	if a == nil {
-		return -1
-	}
-	if b == nil {
-		return 1
-	}
-	switch av := a.(type) {
-	case int64:
-		bv, ok := b.(int64)
-		if !ok {
-			return 0
-		}
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
-		}
-		return 0
-	case float64:
-		bv, ok := b.(float64)
-		if !ok {
-			return 0
-		}
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
-		}
-		return 0
-	case string:
-		bv, ok := b.(string)
-		if !ok {
-			return 0
-		}
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
-		}
-		return 0
-	default:
-		return 0
-	}
-}
 
 
 func (db *Database) ExecWithParams(sql string, params []interface{}) (Result, error) {
@@ -704,62 +597,19 @@ func (tx *Transaction) Query(sql string) (*Rows, error) {
 }
 
 func (db *Database) extractValue(expr QP.Expr) interface{} {
-	return db.extractValueTyped(expr, "")
+	return db.engine.ExtractValue(expr)
 }
 
 func (db *Database) extractValueTyped(expr QP.Expr, colType string) interface{} {
-	if expr == nil {
-		return nil
-	}
-	switch e := expr.(type) {
-	case *QP.Literal:
-		val := e.Value
-		if strVal, ok := val.(string); ok {
-			converted := db.convertStringToType(strVal, colType)
-			return converted
-		}
-		return val
-	case *QP.ColumnRef:
-		return e.Name
-	case *QP.UnaryExpr:
-		val := db.extractValueTyped(e.Expr, colType)
-		if e.Op == QP.TokenMinus {
-			return db.negateValue(val)
-		}
-		return val
-	default:
-		return nil
-	}
+	return db.engine.ExtractValueTyped(expr, colType)
 }
 
 func (db *Database) negateValue(val interface{}) interface{} {
-	if val == nil {
-		return nil
-	}
-	switch v := val.(type) {
-	case int64:
-		return -v
-	case float64:
-		return -v
-	case int:
-		return -v
-	}
-	return val
+	return db.engine.Negate(val)
 }
 
 func (db *Database) convertStringToType(val string, colType string) interface{} {
-	switch colType {
-	case "INTEGER", "INT", "BIGINT", "SMALLINT":
-		var intVal int64
-		fmt.Sscanf(val, "%d", &intVal)
-		return intVal
-	case "REAL", "FLOAT", "DOUBLE", "DOUBLE PRECISION", "NUMERIC", "DECIMAL":
-		var floatVal float64
-		fmt.Sscanf(val, "%f", &floatVal)
-		return floatVal
-	default:
-		return val
-	}
+	return db.engine.ConvertStringToType(val, colType)
 }
 
 func (db *Database) MustExec(sql string, params ...interface{}) Result {
@@ -771,80 +621,21 @@ func (db *Database) MustExec(sql string, params ...interface{}) Result {
 }
 
 func (db *Database) tryUseIndex(tableName string, where QP.Expr) []map[string]interface{} {
-	if where == nil {
-		return nil
-	}
-
-	binExpr, ok := where.(*QP.BinaryExpr)
-	if !ok {
-		return nil
-	}
-
-	if binExpr.Op != QP.TokenEq {
-		return nil
-	}
-
-	var colName string
-	var colValue interface{}
-
-	if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
-		if lit, ok := binExpr.Right.(*QP.Literal); ok {
-			colName = colRef.Name
-			colValue = lit.Value
-		}
-	} else if colRef, ok := binExpr.Right.(*QP.ColumnRef); ok {
-		if lit, ok := binExpr.Left.(*QP.Literal); ok {
-			colName = colRef.Name
-			colValue = lit.Value
+	// Convert IndexInfo to QE.IndexInfo
+	qeIndexes := make(map[string]*QE.IndexInfo)
+	for name, idx := range db.indexes {
+		qeIndexes[name] = &QE.IndexInfo{
+			Name:    idx.Name,
+			Table:   idx.Table,
+			Columns: idx.Columns,
+			Unique:  idx.Unique,
 		}
 	}
-
-	if colName == "" {
-		return nil
-	}
-
-	for _, idx := range db.indexes {
-		if idx.Table == tableName && len(idx.Columns) > 0 && idx.Columns[0] == colName {
-			return db.scanByIndexValue(tableName, colName, colValue, idx.Unique)
-		}
-	}
-
-	return nil
+	return db.engine.TryUseIndex(tableName, where, qeIndexes)
 }
 
 func (db *Database) scanByIndexValue(tableName, colName string, value interface{}, unique bool) []map[string]interface{} {
-	tableData := db.data[tableName]
-	if tableData == nil {
-		return nil
-	}
-
-	result := make([]map[string]interface{}, 0)
-	for _, row := range tableData {
-		if rowVal, ok := row[colName]; ok {
-			if db.engine.ValuesEqual(rowVal, value) {
-				result = append(result, row)
-				if unique {
-					return result
-				}
-			}
-		}
-	}
-	return result
-}
-
-func toFloat64(v interface{}) (float64, bool) {
-	switch n := v.(type) {
-	case int64:
-		return float64(n), true
-	case int:
-		return float64(n), true
-	case float64:
-		return n, true
-	case float32:
-		return float64(n), true
-	default:
-		return 0, false
-	}
+	return db.engine.ScanByIndexValue(tableName, colName, value, unique)
 }
 
 
@@ -852,61 +643,7 @@ func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, col
 	if len(orderBy) == 0 || len(data) == 0 {
 		return data
 	}
-
-	sorted := make([][]interface{}, len(data))
-	copy(sorted, data)
-
-	// Pre-evaluate ORDER BY expressions for each row
-	// This is needed for non-ColumnRef expressions (e.g., val * -1)
-	orderByValues := make([][]interface{}, len(orderBy))
-	for obIdx, ob := range orderBy {
-		orderByValues[obIdx] = make([]interface{}, len(data))
-		for rowIdx, row := range data {
-			// Convert row slice to map for EvalExpr
-			rowMap := make(map[string]interface{})
-			for colIdx, colName := range cols {
-				rowMap[colName] = row[colIdx]
-			}
-			orderByValues[obIdx][rowIdx] = db.engine.EvalExpr(rowMap, ob.Expr)
-		}
-	}
-
-	for i := range sorted {
-		for j := i + 1; j < len(sorted); j++ {
-			for obIdx, ob := range orderBy {
-				var keyValI, keyValJ interface{}
-				if colRef, ok := ob.Expr.(*QP.ColumnRef); ok {
-					for ci, cn := range cols {
-						if cn == colRef.Name {
-							keyValI = sorted[i][ci]
-							keyValJ = sorted[j][ci]
-							break
-						}
-					}
-				} else {
-					// Use pre-evaluated expression values
-					keyValI = orderByValues[obIdx][i]
-					keyValJ = orderByValues[obIdx][j]
-				}
-				cmp := db.engine.CompareVals(keyValI, keyValJ)
-				if ob.Desc {
-					cmp = -cmp
-				}
-				if cmp > 0 {
-					sorted[i], sorted[j] = sorted[j], sorted[i]
-					// Also swap the pre-evaluated values to maintain consistency
-					for obIdx2 := range orderBy {
-						orderByValues[obIdx2][i], orderByValues[obIdx2][j] = orderByValues[obIdx2][j], orderByValues[obIdx2][i]
-					}
-					break
-				} else if cmp < 0 {
-					break
-				}
-				// if cmp == 0, continue to next ORDER BY column
-			}
-		}
-	}
-	return sorted
+	return db.engine.SortRows(data, orderBy, cols)
 }
 
 func (db *Database) applyLimit(rows *Rows, limitExpr QP.Expr, offsetExpr QP.Expr) (*Rows, error) {
@@ -933,20 +670,9 @@ func (db *Database) applyLimit(rows *Rows, limitExpr QP.Expr, offsetExpr QP.Expr
 		}
 	}
 
-	if offset >= len(rows.Data) {
-		return &Rows{Columns: rows.Columns, Data: [][]interface{}{}}, nil
-	}
-
-	if limit <= 0 {
-		return &Rows{Columns: rows.Columns, Data: [][]interface{}{}}, nil
-	}
-
-	end := offset + limit
-	if end > len(rows.Data) {
-		end = len(rows.Data)
-	}
-
-	return &Rows{Columns: rows.Columns, Data: rows.Data[offset:end]}, nil
+	// Use QE's ApplyLimit
+	rows.Data = db.engine.ApplyLimit(rows.Data, limit, offset)
+	return rows, nil
 }
 
 func (db *Database) serializeRow(row map[string]interface{}) []byte {

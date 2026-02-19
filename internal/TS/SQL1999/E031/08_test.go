@@ -29,10 +29,17 @@ func TestSQL1999_F301_E03108_L1(t *testing.T) {
 		sql  string
 	}{
 		{"CreateTable", "CREATE TABLE employees (id INTEGER, name TEXT, department TEXT)"},
+		{"CreateDepartments", "CREATE TABLE departments (id INTEGER, name TEXT)"},
+		{"CreateProjects", "CREATE TABLE projects (id INTEGER, name TEXT, dept_id INTEGER)"},
 		{"InsertData1", "INSERT INTO employees VALUES (1, 'Alice', 'Engineering')"},
 		{"InsertData2", "INSERT INTO employees VALUES (2, 'Bob', 'Sales')"},
 		{"InsertData3", "INSERT INTO employees VALUES (3, 'Charlie', 'Engineering')"},
 		{"InsertData4", "INSERT INTO employees VALUES (4, 'Diana', 'HR')"},
+		{"InsertDept1", "INSERT INTO departments VALUES (1, 'Engineering')"},
+		{"InsertDept2", "INSERT INTO departments VALUES (2, 'Sales')"},
+		{"InsertDept3", "INSERT INTO departments VALUES (3, 'HR')"},
+		{"InsertProj1", "INSERT INTO projects VALUES (1, 'Project Alpha', 1)"},
+		{"InsertProj2", "INSERT INTO projects VALUES (2, 'Project Beta', 2)"},
 	}
 
 	for _, tt := range setup {

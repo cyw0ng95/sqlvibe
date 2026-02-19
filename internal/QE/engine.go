@@ -616,7 +616,7 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 	case *QP.UnaryExpr:
 		val := qe.evalValue(row, e.Expr)
 		if e.Op == QP.TokenMinus {
-			return qe.negate(val)
+			return qe.Negate(val)
 		}
 		if e.Op == QP.TokenNot {
 			if val == nil {
@@ -1875,7 +1875,8 @@ func (l *Limit) Close() error {
 	return l.input.Close()
 }
 
-func (qe *QueryEngine) negate(val interface{}) interface{} {
+// Negate negates a numeric value
+func (qe *QueryEngine) Negate(val interface{}) interface{} {
 	if val == nil {
 		return nil
 	}
@@ -1903,4 +1904,123 @@ func (qe *QueryEngine) CompareVals(a, b interface{}) int {
 // MatchLike is a public wrapper for matchLike
 func (qe *QueryEngine) MatchLike(value, pattern string) bool {
 	return qe.matchLike(value, pattern)
+}
+
+// ExtractValue extracts a value from an expression
+func (qe *QueryEngine) ExtractValue(expr QP.Expr) interface{} {
+	return qe.ExtractValueTyped(expr, "")
+}
+
+// ExtractValueTyped extracts and converts a value from an expression based on column type
+func (qe *QueryEngine) ExtractValueTyped(expr QP.Expr, colType string) interface{} {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *QP.Literal:
+		val := e.Value
+		if strVal, ok := val.(string); ok {
+			converted := qe.ConvertStringToType(strVal, colType)
+			return converted
+		}
+		return val
+	case *QP.ColumnRef:
+		return e.Name
+	case *QP.UnaryExpr:
+		val := qe.ExtractValueTyped(e.Expr, colType)
+		if e.Op == QP.TokenMinus {
+			return qe.Negate(val)
+		}
+		return val
+	default:
+		return nil
+	}
+}
+
+// ConvertStringToType converts a string value to the specified column type
+func (qe *QueryEngine) ConvertStringToType(val string, colType string) interface{} {
+	switch colType {
+	case "INTEGER", "INT", "BIGINT", "SMALLINT":
+		var intVal int64
+		fmt.Sscanf(val, "%d", &intVal)
+		return intVal
+	case "REAL", "FLOAT", "DOUBLE", "DOUBLE PRECISION", "NUMERIC", "DECIMAL":
+		var floatVal float64
+		fmt.Sscanf(val, "%f", &floatVal)
+		return floatVal
+	default:
+		return val
+	}
+}
+
+// IndexInfo represents an index structure
+type IndexInfo struct {
+	Name    string
+	Table   string
+	Columns []string
+	Unique  bool
+}
+
+// TryUseIndex attempts to use an index for a WHERE clause
+func (qe *QueryEngine) TryUseIndex(tableName string, where QP.Expr, indexes map[string]*IndexInfo) []map[string]interface{} {
+	if where == nil {
+		return nil
+	}
+
+	binExpr, ok := where.(*QP.BinaryExpr)
+	if !ok {
+		return nil
+	}
+
+	if binExpr.Op != QP.TokenEq {
+		return nil
+	}
+
+	var colName string
+	var colValue interface{}
+
+	if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
+		if lit, ok := binExpr.Right.(*QP.Literal); ok {
+			colName = colRef.Name
+			colValue = lit.Value
+		}
+	} else if colRef, ok := binExpr.Right.(*QP.ColumnRef); ok {
+		if lit, ok := binExpr.Left.(*QP.Literal); ok {
+			colName = colRef.Name
+			colValue = lit.Value
+		}
+	}
+
+	if colName == "" {
+		return nil
+	}
+
+	for _, idx := range indexes {
+		if idx.Table == tableName && len(idx.Columns) > 0 && idx.Columns[0] == colName {
+			return qe.ScanByIndexValue(tableName, colName, colValue, idx.Unique)
+		}
+	}
+
+	return nil
+}
+
+// ScanByIndexValue scans table data using an index
+func (qe *QueryEngine) ScanByIndexValue(tableName, colName string, value interface{}, unique bool) []map[string]interface{} {
+	tableData := qe.data[tableName]
+	if tableData == nil {
+		return nil
+	}
+
+	result := make([]map[string]interface{}, 0)
+	for _, row := range tableData {
+		if rowVal, ok := row[colName]; ok {
+			if qe.ValuesEqual(rowVal, value) {
+				result = append(result, row)
+				if unique {
+					return result
+				}
+			}
+		}
+	}
+	return result
 }
