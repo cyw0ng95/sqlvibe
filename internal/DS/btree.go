@@ -530,8 +530,77 @@ func (c *BTreeCursor) Next() error {
 		return nil
 	}
 
-	// End of page: move up and right
-	// TODO: Implement proper cursor navigation across pages
+	// End of page: move up and right to find next page
+	for len(c.path) > 1 {
+		// Pop current level
+		c.path = c.path[:len(c.path)-1]
+
+		// Move to parent level
+		parentLevel := &c.path[len(c.path)-1]
+		parentPage, err := c.bt.pm.ReadPage(parentLevel.pageNum)
+		if err != nil {
+			return err
+		}
+
+		parentNumCells := int(binary.BigEndian.Uint16(parentPage.Data[3:5]))
+
+		// Check if there's a next cell in parent
+		if parentLevel.cellIdx+1 < parentNumCells {
+			parentLevel.cellIdx++
+
+			// Get the child page number from parent's cell
+			cellPointerOffset := 8 + parentLevel.cellIdx*2
+			cellOffset := int(binary.BigEndian.Uint16(parentPage.Data[cellPointerOffset : cellPointerOffset+2]))
+
+			pageType := parentPage.Data[0]
+			var childPageNum uint32
+			if pageType == 0x05 { // Table interior
+				cell, _ := DecodeTableInteriorCell(parentPage.Data[cellOffset:])
+				childPageNum = cell.LeftChild
+			} else { // Index interior
+				cell, _ := DecodeIndexInteriorCell(parentPage.Data[cellOffset:])
+				childPageNum = cell.LeftChild
+			}
+
+			// Navigate to leftmost leaf of this subtree
+			childPage, err := c.bt.pm.ReadPage(childPageNum)
+			if err != nil {
+				return err
+			}
+
+			for {
+				childPageType := childPage.Data[0]
+				if childPageType == 0x0d || childPageType == 0x02 {
+					// Found leaf page
+					c.path = append(c.path, cursorLevel{pageNum: childPageNum, cellIdx: 0})
+					c.valid = true
+					return nil
+				}
+
+				// Interior page - go to leftmost child
+				cellPointerOffset := 8
+				cellOffset := int(binary.BigEndian.Uint16(childPage.Data[cellPointerOffset : cellPointerOffset+2]))
+
+				if childPageType == 0x05 {
+					cell, _ := DecodeTableInteriorCell(childPage.Data[cellOffset:])
+					childPageNum = cell.LeftChild
+				} else {
+					cell, _ := DecodeIndexInteriorCell(childPage.Data[cellOffset:])
+					childPageNum = cell.LeftChild
+				}
+
+				c.path = append(c.path, cursorLevel{pageNum: childPageNum, cellIdx: 0})
+				childPage, err = c.bt.pm.ReadPage(childPageNum)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		// No more cells in parent, continue going up
+	}
+
+	// Reached root and no more cells
 	c.valid = false
 	return nil
 }

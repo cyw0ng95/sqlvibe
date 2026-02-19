@@ -22,13 +22,20 @@ func newDsVmContext(db *Database) *dsVmContext {
 }
 
 func (ctx *dsVmContext) GetTableData(tableName string) ([]map[string]interface{}, error) {
+	// First check if there's in-memory data (fallback from previous writes)
+	if ctx.db.data != nil && ctx.db.data[tableName] != nil && len(ctx.db.data[tableName]) > 0 {
+		return ctx.db.data[tableName], nil
+	}
+
 	bt, ok := ctx.tableTrees[tableName]
 	if !ok || bt == nil {
-		// Fall back to in-memory if no BTree
-		if ctx.db.data == nil {
-			return nil, nil
-		}
-		return ctx.db.data[tableName], nil
+		// No BTree and no in-memory fallback
+		return make([]map[string]interface{}, 0), nil
+	}
+
+	// Handle empty BTree (rootPage == 0)
+	if bt.RootPage() == 0 {
+		return make([]map[string]interface{}, 0), nil
 	}
 
 	// Scan BTree and convert to map format
@@ -86,8 +93,11 @@ func (ctx *dsVmContext) GetTableColumns(tableName string) ([]string, error) {
 
 func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) error {
 	bt, ok := ctx.tableTrees[tableName]
-	if !ok || bt == nil {
+	if !ok || bt == nil || bt.RootPage() == 0 {
 		// Fall back to in-memory
+		if ctx.db.data == nil {
+			ctx.db.data = make(map[string][]map[string]interface{})
+		}
 		if ctx.db.data[tableName] == nil {
 			ctx.db.data[tableName] = make([]map[string]interface{}, 0)
 		}
