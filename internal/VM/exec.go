@@ -2326,6 +2326,7 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 			state = &AggregateState{
 				GroupKey:     groupKey,
 				Count:        0,
+				Counts:       make([]int, len(aggInfo.Aggregates)),
 				Sums:         make([]interface{}, len(aggInfo.Aggregates)),
 				Mins:         make([]interface{}, len(aggInfo.Aggregates)),
 				Maxs:         make([]interface{}, len(aggInfo.Aggregates)),
@@ -2353,12 +2354,20 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 
 			switch aggDef.Function {
 			case "COUNT":
-			// COUNT is already tracked by state.Count
+				// COUNT(col) only counts non-NULL values; COUNT(*) counts all rows via state.Count
+				if value != nil {
+					state.Counts[aggIdx]++
+				}
 			case "SUM":
-				state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
+				if value != nil {
+					state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
+				}
 			case "AVG":
-				// AVG = SUM / COUNT, we accumulate SUM here
-				state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
+				// AVG = SUM / COUNT of non-NULL values
+				if value != nil {
+					state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
+					state.Counts[aggIdx]++
+				}
 			case "MIN":
 				if state.Mins[aggIdx] == nil || vm.compareVals(value, state.Mins[aggIdx]) < 0 {
 					state.Mins[aggIdx] = value
@@ -2429,14 +2438,16 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 			case "COUNT":
 				if aggDef.Distinct && state.DistinctSets[aggIdx] != nil {
 					aggValue = int64(len(state.DistinctSets[aggIdx]))
-				} else {
+				} else if isCountStar(aggDef) {
 					aggValue = int64(state.Count)
+				} else {
+					aggValue = int64(state.Counts[aggIdx])
 				}
 			case "SUM":
 				aggValue = state.Sums[aggIdx]
 			case "AVG":
-				if state.Count > 0 && state.Sums[aggIdx] != nil {
-					aggValue = vm.divideValues(state.Sums[aggIdx], int64(state.Count))
+				if state.Counts[aggIdx] > 0 && state.Sums[aggIdx] != nil {
+					aggValue = vm.divideValues(state.Sums[aggIdx], int64(state.Counts[aggIdx]))
 				}
 			case "MIN":
 				aggValue = state.Mins[aggIdx]
@@ -2462,11 +2473,25 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 type AggregateState struct {
 	GroupKey      string
 	Count         int
+	Counts        []int // per-aggregate non-NULL counts (for COUNT(col) and AVG)
 	Sums          []interface{}
 	Mins          []interface{}
 	Maxs          []interface{}
 	NonAggValues  []interface{}
 	DistinctSets  []map[string]bool // per-aggregate distinct value sets (for DISTINCT aggregates)
+}
+
+// isCountStar reports whether an aggregate definition is COUNT(*) or COUNT() with no args.
+func isCountStar(aggDef AggregateDef) bool {
+	if len(aggDef.Args) == 0 {
+		return true
+	}
+	if len(aggDef.Args) == 1 {
+		if colRef, ok := aggDef.Args[0].(*QP.ColumnRef); ok && colRef.Name == "*" {
+			return true
+		}
+	}
+	return false
 }
 
 // computeGroupKey generates a string key from GROUP BY expressions
@@ -2577,12 +2602,15 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				if aggDef.Distinct && state.DistinctSets[i] != nil {
 					return int64(len(state.DistinctSets[i]))
 				}
-				return int64(state.Count)
+				if isCountStar(aggDef) {
+					return int64(state.Count)
+				}
+				return int64(state.Counts[i])
 			case "SUM":
 				return state.Sums[i]
 			case "AVG":
-				if state.Count > 0 && state.Sums[i] != nil {
-					return vm.divideValues(state.Sums[i], int64(state.Count))
+				if state.Counts[i] > 0 && state.Sums[i] != nil {
+					return vm.divideValues(state.Sums[i], int64(state.Counts[i]))
 				}
 				return nil
 			case "MIN":
