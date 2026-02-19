@@ -182,6 +182,10 @@ const (
 
 	// Subquery
 	OpScalarSubquery
+	OpExistsSubquery
+	OpNotExistsSubquery
+	OpInSubquery
+	OpNotInSubquery
 
 	// Misc
 	OpSql
@@ -379,7 +383,11 @@ var OpCodeInfo = map[OpCode]string{
 	OpStrGroupConcat: "GroupConcat",
 
 	// Subquery
-	OpScalarSubquery: "ScalarSubquery",
+	OpScalarSubquery:    "ScalarSubquery",
+	OpExistsSubquery:    "ExistsSubquery",
+	OpNotExistsSubquery: "NotExistsSubquery",
+	OpInSubquery:        "InSubquery",
+	OpNotInSubquery:     "NotInSubquery",
 
 	// Misc
 	OpSql:        "Sql",

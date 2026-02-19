@@ -813,8 +813,79 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpColumn:
 			cursorID := int(inst.P1)
 			colIdx := int(inst.P2)
+			tableQualifier := inst.P3 // Table qualifier if present (string), or "table.column" for outer ref
 			dst := inst.P4
 			cursor := vm.cursors.Get(cursorID)
+			
+			// Special case: colIdx=-1 means this is definitely an outer reference
+			// P3 contains "table.column" format
+			if colIdx == -1 && tableQualifier != "" && vm.ctx != nil {
+				type OuterContextProvider interface {
+					GetOuterRowValue(columnName string) (interface{}, bool)
+				}
+				
+				if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
+					// Parse "table.column" to extract column name
+					parts := strings.Split(tableQualifier, ".")
+					if len(parts) == 2 {
+						colName := parts[1]
+						fmt.Printf("DEBUG OpColumn: colIdx=-1 (outer reference), trying GetOuterRowValue(%q)\n", colName)
+						if val, found := outerCtx.GetOuterRowValue(colName); found {
+							fmt.Printf("DEBUG OpColumn: found in outer context: %v\n", val)
+							if dstReg, ok := dst.(int); ok {
+								vm.registers[dstReg] = val
+								continue
+							}
+						} else {
+							fmt.Printf("DEBUG OpColumn: NOT found in outer context\n")
+						}
+					}
+				}
+				// If not found in outer context, emit NULL
+				if dstReg, ok := dst.(int); ok {
+					vm.registers[dstReg] = nil
+				}
+				continue
+			}
+			
+			// For correlation: if we have a table qualifier and outer context,
+			// check if this might be an outer reference
+			shouldTryOuter := false
+			if tableQualifier != "" && vm.ctx != nil && cursor != nil {
+				// If the table qualifier doesn't match the current cursor's table name,
+				// or if the current table is aliased differently, try outer context
+				fmt.Printf("DEBUG OpColumn: tableQualifier=%q, cursor.TableName=%q\n", tableQualifier, cursor.TableName)
+				if cursor.TableName == "" || tableQualifier != cursor.TableName {
+					shouldTryOuter = true
+					fmt.Printf("DEBUG OpColumn: shouldTryOuter=true\n")
+				}
+			}
+			
+			// Try to resolve from outer context first if needed
+			if shouldTryOuter {
+				type OuterContextProvider interface {
+					GetOuterRowValue(columnName string) (interface{}, bool)
+				}
+				
+				if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
+					if colIdx >= 0 && colIdx < len(cursor.Columns) {
+						colName := cursor.Columns[colIdx]
+						// Try to get from outer context
+						fmt.Printf("DEBUG OpColumn: trying GetOuterRowValue(%q)\n", colName)
+						if val, found := outerCtx.GetOuterRowValue(colName); found {
+							fmt.Printf("DEBUG OpColumn: found in outer context: %v\n", val)
+							if dstReg, ok := dst.(int); ok {
+								vm.registers[dstReg] = val
+								continue
+							}
+						} else {
+							fmt.Printf("DEBUG OpColumn: NOT found in outer context\n")
+						}
+					}
+				}
+			}
+			
+			// Default: load from current cursor
 			if cursor != nil && cursor.Data != nil && cursor.Index >= 0 && cursor.Index < len(cursor.Data) {
 				row := cursor.Data[cursor.Index]
 				if colIdx >= 0 && colIdx < len(cursor.Columns) {
@@ -834,7 +905,23 @@ func (vm *VM) Exec(ctx interface{}) error {
 			
 			// Try to execute the subquery through the context
 			if vm.ctx != nil {
-				// Use type assertion to check if context supports subquery execution
+				// Try context-aware executor first (for correlated subqueries)
+				type SubqueryExecutorWithContext interface {
+					ExecuteSubqueryWithContext(subquery interface{}, outerRow map[string]interface{}) (interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryExecutorWithContext); ok {
+					// Get current row from cursor 0 (if available)
+					currentRow := vm.getCurrentRow(0)
+					if result, err := executor.ExecuteSubqueryWithContext(inst.P4, currentRow); err == nil {
+						vm.registers[dstReg] = result
+					} else {
+						vm.registers[dstReg] = nil
+					}
+					continue
+				}
+				
+				// Fallback to non-context executor
 				type SubqueryExecutor interface {
 					ExecuteSubquery(subquery interface{}) (interface{}, error)
 				}
@@ -850,6 +937,227 @@ func (vm *VM) Exec(ctx interface{}) error {
 				}
 			} else {
 				vm.registers[dstReg] = nil
+			}
+			continue
+
+		case OpExistsSubquery:
+			// Execute EXISTS subquery: returns 1 if subquery returns any rows, 0 otherwise
+			// P1 = destination register
+			// P4 = SelectStmt to execute
+			dstReg := int(inst.P1)
+			
+			if vm.ctx != nil {
+				// Try context-aware executor first (for correlated subqueries)
+				type SubqueryRowsExecutorWithContext interface {
+					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryRowsExecutorWithContext); ok {
+					// Get current row from cursor 0 (if available)
+					currentRow := vm.getCurrentRow(0)
+					fmt.Printf("DEBUG OpExistsSubquery: currentRow=%v\n", currentRow)
+					if rows, err := executor.ExecuteSubqueryRowsWithContext(inst.P4, currentRow); err == nil && len(rows) > 0 {
+						fmt.Printf("DEBUG OpExistsSubquery: got %d rows from subquery\n", len(rows))
+						vm.registers[dstReg] = int64(1)
+					} else {
+						fmt.Printf("DEBUG OpExistsSubquery: got 0 rows from subquery (err=%v)\n", err)
+						vm.registers[dstReg] = int64(0)
+					}
+					continue
+				}
+				
+				// Fallback to non-context executor
+				type SubqueryRowsExecutor interface {
+					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+					if rows, err := executor.ExecuteSubqueryRows(inst.P4); err == nil && len(rows) > 0 {
+						vm.registers[dstReg] = int64(1)
+					} else {
+						vm.registers[dstReg] = int64(0)
+					}
+				} else {
+					vm.registers[dstReg] = int64(0)
+				}
+			} else {
+				vm.registers[dstReg] = int64(0)
+			}
+			continue
+
+		case OpNotExistsSubquery:
+			// Execute NOT EXISTS subquery: returns 1 if subquery returns no rows, 0 otherwise
+			// P1 = destination register
+			// P4 = SelectStmt to execute
+			dstReg := int(inst.P1)
+			
+			if vm.ctx != nil {
+				// Try context-aware executor first (for correlated subqueries)
+				type SubqueryRowsExecutorWithContext interface {
+					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryRowsExecutorWithContext); ok {
+					// Get current row from cursor 0 (if available)
+					currentRow := vm.getCurrentRow(0)
+					if rows, err := executor.ExecuteSubqueryRowsWithContext(inst.P4, currentRow); err == nil && len(rows) > 0 {
+						vm.registers[dstReg] = int64(0) // rows exist, so NOT EXISTS is false
+					} else {
+						vm.registers[dstReg] = int64(1) // no rows, so NOT EXISTS is true
+					}
+					continue
+				}
+				
+				// Fallback to non-context executor
+				type SubqueryRowsExecutor interface {
+					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+					if rows, err := executor.ExecuteSubqueryRows(inst.P4); err == nil && len(rows) > 0 {
+						vm.registers[dstReg] = int64(0) // rows exist, so NOT EXISTS is false
+					} else {
+						vm.registers[dstReg] = int64(1) // no rows, so NOT EXISTS is true
+					}
+				} else {
+					vm.registers[dstReg] = int64(1)
+				}
+			} else {
+				vm.registers[dstReg] = int64(1)
+			}
+			continue
+
+		case OpInSubquery:
+			// Execute IN subquery: check if value is in the result set
+			// P1 = destination register
+			// P2 = value register to check
+			// P4 = SelectStmt to execute
+			dstReg := int(inst.P1)
+			valueReg := int(inst.P2)
+			value := vm.registers[valueReg]
+			
+			if vm.ctx != nil {
+				// Try context-aware executor first (for correlated subqueries)
+				type SubqueryRowsExecutorWithContext interface {
+					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryRowsExecutorWithContext); ok {
+					// Get current row from cursor 0 (if available)
+					currentRow := vm.getCurrentRow(0)
+					if rows, err := executor.ExecuteSubqueryRowsWithContext(inst.P4, currentRow); err == nil {
+						// Check if value matches any row's first column
+						found := false
+						for _, row := range rows {
+							if len(row) > 0 && compareVals(value, row[0]) == 0 {
+								found = true
+								break
+							}
+						}
+						if found {
+							vm.registers[dstReg] = int64(1)
+						} else {
+							vm.registers[dstReg] = int64(0)
+						}
+						continue
+					}
+				}
+				
+				// Fallback to non-context executor
+				type SubqueryRowsExecutor interface {
+					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+					if rows, err := executor.ExecuteSubqueryRows(inst.P4); err == nil {
+						// Check if value matches any row's first column
+						found := false
+						for _, row := range rows {
+							if len(row) > 0 && compareVals(value, row[0]) == 0 {
+								found = true
+								break
+							}
+						}
+						if found {
+							vm.registers[dstReg] = int64(1)
+						} else {
+							vm.registers[dstReg] = int64(0)
+						}
+					} else {
+						vm.registers[dstReg] = int64(0)
+					}
+				} else {
+					vm.registers[dstReg] = int64(0)
+				}
+			} else {
+				vm.registers[dstReg] = int64(0)
+			}
+			continue
+
+		case OpNotInSubquery:
+			// Execute NOT IN subquery: check if value is NOT in the result set
+			// P1 = destination register
+			// P2 = value register to check
+			// P4 = SelectStmt to execute
+			dstReg := int(inst.P1)
+			valueReg := int(inst.P2)
+			value := vm.registers[valueReg]
+			
+			if vm.ctx != nil {
+				// Try context-aware executor first (for correlated subqueries)
+				type SubqueryRowsExecutorWithContext interface {
+					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryRowsExecutorWithContext); ok {
+					// Get current row from cursor 0 (if available)
+					currentRow := vm.getCurrentRow(0)
+					if rows, err := executor.ExecuteSubqueryRowsWithContext(inst.P4, currentRow); err == nil {
+						// Check if value matches any row's first column
+						found := false
+						for _, row := range rows {
+							if len(row) > 0 && compareVals(value, row[0]) == 0 {
+								found = true
+								break
+							}
+						}
+						if found {
+							vm.registers[dstReg] = int64(0) // found, so NOT IN is false
+						} else {
+							vm.registers[dstReg] = int64(1) // not found, so NOT IN is true
+						}
+						continue
+					}
+				}
+				
+				// Fallback to non-context executor
+				type SubqueryRowsExecutor interface {
+					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+				}
+				
+				if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+					if rows, err := executor.ExecuteSubqueryRows(inst.P4); err == nil {
+						// Check if value matches any row's first column
+						found := false
+						for _, row := range rows {
+							if len(row) > 0 && compareVals(value, row[0]) == 0 {
+								found = true
+								break
+							}
+						}
+						if found {
+							vm.registers[dstReg] = int64(0) // found, so NOT IN is false
+						} else {
+							vm.registers[dstReg] = int64(1) // not found, so NOT IN is true
+						}
+					} else {
+						vm.registers[dstReg] = int64(1)
+					}
+				} else {
+					vm.registers[dstReg] = int64(1)
+				}
+			} else {
+				vm.registers[dstReg] = int64(1)
 			}
 			continue
 
@@ -879,6 +1187,16 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if tableName == "" {
 				continue
 			}
+			
+			// If cursor is already manually opened (e.g., for correlated subqueries),
+			// don't reopen it to preserve the alias
+			existingCursor := vm.cursors.Get(cursorID)
+			if existingCursor != nil {
+				fmt.Printf("DEBUG OpOpenRead: cursor %d already open with name %q, skipping reopen to %q\n", cursorID, existingCursor.TableName, tableName)
+				continue
+			}
+			
+			fmt.Printf("DEBUG OpOpenRead: opening cursor %d with tableName=%q\n", cursorID, tableName)
 			if vm.ctx != nil {
 				if data, err := vm.ctx.GetTableData(tableName); err == nil && data != nil {
 					if cols, err := vm.ctx.GetTableColumns(tableName); err == nil {
@@ -1288,6 +1606,17 @@ func (r refVal) toFloat() float64 {
 		}
 	}
 	return 0
+}
+
+// getCurrentRow retrieves the current row from a cursor for correlated subquery context
+func (vm *VM) getCurrentRow(cursorID int) map[string]interface{} {
+	cursor := vm.cursors.Get(cursorID)
+	if cursor == nil || cursor.Index < 0 || cursor.Index >= len(cursor.Data) {
+		return nil
+	}
+	
+	// Return the current row
+	return cursor.Data[cursor.Index]
 }
 
 func (r refVal) String() string {
@@ -1923,11 +2252,11 @@ case "AVG":
 // AVG = SUM / COUNT, we accumulate SUM here
 state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
 case "MIN":
-if state.Mins[aggIdx] == nil || vm.compareValues(value, state.Mins[aggIdx]) < 0 {
+if state.Mins[aggIdx] == nil || vm.compareVals(value, state.Mins[aggIdx]) < 0 {
 state.Mins[aggIdx] = value
 }
 case "MAX":
-if state.Maxs[aggIdx] == nil || vm.compareValues(value, state.Maxs[aggIdx]) > 0 {
+if state.Maxs[aggIdx] == nil || vm.compareVals(value, state.Maxs[aggIdx]) > 0 {
 state.Maxs[aggIdx] = value
 }
 }
@@ -2070,17 +2399,17 @@ return vm.addValues(left, right)
 case QP.TokenMinus:
 return vm.subtractValues(left, right)
 case QP.TokenGt:
-return vm.compareValues(left, right) > 0
+return vm.compareVals(left, right) > 0
 case QP.TokenGe:
-return vm.compareValues(left, right) >= 0
+return vm.compareVals(left, right) >= 0
 case QP.TokenLt:
-return vm.compareValues(left, right) < 0
+return vm.compareVals(left, right) < 0
 case QP.TokenLe:
-return vm.compareValues(left, right) <= 0
+return vm.compareVals(left, right) <= 0
 case QP.TokenEq:
-return vm.compareValues(left, right) == 0
+return vm.compareVals(left, right) == 0
 case QP.TokenNe:
-return vm.compareValues(left, right) != 0
+return vm.compareVals(left, right) != 0
 default:
 return nil
 }
@@ -2104,7 +2433,32 @@ if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
 for i, expr := range aggInfo.NonAggCols {
 if nonAggCol, ok := expr.(*QP.ColumnRef); ok && nonAggCol.Name == colRef.Name {
 left := state.NonAggValues[i]
-right := vm.evaluateExprOnRow(nil, nil, binExpr.Right)
+
+// Evaluate the right side - handle subqueries specially
+var right interface{}
+if subqExpr, ok := binExpr.Right.(*QP.SubqueryExpr); ok {
+// Execute the subquery through the context
+if vm.ctx != nil {
+type SubqueryExecutor interface {
+ExecuteSubquery(subquery interface{}) (interface{}, error)
+}
+
+if executor, ok := vm.ctx.(SubqueryExecutor); ok {
+if result, err := executor.ExecuteSubquery(subqExpr.Select); err == nil {
+right = result
+} else {
+right = nil
+}
+} else {
+right = nil
+}
+} else {
+right = nil
+}
+} else {
+right = vm.evaluateExprOnRow(nil, nil, binExpr.Right)
+}
+
 result := vm.evaluateBinaryOp(left, right, binExpr.Op)
 if boolVal, ok := result.(bool); ok {
 return boolVal
@@ -2214,7 +2568,7 @@ return nil
 }
 
 // compareValues compares two values (-1, 0, 1)
-func (vm *VM) compareValues(a, b interface{}) int {
+func (vm *VM) compareVals(a, b interface{}) int {
 if a == nil && b == nil {
 return 0
 }

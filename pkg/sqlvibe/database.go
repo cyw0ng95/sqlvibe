@@ -1496,6 +1496,24 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 		columnNames = []string{"constraint_name", "unique_constraint_schema", "unique_constraint_name"}
 		// No foreign keys tracked yet, return empty
 		
+	case "key_column_usage":
+		columnNames = []string{"constraint_name", "table_name", "table_schema", "column_name", "ordinal_position"}
+		// Extract PRIMARY KEY column usage from in-memory schema
+		for tblName, pkCols := range db.primaryKeys {
+			if len(pkCols) > 0 {
+				constraintName := fmt.Sprintf("pk_%s", tblName)
+				for i, colName := range pkCols {
+					allResults = append(allResults, []interface{}{
+						constraintName,
+						tblName,
+						"main",
+						colName,
+						int64(i + 1), // ordinal position starts at 1
+					})
+				}
+			}
+		}
+		
 	default:
 		return nil, fmt.Errorf("unknown information_schema view: %s", viewName)
 	}
@@ -1722,6 +1740,65 @@ func (ctx *dbVmContext) ExecuteSubquery(subquery interface{}) (interface{}, erro
 	return nil, nil
 }
 
+// ExecuteSubqueryRows executes a subquery and returns all rows
+func (ctx *dbVmContext) ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error) {
+	// Type assert to *QP.SelectStmt
+	selectStmt, ok := subquery.(*QP.SelectStmt)
+	if !ok {
+		return nil, fmt.Errorf("subquery is not a SelectStmt")
+	}
+	
+	// Execute the subquery using execSelectStmt
+	rows, err := ctx.db.execSelectStmt(selectStmt)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Return all rows
+	return rows.Data, nil
+}
+
+// ExecuteSubqueryWithContext executes a scalar subquery with outer row context
+func (ctx *dbVmContext) ExecuteSubqueryWithContext(subquery interface{}, outerRow map[string]interface{}) (interface{}, error) {
+	// Type assert to *QP.SelectStmt
+	selectStmt, ok := subquery.(*QP.SelectStmt)
+	if !ok {
+		return nil, fmt.Errorf("subquery is not a SelectStmt")
+	}
+	
+	// Execute the subquery with outer row context
+	rows, err := ctx.db.execSelectStmtWithContext(selectStmt, outerRow)
+	if err != nil {
+		return nil, err
+	}
+	
+	// For a scalar subquery, return the first column of the first row
+	if len(rows.Data) > 0 && len(rows.Data[0]) > 0 {
+		return rows.Data[0][0], nil
+	}
+	
+	// If no rows, return nil
+	return nil, nil
+}
+
+// ExecuteSubqueryRowsWithContext executes a subquery with outer row context and returns all rows
+func (ctx *dbVmContext) ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error) {
+	// Type assert to *QP.SelectStmt
+	selectStmt, ok := subquery.(*QP.SelectStmt)
+	if !ok {
+		return nil, fmt.Errorf("subquery is not a SelectStmt")
+	}
+	
+	// Execute the subquery with outer row context
+	rows, err := ctx.db.execSelectStmtWithContext(selectStmt, outerRow)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Return all rows
+	return rows.Data, nil
+}
+
 // execSetOp executes SET operations (UNION, EXCEPT, INTERSECT) by running left and right separately
 func (db *Database) execSetOp(stmt *QP.SelectStmt, originalSQL string) (*Rows, error) {
 	// For now, use the existing direct execution path
@@ -1880,18 +1957,32 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 
 	compiler := CG.NewCompiler()
-	compiler.SetTableSchema(make(map[string]int), tableCols)
+	// Build column index map
+	colIndices := make(map[string]int)
 	for i, colName := range tableCols {
-		compiler.SetTableSchema(map[string]int{colName: i}, tableCols)
+		colIndices[colName] = i
 	}
+	compiler.SetTableSchema(colIndices, tableCols)
 
 	program := compiler.CompileSelect(stmt)
 	vm := VM.NewVMWithContext(program, &dbVmContext{db: db})
 
-	// Open table cursor
-	vm.Cursors().OpenTableAtID(0, tableName, db.data[tableName], tableCols)
+	// Reset VM state before opening cursor manually
+	vm.Reset()
+	vm.SetPC(0)
 
-	err := vm.Run(nil)
+	// Open table cursor (use alias if present, otherwise table name)
+	cursorName := tableName
+	if stmt.From.Alias != "" {
+		cursorName = stmt.From.Alias
+	}
+	vm.Cursors().OpenTableAtID(0, cursorName, db.data[tableName], tableCols)
+
+	// Execute without calling Reset again (use Exec instead of Run)
+	err := vm.Exec(nil)
+	if err == VM.ErrHalt {
+		err = nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1914,6 +2005,154 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 
 	return &Rows{Columns: cols, Data: results}, nil
+}
+
+// execSelectStmtWithContext executes a SelectStmt with outer row context for correlated subqueries
+func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[string]interface{}) (*Rows, error) {
+	if stmt.From == nil {
+		// SELECT without FROM - compile and execute directly (no correlation possible)
+		return db.execSelectStmt(stmt)
+	}
+
+	// SELECT with FROM - use existing VM query execution with context
+	tableName := stmt.From.Name
+	
+	// Handle information_schema virtual tables
+	if strings.ToLower(stmt.From.Schema) == "information_schema" {
+		fullName := stmt.From.Schema + "." + tableName
+		return db.queryInformationSchema(stmt, fullName)
+	}
+	
+	if db.data[tableName] == nil {
+		return nil, fmt.Errorf("table not found: %s", tableName)
+	}
+
+	tableCols := db.columnOrder[tableName]
+	if tableCols == nil {
+		tableCols = db.getOrderedColumns(tableName)
+	}
+
+	compiler := CG.NewCompiler()
+	// Build column index map
+	colIndices := make(map[string]int)
+	for i, colName := range tableCols {
+		colIndices[colName] = i
+	}
+	compiler.SetTableSchema(colIndices, tableCols)
+
+	program := compiler.CompileSelect(stmt)
+	
+	// Create context with outer row
+	ctx := &dbVmContextWithOuter{
+		db:       db,
+		outerRow: outerRow,
+	}
+	vm := VM.NewVMWithContext(program, ctx)
+	
+	// Reset VM state before opening cursor manually
+	vm.Reset()
+	vm.SetPC(0)
+
+	// Open table cursor (use alias if present, otherwise table name)
+	cursorName := tableName
+	if stmt.From.Alias != "" {
+		cursorName = stmt.From.Alias
+	}
+	fmt.Printf("DEBUG execSelectStmtWithContext: About to open cursor 0 with cursorName=%q\n", cursorName)
+	vm.Cursors().OpenTableAtID(0, cursorName, db.data[tableName], tableCols)
+	fmt.Printf("DEBUG execSelectStmtWithContext: Cursor 0 opened, about to Exec\n")
+
+	// Execute without calling Reset again (use Exec instead of Run)
+	err := vm.Exec(nil)
+	if err == VM.ErrHalt {
+		err = nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	results := vm.Results()
+
+	// Get column names from SELECT
+	cols := make([]string, 0)
+	for i, col := range stmt.Columns {
+		if colRef, ok := col.(*QP.ColumnRef); ok {
+			// Handle SELECT * - expand to table columns
+			if colRef.Name == "*" {
+				cols = append(cols, tableCols...)
+			} else {
+				cols = append(cols, colRef.Name)
+			}
+		} else {
+			cols = append(cols, fmt.Sprintf("col%d", i))
+		}
+	}
+
+	return &Rows{Columns: cols, Data: results}, nil
+}
+
+// dbVmContextWithOuter extends dbVmContext with outer row context for correlated subqueries
+type dbVmContextWithOuter struct {
+	db       *Database
+	outerRow map[string]interface{}
+}
+
+func (ctx *dbVmContextWithOuter) GetTableData(tableName string) ([]map[string]interface{}, error) {
+	if ctx.db.data == nil {
+		return nil, nil
+	}
+	return ctx.db.data[tableName], nil
+}
+
+func (ctx *dbVmContextWithOuter) GetTableColumns(tableName string) ([]string, error) {
+	if ctx.db.columnOrder == nil {
+		return nil, nil
+	}
+	return ctx.db.columnOrder[tableName], nil
+}
+
+// GetOuterRowValue retrieves a value from the outer row context
+func (ctx *dbVmContextWithOuter) GetOuterRowValue(columnName string) (interface{}, bool) {
+	if ctx.outerRow == nil {
+		return nil, false
+	}
+	val, ok := ctx.outerRow[columnName]
+	return val, ok
+}
+
+func (ctx *dbVmContextWithOuter) InsertRow(tableName string, row map[string]interface{}) error {
+	// Delegate to dbVmContext
+	return (&dbVmContext{db: ctx.db}).InsertRow(tableName, row)
+}
+
+func (ctx *dbVmContextWithOuter) UpdateRow(tableName string, rowIndex int, row map[string]interface{}) error {
+	// Delegate to dbVmContext
+	return (&dbVmContext{db: ctx.db}).UpdateRow(tableName, rowIndex, row)
+}
+
+func (ctx *dbVmContextWithOuter) DeleteRow(tableName string, rowIndex int) error {
+	// Delegate to dbVmContext
+	return (&dbVmContext{db: ctx.db}).DeleteRow(tableName, rowIndex)
+}
+
+func (ctx *dbVmContextWithOuter) ExecuteSubquery(subquery interface{}) (interface{}, error) {
+	// Delegate to db's dbVmContext
+	return (&dbVmContext{db: ctx.db}).ExecuteSubquery(subquery)
+}
+
+func (ctx *dbVmContextWithOuter) ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error) {
+	// Delegate to db's dbVmContext
+	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRows(subquery)
+}
+
+func (ctx *dbVmContextWithOuter) ExecuteSubqueryWithContext(subquery interface{}, outerRow map[string]interface{}) (interface{}, error) {
+	// Delegate to db's dbVmContext
+	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryWithContext(subquery, outerRow)
+}
+
+func (ctx *dbVmContextWithOuter) ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error) {
+	// Delegate to db's dbVmContext
+	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRowsWithContext(subquery, outerRow)
 }
 
 func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) {
