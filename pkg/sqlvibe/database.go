@@ -1965,6 +1965,10 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	program := compiler.CompileSelect(stmt)
 	vm := VM.NewVMWithContext(program, &dbVmContext{db: db})
 
+	// Reset VM state before opening cursor manually
+	vm.Reset()
+	vm.SetPC(0)
+
 	// Open table cursor (use alias if present, otherwise table name)
 	cursorName := tableName
 	if stmt.From.Alias != "" {
@@ -1972,7 +1976,11 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 	vm.Cursors().OpenTableAtID(0, cursorName, db.data[tableName], tableCols)
 
-	err := vm.Run(nil)
+	// Execute without calling Reset again (use Exec instead of Run)
+	err := vm.Exec(nil)
+	if err == VM.ErrHalt {
+		err = nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -2036,15 +2044,25 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 		outerRow: outerRow,
 	}
 	vm := VM.NewVMWithContext(program, ctx)
+	
+	// Reset VM state before opening cursor manually
+	vm.Reset()
+	vm.SetPC(0)
 
 	// Open table cursor (use alias if present, otherwise table name)
 	cursorName := tableName
 	if stmt.From.Alias != "" {
 		cursorName = stmt.From.Alias
 	}
+	fmt.Printf("DEBUG execSelectStmtWithContext: About to open cursor 0 with cursorName=%q\n", cursorName)
 	vm.Cursors().OpenTableAtID(0, cursorName, db.data[tableName], tableCols)
+	fmt.Printf("DEBUG execSelectStmtWithContext: Cursor 0 opened, about to Exec\n")
 
-	err := vm.Run(nil)
+	// Execute without calling Reset again (use Exec instead of Run)
+	err := vm.Exec(nil)
+	if err == VM.ErrHalt {
+		err = nil
+	}
 	if err != nil {
 		return nil, err
 	}
