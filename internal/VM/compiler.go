@@ -1267,6 +1267,7 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *Program {
 		Aggregates:   make([]AggregateDef, 0),
 		NonAggCols:   make([]QP.Expr, 0),
 		HavingExpr:   stmt.Having,
+		WhereExpr:    stmt.Where,
 	}
 
 	// Collect GROUP BY expressions
@@ -1319,6 +1320,7 @@ type AggregateInfo struct {
 	Aggregates   []AggregateDef // Aggregate functions in SELECT
 	NonAggCols   []QP.Expr      // Non-aggregate columns in SELECT
 	HavingExpr   QP.Expr        // HAVING clause expression
+	WhereExpr    QP.Expr        // WHERE clause expression
 }
 
 // AggregateDef defines an aggregate function

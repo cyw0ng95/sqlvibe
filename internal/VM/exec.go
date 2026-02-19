@@ -2312,6 +2312,13 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 	for rowIdx := 0; rowIdx < len(cursor.Data); rowIdx++ {
 		row := cursor.Data[rowIdx]
 
+		// Apply WHERE filter if present
+		if aggInfo.WhereExpr != nil {
+			if !vm.evaluateBoolExprOnRow(row, cursor.Columns, aggInfo.WhereExpr) {
+				continue
+			}
+		}
+
 		// Compute group key from GROUP BY expressions
 		groupKey := vm.computeGroupKey(row, cursor.Columns, aggInfo.GroupByExprs)
 
@@ -2545,7 +2552,62 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 	}
 }
 
-// evaluateBinaryOp evaluates a binary operation
+// evaluateBoolExprOnRow evaluates a WHERE-clause expression as a boolean against a row
+func (vm *VM) evaluateBoolExprOnRow(row map[string]interface{}, columns []string, expr QP.Expr) bool {
+	if expr == nil {
+		return true
+	}
+	switch e := expr.(type) {
+	case *QP.BinaryExpr:
+		switch e.Op {
+		case QP.TokenAnd:
+			return vm.evaluateBoolExprOnRow(row, columns, e.Left) && vm.evaluateBoolExprOnRow(row, columns, e.Right)
+		case QP.TokenOr:
+			return vm.evaluateBoolExprOnRow(row, columns, e.Left) || vm.evaluateBoolExprOnRow(row, columns, e.Right)
+		case QP.TokenIs:
+			left := vm.evaluateExprOnRow(row, columns, e.Left)
+			right := vm.evaluateExprOnRow(row, columns, e.Right)
+			if right == nil {
+				return left == nil
+			}
+			return left == right
+		case QP.TokenIsNot:
+			left := vm.evaluateExprOnRow(row, columns, e.Left)
+			right := vm.evaluateExprOnRow(row, columns, e.Right)
+			if right == nil {
+				return left != nil
+			}
+			return left != right
+		default:
+			result := vm.evaluateBinaryOp(
+				vm.evaluateExprOnRow(row, columns, e.Left),
+				vm.evaluateExprOnRow(row, columns, e.Right),
+				e.Op,
+			)
+			if bv, ok := result.(bool); ok {
+				return bv
+			}
+			return false
+		}
+	case *QP.UnaryExpr:
+		if e.Op == QP.TokenNot {
+			return !vm.evaluateBoolExprOnRow(row, columns, e.Expr)
+		}
+		result := vm.evaluateExprOnRow(row, columns, e.Expr)
+		if bv, ok := result.(bool); ok {
+			return bv
+		}
+		return false
+	default:
+		result := vm.evaluateExprOnRow(row, columns, expr)
+		if bv, ok := result.(bool); ok {
+			return bv
+		}
+		return result != nil
+	}
+}
+
+
 func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interface{} {
 	// Simple implementation for common operators
 	switch op {

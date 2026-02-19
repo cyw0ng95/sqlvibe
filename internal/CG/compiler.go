@@ -417,6 +417,7 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
 		Aggregates:   make([]VM.AggregateDef, 0),
 		NonAggCols:   make([]QP.Expr, 0),
 		HavingExpr:   stmt.Having,
+		WhereExpr:    stmt.Where,
 	}
 
 	if stmt.GroupBy != nil {

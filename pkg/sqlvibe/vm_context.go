@@ -2,10 +2,52 @@ package sqlvibe
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 )
+
+// autoAssignPK assigns an auto-increment value to a single INTEGER PRIMARY KEY column
+// when its value is nil, mimicking SQLite's rowid alias behavior.
+func (db *Database) autoAssignPK(tableName string, row map[string]interface{}) {
+	pkCols := db.primaryKeys[tableName]
+	if len(pkCols) != 1 {
+		return
+	}
+	pkCol := pkCols[0]
+	if row[pkCol] != nil {
+		return
+	}
+	// Check that it's an INTEGER column
+	colTypes := db.tables[tableName]
+	if colTypes == nil {
+		return
+	}
+	colType := strings.ToUpper(colTypes[pkCol])
+	if !strings.Contains(colType, "INT") {
+		return
+	}
+	// Find max existing value
+	var maxID int64
+	for _, r := range db.data[tableName] {
+		switch v := r[pkCol].(type) {
+		case int64:
+			if v > maxID {
+				maxID = v
+			}
+		case int:
+			if int64(v) > maxID {
+				maxID = int64(v)
+			}
+		case float64:
+			if int64(v) > maxID {
+				maxID = int64(v)
+			}
+		}
+	}
+	row[pkCol] = maxID + 1
+}
 
 type dsVmContext struct {
 	db         *Database
@@ -101,6 +143,60 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		if ctx.db.data[tableName] == nil {
 			ctx.db.data[tableName] = make([]map[string]interface{}, 0)
 		}
+
+		// Auto-assign integer primary key if nil
+		ctx.db.autoAssignPK(tableName, row)
+
+		// Check NOT NULL constraints
+		tableNotNull := ctx.db.columnNotNull[tableName]
+		for colName, isNotNull := range tableNotNull {
+			if isNotNull {
+				if val, exists := row[colName]; !exists || val == nil {
+					return fmt.Errorf("NOT NULL constraint failed: %s.%s", tableName, colName)
+				}
+			}
+		}
+
+		// Check CHECK constraints using dbVmContext evaluator
+		tableChecks := ctx.db.columnChecks[tableName]
+		for colName, checkExpr := range tableChecks {
+			if checkExpr != nil {
+				dbCtx := &dbVmContext{db: ctx.db}
+				result := dbCtx.evaluateCheckConstraint(checkExpr, row)
+				isValid := false
+				if result != nil {
+					switch v := result.(type) {
+					case bool:
+						isValid = v
+					case int64:
+						isValid = v != 0
+					case float64:
+						isValid = v != 0.0
+					case string:
+						isValid = len(v) > 0
+					default:
+						isValid = true
+					}
+				}
+				if !isValid {
+					return fmt.Errorf("CHECK constraint failed: %s.%s", tableName, colName)
+				}
+			}
+		}
+
+		// Check primary key uniqueness
+		pkCols := ctx.db.primaryKeys[tableName]
+		if len(pkCols) > 0 {
+			for _, pkCol := range pkCols {
+				pkVal := row[pkCol]
+				for _, existingRow := range ctx.db.data[tableName] {
+					if existingRow[pkCol] == pkVal && pkVal != nil {
+						return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCol)
+					}
+				}
+			}
+		}
+
 		ctx.db.data[tableName] = append(ctx.db.data[tableName], row)
 		return nil
 	}
@@ -196,6 +292,9 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		ctx.db.data[tableName] = make([]map[string]interface{}, 0)
 	}
 
+	// Auto-assign integer primary key if nil
+	ctx.db.autoAssignPK(tableName, row)
+
 	// Apply defaults for missing columns and NULL values
 	tableDefaults := ctx.db.columnDefaults[tableName]
 	for colName, defaultVal := range tableDefaults {
@@ -265,6 +364,9 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 	if len(pkCols) > 0 {
 		for _, pkCol := range pkCols {
 			pkVal := row[pkCol]
+			if pkVal == nil {
+				continue
+			}
 			for _, existingRow := range ctx.db.data[tableName] {
 				if existingRow[pkCol] == pkVal {
 					return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCol)

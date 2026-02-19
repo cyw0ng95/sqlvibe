@@ -460,8 +460,8 @@ func (db *Database) applyDefaults(sql string, tableName string, tableCols []stri
 		if strings.Contains(upperSQL, "DEFAULT VALUES") {
 			var vals []string
 			for _, col := range tableCols {
-				if _, hasDef := tableDefaults[col]; hasDef {
-					vals = append(vals, "NULL")
+				if defVal, hasDef := tableDefaults[col]; hasDef {
+					vals = append(vals, literalToString(defVal))
 				} else {
 					vals = append(vals, "NULL")
 				}
@@ -498,8 +498,8 @@ func (db *Database) applyDefaults(sql string, tableName string, tableCols []stri
 		for _, val := range row {
 			rowVals = append(rowVals, literalToString(val))
 		}
-		for range missingWithDefaults {
-			rowVals = append(rowVals, "NULL")
+		for _, col := range missingWithDefaults {
+			rowVals = append(rowVals, literalToString(tableDefaults[col]))
 		}
 		newVals = append(newVals, "("+strings.Join(rowVals, ", ")+")")
 	}
