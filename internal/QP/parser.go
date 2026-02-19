@@ -801,6 +801,15 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 					}
 				}
 
+				// Validate: only one primary key allowed
+				if col.PrimaryKey {
+					for _, existingCol := range stmt.Columns {
+						if existingCol.PrimaryKey {
+							return nil, fmt.Errorf("table %q has more than one primary key", stmt.Name)
+						}
+					}
+				}
+
 				stmt.Columns = append(stmt.Columns, col)
 
 				if p.current().Type != TokenComma {
