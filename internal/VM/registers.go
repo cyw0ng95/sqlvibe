@@ -1,31 +1,44 @@
 package VM
 
 type RegisterAllocator struct {
-	regs    []int
-	maxReg  int
-	nextReg int
-	inUse   map[int]bool
+	maxReg    int
+	nextReg   int
+	allocated uint64
+	largeRegs map[int]bool
 }
 
 func NewRegisterAllocator(initialRegs int) *RegisterAllocator {
+	if initialRegs <= 0 {
+		initialRegs = 16
+	}
 	return &RegisterAllocator{
-		regs:    make([]int, 0),
-		maxReg:  initialRegs,
-		nextReg: 0,
-		inUse:   make(map[int]bool),
+		maxReg:    initialRegs,
+		nextReg:   0,
+		allocated: 0,
+		largeRegs: make(map[int]bool),
 	}
 }
 
 func (ra *RegisterAllocator) Alloc() int {
-	for i := 0; i < ra.maxReg; i++ {
-		if !ra.inUse[i] {
-			ra.inUse[i] = true
+	if ra.nextReg < 64 {
+		for i := ra.nextReg; i < 64; i++ {
+			if (ra.allocated & (1 << i)) == 0 {
+				ra.allocated |= (1 << i)
+				ra.nextReg = i
+				return i
+			}
+		}
+	}
+
+	for i := 64; ; i++ {
+		if !ra.largeRegs[i] {
+			ra.largeRegs[i] = true
+			if i >= ra.maxReg {
+				ra.maxReg = i + 1
+			}
 			return i
 		}
 	}
-	ra.inUse[ra.maxReg] = true
-	ra.maxReg++
-	return ra.maxReg - 1
 }
 
 func (ra *RegisterAllocator) AllocMany(count int) []int {
@@ -37,8 +50,16 @@ func (ra *RegisterAllocator) AllocMany(count int) []int {
 }
 
 func (ra *RegisterAllocator) Release(reg int) {
-	if reg >= 0 && reg <= ra.maxReg {
-		ra.inUse[reg] = false
+	if reg < 0 {
+		return
+	}
+	if reg < 64 {
+		ra.allocated &= ^(1 << reg)
+		if reg < ra.nextReg {
+			ra.nextReg = reg
+		}
+	} else {
+		delete(ra.largeRegs, reg)
 	}
 }
 
@@ -49,11 +70,16 @@ func (ra *RegisterAllocator) ReleaseMany(regs []int) {
 }
 
 func (ra *RegisterAllocator) Reserve(reg int) {
-	if reg >= 0 {
-		ra.inUse[reg] = true
-		if reg >= ra.maxReg {
-			ra.maxReg = reg + 1
-		}
+	if reg < 0 {
+		return
+	}
+	if reg < 64 {
+		ra.allocated |= (1 << reg)
+	} else {
+		ra.largeRegs[reg] = true
+	}
+	if reg >= ra.maxReg {
+		ra.maxReg = reg + 1
 	}
 }
 
@@ -62,8 +88,7 @@ func (ra *RegisterAllocator) MaxReg() int {
 }
 
 func (ra *RegisterAllocator) Reset() {
-	for k := range ra.inUse {
-		ra.inUse[k] = false
-	}
+	ra.allocated = 0
 	ra.nextReg = 0
+	ra.largeRegs = make(map[int]bool)
 }
