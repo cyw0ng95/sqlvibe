@@ -1889,3 +1889,18 @@ func (qe *QueryEngine) negate(val interface{}) interface{} {
 	}
 	return val
 }
+
+// ValuesEqual is a public wrapper for valuesEqual
+func (qe *QueryEngine) ValuesEqual(a, b interface{}) bool {
+	return qe.valuesEqual(a, b)
+}
+
+// CompareVals is a public wrapper for compareVals
+func (qe *QueryEngine) CompareVals(a, b interface{}) int {
+	return qe.compareVals(a, b)
+}
+
+// MatchLike is a public wrapper for matchLike
+func (qe *QueryEngine) MatchLike(value, pattern string) bool {
+	return qe.matchLike(value, pattern)
+}
