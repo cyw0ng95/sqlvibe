@@ -1034,41 +1034,52 @@ func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *Program {
 	// Open cursor for the table (cursor 0)
 	c.program.EmitOpenTable(0, stmt.Table)
 
-	// Insert each row
-	for _, row := range stmt.Values {
-		// Compile each value expression into registers
-		// If columns are specified in INSERT, map values to columns
-		// Otherwise, values map to table column order
-		var insertInfo interface{}
-
-		if len(stmt.Columns) > 0 {
-			// Columns specified: create map of column name to register
-			colMap := make(map[string]int)
-			for i, val := range row {
-				if i < len(stmt.Columns) {
-					reg := c.compileExpr(val)
-					colMap[stmt.Columns[i]] = reg
-				}
-			}
-			insertInfo = colMap
-		} else {
-			// No columns specified: use positional array
-			rowRegs := make([]int, 0)
-			for _, val := range row {
-				reg := c.compileExpr(val)
-				rowRegs = append(rowRegs, reg)
-			}
-			insertInfo = rowRegs
-		}
-
-		// Emit Insert opcode with column mapping or positional registers
-		idx := len(c.program.Instructions)
+	// Handle DEFAULT VALUES
+	if stmt.UseDefaults {
+		// Insert a single row with all defaults
+		// Pass empty map to signal all defaults should be used
 		c.program.Instructions = append(c.program.Instructions, Instruction{
 			Op: OpInsert,
 			P1: 0, // cursor ID
-			P4: insertInfo,
+			P4: map[string]int{}, // Empty map signals use all defaults
 		})
-		_ = idx
+	} else {
+		// Insert each row
+		for _, row := range stmt.Values {
+			// Compile each value expression into registers
+			// If columns are specified in INSERT, map values to columns
+			// Otherwise, values map to table column order
+			var insertInfo interface{}
+
+			if len(stmt.Columns) > 0 {
+				// Columns specified: create map of column name to register
+				colMap := make(map[string]int)
+				for i, val := range row {
+					if i < len(stmt.Columns) {
+						reg := c.compileExpr(val)
+						colMap[stmt.Columns[i]] = reg
+					}
+				}
+				insertInfo = colMap
+			} else {
+				// No columns specified: use positional array
+				rowRegs := make([]int, 0)
+				for _, val := range row {
+					reg := c.compileExpr(val)
+					rowRegs = append(rowRegs, reg)
+				}
+				insertInfo = rowRegs
+			}
+
+			// Emit Insert opcode with column mapping or positional registers
+			idx := len(c.program.Instructions)
+			c.program.Instructions = append(c.program.Instructions, Instruction{
+				Op: OpInsert,
+				P1: 0, // cursor ID
+				P4: insertInfo,
+			})
+			_ = idx
+		}
 	}
 
 	c.program.Emit(OpHalt)

@@ -50,9 +50,10 @@ type Join struct {
 }
 
 type InsertStmt struct {
-	Table   string
-	Columns []string
-	Values  [][]Expr
+	Table         string
+	Columns       []string
+	Values        [][]Expr
+	UseDefaults   bool // True when using DEFAULT VALUES
 }
 
 func (i *InsertStmt) NodeType() string { return "InsertStmt" }
@@ -545,6 +546,18 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 		p.expect(TokenRightParen)
 	}
 
+	// Check for DEFAULT VALUES
+	if p.current().Literal == "DEFAULT" {
+		p.advance()
+		if p.current().Literal == "VALUES" {
+			p.advance()
+			stmt.UseDefaults = true
+			return stmt, nil
+		}
+		// Not DEFAULT VALUES, backtrack would be needed but we'll error for now
+		return nil, fmt.Errorf("expected VALUES after DEFAULT")
+	}
+
 	if p.current().Literal == "VALUES" {
 		p.advance()
 		for {
@@ -554,6 +567,12 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 			p.advance()
 
 			row := make([]Expr, 0)
+			// Don't allow empty VALUES () - that's not standard SQL
+			// Use DEFAULT VALUES instead
+			if p.current().Type == TokenRightParen {
+				return nil, fmt.Errorf("empty VALUES () not supported, use DEFAULT VALUES")
+			}
+			
 			for {
 				expr, err := p.parseExpr()
 				if err != nil {

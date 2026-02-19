@@ -1699,10 +1699,11 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		ctx.db.data[tableName] = make([]map[string]interface{}, 0)
 	}
 
-	// Apply defaults for NULL values
+	// Apply defaults for missing columns and NULL values
 	tableDefaults := ctx.db.columnDefaults[tableName]
 	for colName, defaultVal := range tableDefaults {
 		if val, exists := row[colName]; exists {
+			// Column exists but is NULL - apply default
 			if val == nil {
 				// Extract value from Literal if needed
 				if lit, ok := defaultVal.(*QP.Literal); ok {
@@ -1710,6 +1711,13 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 				} else {
 					row[colName] = defaultVal
 				}
+			}
+		} else {
+			// Column missing entirely - add it with default value
+			if lit, ok := defaultVal.(*QP.Literal); ok {
+				row[colName] = lit.Value
+			} else {
+				row[colName] = defaultVal
 			}
 		}
 	}
