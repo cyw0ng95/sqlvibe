@@ -18,10 +18,11 @@ const MaxVMIterations = 1000000
 
 func (vm *VM) Exec(ctx interface{}) error {
 	iterationCount := 0
+	checkInterval := 1000 // Check for infinite loop every 1000 iterations
 	for {
-		// Check for infinite loop
+		// Check for infinite loop less frequently for better performance
 		iterationCount++
-		if iterationCount > MaxVMIterations {
+		if iterationCount%checkInterval == 0 && iterationCount > MaxVMIterations {
 			util.Assert(false, "VM execution exceeded %d iterations - possible infinite loop detected. This usually indicates a bug in the query compiler (e.g., incorrect jump targets in JOIN compilation).", MaxVMIterations)
 		}
 
@@ -2471,14 +2472,14 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 
 // AggregateState tracks aggregate values for a group
 type AggregateState struct {
-	GroupKey      string
-	Count         int
-	Counts        []int // per-aggregate non-NULL counts (for COUNT(col) and AVG)
-	Sums          []interface{}
-	Mins          []interface{}
-	Maxs          []interface{}
-	NonAggValues  []interface{}
-	DistinctSets  []map[string]bool // per-aggregate distinct value sets (for DISTINCT aggregates)
+	GroupKey     string
+	Count        int
+	Counts       []int // per-aggregate non-NULL counts (for COUNT(col) and AVG)
+	Sums         []interface{}
+	Mins         []interface{}
+	Maxs         []interface{}
+	NonAggValues []interface{}
+	DistinctSets []map[string]bool // per-aggregate distinct value sets (for DISTINCT aggregates)
 }
 
 // isCountStar reports whether an aggregate definition is COUNT(*) or COUNT() with no args.
