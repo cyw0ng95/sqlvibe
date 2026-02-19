@@ -373,7 +373,15 @@ func (db *Database) Exec(sql string) (Result, error) {
 		db.columnDefaults[stmt.Name] = make(map[string]interface{})
 		db.columnNotNull[stmt.Name] = make(map[string]bool)
 		db.columnChecks[stmt.Name] = make(map[string]QP.Expr)
+		seenCols := make(map[string]bool)
+		if len(stmt.Columns) == 0 {
+			return Result{}, fmt.Errorf("table must have at least one column")
+		}
 		for _, col := range stmt.Columns {
+			if seenCols[col.Name] {
+				return Result{}, fmt.Errorf("duplicate column name: %s", col.Name)
+			}
+			seenCols[col.Name] = true
 			schema[col.Name] = QE.ColumnType{Name: col.Name, Type: col.Type}
 			colTypes[col.Name] = col.Type
 			if col.PrimaryKey {

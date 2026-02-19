@@ -728,7 +728,22 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 
 		if p.current().Type == TokenLeftParen {
 			p.advance()
+			// Check for empty table definition
+			if p.current().Type == TokenRightParen {
+				return nil, fmt.Errorf("near \")\": syntax error")
+			}
 			for {
+				// Stop when we reach the end of column definitions
+				if p.current().Type == TokenRightParen || p.current().Type == TokenEOF {
+					break
+				}
+				// Stop at table-level constraint keywords
+				if p.current().Type == TokenKeyword {
+					kw := strings.ToUpper(p.current().Literal)
+					if kw == "PRIMARY" || kw == "UNIQUE" || kw == "CHECK" || kw == "FOREIGN" || kw == "CONSTRAINT" {
+						break
+					}
+				}
 				col := ColumnDef{
 					Name: p.current().Literal,
 				}
@@ -807,18 +822,12 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 								}
 							}
 						}
+					} else if keyword == "AUTOINCREMENT" || keyword == "ASC" || keyword == "DESC" {
+						// Column modifier keywords - skip
+						p.advance()
 					} else {
 						// Stop at unknown keywords or table-level constraints
 						break
-					}
-				}
-
-				// Validate: only one primary key allowed
-				if col.PrimaryKey {
-					for _, existingCol := range stmt.Columns {
-						if existingCol.PrimaryKey {
-							return nil, fmt.Errorf("table %q has more than one primary key", stmt.Name)
-						}
 					}
 				}
 
@@ -828,6 +837,69 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 					break
 				}
 				p.advance()
+
+				// Check for table-level constraints after comma
+				for p.current().Type == TokenKeyword {
+					kw := strings.ToUpper(p.current().Literal)
+					if kw == "PRIMARY" {
+						p.advance()
+						if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "KEY" {
+							p.advance()
+						}
+						if p.current().Type == TokenLeftParen {
+							p.advance()
+							for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+								pkColName := p.current().Literal
+								for i := range stmt.Columns {
+									if stmt.Columns[i].Name == pkColName {
+										stmt.Columns[i].PrimaryKey = true
+									}
+								}
+								p.advance()
+								if p.current().Type == TokenComma {
+									p.advance()
+								}
+							}
+							if p.current().Type == TokenRightParen {
+								p.advance()
+							}
+						}
+					} else if kw == "UNIQUE" {
+						p.advance()
+						if p.current().Type == TokenLeftParen {
+							for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+								p.advance()
+							}
+							if p.current().Type == TokenRightParen {
+								p.advance()
+							}
+						}
+					} else if kw == "CHECK" {
+						p.advance()
+						if p.current().Type == TokenLeftParen {
+							p.advance()
+							_, _ = p.parseExpr()
+							if p.current().Type == TokenRightParen {
+								p.advance()
+							}
+						}
+					} else if kw == "FOREIGN" {
+						for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+							p.advance()
+						}
+					} else if kw == "CONSTRAINT" {
+						p.advance() // consume "CONSTRAINT"
+						p.advance() // consume constraint name
+						continue
+					} else {
+						break
+					}
+					if p.current().Type == TokenComma {
+						p.advance()
+					} else {
+						break
+					}
+				}
 			}
 			p.expect(TokenRightParen)
 		}

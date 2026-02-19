@@ -187,12 +187,17 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		// Check primary key uniqueness
 		pkCols := ctx.db.primaryKeys[tableName]
 		if len(pkCols) > 0 {
-			for _, pkCol := range pkCols {
-				pkVal := row[pkCol]
-				for _, existingRow := range ctx.db.data[tableName] {
-					if existingRow[pkCol] == pkVal && pkVal != nil {
-						return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCol)
+			for _, existingRow := range ctx.db.data[tableName] {
+				allMatch := true
+				for _, pkCol := range pkCols {
+					pkVal := row[pkCol]
+					if pkVal == nil || existingRow[pkCol] != pkVal {
+						allMatch = false
+						break
 					}
+				}
+				if allMatch {
+					return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
 				}
 			}
 		}
@@ -380,15 +385,17 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 	// Check primary key constraints
 	pkCols := ctx.db.primaryKeys[tableName]
 	if len(pkCols) > 0 {
-		for _, pkCol := range pkCols {
-			pkVal := row[pkCol]
-			if pkVal == nil {
-				continue
-			}
-			for _, existingRow := range ctx.db.data[tableName] {
-				if existingRow[pkCol] == pkVal {
-					return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCol)
+		for _, existingRow := range ctx.db.data[tableName] {
+			allMatch := true
+			for _, pkCol := range pkCols {
+				pkVal := row[pkCol]
+				if pkVal == nil || existingRow[pkCol] != pkVal {
+					allMatch = false
+					break
 				}
+			}
+			if allMatch {
+				return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
 			}
 		}
 	}
