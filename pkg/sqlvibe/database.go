@@ -544,118 +544,11 @@ func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error)
 		return rows, nil
 	}
 
-	cols := rows.Columns
-	data := rows.Data
-
-	// Pre-evaluate ORDER BY expressions for each row
-	// This is needed for non-ColumnRef expressions (e.g., val * -1, ABS(val))
-	orderByValues := make([][]interface{}, len(orderBy))
-	for obIdx, ob := range orderBy {
-		orderByValues[obIdx] = make([]interface{}, len(data))
-		for rowIdx, row := range data {
-			// Convert row slice to map for EvalExpr
-			rowMap := make(map[string]interface{})
-			for colIdx, colName := range cols {
-				rowMap[colName] = row[colIdx]
-			}
-			orderByValues[obIdx][rowIdx] = db.engine.EvalExpr(rowMap, ob.Expr)
-		}
-	}
-
-	sorted := make([][]interface{}, len(data))
-	copy(sorted, data)
-
-	for i := range sorted {
-		for j := i + 1; j < len(sorted); j++ {
-			for obIdx, ob := range orderBy {
-				var keyValI, keyValJ interface{}
-				if colRef, ok := ob.Expr.(*QP.ColumnRef); ok {
-					for ci, cn := range cols {
-						if cn == colRef.Name {
-							keyValI = sorted[i][ci]
-							keyValJ = sorted[j][ci]
-							break
-						}
-					}
-				} else {
-					// Use pre-evaluated expression values
-					keyValI = orderByValues[obIdx][i]
-					keyValJ = orderByValues[obIdx][j]
-				}
-				cmp := compareValues(keyValI, keyValJ)
-				if ob.Desc {
-					cmp = -cmp
-				}
-				if cmp > 0 {
-					sorted[i], sorted[j] = sorted[j], sorted[i]
-					// Also swap the pre-evaluated values to maintain consistency
-					for obIdx2 := range orderBy {
-						orderByValues[obIdx2][i], orderByValues[obIdx2][j] = orderByValues[obIdx2][j], orderByValues[obIdx2][i]
-					}
-					break
-				} else if cmp < 0 {
-					break
-				}
-				// if cmp == 0, continue to next ORDER BY column
-			}
-		}
-	}
-
-	return &Rows{Columns: cols, Data: sorted}, nil
+	sorted := db.engine.SortRows(rows.Data, orderBy, rows.Columns)
+	return &Rows{Columns: rows.Columns, Data: sorted}, nil
 }
 
 
-func compareValues(a, b interface{}) int {
-	if a == nil && b == nil {
-		return 0
-	}
-	if a == nil {
-		return -1
-	}
-	if b == nil {
-		return 1
-	}
-	switch av := a.(type) {
-	case int64:
-		bv, ok := b.(int64)
-		if !ok {
-			return 0
-		}
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
-		}
-		return 0
-	case float64:
-		bv, ok := b.(float64)
-		if !ok {
-			return 0
-		}
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
-		}
-		return 0
-	case string:
-		bv, ok := b.(string)
-		if !ok {
-			return 0
-		}
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
-		}
-		return 0
-	default:
-		return 0
-	}
-}
 
 
 func (db *Database) ExecWithParams(sql string, params []interface{}) (Result, error) {
@@ -745,81 +638,12 @@ func (db *Database) scanByIndexValue(tableName, colName string, value interface{
 	return db.engine.ScanByIndexValue(tableName, colName, value, unique)
 }
 
-func toFloat64(v interface{}) (float64, bool) {
-	switch n := v.(type) {
-	case int64:
-		return float64(n), true
-	case int:
-		return float64(n), true
-	case float64:
-		return n, true
-	case float32:
-		return float64(n), true
-	default:
-		return 0, false
-	}
-}
-
 
 func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, cols []string) [][]interface{} {
 	if len(orderBy) == 0 || len(data) == 0 {
 		return data
 	}
-
-	sorted := make([][]interface{}, len(data))
-	copy(sorted, data)
-
-	// Pre-evaluate ORDER BY expressions for each row
-	// This is needed for non-ColumnRef expressions (e.g., val * -1)
-	orderByValues := make([][]interface{}, len(orderBy))
-	for obIdx, ob := range orderBy {
-		orderByValues[obIdx] = make([]interface{}, len(data))
-		for rowIdx, row := range data {
-			// Convert row slice to map for EvalExpr
-			rowMap := make(map[string]interface{})
-			for colIdx, colName := range cols {
-				rowMap[colName] = row[colIdx]
-			}
-			orderByValues[obIdx][rowIdx] = db.engine.EvalExpr(rowMap, ob.Expr)
-		}
-	}
-
-	for i := range sorted {
-		for j := i + 1; j < len(sorted); j++ {
-			for obIdx, ob := range orderBy {
-				var keyValI, keyValJ interface{}
-				if colRef, ok := ob.Expr.(*QP.ColumnRef); ok {
-					for ci, cn := range cols {
-						if cn == colRef.Name {
-							keyValI = sorted[i][ci]
-							keyValJ = sorted[j][ci]
-							break
-						}
-					}
-				} else {
-					// Use pre-evaluated expression values
-					keyValI = orderByValues[obIdx][i]
-					keyValJ = orderByValues[obIdx][j]
-				}
-				cmp := db.engine.CompareVals(keyValI, keyValJ)
-				if ob.Desc {
-					cmp = -cmp
-				}
-				if cmp > 0 {
-					sorted[i], sorted[j] = sorted[j], sorted[i]
-					// Also swap the pre-evaluated values to maintain consistency
-					for obIdx2 := range orderBy {
-						orderByValues[obIdx2][i], orderByValues[obIdx2][j] = orderByValues[obIdx2][j], orderByValues[obIdx2][i]
-					}
-					break
-				} else if cmp < 0 {
-					break
-				}
-				// if cmp == 0, continue to next ORDER BY column
-			}
-		}
-	}
-	return sorted
+	return db.engine.SortRows(data, orderBy, cols)
 }
 
 func (db *Database) applyLimit(rows *Rows, limitExpr QP.Expr, offsetExpr QP.Expr) (*Rows, error) {

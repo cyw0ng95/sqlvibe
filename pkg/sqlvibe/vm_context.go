@@ -143,17 +143,17 @@ func (ctx *dbVmContext) evaluateCheckConstraint(expr QP.Expr, row map[string]int
 		// Perform the operation
 		switch e.Op {
 		case QP.TokenEq:
-			return compareValues(left, right) == 0
+			return ctx.db.engine.CompareVals(left, right) == 0
 		case QP.TokenNe:
-			return compareValues(left, right) != 0
+			return ctx.db.engine.CompareVals(left, right) != 0
 		case QP.TokenLt:
-			return compareValues(left, right) < 0
+			return ctx.db.engine.CompareVals(left, right) < 0
 		case QP.TokenLe:
-			return compareValues(left, right) <= 0
+			return ctx.db.engine.CompareVals(left, right) <= 0
 		case QP.TokenGt:
-			return compareValues(left, right) > 0
+			return ctx.db.engine.CompareVals(left, right) > 0
 		case QP.TokenGe:
-			return compareValues(left, right) >= 0
+			return ctx.db.engine.CompareVals(left, right) >= 0
 		case QP.TokenAnd:
 			// AND: both must be truthy
 			return isTruthy(left) && isTruthy(right)
