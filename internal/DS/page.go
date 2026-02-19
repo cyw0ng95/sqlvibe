@@ -3,6 +3,8 @@ package DS
 import (
 	"encoding/binary"
 	"errors"
+
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 const (
@@ -63,6 +65,9 @@ type Page struct {
 }
 
 func NewPage(num uint32, size int) *Page {
+	util.Assert(size >= MinPageSize && size <= MaxPageSize, "page size %d out of bounds [%d, %d]", size, MinPageSize, MaxPageSize)
+	util.Assert(IsValidPageSize(size), "page size %d must be power of 2", size)
+	
 	return &Page{
 		Num:      num,
 		Type:     0,
@@ -78,6 +83,9 @@ func (p *Page) SetType(t PageType) {
 }
 
 func (p *Page) SetData(data []byte) {
+	util.AssertNotNil(data, "data")
+	util.Assert(len(data) <= len(p.Data), "data size %d exceeds page capacity %d", len(data), len(p.Data))
+	
 	copy(p.Data, data)
 	p.IsDirty = true
 }
@@ -121,6 +129,8 @@ func (h *DatabaseHeader) GetTextEncoding() string {
 }
 
 func ParseHeader(data []byte) (*DatabaseHeader, error) {
+	util.AssertNotNil(data, "data")
+	
 	if len(data) < 100 {
 		return nil, ErrInvalidHeader
 	}
@@ -157,6 +167,8 @@ func ParseHeader(data []byte) (*DatabaseHeader, error) {
 }
 
 func (h *DatabaseHeader) WriteTo(data []byte) error {
+	util.AssertNotNil(data, "data")
+	
 	if len(data) < 100 {
 		return ErrInvalidHeader
 	}
@@ -188,6 +200,8 @@ func (h *DatabaseHeader) WriteTo(data []byte) error {
 }
 
 func NewDatabaseHeader(pageSize uint16) *DatabaseHeader {
+	util.Assert(IsValidPageSize(int(pageSize)), "invalid page size: %d", pageSize)
+	
 	h := &DatabaseHeader{
 		PageSize:            pageSize,
 		WriteVersion:        1,

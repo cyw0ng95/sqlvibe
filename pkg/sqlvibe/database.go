@@ -10,6 +10,7 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/QE"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 	"github.com/sqlvibe/sqlvibe/internal/TM"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 type Database struct {
 	pm             *DS.PageManager
@@ -69,6 +70,8 @@ func (r *Rows) Next() bool {
 }
 
 func (r *Rows) Scan(dest ...interface{}) error {
+	util.Assert(r.pos >= 0, "row position cannot be negative: %d", r.pos)
+	
 	if r.Data == nil || r.pos < 0 || r.pos >= len(r.Data) {
 		return fmt.Errorf("no rows available")
 	}

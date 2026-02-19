@@ -3,6 +3,8 @@ package DS
 import (
 	"encoding/binary"
 	"errors"
+
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 // Cell format encoding/decoding for all 4 BTree page types
@@ -37,6 +39,9 @@ type CellData struct {
 // EncodeTableLeafCell encodes a table leaf cell
 // Format: payload_size (varint) + rowid (varint) + payload + [overflow_page (4 bytes)]
 func EncodeTableLeafCell(rowid int64, payload []byte, overflowPage uint32) []byte {
+	util.AssertNotNil(payload, "payload")
+	util.Assert(rowid > 0, "rowid must be positive: %d", rowid)
+	
 	payloadSize := len(payload)
 	
 	// Calculate size
@@ -68,6 +73,8 @@ func EncodeTableLeafCell(rowid int64, payload []byte, overflowPage uint32) []byt
 
 // DecodeTableLeafCell decodes a table leaf cell
 func DecodeTableLeafCell(buf []byte) (*CellData, error) {
+	util.AssertNotNil(buf, "buf")
+	
 	if len(buf) < 2 {
 		return nil, ErrInvalidCellFormat
 	}
