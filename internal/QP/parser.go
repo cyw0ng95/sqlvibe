@@ -92,6 +92,7 @@ type ColumnDef struct {
 	PrimaryKey bool
 	NotNull    bool
 	Default    Expr
+	Check      Expr // CHECK constraint expression
 }
 
 type DropTableStmt struct {
@@ -750,6 +751,21 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 							return nil, err
 						}
 						col.Default = defaultExpr
+					} else if keyword == "CHECK" {
+						// Parse CHECK constraint
+						p.advance()
+						if p.current().Type == TokenLeftParen {
+							p.advance()
+							// Parse the check expression
+							checkExpr, err := p.parseExpr()
+							if err != nil {
+								return nil, err
+							}
+							col.Check = checkExpr
+							if p.current().Type == TokenRightParen {
+								p.advance()
+							}
+						}
 					} else if keyword == "REFERENCES" {
 						// Skip FOREIGN KEY reference for now
 						p.advance()

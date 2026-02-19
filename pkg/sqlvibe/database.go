@@ -26,6 +26,7 @@ type Database struct {
 	columnOrder    map[string][]string                 // table name -> ordered column names
 	columnDefaults map[string]map[string]interface{}   // table name -> column name -> default value
 	columnNotNull  map[string]map[string]bool          // table name -> column name -> NOT NULL
+	columnChecks   map[string]map[string]QP.Expr       // table name -> column name -> CHECK expression
 	data           map[string][]map[string]interface{} // table name -> rows -> column name -> value
 	indexes        map[string]*IndexInfo               // index name -> index info
 	isRegistry     *IS.Registry                        // information_schema registry
@@ -168,6 +169,7 @@ func Open(path string) (*Database, error) {
 		columnOrder:    make(map[string][]string),
 		columnDefaults: make(map[string]map[string]interface{}),
 		columnNotNull:  make(map[string]map[string]bool),
+		columnChecks:   make(map[string]map[string]QP.Expr),
 		data:           data,
 		indexes:        make(map[string]*IndexInfo),
 	}, nil
@@ -264,6 +266,7 @@ func (db *Database) Exec(sql string) (Result, error) {
 		var pkCols []string
 		db.columnDefaults[stmt.Name] = make(map[string]interface{})
 		db.columnNotNull[stmt.Name] = make(map[string]bool)
+		db.columnChecks[stmt.Name] = make(map[string]QP.Expr)
 		for _, col := range stmt.Columns {
 			schema[col.Name] = QE.ColumnType{Name: col.Name, Type: col.Type}
 			colTypes[col.Name] = col.Type
@@ -275,6 +278,9 @@ func (db *Database) Exec(sql string) (Result, error) {
 			}
 			if col.NotNull {
 				db.columnNotNull[stmt.Name][col.Name] = true
+			}
+			if col.Check != nil {
+				db.columnChecks[stmt.Name][col.Name] = col.Check
 			}
 		}
 		db.engine.RegisterTable(stmt.Name, schema)
@@ -1732,6 +1738,37 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		}
 	}
 
+	// Check CHECK constraints
+	tableChecks := ctx.db.columnChecks[tableName]
+	for colName, checkExpr := range tableChecks {
+		if checkExpr != nil {
+			// Evaluate the CHECK expression with the row values
+			// Create a simple evaluator that can resolve column references to row values
+			result := ctx.evaluateCheckConstraint(checkExpr, row)
+			
+			// CHECK constraint must evaluate to true (non-zero, non-null, non-false)
+			isValid := false
+			if result != nil {
+				switch v := result.(type) {
+				case bool:
+					isValid = v
+				case int64:
+					isValid = v != 0
+				case float64:
+					isValid = v != 0.0
+				case string:
+					isValid = len(v) > 0
+				default:
+					isValid = true
+				}
+			}
+			
+			if !isValid {
+				return fmt.Errorf("CHECK constraint failed: %s.%s", tableName, colName)
+			}
+		}
+	}
+
 	// Check primary key constraints
 	pkCols := ctx.db.primaryKeys[tableName]
 	if len(pkCols) > 0 {
@@ -1752,6 +1789,184 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 	serialized := ctx.db.serializeRow(row)
 	ctx.db.engine.Insert(tableName, uint64(rowID), serialized)
 
+	return nil
+}
+
+// evaluateCheckConstraint evaluates a CHECK constraint expression with row values
+func (ctx *dbVmContext) evaluateCheckConstraint(expr QP.Expr, row map[string]interface{}) interface{} {
+	switch e := expr.(type) {
+	case *QP.Literal:
+		return e.Value
+	
+	case *QP.ColumnRef:
+		// Look up column value in the row
+		if val, ok := row[e.Name]; ok {
+			return val
+		}
+		return nil
+	
+	case *QP.BinaryExpr:
+		// Evaluate left and right operands
+		left := ctx.evaluateCheckConstraint(e.Left, row)
+		right := ctx.evaluateCheckConstraint(e.Right, row)
+		
+		// Handle NULL propagation
+		if left == nil || right == nil {
+			// In SQL, NULL comparisons return NULL (which is falsy for CHECK)
+			return nil
+		}
+		
+		// Perform the operation
+		switch e.Op {
+		case QP.TokenEq:
+			return compareValues(left, right) == 0
+		case QP.TokenNe:
+			return compareValues(left, right) != 0
+		case QP.TokenLt:
+			return compareValues(left, right) < 0
+		case QP.TokenLe:
+			return compareValues(left, right) <= 0
+		case QP.TokenGt:
+			return compareValues(left, right) > 0
+		case QP.TokenGe:
+			return compareValues(left, right) >= 0
+		case QP.TokenAnd:
+			// AND: both must be truthy
+			return isTruthy(left) && isTruthy(right)
+		case QP.TokenOr:
+			// OR: at least one must be truthy
+			return isTruthy(left) || isTruthy(right)
+		case QP.TokenPlus:
+			return addValues(left, right)
+		case QP.TokenMinus:
+			return subtractValues(left, right)
+		case QP.TokenAsterisk:
+			return multiplyValues(left, right)
+		case QP.TokenSlash:
+			return divideValues(left, right)
+		}
+	
+	case *QP.UnaryExpr:
+		val := ctx.evaluateCheckConstraint(e.Expr, row)
+		if e.Op == QP.TokenMinus {
+			if iv, ok := val.(int64); ok {
+				return -iv
+			}
+			if fv, ok := val.(float64); ok {
+				return -fv
+			}
+		}
+		return val
+	}
+	
+	return nil
+}
+
+// Helper functions for CHECK constraint evaluation
+func isTruthy(val interface{}) bool {
+	if val == nil {
+		return false
+	}
+	switch v := val.(type) {
+	case bool:
+		return v
+	case int64:
+		return v != 0
+	case float64:
+		return v != 0.0
+	case string:
+		return len(v) > 0
+	default:
+		return true
+	}
+}
+
+// Arithmetic helper functions for CHECK constraint evaluation
+func addValues(left, right interface{}) interface{} {
+	if l, ok := left.(int64); ok {
+		if r, ok := right.(int64); ok {
+			return l + r
+		}
+		if r, ok := right.(float64); ok {
+			return float64(l) + r
+		}
+	}
+	if l, ok := left.(float64); ok {
+		if r, ok := right.(int64); ok {
+			return l + float64(r)
+		}
+		if r, ok := right.(float64); ok {
+			return l + r
+		}
+	}
+	return nil
+}
+
+func subtractValues(left, right interface{}) interface{} {
+	if l, ok := left.(int64); ok {
+		if r, ok := right.(int64); ok {
+			return l - r
+		}
+		if r, ok := right.(float64); ok {
+			return float64(l) - r
+		}
+	}
+	if l, ok := left.(float64); ok {
+		if r, ok := right.(int64); ok {
+			return l - float64(r)
+		}
+		if r, ok := right.(float64); ok {
+			return l - r
+		}
+	}
+	return nil
+}
+
+func multiplyValues(left, right interface{}) interface{} {
+	if l, ok := left.(int64); ok {
+		if r, ok := right.(int64); ok {
+			return l * r
+		}
+		if r, ok := right.(float64); ok {
+			return float64(l) * r
+		}
+	}
+	if l, ok := left.(float64); ok {
+		if r, ok := right.(int64); ok {
+			return l * float64(r)
+		}
+		if r, ok := right.(float64); ok {
+			return l * r
+		}
+	}
+	return nil
+}
+
+func divideValues(left, right interface{}) interface{} {
+	if l, ok := left.(int64); ok {
+		if r, ok := right.(int64); ok {
+			if r != 0 {
+				return l / r
+			}
+		}
+		if r, ok := right.(float64); ok {
+			if r != 0.0 {
+				return float64(l) / r
+			}
+		}
+	}
+	if l, ok := left.(float64); ok {
+		if r, ok := right.(int64); ok {
+			if r != 0 {
+				return l / float64(r)
+			}
+		}
+		if r, ok := right.(float64); ok {
+			if r != 0.0 {
+				return l / r
+			}
+		}
+	}
 	return nil
 }
 
