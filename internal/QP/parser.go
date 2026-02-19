@@ -327,6 +327,9 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 	if p.current().Type == TokenKeyword && p.current().Literal == "DISTINCT" {
 		p.advance()
 		stmt.Distinct = true
+	} else if p.current().Type == TokenAll {
+		// SELECT ALL is the default (non-distinct) - just consume the token
+		p.advance()
 	}
 
 	if p.current().Type == TokenAsterisk {
@@ -340,6 +343,15 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 			}
 			if col == nil {
 			}
+
+			// Check for column alias: expr AS alias OR expr alias (implicit alias)
+			if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+				p.advance()
+				alias := p.current().Literal
+				p.advance()
+				col = &AliasExpr{Expr: col, Alias: alias}
+			}
+
 			stmt.Columns = append(stmt.Columns, col)
 
 			if p.current().Type != TokenComma {
@@ -347,7 +359,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				if p.current().Type == TokenKeyword {
 					lit := p.current().Literal
 					litUpper := strings.ToUpper(lit)
-					if litUpper == "FROM" || litUpper == "WHERE" || litUpper == "ORDER" || litUpper == "GROUP" || litUpper == "HAVING" || litUpper == "LIMIT" || litUpper == "AS" {
+					if litUpper == "FROM" || litUpper == "WHERE" || litUpper == "ORDER" || litUpper == "GROUP" || litUpper == "HAVING" || litUpper == "LIMIT" {
 						break
 					}
 				}

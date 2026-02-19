@@ -432,6 +432,9 @@ func (c *Compiler) compileExpr(expr QP.Expr) int {
 	case *QP.SubqueryExpr:
 		return c.compileSubqueryExpr(e)
 
+	case *QP.AliasExpr:
+		return c.compileExpr(e.Expr)
+
 	default:
 		reg := c.ra.Alloc()
 		c.program.EmitLoadConst(reg, nil)

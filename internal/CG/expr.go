@@ -38,6 +38,10 @@ func (c *Compiler) compileExpr(expr QP.Expr) int {
 	case *QP.SubqueryExpr:
 		return c.compileSubqueryExpr(e)
 
+	case *QP.AliasExpr:
+		// Alias expression: just compile the inner expression (alias is handled by column naming)
+		return c.compileExpr(e.Expr)
+
 	default:
 		reg := c.ra.Alloc()
 		c.program.EmitLoadConst(reg, nil)
