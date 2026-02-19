@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/sqlvibe/sqlvibe/internal/CG"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 	"github.com/sqlvibe/sqlvibe/internal/VM"
 )
@@ -31,7 +32,7 @@ func (db *Database) handleExplain(stmt *QP.ExplainStmt, sql string) (*Rows, erro
 		innerSQL = strings.TrimPrefix(innerSQL, "EXPLAIN")
 		innerSQL = strings.TrimSpace(innerSQL)
 
-		program, err := VM.CompileWithSchema(innerSQL, nil)
+		program, err := CG.CompileWithSchema(innerSQL, nil)
 		if err != nil {
 			return nil, err
 		}

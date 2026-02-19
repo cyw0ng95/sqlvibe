@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sqlvibe/sqlvibe/internal/PB/vfs"
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/vfs"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 var (
@@ -177,7 +177,7 @@ func parseVFSURI(uri string) (vfsName string, path string, err error) {
 // Supports :memory: databases and VFS selection via URI
 func OpenFile(uri string, flag int) (File, error) {
 	util.Assert(uri != "", "URI cannot be empty")
-
+	
 	// Parse URI to get VFS name and path
 	vfsName, path, err := parseVFSURI(uri)
 	if err != nil {
@@ -227,3 +227,4 @@ func OpenFile(uri string, flag int) (File, error) {
 		curLock:   LockNone,
 	}, nil
 }
+

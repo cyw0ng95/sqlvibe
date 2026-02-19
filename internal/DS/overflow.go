@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 // Overflow page format:
@@ -30,11 +30,11 @@ func NewOverflowManager(pm *PageManager) *OverflowManager {
 // Returns the first overflow page number
 func (om *OverflowManager) WriteOverflowChain(payload []byte) (uint32, error) {
 	util.AssertNotNil(payload, "payload")
-
+	
 	if len(payload) == 0 {
 		return 0, nil
 	}
-
+	
 	util.Assert(om.pm.PageSize() > OverflowPageHeaderSize, "page size too small for overflow: %d", om.pm.PageSize())
 
 	usableSize := om.pm.PageSize() - OverflowPageHeaderSize
@@ -99,7 +99,7 @@ func (om *OverflowManager) WriteOverflowChain(payload []byte) (uint32, error) {
 func (om *OverflowManager) ReadOverflowChain(firstPage uint32, totalSize int) ([]byte, error) {
 	util.Assert(firstPage > 0 || totalSize == 0, "firstPage must be positive when totalSize > 0")
 	util.Assert(totalSize >= 0, "totalSize cannot be negative: %d", totalSize)
-
+	
 	if firstPage == 0 || totalSize == 0 {
 		return nil, nil
 	}

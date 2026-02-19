@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 type ASTNode interface {
@@ -182,8 +182,9 @@ type ColumnRef struct {
 func (e *ColumnRef) exprNode() {}
 
 type FuncCall struct {
-	Name string
-	Args []Expr
+	Name     string
+	Args     []Expr
+	Distinct bool // true if DISTINCT keyword was used (e.g. COUNT(DISTINCT col))
 }
 
 func (e *FuncCall) exprNode() {}
@@ -1441,8 +1442,11 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				p.advance()
 
 				// Handle DISTINCT or ALL keywords in aggregate functions
-				// Skip these keywords as they don't affect the basic aggregation
-				if (p.current().Type == TokenKeyword && p.current().Literal == "DISTINCT") || p.current().Type == TokenAll {
+				distinct := false
+				if p.current().Type == TokenKeyword && p.current().Literal == "DISTINCT" {
+					distinct = true
+					p.advance()
+				} else if p.current().Type == TokenAll {
 					p.advance()
 				}
 
@@ -1458,7 +1462,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 					}
 				}
 				p.expect(TokenRightParen)
-				return &FuncCall{Name: tok.Literal, Args: args}, nil
+				return &FuncCall{Name: tok.Literal, Args: args, Distinct: distinct}, nil
 			}
 		}
 		if tok.Literal == "NULL" {

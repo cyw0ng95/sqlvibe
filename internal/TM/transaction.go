@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 var (
@@ -89,7 +89,7 @@ type TransactionManager struct {
 // NewTransactionManager creates a new transaction manager
 func NewTransactionManager(pm *DS.PageManager) *TransactionManager {
 	util.AssertNotNil(pm, "PageManager")
-
+	
 	return &TransactionManager{
 		lockMgr:      NewLockState(),
 		nextID:       1,

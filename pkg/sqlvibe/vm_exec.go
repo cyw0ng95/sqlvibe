@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/sqlvibe/sqlvibe/internal/CG"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 	"github.com/sqlvibe/sqlvibe/internal/VM"
 )
@@ -41,7 +42,7 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 		tableName = stmt.Table
 	}
 
-	program, err := VM.Compile(sql)
+	program, err := CG.Compile(sql)
 	if err != nil {
 		return nil, fmt.Errorf("VM compile error: %v", err)
 	}
@@ -82,7 +83,7 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	if stmt.From == nil {
 		// SELECT without FROM - compile and execute directly
-		compiler := VM.NewCompiler()
+		compiler := CG.NewCompiler()
 		program := compiler.CompileSelect(stmt)
 
 		vm := VM.NewVMWithContext(program, &dbVmContext{db: db})
@@ -118,7 +119,7 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 		tableCols = db.getOrderedColumns(tableName)
 	}
 
-	compiler := VM.NewCompiler()
+	compiler := CG.NewCompiler()
 	// Build column index map
 	colIndices := make(map[string]int)
 	for i, colName := range tableCols {
@@ -150,6 +151,11 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 
 	results := vm.Results()
+
+	// Apply DISTINCT deduplication if requested
+	if stmt.Distinct {
+		results = deduplicateRows(results)
+	}
 
 	// Get column names from SELECT
 	cols := make([]string, 0)
@@ -194,7 +200,7 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 		tableCols = db.getOrderedColumns(tableName)
 	}
 
-	compiler := VM.NewCompiler()
+	compiler := CG.NewCompiler()
 	// Build column index map
 	colIndices := make(map[string]int)
 	for i, colName := range tableCols {
@@ -234,6 +240,11 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 
 	results := vm.Results()
+
+	// Apply DISTINCT deduplication if requested
+	if stmt.Distinct {
+		results = deduplicateRows(results)
+	}
 
 	// Get column names from SELECT
 	cols := make([]string, 0)
@@ -305,7 +316,7 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	}
 
 	// Compile with schema information
-	cg := VM.NewCompiler()
+	cg := CG.NewCompiler()
 	// For JOINs, use TableSchemas (multi-table), NOT combined TableColIndices
 	// TableColIndices is only for single-table queries
 	if multiTableSchemas != nil {
@@ -330,6 +341,11 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	}
 
 	results := vm.Results()
+
+	// Apply DISTINCT deduplication if requested
+	if stmt.Distinct {
+		results = deduplicateRows(results)
+	}
 
 	// Get column names from the SELECT statement
 	cols := make([]string, 0)
@@ -512,7 +528,7 @@ func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
 	processedSQL := db.applyDefaults(sql, tableName, tableCols)
 
 	// Compile the DML statement
-	program, err := VM.CompileWithSchema(processedSQL, tableCols)
+	program, err := CG.CompileWithSchema(processedSQL, tableCols)
 	if err != nil {
 		return Result{}, err
 	}
@@ -534,4 +550,18 @@ func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
 
 	// Get rows affected from VM
 	return Result{RowsAffected: vm.RowsAffected()}, nil
+}
+
+// deduplicateRows removes duplicate rows, preserving the first occurrence of each unique row.
+func deduplicateRows(rows [][]interface{}) [][]interface{} {
+	seen := make(map[string]bool)
+	result := make([][]interface{}, 0, len(rows))
+	for _, row := range rows {
+		key := fmt.Sprintf("%v", row)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, row)
+		}
+	}
+	return result
 }

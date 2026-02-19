@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 // MaxVMIterations is the maximum number of VM instructions that can be executed
@@ -1422,18 +1422,16 @@ func (vm *VM) Exec(ctx interface{}) error {
 					return err
 				}
 				vm.rowsAffected++
-				// After deletion, we need to adjust the cursor
-				// Reload the cursor data
-				if vm.ctx != nil {
-					data, err := vm.ctx.GetTableData(cursor.TableName)
-					if err == nil {
-						cursor.Data = data
-						// Keep cursor at same index (which now points to next row)
-						if cursor.Index >= len(cursor.Data) {
-							cursor.EOF = true
-						}
-					}
+				// After deletion, reload the cursor data
+				data, err := vm.ctx.GetTableData(cursor.TableName)
+				if err == nil {
+					cursor.Data = data
 				}
+				// Decrement cursor.Index to compensate for the upcoming OpNext
+				// increment. After deletion the slice shifts down: the old index
+				// now points to what was previously the next row. OpNext will
+				// then advance it back to that position.
+				cursor.Index--
 			}
 			continue
 
@@ -2319,6 +2317,12 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 		// Get or create aggregate state for this group
 		state, exists := groups[groupKey]
 		if !exists {
+			distinctSets := make([]map[string]bool, len(aggInfo.Aggregates))
+			for i, aggDef := range aggInfo.Aggregates {
+				if aggDef.Distinct {
+					distinctSets[i] = make(map[string]bool)
+				}
+			}
 			state = &AggregateState{
 				GroupKey:     groupKey,
 				Count:        0,
@@ -2326,6 +2330,7 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 				Mins:         make([]interface{}, len(aggInfo.Aggregates)),
 				Maxs:         make([]interface{}, len(aggInfo.Aggregates)),
 				NonAggValues: make([]interface{}, len(aggInfo.NonAggCols)),
+				DistinctSets: distinctSets,
 			}
 			groups[groupKey] = state
 		}
@@ -2336,6 +2341,15 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 		// Evaluate aggregate functions
 		for aggIdx, aggDef := range aggInfo.Aggregates {
 			value := vm.evaluateAggregateArg(row, cursor.Columns, aggDef.Args)
+
+			// For DISTINCT aggregates, skip if value already seen
+			if aggDef.Distinct && state.DistinctSets[aggIdx] != nil {
+				valKey := fmt.Sprintf("%v", value)
+				if state.DistinctSets[aggIdx][valKey] {
+					continue
+				}
+				state.DistinctSets[aggIdx][valKey] = true
+			}
 
 			switch aggDef.Function {
 			case "COUNT":
@@ -2379,6 +2393,24 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 		}
 	}
 
+	// SQL standard: aggregate without GROUP BY on empty table must return 1 row
+	// with COUNT=0 and NULL for other aggregates.
+	if len(groupKeys) == 0 && len(aggInfo.GroupByExprs) == 0 {
+		resultRow := make([]interface{}, 0, len(aggInfo.NonAggCols)+len(aggInfo.Aggregates))
+		for range aggInfo.NonAggCols {
+			resultRow = append(resultRow, nil)
+		}
+		for _, aggDef := range aggInfo.Aggregates {
+			if aggDef.Function == "COUNT" {
+				resultRow = append(resultRow, int64(0))
+			} else {
+				resultRow = append(resultRow, nil)
+			}
+		}
+		vm.results = append(vm.results, resultRow)
+		return
+	}
+
 	for _, key := range groupKeys {
 		state := groups[key]
 		// Build result row: non-agg columns + aggregates
@@ -2395,7 +2427,11 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 
 			switch aggDef.Function {
 			case "COUNT":
-				aggValue = int64(state.Count)
+				if aggDef.Distinct && state.DistinctSets[aggIdx] != nil {
+					aggValue = int64(len(state.DistinctSets[aggIdx]))
+				} else {
+					aggValue = int64(state.Count)
+				}
 			case "SUM":
 				aggValue = state.Sums[aggIdx]
 			case "AVG":
@@ -2413,8 +2449,6 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 
 		// Apply HAVING filter if present
 		if aggInfo.HavingExpr != nil {
-			// Evaluate HAVING on the result row
-			// For simplicity, check if any non-agg column matches the HAVING condition
 			if !vm.evaluateHaving(state, aggInfo) {
 				continue
 			}
@@ -2426,12 +2460,13 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 
 // AggregateState tracks aggregate values for a group
 type AggregateState struct {
-	GroupKey     string
-	Count        int
-	Sums         []interface{}
-	Mins         []interface{}
-	Maxs         []interface{}
-	NonAggValues []interface{}
+	GroupKey      string
+	Count         int
+	Sums          []interface{}
+	Mins          []interface{}
+	Maxs          []interface{}
+	NonAggValues  []interface{}
+	DistinctSets  []map[string]bool // per-aggregate distinct value sets (for DISTINCT aggregates)
 }
 
 // computeGroupKey generates a string key from GROUP BY expressions
@@ -2511,58 +2546,62 @@ func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interfa
 
 // evaluateHaving checks if a group passes the HAVING filter
 func (vm *VM) evaluateHaving(state *AggregateState, aggInfo *AggregateInfo) bool {
-	// For now, implement simple HAVING logic
-	// Full implementation would need to evaluate the HAVING expression with aggregate values
-	// This is a simplified version that assumes HAVING uses non-agg columns
-
 	if aggInfo.HavingExpr == nil {
 		return true
 	}
 
-	// Try to evaluate the HAVING expression
-	// For simplicity, check if it's a comparison on a non-agg column
 	if binExpr, ok := aggInfo.HavingExpr.(*QP.BinaryExpr); ok {
-		if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
-			// Find the column value in NonAggValues
-			for i, expr := range aggInfo.NonAggCols {
-				if nonAggCol, ok := expr.(*QP.ColumnRef); ok && nonAggCol.Name == colRef.Name {
-					left := state.NonAggValues[i]
-
-					// Evaluate the right side - handle subqueries specially
-					var right interface{}
-					if subqExpr, ok := binExpr.Right.(*QP.SubqueryExpr); ok {
-						// Execute the subquery through the context
-						if vm.ctx != nil {
-							type SubqueryExecutor interface {
-								ExecuteSubquery(subquery interface{}) (interface{}, error)
-							}
-
-							if executor, ok := vm.ctx.(SubqueryExecutor); ok {
-								if result, err := executor.ExecuteSubquery(subqExpr.Select); err == nil {
-									right = result
-								} else {
-									right = nil
-								}
-							} else {
-								right = nil
-							}
-						} else {
-							right = nil
-						}
-					} else {
-						right = vm.evaluateExprOnRow(nil, nil, binExpr.Right)
-					}
-
-					result := vm.evaluateBinaryOp(left, right, binExpr.Op)
-					if boolVal, ok := result.(bool); ok {
-						return boolVal
-					}
-				}
-			}
+		left := vm.resolveHavingOperand(binExpr.Left, state, aggInfo)
+		right := vm.resolveHavingOperand(binExpr.Right, state, aggInfo)
+		result := vm.evaluateBinaryOp(left, right, binExpr.Op)
+		if boolVal, ok := result.(bool); ok {
+			return boolVal
 		}
 	}
 
 	return true
+}
+
+// resolveHavingOperand resolves a HAVING expression operand to its value,
+// handling aggregate function references, column references, and literals.
+func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo *AggregateInfo) interface{} {
+	switch e := expr.(type) {
+	case *QP.FuncCall:
+		funcName := strings.ToUpper(e.Name)
+		for i, aggDef := range aggInfo.Aggregates {
+			if aggDef.Function != funcName {
+				continue
+			}
+			switch funcName {
+			case "COUNT":
+				if aggDef.Distinct && state.DistinctSets[i] != nil {
+					return int64(len(state.DistinctSets[i]))
+				}
+				return int64(state.Count)
+			case "SUM":
+				return state.Sums[i]
+			case "AVG":
+				if state.Count > 0 && state.Sums[i] != nil {
+					return vm.divideValues(state.Sums[i], int64(state.Count))
+				}
+				return nil
+			case "MIN":
+				return state.Mins[i]
+			case "MAX":
+				return state.Maxs[i]
+			}
+		}
+		return nil
+	case *QP.ColumnRef:
+		for i, nonAggExpr := range aggInfo.NonAggCols {
+			if colRef, ok := nonAggExpr.(*QP.ColumnRef); ok && colRef.Name == e.Name {
+				return state.NonAggValues[i]
+			}
+		}
+		return nil
+	default:
+		return vm.evaluateExprOnRow(nil, nil, expr)
+	}
 }
 
 // addValues adds two values (handles nil and type conversion)

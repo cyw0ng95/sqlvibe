@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 type Compiler struct {
@@ -1262,6 +1262,7 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *Program {
 				aggDef := AggregateDef{
 					Function: fc.Name,
 					Args:     fc.Args,
+					Distinct: fc.Distinct,
 				}
 				aggInfo.Aggregates = append(aggInfo.Aggregates, aggDef)
 			default:
@@ -1303,6 +1304,7 @@ type AggregateInfo struct {
 type AggregateDef struct {
 	Function string    // COUNT, SUM, AVG, MIN, MAX
 	Args     []QP.Expr // Arguments to the aggregate
+	Distinct bool      // true if DISTINCT was specified (e.g. COUNT(DISTINCT col))
 }
 
 func Compile(sql string) (*Program, error) {
@@ -1356,16 +1358,6 @@ func hasAggregates(stmt *QP.SelectStmt) bool {
 		}
 	}
 	return stmt.GroupBy != nil
-}
-
-func (c *Compiler) SetTableSchema(schema map[string]int, schemaOrder []string) {
-	c.TableColIndices = schema
-	c.TableColOrder = schemaOrder
-}
-
-func (c *Compiler) SetMultiTableSchema(schemas map[string]map[string]int, colOrder []string) {
-	c.TableSchemas = schemas
-	c.TableColOrder = colOrder
 }
 
 // compileSetOp compiles SET operations (UNION, EXCEPT, INTERSECT)
