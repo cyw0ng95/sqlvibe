@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 type Compiler struct {

@@ -5,41 +5,41 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 // BTree represents a B-Tree using the new encoding infrastructure
 type BTree struct {
-	pm           *PageManager
-	om           *OverflowManager
-	balancer     *PageBalancer
-	freelist     *FreelistManager
-	rootPage     uint32
-	isTable      bool
+	pm       *PageManager
+	om       *OverflowManager
+	balancer *PageBalancer
+	freelist *FreelistManager
+	rootPage uint32
+	isTable  bool
 }
 
 // BTreeCursor represents a position in the B-Tree
 type BTreeCursor struct {
-	bt       *BTree
-	path     []cursorLevel // Path from root to current position
-	valid    bool
+	bt    *BTree
+	path  []cursorLevel // Path from root to current position
+	valid bool
 }
 
 type cursorLevel struct {
-	pageNum  uint32
-	cellIdx  int
+	pageNum uint32
+	cellIdx int
 }
 
 // NewBTree creates a new B-Tree
 func NewBTree(pm *PageManager, rootPage uint32, isTable bool) *BTree {
 	util.AssertNotNil(pm, "PageManager")
 	return &BTree{
-		pm:           pm,
-		om:           NewOverflowManager(pm),
-		balancer:     NewPageBalancer(pm),
-		freelist:     NewFreelistManager(pm, 0),
-		rootPage:     rootPage,
-		isTable:      isTable,
+		pm:       pm,
+		om:       NewOverflowManager(pm),
+		balancer: NewPageBalancer(pm),
+		freelist: NewFreelistManager(pm, 0),
+		rootPage: rootPage,
+		isTable:  isTable,
 	}
 }
 
@@ -71,11 +71,11 @@ func (bt *BTree) searchPage(page *Page, key []byte) ([]byte, error) {
 	util.AssertNotNil(page, "page")
 	util.Assert(len(page.Data) >= 12, "page data too small: %d bytes", len(page.Data))
 	util.Assert(len(key) > 0, "search key cannot be empty")
-	
+
 	pageType := page.Data[0]
 	util.Assert(pageType == 0x0d || pageType == 0x02 || pageType == 0x05 || pageType == 0x0a,
 		"invalid page type: 0x%02x", pageType)
-	
+
 	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
 	util.Assert(numCells >= 0 && numCells < 65536, "invalid cell count: %d", numCells)
 
@@ -86,7 +86,7 @@ func (bt *BTree) searchPage(page *Page, key []byte) ([]byte, error) {
 		if cellIdx >= numCells {
 			return nil, nil // Not found
 		}
-		
+
 		util.Assert(cellIdx >= 0, "cellIdx cannot be negative: %d", cellIdx)
 
 		// Read cell
@@ -126,7 +126,7 @@ func (bt *BTree) searchPage(page *Page, key []byte) ([]byte, error) {
 
 	// Interior page - recurse
 	util.Assert(pageType == 0x05 || pageType == 0x0a, "unexpected page type for interior: 0x%02x", pageType)
-	
+
 	var childPage uint32
 	if cellIdx < numCells {
 		cellPointerOffset := 8 + cellIdx*2
@@ -152,7 +152,7 @@ func (bt *BTree) searchPage(page *Page, key []byte) ([]byte, error) {
 		util.Assert(len(page.Data) >= 12, "page too small for rightmost pointer")
 		childPage = binary.BigEndian.Uint32(page.Data[8:12])
 	}
-	
+
 	util.Assert(childPage > 0, "child page number cannot be zero")
 
 	childPageData, err := bt.pm.ReadPage(childPage)
@@ -168,10 +168,10 @@ func (bt *BTree) findCell(page *Page, key []byte) int {
 	util.AssertNotNil(page, "page")
 	util.Assert(len(key) > 0, "search key cannot be empty")
 	util.Assert(len(page.Data) >= 5, "page data too small for header")
-	
+
 	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
 	pageType := page.Data[0]
-	
+
 	util.Assert(pageType == 0x0d || pageType == 0x02 || pageType == 0x05 || pageType == 0x0a,
 		"invalid page type in findCell: 0x%02x", pageType)
 
@@ -219,7 +219,7 @@ func (bt *BTree) findCell(page *Page, key []byte) int {
 func (bt *BTree) Insert(key []byte, value []byte) error {
 	util.Assert(len(key) > 0, "insert key cannot be empty")
 	// Note: value can be empty for index entries
-	
+
 	if bt.rootPage == 0 {
 		// Create root page
 		pageNum, err := bt.pm.AllocatePage()
@@ -253,7 +253,7 @@ func (bt *BTree) Insert(key []byte, value []byte) error {
 func (bt *BTree) insertIntoPage(pageNum uint32, key []byte, value []byte) error {
 	util.Assert(pageNum > 0, "page number cannot be zero")
 	util.Assert(len(key) > 0, "insert key cannot be empty")
-	
+
 	page, err := bt.pm.ReadPage(pageNum)
 	if err != nil {
 		return err
@@ -319,20 +319,20 @@ func (bt *BTree) findChildForInsert(page *Page, key []byte) uint32 {
 func (bt *BTree) insertCell(pageNum uint32, key []byte, value []byte) error {
 	util.Assert(pageNum > 0, "page number cannot be zero")
 	util.Assert(len(key) > 0, "insert key cannot be empty")
-	
+
 	page, err := bt.pm.ReadPage(pageNum)
 	if err != nil {
 		return err
 	}
-	
+
 	util.Assert(len(page.Data) >= 8, "page data too small for header")
-	
+
 	pageType := page.Data[0]
 	util.Assert(pageType == 0x0d || pageType == 0x02, "insertCell only for leaf pages, got: 0x%02x", pageType)
-	
+
 	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
 	contentStart := int(binary.BigEndian.Uint16(page.Data[5:7]))
-	
+
 	util.Assert(numCells >= 0, "invalid cell count: %d", numCells)
 	util.Assert(contentStart > 0 && contentStart <= len(page.Data), "invalid content start: %d", contentStart)
 
@@ -355,7 +355,7 @@ func (bt *BTree) insertCell(pageNum uint32, key []byte, value []byte) error {
 	// Calculate new content start (growing downward from end of page)
 	newContentStart := contentStart - len(cellData)
 	util.Assert(newContentStart > 0, "new content start %d must be positive", newContentStart)
-	
+
 	// Ensure we have space (simple check - proper check would consider fragmentation)
 	headerEnd := 8 + (numCells+1)*2 // Header + all cell pointers including new one
 	if newContentStart < headerEnd {
@@ -441,7 +441,7 @@ func (c *BTreeCursor) Valid() bool {
 func (c *BTreeCursor) Key() ([]byte, error) {
 	util.AssertTrue(c.valid, "cursor must be valid")
 	util.Assert(len(c.path) > 0, "cursor path cannot be empty")
-	
+
 	if !c.valid || len(c.path) == 0 {
 		return nil, fmt.Errorf("invalid cursor position")
 	}
@@ -477,7 +477,7 @@ func (c *BTreeCursor) Key() ([]byte, error) {
 func (c *BTreeCursor) Value() ([]byte, error) {
 	util.AssertTrue(c.valid, "cursor must be valid")
 	util.Assert(len(c.path) > 0, "cursor path cannot be empty")
-	
+
 	if !c.valid || len(c.path) == 0 {
 		return nil, fmt.Errorf("invalid cursor position")
 	}
@@ -508,7 +508,7 @@ func (c *BTreeCursor) Value() ([]byte, error) {
 func (c *BTreeCursor) Next() error {
 	util.AssertTrue(c.valid, "cursor must be valid to advance")
 	util.Assert(len(c.path) > 0, "cursor path cannot be empty")
-	
+
 	if !c.valid || len(c.path) == 0 {
 		return fmt.Errorf("invalid cursor position")
 	}

@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 // MaxVMIterations is the maximum number of VM instructions that can be executed

@@ -9,9 +9,10 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/PB"
 	"github.com/sqlvibe/sqlvibe/internal/QE"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 	"github.com/sqlvibe/sqlvibe/internal/TM"
-	"github.com/sqlvibe/sqlvibe/internal/util"
 )
+
 type Database struct {
 	pm             *DS.PageManager
 	engine         *QE.QueryEngine
@@ -71,7 +72,7 @@ func (r *Rows) Next() bool {
 
 func (r *Rows) Scan(dest ...interface{}) error {
 	util.Assert(r.pos >= 0, "row position cannot be negative: %d", r.pos)
-	
+
 	if r.Data == nil || r.pos < 0 || r.pos >= len(r.Data) {
 		return fmt.Errorf("no rows available")
 	}
@@ -551,9 +552,6 @@ func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error)
 	return &Rows{Columns: rows.Columns, Data: sorted}, nil
 }
 
-
-
-
 func (db *Database) ExecWithParams(sql string, params []interface{}) (Result, error) {
 	return db.Exec(sql)
 }
@@ -640,7 +638,6 @@ func (db *Database) tryUseIndex(tableName string, where QP.Expr) []map[string]in
 func (db *Database) scanByIndexValue(tableName, colName string, value interface{}, unique bool) []map[string]interface{} {
 	return db.engine.ScanByIndexValue(tableName, colName, value, unique)
 }
-
 
 func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, cols []string) [][]interface{} {
 	if len(orderBy) == 0 || len(data) == 0 {
@@ -998,4 +995,3 @@ func (db *Database) getRightColumns(right []map[string]interface{}) []string {
 	}
 	return cols
 }
-
