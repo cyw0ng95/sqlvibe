@@ -364,6 +364,10 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 			p.advance()
 		}
 
+		// Check for table alias (with or without AS keyword)
+		if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+			p.advance() // consume AS
+		}
 		if p.current().Type == TokenIdentifier {
 			ref.Alias = p.current().Literal
 			p.advance()
@@ -393,6 +397,10 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				p.advance()
 			}
 
+			// Check for table alias in JOIN (with or without AS keyword)
+			if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+				p.advance() // consume AS
+			}
 			if p.current().Type == TokenIdentifier {
 				rightTable.Alias = p.current().Literal
 				p.advance()
