@@ -1295,7 +1295,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 			case []int:
 				// No columns specified: use table column order
 				cols := cursor.Columns
+				// fmt.Printf("DEBUG OpInsert: cols=%v, registers len=%d\n", cols, len(vm.registers))
 				for i, reg := range v {
+					// fmt.Printf("DEBUG OpInsert: i=%d, reg=%d, value=%v\n", i, reg, vm.registers[reg])
 					if i < len(cols) {
 						row[cols[i]] = vm.registers[reg]
 					}

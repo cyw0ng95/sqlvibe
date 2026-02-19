@@ -407,6 +407,8 @@ func (c *Compiler) compileExpr(expr QP.Expr) int {
 		return c.ra.Alloc()
 	}
 
+	// fmt.Printf("DEBUG compileExpr: expr=%+v (type=%T)\n", expr, expr)
+
 	switch e := expr.(type) {
 	case *QP.Literal:
 		return c.compileLiteral(e)
@@ -441,6 +443,7 @@ func (c *Compiler) compileExpr(expr QP.Expr) int {
 
 func (c *Compiler) compileLiteral(lit *QP.Literal) int {
 	reg := c.ra.Alloc()
+	// fmt.Printf("DEBUG compileLiteral: lit.Value=%v (type=%T)\n", lit.Value, lit.Value)
 	c.program.EmitLoadConst(reg, lit.Value)
 	return reg
 }

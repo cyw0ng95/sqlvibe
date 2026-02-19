@@ -347,7 +347,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		p.advance()
 		ref := &TableRef{Name: p.current().Literal}
 		p.advance()
-		
+
 		// Check for schema.table notation
 		if p.current().Type == TokenDot {
 			p.advance()
@@ -356,7 +356,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 			ref.Name = p.current().Literal
 			p.advance()
 		}
-		
+
 		if p.current().Type == TokenIdentifier {
 			ref.Alias = p.current().Literal
 			p.advance()
@@ -377,7 +377,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 
 			rightTable := &TableRef{Name: p.current().Literal}
 			p.advance()
-			
+
 			// Check for schema.table notation in JOIN
 			if p.current().Type == TokenDot {
 				p.advance()
@@ -385,7 +385,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				rightTable.Name = p.current().Literal
 				p.advance()
 			}
-			
+
 			if p.current().Type == TokenIdentifier {
 				rightTable.Alias = p.current().Literal
 				p.advance()
@@ -683,7 +683,7 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 						}
 					}
 				}
-				
+
 				// Parse column constraints before appending
 				for p.current().Type == TokenKeyword || p.current().Type == TokenNot {
 					var keyword string
@@ -735,7 +735,7 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 						break
 					}
 				}
-				
+
 				stmt.Columns = append(stmt.Columns, col)
 
 				if p.current().Type != TokenComma {
@@ -1269,6 +1269,9 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	case TokenString:
 		p.advance()
 		return &Literal{Value: tok.Literal}, nil
+	case TokenHexString:
+		p.advance()
+		return &Literal{Value: []byte(tok.Literal)}, nil
 	case TokenCast:
 		p.advance()
 		if p.current().Type != TokenLeftParen {
@@ -1514,4 +1517,3 @@ func (p *Parser) parseRollback() (ASTNode, error) {
 
 	return &RollbackStmt{}, nil
 }
-

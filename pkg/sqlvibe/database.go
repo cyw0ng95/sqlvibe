@@ -1361,6 +1361,15 @@ func (db *Database) serializeRow(row map[string]interface{}) []byte {
 			result = append(result, []byte(fmt.Sprintf("%f", v))...)
 		case string:
 			result = append(result, []byte(v)...)
+		case []byte:
+			result = append(result, '[')
+			for i, b := range v {
+				if i > 0 {
+					result = append(result, ',')
+				}
+				result = append(result, []byte(fmt.Sprintf("%d", b))...)
+			}
+			result = append(result, ']')
 		case nil:
 		default:
 			result = append(result, []byte(fmt.Sprintf("%v", v))...)

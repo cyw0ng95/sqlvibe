@@ -13,6 +13,7 @@ const (
 	TokenEOF
 	TokenIdentifier
 	TokenString
+	TokenHexString
 	TokenNumber
 	TokenKeyword
 	TokenExplain
@@ -186,7 +187,12 @@ func (t *Tokenizer) Tokenize() ([]Token, error) {
 
 		ch := t.input[t.pos]
 
-		if unicode.IsLetter(rune(ch)) || ch == '_' {
+		// Check for hex string (x'...') BEFORE checking for identifier
+		if (ch == 'x' || ch == 'X') && t.pos+1 < len(t.input) && (t.input[t.pos+1] == '\'' || t.input[t.pos+1] == '"') {
+			if err := t.readHexString(); err != nil {
+				return nil, err
+			}
+		} else if unicode.IsLetter(rune(ch)) || ch == '_' {
 			if err := t.readIdentifier(); err != nil {
 				return nil, err
 			}
@@ -306,6 +312,51 @@ func (t *Tokenizer) readString() error {
 	t.pos++
 	t.addToken(TokenString, literal)
 	return nil
+}
+
+func (t *Tokenizer) readHexString() error {
+	// Skip the 'x' character and get the quote
+	t.pos++
+	quote := t.input[t.pos]
+	t.pos++
+
+	t.start = t.pos
+	for t.pos < len(t.input) {
+		if t.input[t.pos] == quote {
+			break
+		}
+		t.pos++
+	}
+
+	if t.pos >= len(t.input) {
+		return fmt.Errorf("unterminated hex string at position %d", t.start)
+	}
+
+	hexStr := t.input[t.start:t.pos]
+	t.pos++
+
+	bytes, err := parseHexString(hexStr)
+	if err != nil {
+		return err
+	}
+	t.addToken(TokenHexString, string(bytes))
+	return nil
+}
+
+func parseHexString(s string) ([]byte, error) {
+	if len(s)%2 != 0 {
+		return nil, fmt.Errorf("invalid hex string: odd length")
+	}
+	result := make([]byte, len(s)/2)
+	for i := 0; i < len(s); i += 2 {
+		var b byte
+		n, err := fmt.Sscanf(s[i:i+2], "%2x", &b)
+		if err != nil || n != 1 {
+			return nil, fmt.Errorf("invalid hex string: %s", s[i:i+2])
+		}
+		result[i/2] = b
+	}
+	return result, nil
 }
 
 func (t *Tokenizer) readOperator() error {
