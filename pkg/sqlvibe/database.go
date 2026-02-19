@@ -1957,10 +1957,12 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 
 	compiler := CG.NewCompiler()
-	compiler.SetTableSchema(make(map[string]int), tableCols)
+	// Build column index map
+	colIndices := make(map[string]int)
 	for i, colName := range tableCols {
-		compiler.SetTableSchema(map[string]int{colName: i}, tableCols)
+		colIndices[colName] = i
 	}
+	compiler.SetTableSchema(colIndices, tableCols)
 
 	program := compiler.CompileSelect(stmt)
 	vm := VM.NewVMWithContext(program, &dbVmContext{db: db})
@@ -2031,10 +2033,12 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 
 	compiler := CG.NewCompiler()
-	compiler.SetTableSchema(make(map[string]int), tableCols)
+	// Build column index map
+	colIndices := make(map[string]int)
 	for i, colName := range tableCols {
-		compiler.SetTableSchema(map[string]int{colName: i}, tableCols)
+		colIndices[colName] = i
 	}
+	compiler.SetTableSchema(colIndices, tableCols)
 
 	program := compiler.CompileSelect(stmt)
 	
