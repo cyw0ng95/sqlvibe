@@ -927,33 +927,68 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 }
 
 func (c *Compiler) compileCaseExpr(caseExpr *QP.CaseExpr) int {
-	elseReg := c.ra.Alloc()
-	if caseExpr.Else != nil {
-		elseReg = c.compileExpr(caseExpr.Else)
-	} else {
-		c.program.EmitLoadConst(elseReg, nil)
+	// Allocate result register that all branches will write to
+	resultReg := c.ra.Alloc()
+	
+	// Track jump positions for when each WHEN succeeds (to skip remaining conditions)
+	endJumps := make([]int, 0)
+	
+	// Check if this is Simple CASE (has operand) or Searched CASE (no operand)
+	var operandReg int
+	isSimpleCase := caseExpr.Operand != nil
+	if isSimpleCase {
+		// Simple CASE: evaluate operand once and compare to each WHEN value
+		operandReg = c.compileExpr(caseExpr.Operand)
 	}
-
-	resultReg := elseReg
-
-	for i := len(caseExpr.Whens) - 1; i >= 0; i-- {
-		when := caseExpr.Whens[i]
-		condReg := c.compileExpr(when.Condition)
+	
+	// Process each WHEN clause in order
+	for _, when := range caseExpr.Whens {
+		var condReg int
+		
+		if isSimpleCase {
+			// Simple CASE: compare operand to WHEN value
+			// Evaluate WHEN value
+			whenValueReg := c.compileExpr(when.Condition)
+			// Compare: operand == whenValue
+			condReg = c.ra.Alloc()
+			eqIdx := c.program.EmitOp(OpEq, int32(operandReg), int32(whenValueReg))
+			c.program.Instructions[eqIdx].P4 = condReg
+		} else {
+			// Searched CASE: evaluate condition as boolean
+			condReg = c.compileExpr(when.Condition)
+		}
+		
+		// If condition is false, jump to next WHEN (or ELSE)
+		// OpIfNot: jump to P2 if register P1 is false/zero/null
+		skipIdx := c.program.EmitOp(OpIfNot, int32(condReg), 0)
+		
+		// Condition is true: evaluate and store THEN result
 		thenReg := c.compileExpr(when.Result)
-
-		currResult := c.ra.Alloc()
-		zeroReg := c.ra.Alloc()
-		c.program.EmitLoadConst(zeroReg, int64(0))
-		match := c.program.EmitEq(condReg, zeroReg, 0)
-		c.program.Fixup(match)
-		c.program.EmitCopy(thenReg, currResult)
-		resultReg = currResult
-		_ = resultReg
+		c.program.EmitCopy(thenReg, resultReg)
+		
+		// Jump to end (skip remaining WHEN clauses and ELSE)
+		jumpToEnd := c.program.EmitOp(OpGoto, 0, 0)
+		endJumps = append(endJumps, jumpToEnd)
+		
+		// Fix the skip jump to point here (start of next WHEN or ELSE)
+		c.program.Fixup(skipIdx)
 	}
-
-	dst := c.ra.Alloc()
-	c.program.EmitCopy(elseReg, dst)
-	return dst
+	
+	// ELSE clause: reached if no WHEN condition matched
+	if caseExpr.Else != nil {
+		elseReg := c.compileExpr(caseExpr.Else)
+		c.program.EmitCopy(elseReg, resultReg)
+	} else {
+		// No ELSE clause: result is NULL
+		c.program.EmitLoadConst(resultReg, nil)
+	}
+	
+	// All end jumps point here
+	for _, jumpIdx := range endJumps {
+		c.program.Fixup(jumpIdx)
+	}
+	
+	return resultReg
 }
 
 func (c *Compiler) compileCastExpr(cast *QP.CastExpr) int {
