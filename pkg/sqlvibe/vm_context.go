@@ -269,6 +269,24 @@ func (ctx *dsVmContext) DeleteRow(tableName string, rowIndex int) error {
 	return nil
 }
 
+// Subquery execution: delegate to dbVmContext for full support
+func (ctx *dsVmContext) ExecuteSubquery(subquery interface{}) (interface{}, error) {
+	return (&dbVmContext{db: ctx.db}).ExecuteSubquery(subquery)
+}
+
+func (ctx *dsVmContext) ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error) {
+	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRows(subquery)
+}
+
+func (ctx *dsVmContext) ExecuteSubqueryWithContext(subquery interface{}, outerRow map[string]interface{}) (interface{}, error) {
+	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryWithContext(subquery, outerRow)
+}
+
+func (ctx *dsVmContext) ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error) {
+	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRowsWithContext(subquery, outerRow)
+}
+
+
 type dbVmContext struct {
 	db *Database
 }

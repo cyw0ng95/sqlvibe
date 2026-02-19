@@ -1023,11 +1023,7 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 				if err != nil {
 					return nil, err
 				}
-				if lit, ok := expr.(*Literal); ok {
-					values = append(values, lit.Value)
-				} else {
-					values = append(values, nil)
-				}
+				values = append(values, evalConstExpr(expr))
 				if p.current().Type == TokenComma {
 					p.advance()
 				}
@@ -1060,11 +1056,7 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 				if err != nil {
 					return nil, err
 				}
-				if lit, ok := expr.(*Literal); ok {
-					values = append(values, lit.Value)
-				} else {
-					values = append(values, nil)
-				}
+				values = append(values, evalConstExpr(expr))
 				if p.current().Type == TokenComma {
 					p.advance()
 				}
@@ -1149,11 +1141,7 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 				if err != nil {
 					return nil, err
 				}
-				if lit, ok := expr.(*Literal); ok {
-					values = append(values, lit.Value)
-				} else {
-					values = append(values, nil)
-				}
+				values = append(values, evalConstExpr(expr))
 				if p.current().Type == TokenComma {
 					p.advance()
 				}
@@ -1197,6 +1185,24 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Check for ESCAPE clause
+		if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) && strings.ToUpper(p.current().Literal) == "ESCAPE" {
+			p.advance()
+			escapeExpr, err := p.parseAddExpr()
+			if err != nil {
+				return nil, err
+			}
+			// Pre-process the pattern with the escape character at parse time
+			if patLit, ok := pattern.(*Literal); ok {
+				if escLit, ok := escapeExpr.(*Literal); ok {
+					if patStr, ok := patLit.Value.(string); ok {
+						if escStr, ok := escLit.Value.(string); ok && len(escStr) == 1 {
+							pattern = &Literal{Value: applyLikeEscape(patStr, rune(escStr[0]))}
+						}
+					}
+				}
+			}
+		}
 		return &BinaryExpr{Op: TokenLike, Left: left, Right: pattern}, nil
 	}
 
@@ -1206,6 +1212,23 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 		pattern, err := p.parseAddExpr()
 		if err != nil {
 			return nil, err
+		}
+		// Check for ESCAPE clause
+		if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) && strings.ToUpper(p.current().Literal) == "ESCAPE" {
+			p.advance()
+			escapeExpr, err := p.parseAddExpr()
+			if err != nil {
+				return nil, err
+			}
+			if patLit, ok := pattern.(*Literal); ok {
+				if escLit, ok := escapeExpr.(*Literal); ok {
+					if patStr, ok := patLit.Value.(string); ok {
+						if escStr, ok := escLit.Value.(string); ok && len(escStr) == 1 {
+							pattern = &Literal{Value: applyLikeEscape(patStr, rune(escStr[0]))}
+						}
+					}
+				}
+			}
 		}
 		return &BinaryExpr{Op: TokenNotLike, Left: left, Right: pattern}, nil
 	}
@@ -1634,4 +1657,105 @@ func (p *Parser) parseRollback() (ASTNode, error) {
 	}
 
 	return &RollbackStmt{}, nil
+}
+
+// evalConstExpr evaluates a constant expression (one with no column references)
+// and returns the result as an interface{}. Used for IN list evaluation.
+func evalConstExpr(expr Expr) interface{} {
+switch e := expr.(type) {
+case *Literal:
+return e.Value
+case *UnaryExpr:
+val := evalConstExpr(e.Expr)
+if e.Op == TokenMinus {
+switch v := val.(type) {
+case int64:
+return -v
+case float64:
+return -v
+}
+}
+return val
+case *BinaryExpr:
+left := evalConstExpr(e.Left)
+right := evalConstExpr(e.Right)
+if left == nil || right == nil {
+return nil
+}
+lf, lok := toFloat64Const(left)
+rf, rok := toFloat64Const(right)
+if !lok || !rok {
+return nil
+}
+switch e.Op {
+case TokenPlus:
+r := lf + rf
+if isIntVal(left) && isIntVal(right) {
+return int64(r)
+}
+return r
+case TokenMinus:
+r := lf - rf
+if isIntVal(left) && isIntVal(right) {
+return int64(r)
+}
+return r
+case TokenAsterisk:
+r := lf * rf
+if isIntVal(left) && isIntVal(right) {
+return int64(r)
+}
+return r
+case TokenSlash:
+if rf == 0 {
+return nil
+}
+r := lf / rf
+if isIntVal(left) && isIntVal(right) {
+return int64(r)
+}
+return r
+}
+return nil
+default:
+return nil
+}
+}
+
+func toFloat64Const(v interface{}) (float64, bool) {
+switch n := v.(type) {
+case int64:
+return float64(n), true
+case float64:
+return n, true
+case int:
+return float64(n), true
+}
+return 0, false
+}
+
+func isIntVal(v interface{}) bool {
+switch v.(type) {
+case int64, int:
+return true
+}
+return false
+}
+
+// applyLikeEscape pre-processes a LIKE pattern by converting escape sequences.
+// It replaces escapeChar+X with \X (backslash escape used by likeMatchRecursive).
+func applyLikeEscape(pattern string, escapeChar rune) string {
+runes := []rune(pattern)
+out := make([]rune, 0, len(runes))
+for i := 0; i < len(runes); i++ {
+if runes[i] == escapeChar && i+1 < len(runes) {
+next := runes[i+1]
+// escape_char followed by any char: treat next char as literal
+out = append(out, '\\', next)
+i++ // skip next char
+} else {
+out = append(out, runes[i])
+}
+}
+return string(out)
 }

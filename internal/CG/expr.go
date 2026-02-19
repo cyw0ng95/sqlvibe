@@ -220,6 +220,10 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 				c.program.EmitLoadConst(dst, int64(0))
 
 				for _, val := range values {
+					if val == nil {
+						// NULL in IN list: skip (NULL never makes IN result TRUE)
+						continue
+					}
 					valReg := c.ra.Alloc()
 					c.program.EmitLoadConst(valReg, val)
 
