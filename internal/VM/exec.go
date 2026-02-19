@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
-	
+
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
 	"github.com/sqlvibe/sqlvibe/internal/util"
 )
@@ -24,7 +24,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		if iterationCount > MaxVMIterations {
 			util.Assert(false, "VM execution exceeded %d iterations - possible infinite loop detected. This usually indicates a bug in the query compiler (e.g., incorrect jump targets in JOIN compilation).", MaxVMIterations)
 		}
-		
+
 		inst := vm.GetInstruction()
 
 		switch inst.Op {
@@ -807,7 +807,45 @@ func (vm *VM) Exec(ctx interface{}) error {
 			continue
 
 		case OpCast:
-			vm.registers[inst.P1] = vm.registers[inst.P1]
+			val := vm.registers[inst.P1]
+			targetType, _ := inst.P4.(string)
+			if val != nil {
+				upperType := strings.ToUpper(targetType)
+				switch upperType {
+				case "INTEGER", "INT":
+					if s, ok := val.(string); ok {
+						if iv, err := strconv.ParseInt(s, 10, 64); err == nil {
+							vm.registers[inst.P1] = iv
+						} else if fv, err := strconv.ParseFloat(s, 64); err == nil {
+							vm.registers[inst.P1] = int64(fv)
+						} else {
+							vm.registers[inst.P1] = int64(0)
+						}
+					} else if fv, ok := val.(float64); ok {
+						vm.registers[inst.P1] = int64(fv)
+					}
+				case "REAL", "FLOAT", "DOUBLE", "NUMERIC", "DECIMAL":
+					if s, ok := val.(string); ok {
+						if fv, err := strconv.ParseFloat(s, 64); err == nil {
+							vm.registers[inst.P1] = fv
+						} else {
+							vm.registers[inst.P1] = float64(0)
+						}
+					} else if iv, ok := val.(int64); ok {
+						vm.registers[inst.P1] = float64(iv)
+					}
+				case "TEXT", "VARCHAR", "CHAR", "CHARACTER":
+					if s, ok := val.(string); ok {
+						vm.registers[inst.P1] = s
+					} else if iv, ok := val.(int64); ok {
+						vm.registers[inst.P1] = strconv.FormatInt(iv, 10)
+					} else if fv, ok := val.(float64); ok {
+						vm.registers[inst.P1] = strconv.FormatFloat(fv, 'f', -1, 64)
+					} else {
+						vm.registers[inst.P1] = fmt.Sprintf("%v", val)
+					}
+				}
+			}
 			continue
 
 		case OpColumn:
@@ -816,14 +854,14 @@ func (vm *VM) Exec(ctx interface{}) error {
 			tableQualifier := inst.P3 // Table qualifier if present (string), or "table.column" for outer ref
 			dst := inst.P4
 			cursor := vm.cursors.Get(cursorID)
-			
+
 			// Special case: colIdx=-1 means this is definitely an outer reference
 			// P3 contains "table.column" format
 			if colIdx == -1 && tableQualifier != "" && vm.ctx != nil {
 				type OuterContextProvider interface {
 					GetOuterRowValue(columnName string) (interface{}, bool)
 				}
-				
+
 				if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
 					// Parse "table.column" to extract column name
 					parts := strings.Split(tableQualifier, ".")
@@ -847,7 +885,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 				}
 				continue
 			}
-			
+
 			// For correlation: if we have a table qualifier and outer context,
 			// check if this might be an outer reference
 			shouldTryOuter := false
@@ -860,13 +898,13 @@ func (vm *VM) Exec(ctx interface{}) error {
 					// fmt.Printf("DEBUG OpColumn: shouldTryOuter=true\n")
 				}
 			}
-			
+
 			// Try to resolve from outer context first if needed
 			if shouldTryOuter {
 				type OuterContextProvider interface {
 					GetOuterRowValue(columnName string) (interface{}, bool)
 				}
-				
+
 				if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
 					if colIdx >= 0 && colIdx < len(cursor.Columns) {
 						colName := cursor.Columns[colIdx]
@@ -884,7 +922,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 					}
 				}
 			}
-			
+
 			// Default: load from current cursor
 			if cursor != nil && cursor.Data != nil && cursor.Index >= 0 && cursor.Index < len(cursor.Data) {
 				row := cursor.Data[cursor.Index]
@@ -902,14 +940,14 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// P1 = destination register
 			// P4 = SelectStmt to execute
 			dstReg := int(inst.P1)
-			
+
 			// Try to execute the subquery through the context
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)
 				type SubqueryExecutorWithContext interface {
 					ExecuteSubqueryWithContext(subquery interface{}, outerRow map[string]interface{}) (interface{}, error)
 				}
-				
+
 				if executor, ok := vm.ctx.(SubqueryExecutorWithContext); ok {
 					// Get current row from cursor 0 (if available)
 					currentRow := vm.getCurrentRow(0)
@@ -920,12 +958,12 @@ func (vm *VM) Exec(ctx interface{}) error {
 					}
 					continue
 				}
-				
+
 				// Fallback to non-context executor
 				type SubqueryExecutor interface {
 					ExecuteSubquery(subquery interface{}) (interface{}, error)
 				}
-				
+
 				if executor, ok := vm.ctx.(SubqueryExecutor); ok {
 					if result, err := executor.ExecuteSubquery(inst.P4); err == nil {
 						vm.registers[dstReg] = result
@@ -945,13 +983,13 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// P1 = destination register
 			// P4 = SelectStmt to execute
 			dstReg := int(inst.P1)
-			
+
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)
 				type SubqueryRowsExecutorWithContext interface {
 					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
 				}
-				
+
 				if executor, ok := vm.ctx.(SubqueryRowsExecutorWithContext); ok {
 					// Get current row from cursor 0 (if available)
 					currentRow := vm.getCurrentRow(0)
@@ -965,12 +1003,12 @@ func (vm *VM) Exec(ctx interface{}) error {
 					}
 					continue
 				}
-				
+
 				// Fallback to non-context executor
 				type SubqueryRowsExecutor interface {
 					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
 				}
-				
+
 				if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
 					if rows, err := executor.ExecuteSubqueryRows(inst.P4); err == nil && len(rows) > 0 {
 						vm.registers[dstReg] = int64(1)
@@ -990,13 +1028,13 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// P1 = destination register
 			// P4 = SelectStmt to execute
 			dstReg := int(inst.P1)
-			
+
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)
 				type SubqueryRowsExecutorWithContext interface {
 					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
 				}
-				
+
 				if executor, ok := vm.ctx.(SubqueryRowsExecutorWithContext); ok {
 					// Get current row from cursor 0 (if available)
 					currentRow := vm.getCurrentRow(0)
@@ -1007,12 +1045,12 @@ func (vm *VM) Exec(ctx interface{}) error {
 					}
 					continue
 				}
-				
+
 				// Fallback to non-context executor
 				type SubqueryRowsExecutor interface {
 					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
 				}
-				
+
 				if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
 					if rows, err := executor.ExecuteSubqueryRows(inst.P4); err == nil && len(rows) > 0 {
 						vm.registers[dstReg] = int64(0) // rows exist, so NOT EXISTS is false
@@ -1035,13 +1073,13 @@ func (vm *VM) Exec(ctx interface{}) error {
 			dstReg := int(inst.P1)
 			valueReg := int(inst.P2)
 			value := vm.registers[valueReg]
-			
+
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)
 				type SubqueryRowsExecutorWithContext interface {
 					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
 				}
-				
+
 				if executor, ok := vm.ctx.(SubqueryRowsExecutorWithContext); ok {
 					// Get current row from cursor 0 (if available)
 					currentRow := vm.getCurrentRow(0)
@@ -1062,12 +1100,12 @@ func (vm *VM) Exec(ctx interface{}) error {
 						continue
 					}
 				}
-				
+
 				// Fallback to non-context executor
 				type SubqueryRowsExecutor interface {
 					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
 				}
-				
+
 				if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
 					if rows, err := executor.ExecuteSubqueryRows(inst.P4); err == nil {
 						// Check if value matches any row's first column
@@ -1102,13 +1140,13 @@ func (vm *VM) Exec(ctx interface{}) error {
 			dstReg := int(inst.P1)
 			valueReg := int(inst.P2)
 			value := vm.registers[valueReg]
-			
+
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)
 				type SubqueryRowsExecutorWithContext interface {
 					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
 				}
-				
+
 				if executor, ok := vm.ctx.(SubqueryRowsExecutorWithContext); ok {
 					// Get current row from cursor 0 (if available)
 					currentRow := vm.getCurrentRow(0)
@@ -1129,12 +1167,12 @@ func (vm *VM) Exec(ctx interface{}) error {
 						continue
 					}
 				}
-				
+
 				// Fallback to non-context executor
 				type SubqueryRowsExecutor interface {
 					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
 				}
-				
+
 				if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
 					if rows, err := executor.ExecuteSubqueryRows(inst.P4); err == nil {
 						// Check if value matches any row's first column
@@ -1167,16 +1205,16 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// P4 = AggregateInfo structure
 			cursorID := int(inst.P1)
 			cursor := vm.cursors.Get(cursorID)
-			
+
 			if cursor == nil || cursor.Data == nil {
 				continue
 			}
-			
+
 			aggInfo, ok := inst.P4.(*AggregateInfo)
 			if !ok {
 				continue
 			}
-			
+
 			// Execute aggregation: scan all rows, group, accumulate, emit
 			vm.executeAggregation(cursor, aggInfo)
 			continue
@@ -1187,7 +1225,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if tableName == "" {
 				continue
 			}
-			
+
 			// If cursor is already manually opened (e.g., for correlated subqueries),
 			// don't reopen it to preserve the alias
 			existingCursor := vm.cursors.Get(cursorID)
@@ -1195,7 +1233,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 				// fmt.Printf("DEBUG OpOpenRead: cursor %d already open with name %q, skipping reopen to %q\n", cursorID, existingCursor.TableName, tableName)
 				continue
 			}
-			
+
 			// fmt.Printf("DEBUG OpOpenRead: opening cursor %d with tableName=%q\n", cursorID, tableName)
 			if vm.ctx != nil {
 				if data, err := vm.ctx.GetTableData(tableName); err == nil && data != nil {
@@ -1614,7 +1652,7 @@ func (vm *VM) getCurrentRow(cursorID int) map[string]interface{} {
 	if cursor == nil || cursor.Index < 0 || cursor.Index >= len(cursor.Data) {
 		return nil
 	}
-	
+
 	// Return the current row
 	return cursor.Data[cursor.Index]
 }
@@ -2212,66 +2250,66 @@ var ErrValueTooBig = errors.New("value too big")
 
 // executeAggregation performs GROUP BY and aggregate function execution
 func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
-// Map from group key (string) to aggregate state
-groups := make(map[string]*AggregateState)
+	// Map from group key (string) to aggregate state
+	groups := make(map[string]*AggregateState)
 
-// Scan all rows and accumulate aggregates per group
-for rowIdx := 0; rowIdx < len(cursor.Data); rowIdx++ {
-row := cursor.Data[rowIdx]
+	// Scan all rows and accumulate aggregates per group
+	for rowIdx := 0; rowIdx < len(cursor.Data); rowIdx++ {
+		row := cursor.Data[rowIdx]
 
-// Compute group key from GROUP BY expressions
-groupKey := vm.computeGroupKey(row, cursor.Columns, aggInfo.GroupByExprs)
+		// Compute group key from GROUP BY expressions
+		groupKey := vm.computeGroupKey(row, cursor.Columns, aggInfo.GroupByExprs)
 
-// Get or create aggregate state for this group
-state, exists := groups[groupKey]
-if !exists {
-state = &AggregateState{
-GroupKey:       groupKey,
-Count:          0,
-Sums:           make([]interface{}, len(aggInfo.Aggregates)),
-Mins:           make([]interface{}, len(aggInfo.Aggregates)),
-Maxs:           make([]interface{}, len(aggInfo.Aggregates)),
-NonAggValues:   make([]interface{}, len(aggInfo.NonAggCols)),
-}
-groups[groupKey] = state
-}
+		// Get or create aggregate state for this group
+		state, exists := groups[groupKey]
+		if !exists {
+			state = &AggregateState{
+				GroupKey:     groupKey,
+				Count:        0,
+				Sums:         make([]interface{}, len(aggInfo.Aggregates)),
+				Mins:         make([]interface{}, len(aggInfo.Aggregates)),
+				Maxs:         make([]interface{}, len(aggInfo.Aggregates)),
+				NonAggValues: make([]interface{}, len(aggInfo.NonAggCols)),
+			}
+			groups[groupKey] = state
+		}
 
-// Update aggregate state
-state.Count++
+		// Update aggregate state
+		state.Count++
 
-// Evaluate aggregate functions
-for aggIdx, aggDef := range aggInfo.Aggregates {
-value := vm.evaluateAggregateArg(row, cursor.Columns, aggDef.Args)
+		// Evaluate aggregate functions
+		for aggIdx, aggDef := range aggInfo.Aggregates {
+			value := vm.evaluateAggregateArg(row, cursor.Columns, aggDef.Args)
 
-switch aggDef.Function {
-case "COUNT":
-// COUNT is already tracked by state.Count
-case "SUM":
-state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
-case "AVG":
-// AVG = SUM / COUNT, we accumulate SUM here
-state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
-case "MIN":
-if state.Mins[aggIdx] == nil || vm.compareVals(value, state.Mins[aggIdx]) < 0 {
-state.Mins[aggIdx] = value
-}
-case "MAX":
-if state.Maxs[aggIdx] == nil || vm.compareVals(value, state.Maxs[aggIdx]) > 0 {
-state.Maxs[aggIdx] = value
-}
-}
-}
+			switch aggDef.Function {
+			case "COUNT":
+			// COUNT is already tracked by state.Count
+			case "SUM":
+				state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
+			case "AVG":
+				// AVG = SUM / COUNT, we accumulate SUM here
+				state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
+			case "MIN":
+				if state.Mins[aggIdx] == nil || vm.compareVals(value, state.Mins[aggIdx]) < 0 {
+					state.Mins[aggIdx] = value
+				}
+			case "MAX":
+				if state.Maxs[aggIdx] == nil || vm.compareVals(value, state.Maxs[aggIdx]) > 0 {
+					state.Maxs[aggIdx] = value
+				}
+			}
+		}
 
-// Store first non-aggregate column values for this group
-if !exists {
-for i, expr := range aggInfo.NonAggCols {
-state.NonAggValues[i] = vm.evaluateExprOnRow(row, cursor.Columns, expr)
-}
-}
-}
+		// Store first non-aggregate column values for this group
+		if !exists {
+			for i, expr := range aggInfo.NonAggCols {
+				state.NonAggValues[i] = vm.evaluateExprOnRow(row, cursor.Columns, expr)
+			}
+		}
+	}
 
-// Emit result rows (one per group)
-// Sort groups by key for deterministic output
+	// Emit result rows (one per group)
+	// Sort groups by key for deterministic output
 	groupKeys := make([]string, 0, len(groups))
 	for key := range groups {
 		groupKeys = append(groupKeys, key)
@@ -2284,351 +2322,351 @@ state.NonAggValues[i] = vm.evaluateExprOnRow(row, cursor.Columns, expr)
 			}
 		}
 	}
-	
+
 	for _, key := range groupKeys {
 		state := groups[key]
-// Build result row: non-agg columns + aggregates
-resultRow := make([]interface{}, 0)
+		// Build result row: non-agg columns + aggregates
+		resultRow := make([]interface{}, 0)
 
-// Add non-aggregate columns
-for _, val := range state.NonAggValues {
-resultRow = append(resultRow, val)
-}
+		// Add non-aggregate columns
+		for _, val := range state.NonAggValues {
+			resultRow = append(resultRow, val)
+		}
 
-// Add aggregates
-for aggIdx, aggDef := range aggInfo.Aggregates {
-var aggValue interface{}
+		// Add aggregates
+		for aggIdx, aggDef := range aggInfo.Aggregates {
+			var aggValue interface{}
 
-switch aggDef.Function {
-case "COUNT":
-aggValue = int64(state.Count)
-case "SUM":
-aggValue = state.Sums[aggIdx]
-case "AVG":
-if state.Count > 0 && state.Sums[aggIdx] != nil {
-aggValue = vm.divideValues(state.Sums[aggIdx], int64(state.Count))
-}
-case "MIN":
-aggValue = state.Mins[aggIdx]
-case "MAX":
-aggValue = state.Maxs[aggIdx]
-}
+			switch aggDef.Function {
+			case "COUNT":
+				aggValue = int64(state.Count)
+			case "SUM":
+				aggValue = state.Sums[aggIdx]
+			case "AVG":
+				if state.Count > 0 && state.Sums[aggIdx] != nil {
+					aggValue = vm.divideValues(state.Sums[aggIdx], int64(state.Count))
+				}
+			case "MIN":
+				aggValue = state.Mins[aggIdx]
+			case "MAX":
+				aggValue = state.Maxs[aggIdx]
+			}
 
-resultRow = append(resultRow, aggValue)
-}
+			resultRow = append(resultRow, aggValue)
+		}
 
-// Apply HAVING filter if present
-if aggInfo.HavingExpr != nil {
-// Evaluate HAVING on the result row
-// For simplicity, check if any non-agg column matches the HAVING condition
-if !vm.evaluateHaving(state, aggInfo) {
-continue
-}
-}
+		// Apply HAVING filter if present
+		if aggInfo.HavingExpr != nil {
+			// Evaluate HAVING on the result row
+			// For simplicity, check if any non-agg column matches the HAVING condition
+			if !vm.evaluateHaving(state, aggInfo) {
+				continue
+			}
+		}
 
-vm.results = append(vm.results, resultRow)
-}
+		vm.results = append(vm.results, resultRow)
+	}
 }
 
 // AggregateState tracks aggregate values for a group
 type AggregateState struct {
-GroupKey     string
-Count        int
-Sums         []interface{}
-Mins         []interface{}
-Maxs         []interface{}
-NonAggValues []interface{}
+	GroupKey     string
+	Count        int
+	Sums         []interface{}
+	Mins         []interface{}
+	Maxs         []interface{}
+	NonAggValues []interface{}
 }
 
 // computeGroupKey generates a string key from GROUP BY expressions
 func (vm *VM) computeGroupKey(row map[string]interface{}, columns []string, groupByExprs []QP.Expr) string {
-if len(groupByExprs) == 0 {
-return "" // Single group for aggregates without GROUP BY
-}
+	if len(groupByExprs) == 0 {
+		return "" // Single group for aggregates without GROUP BY
+	}
 
-keyParts := make([]string, 0)
-for _, expr := range groupByExprs {
-value := vm.evaluateExprOnRow(row, columns, expr)
-keyParts = append(keyParts, fmt.Sprintf("%v", value))
-}
-return strings.Join(keyParts, "|")
+	keyParts := make([]string, 0)
+	for _, expr := range groupByExprs {
+		value := vm.evaluateExprOnRow(row, columns, expr)
+		keyParts = append(keyParts, fmt.Sprintf("%v", value))
+	}
+	return strings.Join(keyParts, "|")
 }
 
 // evaluateAggregateArg evaluates the argument of an aggregate function
 func (vm *VM) evaluateAggregateArg(row map[string]interface{}, columns []string, args []QP.Expr) interface{} {
-if len(args) == 0 {
-return nil
-}
+	if len(args) == 0 {
+		return nil
+	}
 
-// For COUNT(*), return 1
-if len(args) == 1 {
-if colRef, ok := args[0].(*QP.ColumnRef); ok && colRef.Name == "*" {
-return int64(1)
-}
-}
+	// For COUNT(*), return 1
+	if len(args) == 1 {
+		if colRef, ok := args[0].(*QP.ColumnRef); ok && colRef.Name == "*" {
+			return int64(1)
+		}
+	}
 
-return vm.evaluateExprOnRow(row, columns, args[0])
+	return vm.evaluateExprOnRow(row, columns, args[0])
 }
 
 // evaluateExprOnRow evaluates an expression against a row
 func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, expr QP.Expr) interface{} {
-if expr == nil {
-return nil
-}
+	if expr == nil {
+		return nil
+	}
 
-switch e := expr.(type) {
-case *QP.Literal:
-return e.Value
-case *QP.ColumnRef:
-return row[e.Name]
-case *QP.BinaryExpr:
-left := vm.evaluateExprOnRow(row, columns, e.Left)
-right := vm.evaluateExprOnRow(row, columns, e.Right)
-return vm.evaluateBinaryOp(left, right, e.Op)
-default:
-return nil
-}
+	switch e := expr.(type) {
+	case *QP.Literal:
+		return e.Value
+	case *QP.ColumnRef:
+		return row[e.Name]
+	case *QP.BinaryExpr:
+		left := vm.evaluateExprOnRow(row, columns, e.Left)
+		right := vm.evaluateExprOnRow(row, columns, e.Right)
+		return vm.evaluateBinaryOp(left, right, e.Op)
+	default:
+		return nil
+	}
 }
 
 // evaluateBinaryOp evaluates a binary operation
 func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interface{} {
-// Simple implementation for common operators
-switch op {
-case QP.TokenPlus:
-return vm.addValues(left, right)
-case QP.TokenMinus:
-return vm.subtractValues(left, right)
-case QP.TokenGt:
-return vm.compareVals(left, right) > 0
-case QP.TokenGe:
-return vm.compareVals(left, right) >= 0
-case QP.TokenLt:
-return vm.compareVals(left, right) < 0
-case QP.TokenLe:
-return vm.compareVals(left, right) <= 0
-case QP.TokenEq:
-return vm.compareVals(left, right) == 0
-case QP.TokenNe:
-return vm.compareVals(left, right) != 0
-default:
-return nil
-}
+	// Simple implementation for common operators
+	switch op {
+	case QP.TokenPlus:
+		return vm.addValues(left, right)
+	case QP.TokenMinus:
+		return vm.subtractValues(left, right)
+	case QP.TokenGt:
+		return vm.compareVals(left, right) > 0
+	case QP.TokenGe:
+		return vm.compareVals(left, right) >= 0
+	case QP.TokenLt:
+		return vm.compareVals(left, right) < 0
+	case QP.TokenLe:
+		return vm.compareVals(left, right) <= 0
+	case QP.TokenEq:
+		return vm.compareVals(left, right) == 0
+	case QP.TokenNe:
+		return vm.compareVals(left, right) != 0
+	default:
+		return nil
+	}
 }
 
 // evaluateHaving checks if a group passes the HAVING filter
 func (vm *VM) evaluateHaving(state *AggregateState, aggInfo *AggregateInfo) bool {
-// For now, implement simple HAVING logic
-// Full implementation would need to evaluate the HAVING expression with aggregate values
-// This is a simplified version that assumes HAVING uses non-agg columns
+	// For now, implement simple HAVING logic
+	// Full implementation would need to evaluate the HAVING expression with aggregate values
+	// This is a simplified version that assumes HAVING uses non-agg columns
 
-if aggInfo.HavingExpr == nil {
-return true
-}
+	if aggInfo.HavingExpr == nil {
+		return true
+	}
 
-// Try to evaluate the HAVING expression
-// For simplicity, check if it's a comparison on a non-agg column
-if binExpr, ok := aggInfo.HavingExpr.(*QP.BinaryExpr); ok {
-if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
-// Find the column value in NonAggValues
-for i, expr := range aggInfo.NonAggCols {
-if nonAggCol, ok := expr.(*QP.ColumnRef); ok && nonAggCol.Name == colRef.Name {
-left := state.NonAggValues[i]
+	// Try to evaluate the HAVING expression
+	// For simplicity, check if it's a comparison on a non-agg column
+	if binExpr, ok := aggInfo.HavingExpr.(*QP.BinaryExpr); ok {
+		if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
+			// Find the column value in NonAggValues
+			for i, expr := range aggInfo.NonAggCols {
+				if nonAggCol, ok := expr.(*QP.ColumnRef); ok && nonAggCol.Name == colRef.Name {
+					left := state.NonAggValues[i]
 
-// Evaluate the right side - handle subqueries specially
-var right interface{}
-if subqExpr, ok := binExpr.Right.(*QP.SubqueryExpr); ok {
-// Execute the subquery through the context
-if vm.ctx != nil {
-type SubqueryExecutor interface {
-ExecuteSubquery(subquery interface{}) (interface{}, error)
-}
+					// Evaluate the right side - handle subqueries specially
+					var right interface{}
+					if subqExpr, ok := binExpr.Right.(*QP.SubqueryExpr); ok {
+						// Execute the subquery through the context
+						if vm.ctx != nil {
+							type SubqueryExecutor interface {
+								ExecuteSubquery(subquery interface{}) (interface{}, error)
+							}
 
-if executor, ok := vm.ctx.(SubqueryExecutor); ok {
-if result, err := executor.ExecuteSubquery(subqExpr.Select); err == nil {
-right = result
-} else {
-right = nil
-}
-} else {
-right = nil
-}
-} else {
-right = nil
-}
-} else {
-right = vm.evaluateExprOnRow(nil, nil, binExpr.Right)
-}
+							if executor, ok := vm.ctx.(SubqueryExecutor); ok {
+								if result, err := executor.ExecuteSubquery(subqExpr.Select); err == nil {
+									right = result
+								} else {
+									right = nil
+								}
+							} else {
+								right = nil
+							}
+						} else {
+							right = nil
+						}
+					} else {
+						right = vm.evaluateExprOnRow(nil, nil, binExpr.Right)
+					}
 
-result := vm.evaluateBinaryOp(left, right, binExpr.Op)
-if boolVal, ok := result.(bool); ok {
-return boolVal
-}
-}
-}
-}
-}
+					result := vm.evaluateBinaryOp(left, right, binExpr.Op)
+					if boolVal, ok := result.(bool); ok {
+						return boolVal
+					}
+				}
+			}
+		}
+	}
 
-return true
+	return true
 }
 
 // addValues adds two values (handles nil and type conversion)
 func (vm *VM) addValues(a, b interface{}) interface{} {
-if a == nil {
-return b
-}
-if b == nil {
-return a
-}
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
 
-aInt, aIsInt := a.(int64)
-bInt, bIsInt := b.(int64)
-if aIsInt && bIsInt {
-return aInt + bInt
-}
+	aInt, aIsInt := a.(int64)
+	bInt, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		return aInt + bInt
+	}
 
-aFloat, aIsFloat := a.(float64)
-bFloat, bIsFloat := b.(float64)
-if aIsFloat && bIsFloat {
-return aFloat + bFloat
-}
-if aIsInt && bIsFloat {
-return float64(aInt) + bFloat
-}
-if aIsFloat && bIsInt {
-return aFloat + float64(bInt)
-}
+	aFloat, aIsFloat := a.(float64)
+	bFloat, bIsFloat := b.(float64)
+	if aIsFloat && bIsFloat {
+		return aFloat + bFloat
+	}
+	if aIsInt && bIsFloat {
+		return float64(aInt) + bFloat
+	}
+	if aIsFloat && bIsInt {
+		return aFloat + float64(bInt)
+	}
 
-return nil
+	return nil
 }
 
 // subtractValues subtracts two values
 func (vm *VM) subtractValues(a, b interface{}) interface{} {
-if a == nil || b == nil {
-return nil
-}
+	if a == nil || b == nil {
+		return nil
+	}
 
-aInt, aIsInt := a.(int64)
-bInt, bIsInt := b.(int64)
-if aIsInt && bIsInt {
-return aInt - bInt
-}
+	aInt, aIsInt := a.(int64)
+	bInt, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		return aInt - bInt
+	}
 
-aFloat, aIsFloat := a.(float64)
-bFloat, bIsFloat := b.(float64)
-if aIsFloat && bIsFloat {
-return aFloat - bFloat
-}
-if aIsInt && bIsFloat {
-return float64(aInt) - bFloat
-}
-if aIsFloat && bIsInt {
-return aFloat - float64(bInt)
-}
+	aFloat, aIsFloat := a.(float64)
+	bFloat, bIsFloat := b.(float64)
+	if aIsFloat && bIsFloat {
+		return aFloat - bFloat
+	}
+	if aIsInt && bIsFloat {
+		return float64(aInt) - bFloat
+	}
+	if aIsFloat && bIsInt {
+		return aFloat - float64(bInt)
+	}
 
-return nil
+	return nil
 }
 
 // divideValues divides two values
 func (vm *VM) divideValues(a, b interface{}) interface{} {
-if a == nil || b == nil {
-return nil
-}
+	if a == nil || b == nil {
+		return nil
+	}
 
-aInt, aIsInt := a.(int64)
-bInt, bIsInt := b.(int64)
-if aIsInt && bIsInt {
-if bInt == 0 {
-return nil
-}
-return float64(aInt) / float64(bInt)
-}
+	aInt, aIsInt := a.(int64)
+	bInt, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		if bInt == 0 {
+			return nil
+		}
+		return float64(aInt) / float64(bInt)
+	}
 
-aFloat, aIsFloat := a.(float64)
-bFloat, bIsFloat := b.(float64)
-if aIsFloat && bIsFloat {
-if bFloat == 0 {
-return nil
-}
-return aFloat / bFloat
-}
-if aIsInt && bIsFloat {
-if bFloat == 0 {
-return nil
-}
-return float64(aInt) / bFloat
-}
-if aIsFloat && bIsInt {
-if bInt == 0 {
-return nil
-}
-return aFloat / float64(bInt)
-}
+	aFloat, aIsFloat := a.(float64)
+	bFloat, bIsFloat := b.(float64)
+	if aIsFloat && bIsFloat {
+		if bFloat == 0 {
+			return nil
+		}
+		return aFloat / bFloat
+	}
+	if aIsInt && bIsFloat {
+		if bFloat == 0 {
+			return nil
+		}
+		return float64(aInt) / bFloat
+	}
+	if aIsFloat && bIsInt {
+		if bInt == 0 {
+			return nil
+		}
+		return aFloat / float64(bInt)
+	}
 
-return nil
+	return nil
 }
 
 // compareValues compares two values (-1, 0, 1)
 func (vm *VM) compareVals(a, b interface{}) int {
-if a == nil && b == nil {
-return 0
-}
-if a == nil {
-return -1
-}
-if b == nil {
-return 1
-}
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
 
-aInt, aIsInt := a.(int64)
-bInt, bIsInt := b.(int64)
-if aIsInt && bIsInt {
-if aInt < bInt {
-return -1
-} else if aInt > bInt {
-return 1
-}
-return 0
-}
+	aInt, aIsInt := a.(int64)
+	bInt, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		if aInt < bInt {
+			return -1
+		} else if aInt > bInt {
+			return 1
+		}
+		return 0
+	}
 
-aFloat, aIsFloat := a.(float64)
-bFloat, bIsFloat := b.(float64)
-if aIsFloat && bIsFloat {
-if aFloat < bFloat {
-return -1
-} else if aFloat > bFloat {
-return 1
-}
-return 0
-}
-if aIsInt && bIsFloat {
-aFloat = float64(aInt)
-if aFloat < bFloat {
-return -1
-} else if aFloat > bFloat {
-return 1
-}
-return 0
-}
-if aIsFloat && bIsInt {
-bFloat = float64(bInt)
-if aFloat < bFloat {
-return -1
-} else if aFloat > bFloat {
-return 1
-}
-return 0
-}
+	aFloat, aIsFloat := a.(float64)
+	bFloat, bIsFloat := b.(float64)
+	if aIsFloat && bIsFloat {
+		if aFloat < bFloat {
+			return -1
+		} else if aFloat > bFloat {
+			return 1
+		}
+		return 0
+	}
+	if aIsInt && bIsFloat {
+		aFloat = float64(aInt)
+		if aFloat < bFloat {
+			return -1
+		} else if aFloat > bFloat {
+			return 1
+		}
+		return 0
+	}
+	if aIsFloat && bIsInt {
+		bFloat = float64(bInt)
+		if aFloat < bFloat {
+			return -1
+		} else if aFloat > bFloat {
+			return 1
+		}
+		return 0
+	}
 
-aStr, aIsStr := a.(string)
-bStr, bIsStr := b.(string)
-if aIsStr && bIsStr {
-if aStr < bStr {
-return -1
-} else if aStr > bStr {
-return 1
-}
-return 0
-}
+	aStr, aIsStr := a.(string)
+	bStr, bIsStr := b.(string)
+	if aIsStr && bIsStr {
+		if aStr < bStr {
+			return -1
+		} else if aStr > bStr {
+			return 1
+		}
+		return 0
+	}
 
-return 0
+	return 0
 }

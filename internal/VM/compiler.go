@@ -94,7 +94,7 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 
 	// Build expanded columns list by processing each column
 	expanded := make([]QP.Expr, 0)
-	
+
 	for _, col := range columns {
 		colRef, isColRef := col.(*QP.ColumnRef)
 		if !isColRef || colRef.Name != "*" {
@@ -102,10 +102,10 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 			expanded = append(expanded, col)
 			continue
 		}
-		
+
 		// This is a star column - expand it
 		starTable := colRef.Table
-		
+
 		// If star has table qualifier (e.g., t1.*), expand to that table's columns only
 		if starTable != "" && c.TableSchemas != nil {
 			if tableSchema, ok := c.TableSchemas[starTable]; ok {
@@ -135,7 +135,7 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 				continue
 			}
 		}
-		
+
 		// Unqualified * - expand to all columns from all tables
 		// For multi-table queries (JOINs), use TableSchemas
 		if c.TableSchemas != nil && len(c.TableSchemas) > 0 && c.TableColOrder != nil && len(c.TableColOrder) > 0 {
@@ -158,7 +158,7 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 			}
 			continue
 		}
-		
+
 		// Single table case: use TableColOrder or TableColIndices
 		if c.TableColOrder != nil && len(c.TableColOrder) > 0 {
 			for _, colName := range c.TableColOrder {
@@ -958,6 +958,7 @@ func (c *Compiler) compileCastExpr(cast *QP.CastExpr) int {
 	dst := c.ra.Alloc()
 
 	c.program.EmitOp(OpCast, int32(srcReg), 0)
+	c.program.Instructions[len(c.program.Instructions)-1].P4 = cast.Type
 	c.program.EmitCopy(srcReg, dst)
 
 	return dst
@@ -966,7 +967,7 @@ func (c *Compiler) compileCastExpr(cast *QP.CastExpr) int {
 func (c *Compiler) compileSubqueryExpr(subq *QP.SubqueryExpr) int {
 	// Allocate a register for the subquery result
 	resultReg := c.ra.Alloc()
-	
+
 	// Emit OpScalarSubquery instruction
 	// P1 = destination register
 	// P4 = the SELECT statement to execute
@@ -975,7 +976,7 @@ func (c *Compiler) compileSubqueryExpr(subq *QP.SubqueryExpr) int {
 		P1: int32(resultReg),
 		P4: subq.Select,
 	})
-	
+
 	return resultReg
 }
 
@@ -1184,7 +1185,7 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *Program {
 
 	// Strategy: Scan all rows, accumulate aggregates, emit results
 	// P4 will contain aggregate information for the VM to execute
-	
+
 	// Build aggregate information structure
 	aggInfo := &AggregateInfo{
 		GroupByExprs: make([]QP.Expr, 0),
@@ -1192,12 +1193,12 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *Program {
 		NonAggCols:   make([]QP.Expr, 0),
 		HavingExpr:   stmt.Having,
 	}
-	
+
 	// Collect GROUP BY expressions
 	if stmt.GroupBy != nil {
 		aggInfo.GroupByExprs = stmt.GroupBy
 	}
-	
+
 	// Analyze SELECT columns for aggregates and non-aggregate expressions
 	for _, col := range stmt.Columns {
 		if fc, ok := col.(*QP.FuncCall); ok {
@@ -1218,7 +1219,7 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *Program {
 			aggInfo.NonAggCols = append(aggInfo.NonAggCols, col)
 		}
 	}
-	
+
 	// Emit OpAggregate instruction with all the information
 	// The VM will execute this by:
 	// 1. Scanning all rows
@@ -1246,8 +1247,8 @@ type AggregateInfo struct {
 
 // AggregateDef defines an aggregate function
 type AggregateDef struct {
-	Function string     // COUNT, SUM, AVG, MIN, MAX
-	Args     []QP.Expr  // Arguments to the aggregate
+	Function string    // COUNT, SUM, AVG, MIN, MAX
+	Args     []QP.Expr // Arguments to the aggregate
 }
 
 func Compile(sql string) (*Program, error) {
@@ -1340,7 +1341,7 @@ func (c *Compiler) compileSetOp(stmt *QP.SelectStmt) *Program {
 // If the list contains a star (*), it returns the actual column count from the table schema
 func (c *Compiler) resolveColumnCount(columns []QP.Expr) int {
 	numCols := len(columns)
-	
+
 	// Check if columns contains a star
 	if numCols == 1 {
 		if colRef, ok := columns[0].(*QP.ColumnRef); ok && colRef.Name == "*" {
@@ -1359,7 +1360,7 @@ func (c *Compiler) resolveColumnCount(columns []QP.Expr) int {
 			}
 		}
 	}
-	
+
 	return numCols
 }
 
