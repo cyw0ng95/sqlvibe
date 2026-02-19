@@ -210,9 +210,16 @@ type CaseWhen struct {
 
 func (e *CaseExpr) exprNode() {}
 
+// TypeSpec represents a SQL type with optional precision and scale
+type TypeSpec struct {
+	Name      string // Type name (e.g., "INTEGER", "DECIMAL", "VARCHAR")
+	Precision int    // For DECIMAL(p,s) or VARCHAR(n), this is p or n
+	Scale     int    // For DECIMAL(p,s), this is s
+}
+
 type CastExpr struct {
-	Expr Expr
-	Type string
+	Expr     Expr
+	TypeSpec TypeSpec // Changed from Type string to TypeSpec
 }
 
 func (e *CastExpr) exprNode() {}
@@ -1286,16 +1293,50 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			return nil, fmt.Errorf("expected AS in CAST expression")
 		}
 		p.advance()
-		typeName := ""
+		
+		// Parse type name
+		typeSpec := TypeSpec{}
 		if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
-			typeName = strings.ToUpper(p.current().Literal)
+			typeSpec.Name = strings.ToUpper(p.current().Literal)
 			p.advance()
 		}
+		
+		// Check for precision/scale: TYPE(precision) or TYPE(precision, scale)
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			
+			// Parse precision (first number)
+			if p.current().Type == TokenNumber {
+				if precision, err := strconv.Atoi(p.current().Literal); err == nil {
+					typeSpec.Precision = precision
+				}
+				p.advance()
+			}
+			
+			// Check for scale (optional, after comma)
+			if p.current().Type == TokenComma {
+				p.advance()
+				if p.current().Type == TokenNumber {
+					if scale, err := strconv.Atoi(p.current().Literal); err == nil {
+						typeSpec.Scale = scale
+					}
+					p.advance()
+				}
+			}
+			
+			// Expect closing paren for type parameters
+			if p.current().Type != TokenRightParen {
+				return nil, fmt.Errorf("expected ')' after type parameters")
+			}
+			p.advance()
+		}
+		
+		// Expect closing paren for CAST expression
 		if p.current().Type != TokenRightParen {
 			return nil, fmt.Errorf("expected ')' after CAST type")
 		}
 		p.advance()
-		return &CastExpr{Expr: expr, Type: typeName}, nil
+		return &CastExpr{Expr: expr, TypeSpec: typeSpec}, nil
 	case TokenIdentifier:
 		p.advance()
 

@@ -995,8 +995,9 @@ func (c *Compiler) compileCastExpr(cast *QP.CastExpr) int {
 	srcReg := c.compileExpr(cast.Expr)
 	dst := c.ra.Alloc()
 
+	// Emit OpCast instruction with TypeSpec in P4
 	c.program.EmitOp(OpCast, int32(srcReg), 0)
-	c.program.Instructions[len(c.program.Instructions)-1].P4 = cast.Type
+	c.program.Instructions[len(c.program.Instructions)-1].P4 = cast.TypeSpec
 	c.program.EmitCopy(srcReg, dst)
 
 	return dst
