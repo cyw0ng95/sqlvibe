@@ -2,6 +2,7 @@ package VM
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
@@ -120,14 +121,9 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 				for colName, idx := range tableSchema {
 					cols = append(cols, colInfo{name: colName, idx: idx})
 				}
-				// Sort by index
-				for i := 0; i < len(cols); i++ {
-					for j := i + 1; j < len(cols); j++ {
-						if cols[i].idx > cols[j].idx {
-							cols[i], cols[j] = cols[j], cols[i]
-						}
-					}
-				}
+				sort.Slice(cols, func(i, j int) bool {
+					return cols[i].idx < cols[j].idx
+				})
 				for _, c := range cols {
 					expanded = append(expanded, &QP.ColumnRef{
 						Name:  c.name,
