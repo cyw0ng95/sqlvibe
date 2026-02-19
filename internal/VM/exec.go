@@ -813,9 +813,40 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpColumn:
 			cursorID := int(inst.P1)
 			colIdx := int(inst.P2)
-			tableQualifier := inst.P3 // Table qualifier if present (string)
+			tableQualifier := inst.P3 // Table qualifier if present (string), or "table.column" for outer ref
 			dst := inst.P4
 			cursor := vm.cursors.Get(cursorID)
+			
+			// Special case: colIdx=-1 means this is definitely an outer reference
+			// P3 contains "table.column" format
+			if colIdx == -1 && tableQualifier != "" && vm.ctx != nil {
+				type OuterContextProvider interface {
+					GetOuterRowValue(columnName string) (interface{}, bool)
+				}
+				
+				if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
+					// Parse "table.column" to extract column name
+					parts := strings.Split(tableQualifier, ".")
+					if len(parts) == 2 {
+						colName := parts[1]
+						fmt.Printf("DEBUG OpColumn: colIdx=-1 (outer reference), trying GetOuterRowValue(%q)\n", colName)
+						if val, found := outerCtx.GetOuterRowValue(colName); found {
+							fmt.Printf("DEBUG OpColumn: found in outer context: %v\n", val)
+							if dstReg, ok := dst.(int); ok {
+								vm.registers[dstReg] = val
+								continue
+							}
+						} else {
+							fmt.Printf("DEBUG OpColumn: NOT found in outer context\n")
+						}
+					}
+				}
+				// If not found in outer context, emit NULL
+				if dstReg, ok := dst.(int); ok {
+					vm.registers[dstReg] = nil
+				}
+				continue
+			}
 			
 			// For correlation: if we have a table qualifier and outer context,
 			// check if this might be an outer reference
