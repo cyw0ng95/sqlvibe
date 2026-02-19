@@ -31,8 +31,9 @@ type SelectStmt struct {
 func (s *SelectStmt) NodeType() string { return "SelectStmt" }
 
 type OrderBy struct {
-	Expr Expr
-	Desc bool
+	Expr  Expr
+	Desc  bool
+	Nulls string // "FIRST", "LAST", or ""
 }
 
 type TableRef struct {
@@ -52,10 +53,10 @@ type Join struct {
 }
 
 type InsertStmt struct {
-	Table         string
-	Columns       []string
-	Values        [][]Expr
-	UseDefaults   bool // True when using DEFAULT VALUES
+	Table       string
+	Columns     []string
+	Values      [][]Expr
+	UseDefaults bool // True when using DEFAULT VALUES
 }
 
 func (i *InsertStmt) NodeType() string { return "InsertStmt" }
@@ -473,12 +474,22 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				if err != nil {
 					break
 				}
-				ob := OrderBy{Expr: expr, Desc: false}
+				ob := OrderBy{Expr: expr, Desc: false, Nulls: ""}
 				if p.current().Literal == "DESC" {
 					ob.Desc = true
 					p.advance()
 				} else if p.current().Literal == "ASC" {
 					p.advance()
+				}
+				if p.current().Literal == "NULLS" {
+					p.advance()
+					if p.current().Literal == "FIRST" {
+						ob.Nulls = "FIRST"
+						p.advance()
+					} else if p.current().Literal == "LAST" {
+						ob.Nulls = "LAST"
+						p.advance()
+					}
 				}
 				stmt.OrderBy = append(stmt.OrderBy, ob)
 				if p.current().Type != TokenComma {
@@ -576,7 +587,7 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 			if p.current().Type == TokenRightParen {
 				return nil, fmt.Errorf("empty VALUES () not supported, use DEFAULT VALUES")
 			}
-			
+
 			for {
 				expr, err := p.parseExpr()
 				if err != nil {
@@ -1339,18 +1350,18 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			return nil, fmt.Errorf("expected AS in CAST expression")
 		}
 		p.advance()
-		
+
 		// Parse type name
 		typeSpec := TypeSpec{}
 		if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
 			typeSpec.Name = strings.ToUpper(p.current().Literal)
 			p.advance()
 		}
-		
+
 		// Check for precision/scale: TYPE(precision) or TYPE(precision, scale)
 		if p.current().Type == TokenLeftParen {
 			p.advance()
-			
+
 			// Parse precision (first number)
 			if p.current().Type == TokenNumber {
 				if precision, err := strconv.Atoi(p.current().Literal); err == nil {
@@ -1358,7 +1369,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				}
 				p.advance()
 			}
-			
+
 			// Check for scale (optional, after comma)
 			if p.current().Type == TokenComma {
 				p.advance()
@@ -1369,14 +1380,14 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 					p.advance()
 				}
 			}
-			
+
 			// Expect closing paren for type parameters
 			if p.current().Type != TokenRightParen {
 				return nil, fmt.Errorf("expected ')' after type parameters")
 			}
 			p.advance()
 		}
-		
+
 		// Expect closing paren for CAST expression
 		if p.current().Type != TokenRightParen {
 			return nil, fmt.Errorf("expected ')' after CAST type")
@@ -1428,13 +1439,13 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			p.advance()
 			if p.current().Type == TokenLeftParen {
 				p.advance()
-				
+
 				// Handle DISTINCT or ALL keywords in aggregate functions
 				// Skip these keywords as they don't affect the basic aggregation
 				if (p.current().Type == TokenKeyword && p.current().Literal == "DISTINCT") || p.current().Type == TokenAll {
 					p.advance()
 				}
-				
+
 				args := make([]Expr, 0)
 				for !p.isEOF() && p.current().Type != TokenRightParen {
 					arg, err := p.parseExpr()

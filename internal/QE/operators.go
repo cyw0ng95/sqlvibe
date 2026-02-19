@@ -302,10 +302,49 @@ func (qe *QueryEngine) SortRows(data [][]interface{}, orderBy []QP.OrderBy, cols
 					keyValI = orderByValues[obIdx][i]
 					keyValJ = orderByValues[obIdx][j]
 				}
-				
-				cmp := qe.CompareVals(keyValI, keyValJ)
-				if ob.Desc {
-					cmp = -cmp
+
+				// Handle NULLS FIRST/LAST
+				cmp := 0
+				nullsI := keyValI == nil
+				nullsJ := keyValJ == nil
+
+				if nullsI && nullsJ {
+					cmp = 0
+				} else if nullsI {
+					// i is NULL
+					if ob.Nulls == "FIRST" {
+						cmp = -1 // NULLs first
+					} else if ob.Nulls == "LAST" {
+						cmp = 1 // NULLs last
+					} else {
+						// Default: NULLs first for ASC, NULLs last for DESC
+						if ob.Desc {
+							cmp = 1 // NULLs last for DESC
+						} else {
+							cmp = -1 // NULLs first for ASC
+						}
+					}
+				} else if nullsJ {
+					// j is NULL
+					if ob.Nulls == "FIRST" {
+						cmp = 1 // NULLs first
+					} else if ob.Nulls == "LAST" {
+						cmp = -1 // NULLs last
+					} else {
+						// Default: NULLs first for ASC, NULLs last for DESC
+						if ob.Desc {
+							cmp = -1 // NULLs last for DESC
+						} else {
+							cmp = 1 // NULLs first for ASC
+						}
+					}
+				} else {
+					// Neither is NULL
+					cmp = qe.CompareVals(keyValI, keyValJ)
+					// Apply DESC after NULL handling
+					if ob.Desc {
+						cmp = -cmp
+					}
 				}
 				if cmp > 0 {
 					sorted[i], sorted[j] = sorted[j], sorted[i]
