@@ -12,6 +12,7 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/TM"
 	"github.com/sqlvibe/sqlvibe/internal/util"
 )
+
 type Database struct {
 	pm             *DS.PageManager
 	engine         *QE.QueryEngine
@@ -29,6 +30,7 @@ type Database struct {
 	indexes        map[string]*IndexInfo               // index name -> index info
 	isRegistry     *IS.Registry                        // information_schema registry
 	txSnapshot     *dbSnapshot                         // snapshot for transaction rollback
+	tableBTrees    map[string]*DS.BTree                // table name -> B-Tree for storage
 }
 
 type dbSnapshot struct {
@@ -174,7 +176,7 @@ func (r *Rows) Next() bool {
 
 func (r *Rows) Scan(dest ...interface{}) error {
 	util.Assert(r.pos >= 0, "row position cannot be negative: %d", r.pos)
-	
+
 	if r.Data == nil || r.pos < 0 || r.pos >= len(r.Data) {
 		return fmt.Errorf("no rows available")
 	}
@@ -275,6 +277,7 @@ func Open(path string) (*Database, error) {
 		columnChecks:   make(map[string]map[string]QP.Expr),
 		data:           data,
 		indexes:        make(map[string]*IndexInfo),
+		tableBTrees:    make(map[string]*DS.BTree),
 	}, nil
 }
 
@@ -396,6 +399,11 @@ func (db *Database) Exec(sql string) (Result, error) {
 		if len(pkCols) > 0 {
 			db.primaryKeys[stmt.Name] = pkCols
 		}
+
+		// Create BTree for table storage
+		bt := DS.NewBTree(db.pm, 0, true)
+		db.tableBTrees[stmt.Name] = bt
+
 		return Result{}, nil
 	case "InsertStmt":
 		stmt := ast.(*QP.InsertStmt)
@@ -661,9 +669,6 @@ func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error)
 	return &Rows{Columns: rows.Columns, Data: sorted}, nil
 }
 
-
-
-
 func (db *Database) ExecWithParams(sql string, params []interface{}) (Result, error) {
 	return db.Exec(sql)
 }
@@ -750,7 +755,6 @@ func (db *Database) tryUseIndex(tableName string, where QP.Expr) []map[string]in
 func (db *Database) scanByIndexValue(tableName, colName string, value interface{}, unique bool) []map[string]interface{} {
 	return db.engine.ScanByIndexValue(tableName, colName, value, unique)
 }
-
 
 func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, cols []string) [][]interface{} {
 	if len(orderBy) == 0 || len(data) == 0 {
@@ -1108,4 +1112,3 @@ func (db *Database) getRightColumns(right []map[string]interface{}) []string {
 	}
 	return cols
 }
-

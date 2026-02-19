@@ -47,11 +47,14 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 		return nil, fmt.Errorf("VM compile error: %v", err)
 	}
 
-	ctx := &dbVmContext{db: db}
+	ctx := newDsVmContext(db)
 	vm := VM.NewVMWithContext(program, ctx)
 
-	if tableName != "" && db.data[tableName] != nil {
-		vm.Cursors().OpenTable(tableName, db.data[tableName], db.columnOrder[tableName])
+	// Get table data from DS context
+	if tableName != "" {
+		if tableData, err := ctx.GetTableData(tableName); err == nil && tableData != nil {
+			vm.Cursors().OpenTable(tableName, tableData, db.columnOrder[tableName])
+		}
 	}
 
 	err = vm.Run(nil)
@@ -110,8 +113,12 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 		return db.queryInformationSchema(stmt, fullName)
 	}
 
-	if db.data[tableName] == nil {
-		return nil, fmt.Errorf("table not found: %s", tableName)
+	if tableName != "" {
+		// Check if table exists via DS context
+		ctx := newDsVmContext(db)
+		if tableData, err := ctx.GetTableData(tableName); err != nil || tableData == nil {
+			return nil, fmt.Errorf("table not found: %s", tableName)
+		}
 	}
 
 	tableCols := db.columnOrder[tableName]
@@ -128,7 +135,8 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	compiler.SetTableSchema(colIndices, tableCols)
 
 	program := compiler.CompileSelect(stmt)
-	vm := VM.NewVMWithContext(program, &dbVmContext{db: db})
+	ctx := newDsVmContext(db)
+	vm := VM.NewVMWithContext(program, ctx)
 
 	// Reset VM state before opening cursor manually
 	vm.Reset()
@@ -139,7 +147,11 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	if stmt.From.Alias != "" {
 		cursorName = stmt.From.Alias
 	}
-	vm.Cursors().OpenTableAtID(0, cursorName, db.data[tableName], tableCols)
+
+	// Get table data from DS context
+	if tableData, err := ctx.GetTableData(tableName); err == nil && tableData != nil {
+		vm.Cursors().OpenTableAtID(0, cursorName, tableData, tableCols)
+	}
 
 	// Execute without calling Reset again (use Exec instead of Run)
 	err := vm.Exec(nil)
@@ -191,8 +203,12 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 		return db.queryInformationSchema(stmt, fullName)
 	}
 
-	if db.data[tableName] == nil {
-		return nil, fmt.Errorf("table not found: %s", tableName)
+	if tableName != "" {
+		// Check if table exists via DS context
+		ctx := newDsVmContext(db)
+		if tableData, err := ctx.GetTableData(tableName); err != nil || tableData == nil {
+			return nil, fmt.Errorf("table not found: %s", tableName)
+		}
 	}
 
 	tableCols := db.columnOrder[tableName]
@@ -226,8 +242,9 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	if stmt.From.Alias != "" {
 		cursorName = stmt.From.Alias
 	}
-	// fmt.Printf("DEBUG execSelectStmtWithContext: About to open cursor 0 with cursorName=%q\n", cursorName)
-	vm.Cursors().OpenTableAtID(0, cursorName, db.data[tableName], tableCols)
+	// Get table data from DS context
+	tableData, _ := ctx.GetTableData(tableName)
+	vm.Cursors().OpenTableAtID(0, cursorName, tableData, tableCols)
 	// fmt.Printf("DEBUG execSelectStmtWithContext: Cursor 0 opened, about to Exec\n")
 
 	// Execute without calling Reset again (use Exec instead of Run)
@@ -273,8 +290,12 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		return db.queryInformationSchema(stmt, fullName)
 	}
 
-	if db.data[tableName] == nil {
-		return nil, fmt.Errorf("table not found: %s", tableName)
+	if tableName != "" {
+		// Check if table exists via DS context
+		ctx := newDsVmContext(db)
+		if tableData, err := ctx.GetTableData(tableName); err != nil || tableData == nil {
+			return nil, fmt.Errorf("table not found: %s", tableName)
+		}
 	}
 
 	// Get table column order for proper column mapping
@@ -332,7 +353,7 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 
 	program := cg.CompileSelect(stmt)
 
-	ctx := &dbVmContext{db: db}
+	ctx := newDsVmContext(db)
 	vm := VM.NewVMWithContext(program, ctx)
 
 	err := vm.Run(nil)
@@ -513,9 +534,12 @@ func literalToString(val interface{}) string {
 }
 
 func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
-	// Ensure table exists
-	if db.data[tableName] == nil {
-		db.data[tableName] = make([]map[string]interface{}, 0)
+	// Ensure table exists via DS context
+	ctx := newDsVmContext(db)
+	tableData, err := ctx.GetTableData(tableName)
+	if err != nil || tableData == nil {
+		// Create empty data if not exists (for new tables)
+		tableData = make([]map[string]interface{}, 0)
 	}
 
 	// Get table column order
@@ -534,13 +558,10 @@ func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
 	}
 
 	// Create VM context
-	ctx := &dbVmContext{db: db}
 	vm := VM.NewVMWithContext(program, ctx)
 
 	// Open table cursor
-	if db.data[tableName] != nil {
-		vm.Cursors().OpenTableAtID(0, tableName, db.data[tableName], tableCols)
-	}
+	vm.Cursors().OpenTableAtID(0, tableName, tableData, tableCols)
 
 	// Execute the VM program
 	err = vm.Run(nil)

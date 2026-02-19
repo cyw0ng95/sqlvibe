@@ -3,8 +3,165 @@ package sqlvibe
 import (
 	"fmt"
 
+	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 )
+
+type dsVmContext struct {
+	db         *Database
+	pm         *DS.PageManager
+	tableTrees map[string]*DS.BTree
+}
+
+func newDsVmContext(db *Database) *dsVmContext {
+	return &dsVmContext{
+		db:         db,
+		pm:         db.pm,
+		tableTrees: db.tableBTrees,
+	}
+}
+
+func (ctx *dsVmContext) GetTableData(tableName string) ([]map[string]interface{}, error) {
+	bt, ok := ctx.tableTrees[tableName]
+	if !ok || bt == nil {
+		// Fall back to in-memory if no BTree
+		if ctx.db.data == nil {
+			return nil, nil
+		}
+		return ctx.db.data[tableName], nil
+	}
+
+	// Scan BTree and convert to map format
+	columns, err := ctx.GetTableColumns(tableName)
+	if err != nil {
+		return nil, err
+	}
+
+	cursor := bt.NewCursor()
+	if err := cursor.First(); err != nil {
+		return nil, err
+	}
+
+	var result []map[string]interface{}
+	rowIndex := 0
+	for cursor.Valid() {
+		value, err := cursor.Value()
+		if err != nil {
+			return nil, err
+		}
+
+		// Decode the record
+		values, _, err := DS.DecodeRecord(value)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert to map
+		row := make(map[string]interface{})
+		for i, col := range columns {
+			if i < len(values) {
+				row[col] = values[i]
+			} else {
+				row[col] = nil
+			}
+		}
+		row["_rowid_"] = rowIndex
+		result = append(result, row)
+
+		if err := cursor.Next(); err != nil {
+			return nil, err
+		}
+		rowIndex++
+	}
+
+	return result, nil
+}
+
+func (ctx *dsVmContext) GetTableColumns(tableName string) ([]string, error) {
+	if ctx.db.columnOrder == nil {
+		return nil, nil
+	}
+	return ctx.db.columnOrder[tableName], nil
+}
+
+func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) error {
+	bt, ok := ctx.tableTrees[tableName]
+	if !ok || bt == nil {
+		// Fall back to in-memory
+		if ctx.db.data[tableName] == nil {
+			ctx.db.data[tableName] = make([]map[string]interface{}, 0)
+		}
+		ctx.db.data[tableName] = append(ctx.db.data[tableName], row)
+		return nil
+	}
+
+	// Get column order
+	columns, err := ctx.GetTableColumns(tableName)
+	if err != nil {
+		return err
+	}
+
+	// Extract values in column order
+	values := make([]interface{}, len(columns))
+	for i, col := range columns {
+		values[i] = row[col]
+	}
+
+	// Encode record
+	encoded := DS.EncodeRecord(values)
+
+	// Get rowid (either from row or auto-generate)
+	rowid := int64(len(ctx.db.data[tableName]))
+	if rid, ok := row["_rowid_"]; ok {
+		switch v := rid.(type) {
+		case int64:
+			rowid = v
+		case int:
+			rowid = int64(v)
+		}
+	}
+
+	// Create key from rowid
+	key := make([]byte, 9)
+	DS.PutVarint(key, rowid)
+
+	// Insert into BTree
+	if err := bt.Insert(key, encoded); err != nil {
+		return fmt.Errorf("failed to insert into BTree: %w", err)
+	}
+
+	// Also keep in-memory for fallback
+	if ctx.db.data[tableName] == nil {
+		ctx.db.data[tableName] = make([]map[string]interface{}, 0)
+	}
+	ctx.db.data[tableName] = append(ctx.db.data[tableName], row)
+
+	return nil
+}
+
+func (ctx *dsVmContext) UpdateRow(tableName string, rowIndex int, row map[string]interface{}) error {
+	// Fall back to in-memory
+	if ctx.db.data[tableName] == nil {
+		return fmt.Errorf("table not found")
+	}
+	if rowIndex < 0 || rowIndex >= len(ctx.db.data[tableName]) {
+		return fmt.Errorf("row index out of bounds")
+	}
+	ctx.db.data[tableName][rowIndex] = row
+	return nil
+}
+
+func (ctx *dsVmContext) DeleteRow(tableName string, rowIndex int) error {
+	// Fall back to in-memory
+	if ctx.db.data[tableName] == nil {
+		return fmt.Errorf("table not found")
+	}
+	if rowIndex < 0 || rowIndex >= len(ctx.db.data[tableName]) {
+		return fmt.Errorf("row index out of bounds")
+	}
+	ctx.db.data[tableName] = append(ctx.db.data[tableName][:rowIndex], ctx.db.data[tableName][rowIndex+1:]...)
+	return nil
+}
 
 type dbVmContext struct {
 	db *Database
@@ -69,7 +226,7 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 			// Evaluate the CHECK expression with the row values
 			// Create a simple evaluator that can resolve column references to row values
 			result := ctx.evaluateCheckConstraint(checkExpr, row)
-			
+
 			// CHECK constraint must evaluate to true (non-zero, non-null, non-false)
 			isValid := false
 			if result != nil {
@@ -86,7 +243,7 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 					isValid = true
 				}
 			}
-			
+
 			if !isValid {
 				return fmt.Errorf("CHECK constraint failed: %s.%s", tableName, colName)
 			}
@@ -121,25 +278,25 @@ func (ctx *dbVmContext) evaluateCheckConstraint(expr QP.Expr, row map[string]int
 	switch e := expr.(type) {
 	case *QP.Literal:
 		return e.Value
-	
+
 	case *QP.ColumnRef:
 		// Look up column value in the row
 		if val, ok := row[e.Name]; ok {
 			return val
 		}
 		return nil
-	
+
 	case *QP.BinaryExpr:
 		// Evaluate left and right operands
 		left := ctx.evaluateCheckConstraint(e.Left, row)
 		right := ctx.evaluateCheckConstraint(e.Right, row)
-		
+
 		// Handle NULL propagation
 		if left == nil || right == nil {
 			// In SQL, NULL comparisons return NULL (which is falsy for CHECK)
 			return nil
 		}
-		
+
 		// Perform the operation
 		switch e.Op {
 		case QP.TokenEq:
@@ -169,7 +326,7 @@ func (ctx *dbVmContext) evaluateCheckConstraint(expr QP.Expr, row map[string]int
 		case QP.TokenSlash:
 			return divideValues(left, right)
 		}
-	
+
 	case *QP.UnaryExpr:
 		val := ctx.evaluateCheckConstraint(e.Expr, row)
 		if e.Op == QP.TokenMinus {
@@ -182,7 +339,7 @@ func (ctx *dbVmContext) evaluateCheckConstraint(expr QP.Expr, row map[string]int
 		}
 		return val
 	}
-	
+
 	return nil
 }
 
@@ -399,17 +556,11 @@ type dbVmContextWithOuter struct {
 }
 
 func (ctx *dbVmContextWithOuter) GetTableData(tableName string) ([]map[string]interface{}, error) {
-	if ctx.db.data == nil {
-		return nil, nil
-	}
-	return ctx.db.data[tableName], nil
+	return newDsVmContext(ctx.db).GetTableData(tableName)
 }
 
 func (ctx *dbVmContextWithOuter) GetTableColumns(tableName string) ([]string, error) {
-	if ctx.db.columnOrder == nil {
-		return nil, nil
-	}
-	return ctx.db.columnOrder[tableName], nil
+	return newDsVmContext(ctx.db).GetTableColumns(tableName)
 }
 
 // GetOuterRowValue retrieves a value from the outer row context
@@ -422,36 +573,29 @@ func (ctx *dbVmContextWithOuter) GetOuterRowValue(columnName string) (interface{
 }
 
 func (ctx *dbVmContextWithOuter) InsertRow(tableName string, row map[string]interface{}) error {
-	// Delegate to dbVmContext
-	return (&dbVmContext{db: ctx.db}).InsertRow(tableName, row)
+	return newDsVmContext(ctx.db).InsertRow(tableName, row)
 }
 
 func (ctx *dbVmContextWithOuter) UpdateRow(tableName string, rowIndex int, row map[string]interface{}) error {
-	// Delegate to dbVmContext
-	return (&dbVmContext{db: ctx.db}).UpdateRow(tableName, rowIndex, row)
+	return newDsVmContext(ctx.db).UpdateRow(tableName, rowIndex, row)
 }
 
 func (ctx *dbVmContextWithOuter) DeleteRow(tableName string, rowIndex int) error {
-	// Delegate to dbVmContext
-	return (&dbVmContext{db: ctx.db}).DeleteRow(tableName, rowIndex)
+	return newDsVmContext(ctx.db).DeleteRow(tableName, rowIndex)
 }
 
 func (ctx *dbVmContextWithOuter) ExecuteSubquery(subquery interface{}) (interface{}, error) {
-	// Delegate to db's dbVmContext
 	return (&dbVmContext{db: ctx.db}).ExecuteSubquery(subquery)
 }
 
 func (ctx *dbVmContextWithOuter) ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error) {
-	// Delegate to db's dbVmContext
 	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRows(subquery)
 }
 
 func (ctx *dbVmContextWithOuter) ExecuteSubqueryWithContext(subquery interface{}, outerRow map[string]interface{}) (interface{}, error) {
-	// Delegate to db's dbVmContext
 	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryWithContext(subquery, outerRow)
 }
 
 func (ctx *dbVmContextWithOuter) ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error) {
-	// Delegate to db's dbVmContext
 	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRowsWithContext(subquery, outerRow)
 }
