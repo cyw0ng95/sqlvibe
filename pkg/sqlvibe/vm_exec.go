@@ -152,6 +152,11 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 
 	results := vm.Results()
 
+	// Apply DISTINCT deduplication if requested
+	if stmt.Distinct {
+		results = deduplicateRows(results)
+	}
+
 	// Get column names from SELECT
 	cols := make([]string, 0)
 	for i, col := range stmt.Columns {
@@ -235,6 +240,11 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 
 	results := vm.Results()
+
+	// Apply DISTINCT deduplication if requested
+	if stmt.Distinct {
+		results = deduplicateRows(results)
+	}
 
 	// Get column names from SELECT
 	cols := make([]string, 0)
@@ -331,6 +341,11 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	}
 
 	results := vm.Results()
+
+	// Apply DISTINCT deduplication if requested
+	if stmt.Distinct {
+		results = deduplicateRows(results)
+	}
 
 	// Get column names from the SELECT statement
 	cols := make([]string, 0)
@@ -535,4 +550,18 @@ func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
 
 	// Get rows affected from VM
 	return Result{RowsAffected: vm.RowsAffected()}, nil
+}
+
+// deduplicateRows removes duplicate rows, preserving the first occurrence of each unique row.
+func deduplicateRows(rows [][]interface{}) [][]interface{} {
+	seen := make(map[string]bool)
+	result := make([][]interface{}, 0, len(rows))
+	for _, row := range rows {
+		key := fmt.Sprintf("%v", row)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, row)
+		}
+	}
+	return result
 }

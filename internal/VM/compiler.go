@@ -1262,6 +1262,7 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *Program {
 				aggDef := AggregateDef{
 					Function: fc.Name,
 					Args:     fc.Args,
+					Distinct: fc.Distinct,
 				}
 				aggInfo.Aggregates = append(aggInfo.Aggregates, aggDef)
 			default:
@@ -1303,6 +1304,7 @@ type AggregateInfo struct {
 type AggregateDef struct {
 	Function string    // COUNT, SUM, AVG, MIN, MAX
 	Args     []QP.Expr // Arguments to the aggregate
+	Distinct bool      // true if DISTINCT was specified (e.g. COUNT(DISTINCT col))
 }
 
 func Compile(sql string) (*Program, error) {

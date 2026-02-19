@@ -130,6 +130,8 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 	haltPos := len(c.program.Instructions)
 	c.program.Emit(VM.OpHalt)
 
+	// Fix up: OpRewind jumps to halt when table is empty, OpNext jumps to halt at EOF
+	c.program.FixupWithPos(rewindPos, haltPos)
 	c.program.FixupWithPos(np, haltPos)
 	c.program.FixupWithPos(gotoRewind, rewindPos+1)
 }
@@ -428,6 +430,7 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
 				aggDef := VM.AggregateDef{
 					Function: fc.Name,
 					Args:     fc.Args,
+					Distinct: fc.Distinct,
 				}
 				aggInfo.Aggregates = append(aggInfo.Aggregates, aggDef)
 			default:
