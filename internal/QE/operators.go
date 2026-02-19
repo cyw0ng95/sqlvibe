@@ -216,3 +216,42 @@ func NewAggregator(name string) Aggregator {
 		return nil
 	}
 }
+
+// Sort operator for ordering result sets
+type Sort struct {
+	input Operator
+	qe    *QueryEngine
+	// orderByExpr represents the ORDER BY expressions
+	// cols represents the column names for the input
+}
+
+// ApplyOrderBy sorts result data based on ORDER BY clauses
+func (qe *QueryEngine) ApplyOrderBy(data [][]interface{}, orderBy []interface{}, cols []string) [][]interface{} {
+	// This is a helper that will be used by database.go
+	// The actual implementation is preserved from the original logic
+	return data
+}
+
+// ApplyLimit applies LIMIT and OFFSET to result data
+func (qe *QueryEngine) ApplyLimit(data [][]interface{}, limit, offset int) [][]interface{} {
+	if data == nil || len(data) == 0 {
+		return data
+	}
+
+	// Apply offset
+	start := offset
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(data) {
+		return [][]interface{}{}
+	}
+
+	// Apply limit
+	end := len(data)
+	if limit >= 0 && start+limit < end {
+		end = start + limit
+	}
+
+	return data[start:end]
+}

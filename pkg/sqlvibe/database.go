@@ -704,62 +704,19 @@ func (tx *Transaction) Query(sql string) (*Rows, error) {
 }
 
 func (db *Database) extractValue(expr QP.Expr) interface{} {
-	return db.extractValueTyped(expr, "")
+	return db.engine.ExtractValue(expr)
 }
 
 func (db *Database) extractValueTyped(expr QP.Expr, colType string) interface{} {
-	if expr == nil {
-		return nil
-	}
-	switch e := expr.(type) {
-	case *QP.Literal:
-		val := e.Value
-		if strVal, ok := val.(string); ok {
-			converted := db.convertStringToType(strVal, colType)
-			return converted
-		}
-		return val
-	case *QP.ColumnRef:
-		return e.Name
-	case *QP.UnaryExpr:
-		val := db.extractValueTyped(e.Expr, colType)
-		if e.Op == QP.TokenMinus {
-			return db.negateValue(val)
-		}
-		return val
-	default:
-		return nil
-	}
+	return db.engine.ExtractValueTyped(expr, colType)
 }
 
 func (db *Database) negateValue(val interface{}) interface{} {
-	if val == nil {
-		return nil
-	}
-	switch v := val.(type) {
-	case int64:
-		return -v
-	case float64:
-		return -v
-	case int:
-		return -v
-	}
-	return val
+	return db.engine.Negate(val)
 }
 
 func (db *Database) convertStringToType(val string, colType string) interface{} {
-	switch colType {
-	case "INTEGER", "INT", "BIGINT", "SMALLINT":
-		var intVal int64
-		fmt.Sscanf(val, "%d", &intVal)
-		return intVal
-	case "REAL", "FLOAT", "DOUBLE", "DOUBLE PRECISION", "NUMERIC", "DECIMAL":
-		var floatVal float64
-		fmt.Sscanf(val, "%f", &floatVal)
-		return floatVal
-	default:
-		return val
-	}
+	return db.engine.ConvertStringToType(val, colType)
 }
 
 func (db *Database) MustExec(sql string, params ...interface{}) Result {
@@ -771,65 +728,21 @@ func (db *Database) MustExec(sql string, params ...interface{}) Result {
 }
 
 func (db *Database) tryUseIndex(tableName string, where QP.Expr) []map[string]interface{} {
-	if where == nil {
-		return nil
-	}
-
-	binExpr, ok := where.(*QP.BinaryExpr)
-	if !ok {
-		return nil
-	}
-
-	if binExpr.Op != QP.TokenEq {
-		return nil
-	}
-
-	var colName string
-	var colValue interface{}
-
-	if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
-		if lit, ok := binExpr.Right.(*QP.Literal); ok {
-			colName = colRef.Name
-			colValue = lit.Value
-		}
-	} else if colRef, ok := binExpr.Right.(*QP.ColumnRef); ok {
-		if lit, ok := binExpr.Left.(*QP.Literal); ok {
-			colName = colRef.Name
-			colValue = lit.Value
+	// Convert IndexInfo to QE.IndexInfo
+	qeIndexes := make(map[string]*QE.IndexInfo)
+	for name, idx := range db.indexes {
+		qeIndexes[name] = &QE.IndexInfo{
+			Name:    idx.Name,
+			Table:   idx.Table,
+			Columns: idx.Columns,
+			Unique:  idx.Unique,
 		}
 	}
-
-	if colName == "" {
-		return nil
-	}
-
-	for _, idx := range db.indexes {
-		if idx.Table == tableName && len(idx.Columns) > 0 && idx.Columns[0] == colName {
-			return db.scanByIndexValue(tableName, colName, colValue, idx.Unique)
-		}
-	}
-
-	return nil
+	return db.engine.TryUseIndex(tableName, where, qeIndexes)
 }
 
 func (db *Database) scanByIndexValue(tableName, colName string, value interface{}, unique bool) []map[string]interface{} {
-	tableData := db.data[tableName]
-	if tableData == nil {
-		return nil
-	}
-
-	result := make([]map[string]interface{}, 0)
-	for _, row := range tableData {
-		if rowVal, ok := row[colName]; ok {
-			if db.engine.ValuesEqual(rowVal, value) {
-				result = append(result, row)
-				if unique {
-					return result
-				}
-			}
-		}
-	}
-	return result
+	return db.engine.ScanByIndexValue(tableName, colName, value, unique)
 }
 
 func toFloat64(v interface{}) (float64, bool) {
@@ -933,20 +846,9 @@ func (db *Database) applyLimit(rows *Rows, limitExpr QP.Expr, offsetExpr QP.Expr
 		}
 	}
 
-	if offset >= len(rows.Data) {
-		return &Rows{Columns: rows.Columns, Data: [][]interface{}{}}, nil
-	}
-
-	if limit <= 0 {
-		return &Rows{Columns: rows.Columns, Data: [][]interface{}{}}, nil
-	}
-
-	end := offset + limit
-	if end > len(rows.Data) {
-		end = len(rows.Data)
-	}
-
-	return &Rows{Columns: rows.Columns, Data: rows.Data[offset:end]}, nil
+	// Use QE's ApplyLimit
+	rows.Data = db.engine.ApplyLimit(rows.Data, limit, offset)
+	return rows, nil
 }
 
 func (db *Database) serializeRow(row map[string]interface{}) []byte {
