@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/sqlvibe/sqlvibe/internal/SF/vfs"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 var (
@@ -63,10 +64,14 @@ func (f *vfsFile) Open(path string, flag int) (File, error) {
 }
 
 func (f *vfsFile) ReadAt(p []byte, off int64) (n int, err error) {
+	util.AssertNotNil(p, "buffer")
+	util.Assert(off >= 0, "offset cannot be negative: %d", off)
 	return f.vfsHandle.Read(p, off)
 }
 
 func (f *vfsFile) WriteAt(p []byte, off int64) (n int, err error) {
+	util.AssertNotNil(p, "buffer")
+	util.Assert(off >= 0, "offset cannot be negative: %d", off)
 	return f.vfsHandle.Write(p, off)
 }
 
@@ -127,6 +132,7 @@ func (f *vfsFile) Size() (int64, error) {
 }
 
 func (f *vfsFile) Truncate(size int64) error {
+	util.Assert(size >= 0, "truncate size cannot be negative: %d", size)
 	return f.vfsHandle.Truncate(size)
 }
 
@@ -170,6 +176,8 @@ func parseVFSURI(uri string) (vfsName string, path string, err error) {
 // OpenFile opens a file using the VFS system
 // Supports :memory: databases and VFS selection via URI
 func OpenFile(uri string, flag int) (File, error) {
+	util.Assert(uri != "", "URI cannot be empty")
+	
 	// Parse URI to get VFS name and path
 	vfsName, path, err := parseVFSURI(uri)
 	if err != nil {

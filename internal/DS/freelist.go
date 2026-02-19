@@ -3,6 +3,8 @@ package DS
 import (
 	"encoding/binary"
 	"fmt"
+
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 // Freelist management for SQLite-style page allocation
@@ -25,6 +27,7 @@ type FreelistManager struct {
 
 // NewFreelistManager creates a new freelist manager
 func NewFreelistManager(pm *PageManager, firstTrunk uint32) *FreelistManager {
+	util.AssertNotNil(pm, "PageManager")
 	return &FreelistManager{
 		pm:         pm,
 		firstTrunk: firstTrunk,

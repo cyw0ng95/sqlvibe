@@ -1,5 +1,10 @@
 package VM
 
+const (
+	// MaxCursors is the maximum number of cursors that can be open simultaneously
+	MaxCursors = 256
+)
+
 type Cursor struct {
 	ID        int
 	TableID   int

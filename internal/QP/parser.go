@@ -5,6 +5,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 type ASTNode interface {
@@ -233,6 +235,7 @@ type Parser struct {
 }
 
 func NewParser(tokens []Token) *Parser {
+	util.AssertNotNil(tokens, "tokens")
 	return &Parser{
 		tokens: tokens,
 		pos:    0,

@@ -12,6 +12,7 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 	VMpkg "github.com/sqlvibe/sqlvibe/internal/VM"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 var (
@@ -50,6 +51,9 @@ type Cursor struct {
 }
 
 func NewQueryEngine(pm *DS.PageManager, data map[string][]map[string]interface{}) *QueryEngine {
+	util.AssertNotNil(pm, "PageManager")
+	util.AssertNotNil(data, "data")
+	
 	return &QueryEngine{
 		vm:         nil,
 		pm:         pm,
@@ -66,6 +70,9 @@ func (qe *QueryEngine) SetOuterAlias(alias string) {
 }
 
 func (qe *QueryEngine) RegisterTable(name string, schema map[string]ColumnType) {
+	util.Assert(name != "", "table name cannot be empty")
+	util.AssertNotNil(schema, "schema")
+	
 	btree := DS.NewBTree(qe.pm, 0, true)
 	qe.tables[name] = &TableReader{
 		Name:   name,

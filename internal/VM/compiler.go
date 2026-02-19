@@ -28,6 +28,8 @@ func NewCompiler() *Compiler {
 }
 
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *Program {
+	util.AssertNotNil(stmt, "SelectStmt")
+	
 	// Handle SET operations (UNION, EXCEPT, INTERSECT)
 	if stmt.SetOp != "" && stmt.SetOpRight != nil {
 		return c.compileSetOp(stmt)

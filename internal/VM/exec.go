@@ -1269,6 +1269,8 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpOpenRead:
 			cursorID := int(inst.P1)
+			util.Assert(cursorID >= 0 && cursorID < MaxCursors, "cursor ID %d out of bounds [0, %d)", cursorID, MaxCursors)
+			
 			tableName := inst.P3
 			if tableName == "" {
 				continue
@@ -1294,6 +1296,8 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpRewind:
 			cursorID := int(inst.P1)
+			util.Assert(cursorID >= 0 && cursorID < MaxCursors, "cursor ID %d out of bounds", cursorID)
+			
 			target := int(inst.P2)
 			cursor := vm.cursors.Get(cursorID)
 			if cursor != nil {
@@ -1307,6 +1311,8 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpNext:
 			cursorID := int(inst.P1)
+			util.Assert(cursorID >= 0 && cursorID < MaxCursors, "cursor ID %d out of bounds", cursorID)
+			
 			target := int(inst.P2)
 			cursor := vm.cursors.Get(cursorID)
 			if cursor != nil {
