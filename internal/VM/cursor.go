@@ -1,7 +1,5 @@
 package VM
 
-import "fmt"
-
 type Cursor struct {
 	ID        int
 	TableID   int
@@ -51,7 +49,7 @@ func (ca *CursorArray) OpenTable(tableName string, data []map[string]interface{}
 }
 
 func (ca *CursorArray) OpenTableAtID(cursorID int, tableName string, data []map[string]interface{}, columns []string) {
-	fmt.Printf("DEBUG OpenTableAtID: cursorID=%d, tableName=%q\n", cursorID, tableName)
+	// fmt.Printf("DEBUG OpenTableAtID: cursorID=%d, tableName=%q\n", cursorID, tableName)
 	// Ensure cursors array is large enough
 	for len(ca.cursors) <= cursorID {
 		ca.cursors = append(ca.cursors, nil)
@@ -112,13 +110,13 @@ func (ca *CursorArray) Get(id int) *Cursor {
 	if id >= 0 && id < len(ca.cursors) {
 		result := ca.cursors[id]
 		if result != nil {
-			fmt.Printf("DEBUG CursorArray.Get(%d): returning cursor with TableName=%q\n", id, result.TableName)
+			// fmt.Printf("DEBUG CursorArray.Get(%d): returning cursor with TableName=%q\n", id, result.TableName)
 		} else {
-			fmt.Printf("DEBUG CursorArray.Get(%d): cursor exists but is nil\n", id)
+			// fmt.Printf("DEBUG CursorArray.Get(%d): cursor exists but is nil\n", id)
 		}
 		return result
 	}
-	fmt.Printf("DEBUG CursorArray.Get(%d): id out of range (len=%d)\n", id, len(ca.cursors))
+	// fmt.Printf("DEBUG CursorArray.Get(%d): id out of range (len=%d)\n", id, len(ca.cursors))
 	return nil
 }
 

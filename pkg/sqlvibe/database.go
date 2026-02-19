@@ -2058,9 +2058,9 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	if stmt.From.Alias != "" {
 		cursorName = stmt.From.Alias
 	}
-	fmt.Printf("DEBUG execSelectStmtWithContext: About to open cursor 0 with cursorName=%q\n", cursorName)
+	// fmt.Printf("DEBUG execSelectStmtWithContext: About to open cursor 0 with cursorName=%q\n", cursorName)
 	vm.Cursors().OpenTableAtID(0, cursorName, db.data[tableName], tableCols)
-	fmt.Printf("DEBUG execSelectStmtWithContext: Cursor 0 opened, about to Exec\n")
+	// fmt.Printf("DEBUG execSelectStmtWithContext: Cursor 0 opened, about to Exec\n")
 
 	// Execute without calling Reset again (use Exec instead of Run)
 	err := vm.Exec(nil)

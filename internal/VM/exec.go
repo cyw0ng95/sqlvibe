@@ -829,15 +829,15 @@ func (vm *VM) Exec(ctx interface{}) error {
 					parts := strings.Split(tableQualifier, ".")
 					if len(parts) == 2 {
 						colName := parts[1]
-						fmt.Printf("DEBUG OpColumn: colIdx=-1 (outer reference), trying GetOuterRowValue(%q)\n", colName)
+						// fmt.Printf("DEBUG OpColumn: colIdx=-1 (outer reference), trying GetOuterRowValue(%q)\n", colName)
 						if val, found := outerCtx.GetOuterRowValue(colName); found {
-							fmt.Printf("DEBUG OpColumn: found in outer context: %v\n", val)
+							// fmt.Printf("DEBUG OpColumn: found in outer context: %v\n", val)
 							if dstReg, ok := dst.(int); ok {
 								vm.registers[dstReg] = val
 								continue
 							}
 						} else {
-							fmt.Printf("DEBUG OpColumn: NOT found in outer context\n")
+							// fmt.Printf("DEBUG OpColumn: NOT found in outer context\n")
 						}
 					}
 				}
@@ -854,10 +854,10 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if tableQualifier != "" && vm.ctx != nil && cursor != nil {
 				// If the table qualifier doesn't match the current cursor's table name,
 				// or if the current table is aliased differently, try outer context
-				fmt.Printf("DEBUG OpColumn: tableQualifier=%q, cursor.TableName=%q\n", tableQualifier, cursor.TableName)
+				// fmt.Printf("DEBUG OpColumn: tableQualifier=%q, cursor.TableName=%q\n", tableQualifier, cursor.TableName)
 				if cursor.TableName == "" || tableQualifier != cursor.TableName {
 					shouldTryOuter = true
-					fmt.Printf("DEBUG OpColumn: shouldTryOuter=true\n")
+					// fmt.Printf("DEBUG OpColumn: shouldTryOuter=true\n")
 				}
 			}
 			
@@ -871,15 +871,15 @@ func (vm *VM) Exec(ctx interface{}) error {
 					if colIdx >= 0 && colIdx < len(cursor.Columns) {
 						colName := cursor.Columns[colIdx]
 						// Try to get from outer context
-						fmt.Printf("DEBUG OpColumn: trying GetOuterRowValue(%q)\n", colName)
+						// fmt.Printf("DEBUG OpColumn: trying GetOuterRowValue(%q)\n", colName)
 						if val, found := outerCtx.GetOuterRowValue(colName); found {
-							fmt.Printf("DEBUG OpColumn: found in outer context: %v\n", val)
+							// fmt.Printf("DEBUG OpColumn: found in outer context: %v\n", val)
 							if dstReg, ok := dst.(int); ok {
 								vm.registers[dstReg] = val
 								continue
 							}
 						} else {
-							fmt.Printf("DEBUG OpColumn: NOT found in outer context\n")
+							// fmt.Printf("DEBUG OpColumn: NOT found in outer context\n")
 						}
 					}
 				}
@@ -955,12 +955,12 @@ func (vm *VM) Exec(ctx interface{}) error {
 				if executor, ok := vm.ctx.(SubqueryRowsExecutorWithContext); ok {
 					// Get current row from cursor 0 (if available)
 					currentRow := vm.getCurrentRow(0)
-					fmt.Printf("DEBUG OpExistsSubquery: currentRow=%v\n", currentRow)
+					// fmt.Printf("DEBUG OpExistsSubquery: currentRow=%v\n", currentRow)
 					if rows, err := executor.ExecuteSubqueryRowsWithContext(inst.P4, currentRow); err == nil && len(rows) > 0 {
-						fmt.Printf("DEBUG OpExistsSubquery: got %d rows from subquery\n", len(rows))
+						// fmt.Printf("DEBUG OpExistsSubquery: got %d rows from subquery\n", len(rows))
 						vm.registers[dstReg] = int64(1)
 					} else {
-						fmt.Printf("DEBUG OpExistsSubquery: got 0 rows from subquery (err=%v)\n", err)
+						// fmt.Printf("DEBUG OpExistsSubquery: got 0 rows from subquery (err=%v)\n", err)
 						vm.registers[dstReg] = int64(0)
 					}
 					continue
@@ -1192,11 +1192,11 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// don't reopen it to preserve the alias
 			existingCursor := vm.cursors.Get(cursorID)
 			if existingCursor != nil {
-				fmt.Printf("DEBUG OpOpenRead: cursor %d already open with name %q, skipping reopen to %q\n", cursorID, existingCursor.TableName, tableName)
+				// fmt.Printf("DEBUG OpOpenRead: cursor %d already open with name %q, skipping reopen to %q\n", cursorID, existingCursor.TableName, tableName)
 				continue
 			}
 			
-			fmt.Printf("DEBUG OpOpenRead: opening cursor %d with tableName=%q\n", cursorID, tableName)
+			// fmt.Printf("DEBUG OpOpenRead: opening cursor %d with tableName=%q\n", cursorID, tableName)
 			if vm.ctx != nil {
 				if data, err := vm.ctx.GetTableData(tableName); err == nil && data != nil {
 					if cols, err := vm.ctx.GetTableColumns(tableName); err == nil {
