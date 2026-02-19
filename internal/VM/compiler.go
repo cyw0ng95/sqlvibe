@@ -202,6 +202,15 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 		return
 	}
 
+	// Set up table-to-cursor mapping for single table queries
+	// This is essential for correlated subqueries to distinguish between
+	// inner table references (should use cursor) vs outer table references (should use outer context)
+	c.tableCursors = make(map[string]int)
+	c.tableCursors[tableName] = 0
+	if from.Alias != "" {
+		c.tableCursors[from.Alias] = 0
+	}
+
 	c.columnIndices = make(map[string]int)
 	for i, col := range columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
