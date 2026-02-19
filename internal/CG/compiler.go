@@ -7,70 +7,721 @@ import (
 	VM "github.com/sqlvibe/sqlvibe/internal/VM"
 )
 
-// Compiler wraps the VM compiler and provides a clean API for code generation.
-// This is a transitional structure - the compiler logic will be fully moved
-// from VM to CG in future commits.
 type Compiler struct {
-	vmCompiler *VM.Compiler
+	program         *VM.Program
+	ra              *VM.RegisterAllocator
+	stmtWhere       []QP.Expr
+	stmtColumns     []QP.Expr
+	columnIndices   map[string]int
+	TableColIndices map[string]int
+	TableColOrder   []string
+	tableCursors    map[string]int
+	TableSchemas    map[string]map[string]int
 }
 
 func NewCompiler() *Compiler {
 	return &Compiler{
-		vmCompiler: VM.NewCompiler(),
+		program: VM.NewProgram(),
+		ra:      VM.NewRegisterAllocator(16),
 	}
 }
 
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program {
-	// Check if this is an aggregate query
-	if hasAggregates(stmt) {
-		return c.vmCompiler.CompileAggregate(stmt)
+	if stmt.SetOp != "" && stmt.SetOpRight != nil {
+		return c.compileSetOp(stmt)
 	}
-	return c.vmCompiler.CompileSelect(stmt)
+
+	c.program = VM.NewProgram()
+	c.ra = VM.NewRegisterAllocator(16)
+	c.stmtWhere = nil
+	c.stmtColumns = stmt.Columns
+
+	columns := stmt.Columns
+	if (c.TableColIndices != nil && len(c.TableColIndices) > 0) || (c.TableSchemas != nil && len(c.TableSchemas) > 0) {
+		columns = c.expandStarColumns(stmt.Columns)
+		c.stmtColumns = columns
+	}
+
+	c.program.Emit(VM.OpInit)
+	initPos := c.program.Emit(VM.OpGoto)
+	c.program.Fixup(initPos)
+
+	if stmt.From != nil {
+		c.compileFrom(stmt.From, stmt.Where, columns)
+	} else if columns != nil {
+		resultRegs := make([]int, 0)
+		for _, col := range columns {
+			reg := c.compileExpr(col)
+			resultRegs = append(resultRegs, reg)
+		}
+		c.program.EmitResultRow(resultRegs)
+	}
+
+	if stmt.Where != nil && stmt.From == nil {
+		whereReg := c.compileExpr(stmt.Where)
+		_ = whereReg
+	}
+
+	c.program.Emit(VM.OpHalt)
+
+	return c.program
 }
 
-func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *VM.Program {
-	return c.vmCompiler.CompileInsert(stmt)
+func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Expr) {
+	if from == nil {
+		return
+	}
+
+	if from.Join != nil {
+		c.compileJoin(from, from.Join, where, columns)
+		return
+	}
+
+	tableName := from.Name
+	if tableName == "" {
+		return
+	}
+
+	c.tableCursors = make(map[string]int)
+	c.tableCursors[tableName] = 0
+	if from.Alias != "" {
+		c.tableCursors[from.Alias] = 0
+	}
+
+	c.columnIndices = make(map[string]int)
+	for i, col := range columns {
+		if colRef, ok := col.(*QP.ColumnRef); ok {
+			c.columnIndices[colRef.Name] = i
+		} else if alias, ok := col.(*QP.AliasExpr); ok {
+			c.columnIndices[alias.Alias] = i
+		}
+	}
+
+	c.program.EmitOpenTable(0, tableName)
+	rewindPos := len(c.program.Instructions)
+	c.program.EmitOp(VM.OpRewind, 0, 0)
+
+	colRegs := make([]int, 0)
+	for _, col := range columns {
+		reg := c.compileExpr(col)
+		colRegs = append(colRegs, reg)
+	}
+
+	if where != nil {
+		whereReg := c.compileExpr(where)
+		zeroReg := c.ra.Alloc()
+		c.program.EmitLoadConst(zeroReg, int64(0))
+		skipPos := c.program.EmitEq(int(whereReg), int(zeroReg), 0)
+		nullSkipIdx := c.program.EmitOp(VM.OpIsNull, int32(whereReg), 0)
+		c.program.Instructions[nullSkipIdx].P2 = 0
+		c.program.MarkFixup(skipPos)
+		c.program.MarkFixupP2(nullSkipIdx)
+	}
+
+	c.program.EmitResultRow(colRegs)
+	c.program.ApplyWhereFixups()
+
+	np := c.program.EmitOp(VM.OpNext, 0, 0)
+	gotoRewind := c.program.EmitGoto(rewindPos + 1)
+	haltPos := len(c.program.Instructions)
+	c.program.Emit(VM.OpHalt)
+
+	c.program.FixupWithPos(np, haltPos)
+	c.program.FixupWithPos(gotoRewind, rewindPos+1)
 }
 
-func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *VM.Program {
-	return c.vmCompiler.CompileUpdate(stmt)
-}
+func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.Expr, columns []QP.Expr) {
+	leftTableName := leftTable.Name
+	rightTableName := join.Right.Name
 
-func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *VM.Program {
-	return c.vmCompiler.CompileDelete(stmt)
-}
+	if leftTableName == "" || rightTableName == "" {
+		return
+	}
 
-func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
-	return c.vmCompiler.CompileAggregate(stmt)
+	joinType := join.Type
+	if joinType == "" || joinType == "INNER" || joinType == "CROSS" || joinType == "LEFT" {
+		// Supported
+	} else {
+		return
+	}
+
+	c.tableCursors = make(map[string]int)
+	c.tableCursors[leftTableName] = 0
+	if leftTable.Alias != "" {
+		c.tableCursors[leftTable.Alias] = 0
+	}
+	c.tableCursors[rightTableName] = 1
+	if join.Right.Alias != "" {
+		c.tableCursors[join.Right.Alias] = 1
+	}
+
+	if c.TableSchemas == nil {
+		c.TableSchemas = make(map[string]map[string]int)
+		if c.TableColIndices != nil {
+			leftSchema := make(map[string]int)
+			for colName, colIdx := range c.TableColIndices {
+				leftSchema[colName] = colIdx
+			}
+			c.TableSchemas[leftTableName] = leftSchema
+			if leftTable.Alias != "" {
+				c.TableSchemas[leftTable.Alias] = leftSchema
+			}
+		}
+		rightSchema := make(map[string]int)
+		c.TableSchemas[rightTableName] = rightSchema
+		if join.Right.Alias != "" {
+			c.TableSchemas[join.Right.Alias] = rightSchema
+		}
+	}
+
+	c.columnIndices = make(map[string]int)
+	for i, col := range columns {
+		if colRef, ok := col.(*QP.ColumnRef); ok {
+			c.columnIndices[colRef.Name] = i
+		} else if alias, ok := col.(*QP.AliasExpr); ok {
+			c.columnIndices[alias.Alias] = i
+		}
+	}
+
+	c.program.EmitOpenTable(0, leftTableName)
+	c.program.EmitOpenTable(1, rightTableName)
+
+	leftRewind := c.program.EmitOp(VM.OpRewind, 0, 0)
+
+	rightRewindPos := len(c.program.Instructions)
+	c.program.EmitOp(VM.OpRewind, 1, 0)
+
+	var skipPos, nullSkip int
+	if join.Cond != nil {
+		joinCondReg := c.compileExpr(join.Cond)
+		zeroReg := c.ra.Alloc()
+		c.program.EmitLoadConst(zeroReg, int64(0))
+		skipPos = c.program.EmitEq(joinCondReg, zeroReg, 0)
+		nullSkip = c.program.EmitOp(VM.OpIsNull, int32(joinCondReg), 0)
+	}
+
+	colRegs := make([]int, 0)
+	for _, col := range columns {
+		reg := c.compileExpr(col)
+		colRegs = append(colRegs, reg)
+	}
+
+	if where != nil {
+		whereReg := c.compileExpr(where)
+		zeroReg := c.ra.Alloc()
+		c.program.EmitLoadConst(zeroReg, int64(0))
+		c.program.EmitEq(whereReg, zeroReg, 0)
+	}
+
+	c.program.EmitResultRow(colRegs)
+
+	rightNextPos := len(c.program.Instructions)
+	rightNext := c.program.EmitOp(VM.OpNext, 1, 0)
+
+	if join.Cond != nil {
+		c.program.FixupWithPos(skipPos, rightNextPos)
+		c.program.FixupWithPos(nullSkip, rightNextPos)
+	}
+
+	c.program.EmitGoto(rightRewindPos + 1)
+
+	rightDonePos := len(c.program.Instructions)
+	leftNext := c.program.EmitOp(VM.OpNext, 0, 0)
+	c.program.EmitGoto(rightRewindPos)
+
+	leftDonePos := len(c.program.Instructions)
+	c.program.Emit(VM.OpHalt)
+
+	c.program.FixupWithPos(leftRewind, leftDonePos)
+	c.program.FixupWithPos(rightNext, rightDonePos)
+	c.program.FixupWithPos(leftNext, leftDonePos)
 }
 
 func (c *Compiler) Program() *VM.Program {
-	return c.vmCompiler.Program()
+	return c.program
 }
 
-// SetTableSchema sets the table schema for SELECT * expansion
+func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *VM.Program {
+	c.program = VM.NewProgram()
+	c.ra = VM.NewRegisterAllocator(16)
+
+	c.program.Emit(VM.OpInit)
+	c.program.EmitOpenTable(0, stmt.Table)
+
+	if stmt.UseDefaults {
+		c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+			Op: VM.OpInsert,
+			P1: 0,
+			P4: map[string]int{},
+		})
+	} else {
+		for _, row := range stmt.Values {
+			var insertInfo interface{}
+
+			if len(stmt.Columns) > 0 {
+				colMap := make(map[string]int)
+				for i, val := range row {
+					if i < len(stmt.Columns) {
+						reg := c.compileExpr(val)
+						colMap[stmt.Columns[i]] = reg
+					}
+				}
+				insertInfo = colMap
+			} else {
+				rowRegs := make([]int, 0)
+				for _, val := range row {
+					reg := c.compileExpr(val)
+					rowRegs = append(rowRegs, reg)
+				}
+				insertInfo = rowRegs
+			}
+
+			c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+				Op: VM.OpInsert,
+				P1: 0,
+				P4: insertInfo,
+			})
+		}
+	}
+
+	c.program.Emit(VM.OpHalt)
+	return c.program
+}
+
+func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *VM.Program {
+	c.program = VM.NewProgram()
+	c.ra = VM.NewRegisterAllocator(16)
+
+	c.program.Emit(VM.OpInit)
+	c.program.EmitOpenTable(0, stmt.Table)
+
+	loopStartIdx := len(c.program.Instructions)
+	c.program.Instructions = append(c.program.Instructions, VM.Instruction{Op: VM.OpRewind, P1: 0, P2: 0})
+
+	loopBodyIdx := len(c.program.Instructions)
+
+	if stmt.Where != nil {
+		whereReg := c.compileExpr(stmt.Where)
+		skipTargetIdx := len(c.program.Instructions)
+		c.program.Instructions = append(c.program.Instructions, VM.Instruction{Op: VM.OpIfNot, P1: int32(whereReg), P2: 0})
+
+		setInfo := make(map[string]int)
+		for _, set := range stmt.Set {
+			valueReg := c.compileExpr(set.Value)
+			if colRef, ok := set.Column.(*QP.ColumnRef); ok {
+				setInfo[colRef.Name] = valueReg
+			}
+		}
+
+		c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+			Op: VM.OpUpdate,
+			P1: 0,
+			P4: setInfo,
+		})
+
+		c.program.Instructions[skipTargetIdx].P2 = int32(len(c.program.Instructions))
+	} else {
+		setInfo := make(map[string]int)
+		for _, set := range stmt.Set {
+			valueReg := c.compileExpr(set.Value)
+			if colRef, ok := set.Column.(*QP.ColumnRef); ok {
+				setInfo[colRef.Name] = valueReg
+			}
+		}
+
+		c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+			Op: VM.OpUpdate,
+			P1: 0,
+			P4: setInfo,
+		})
+	}
+
+	nextIdx := len(c.program.Instructions)
+	c.program.Instructions = append(c.program.Instructions, VM.Instruction{Op: VM.OpNext, P1: 0, P2: 0})
+
+	c.program.Instructions = append(c.program.Instructions, VM.Instruction{Op: VM.OpGoto, P2: int32(loopBodyIdx)})
+
+	afterLoopIdx := len(c.program.Instructions)
+	c.program.Instructions[loopStartIdx].P2 = int32(afterLoopIdx)
+	c.program.Instructions[nextIdx].P2 = int32(afterLoopIdx)
+
+	c.program.Emit(VM.OpHalt)
+	return c.program
+}
+
+func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *VM.Program {
+	c.program = VM.NewProgram()
+	c.ra = VM.NewRegisterAllocator(16)
+
+	c.program.Emit(VM.OpInit)
+	c.program.EmitOpenTable(0, stmt.Table)
+
+	loopStartIdx := len(c.program.Instructions)
+	c.program.Instructions = append(c.program.Instructions, VM.Instruction{Op: VM.OpRewind, P1: 0, P2: 0})
+
+	loopBodyIdx := len(c.program.Instructions)
+
+	if stmt.Where != nil {
+		whereReg := c.compileExpr(stmt.Where)
+		skipTargetIdx := len(c.program.Instructions)
+		c.program.Instructions = append(c.program.Instructions, VM.Instruction{Op: VM.OpIfNot, P1: int32(whereReg), P2: 0})
+
+		c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+			Op: VM.OpDelete,
+			P1: 0,
+		})
+
+		c.program.Instructions[skipTargetIdx].P2 = int32(len(c.program.Instructions))
+	} else {
+		c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+			Op: VM.OpDelete,
+			P1: 0,
+		})
+	}
+
+	nextIdx := len(c.program.Instructions)
+	c.program.Instructions = append(c.program.Instructions, VM.Instruction{Op: VM.OpNext, P1: 0, P2: 0})
+
+	c.program.Instructions = append(c.program.Instructions, VM.Instruction{Op: VM.OpGoto, P2: int32(loopBodyIdx)})
+
+	afterLoopIdx := len(c.program.Instructions)
+	c.program.Instructions[loopStartIdx].P2 = int32(afterLoopIdx)
+	c.program.Instructions[nextIdx].P2 = int32(afterLoopIdx)
+
+	c.program.Emit(VM.OpHalt)
+	return c.program
+}
+
+func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
+	c.program = VM.NewProgram()
+	c.ra = VM.NewRegisterAllocator(32)
+
+	c.program.Emit(VM.OpInit)
+
+	tableName := ""
+	if stmt.From != nil {
+		tableName = stmt.From.Name
+	}
+	if tableName != "" {
+		c.program.EmitOpenTable(0, tableName)
+	}
+
+	aggInfo := &AggregateInfo{
+		GroupByExprs: make([]QP.Expr, 0),
+		Aggregates:   make([]AggregateDef, 0),
+		NonAggCols:   make([]QP.Expr, 0),
+		HavingExpr:   stmt.Having,
+	}
+
+	if stmt.GroupBy != nil {
+		aggInfo.GroupByExprs = stmt.GroupBy
+	}
+
+	for _, col := range stmt.Columns {
+		if fc, ok := col.(*QP.FuncCall); ok {
+			switch fc.Name {
+			case "COUNT", "SUM", "AVG", "MIN", "MAX":
+				aggDef := AggregateDef{
+					Function: fc.Name,
+					Args:     fc.Args,
+				}
+				aggInfo.Aggregates = append(aggInfo.Aggregates, aggDef)
+			default:
+				aggInfo.NonAggCols = append(aggInfo.NonAggCols, col)
+			}
+		} else {
+			aggInfo.NonAggCols = append(aggInfo.NonAggCols, col)
+		}
+	}
+
+	c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+		Op: VM.OpAggregate,
+		P1: 0,
+		P4: aggInfo,
+	})
+
+	c.program.Emit(VM.OpHalt)
+	return c.program
+}
+
+type AggregateInfo struct {
+	GroupByExprs []QP.Expr
+	Aggregates   []AggregateDef
+	NonAggCols   []QP.Expr
+	HavingExpr   QP.Expr
+}
+
+type AggregateDef struct {
+	Function string
+	Args     []QP.Expr
+}
+
+func (c *Compiler) resolveColumnCount(columns []QP.Expr) int {
+	numCols := len(columns)
+
+	if numCols == 1 {
+		if colRef, ok := columns[0].(*QP.ColumnRef); ok && colRef.Name == "*" {
+			if c.TableColOrder != nil {
+				return len(c.TableColOrder)
+			} else if c.TableColIndices != nil {
+				return len(c.TableColIndices)
+			} else if c.TableSchemas != nil {
+				totalCols := 0
+				for _, schema := range c.TableSchemas {
+					totalCols += len(schema)
+				}
+				return totalCols
+			}
+		}
+	}
+
+	return numCols
+}
+
+func (c *Compiler) compileSetOp(stmt *QP.SelectStmt) *VM.Program {
+	c.program = VM.NewProgram()
+	c.ra = VM.NewRegisterAllocator(32)
+
+	c.program.Emit(VM.OpInit)
+
+	numCols := c.resolveColumnCount(stmt.Columns)
+
+	switch stmt.SetOp {
+	case "UNION":
+		if stmt.SetOpAll {
+			c.compileSetOpUnionAll(stmt)
+		} else {
+			c.compileSetOpUnionDistinct(stmt, numCols)
+		}
+	case "EXCEPT":
+		c.compileSetOpExcept(stmt, numCols)
+	case "INTERSECT":
+		c.compileSetOpIntersect(stmt, numCols)
+	}
+
+	c.program.Emit(VM.OpHalt)
+	return c.program
+}
+
+func (c *Compiler) compileSetOpUnionAll(stmt *QP.SelectStmt) {
+	leftStmt := *stmt
+	leftStmt.SetOp = ""
+	leftStmt.SetOpAll = false
+	leftStmt.SetOpRight = nil
+
+	leftCompiler := NewCompiler()
+	leftCompiler.TableColIndices = c.TableColIndices
+	leftCompiler.TableColOrder = c.TableColOrder
+	leftProg := leftCompiler.CompileSelect(&leftStmt)
+
+	baseAddr := len(c.program.Instructions)
+	for i := 0; i < len(leftProg.Instructions); i++ {
+		inst := leftProg.Instructions[i]
+		if inst.Op == VM.OpInit || inst.Op == VM.OpHalt {
+			continue
+		}
+		if inst.Op.IsJump() && inst.P2 > 0 {
+			inst.P2 = inst.P2 + int32(baseAddr)
+		}
+		c.program.Instructions = append(c.program.Instructions, inst)
+	}
+
+	rightCompiler := NewCompiler()
+	rightCompiler.TableColIndices = c.TableColIndices
+	rightCompiler.TableColOrder = c.TableColOrder
+	rightProg := rightCompiler.CompileSelect(stmt.SetOpRight)
+
+	baseAddr = len(c.program.Instructions)
+	for i := 0; i < len(rightProg.Instructions); i++ {
+		inst := rightProg.Instructions[i]
+		if inst.Op == VM.OpInit || inst.Op == VM.OpHalt {
+			continue
+		}
+		if inst.Op.IsJump() && inst.P2 > 0 {
+			inst.P2 = inst.P2 + int32(baseAddr)
+		}
+		c.program.Instructions = append(c.program.Instructions, inst)
+	}
+}
+
+func (c *Compiler) compileSetOpUnionDistinct(stmt *QP.SelectStmt, numCols int) {
+	ephemeralTableID := 1
+
+	c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+		Op: VM.OpEphemeralCreate,
+		P1: int32(ephemeralTableID),
+	})
+
+	leftStmt := *stmt
+	leftStmt.SetOp = ""
+	leftStmt.SetOpAll = false
+	leftStmt.SetOpRight = nil
+
+	leftCompiler := NewCompiler()
+	leftCompiler.TableColIndices = c.TableColIndices
+	leftCompiler.TableColOrder = c.TableColOrder
+	leftProg := leftCompiler.CompileSelect(&leftStmt)
+
+	for i := 1; i < len(leftProg.Instructions)-1; i++ {
+		inst := leftProg.Instructions[i]
+		if inst.Op == VM.OpResultRow {
+			if regs, ok := inst.P4.([]int); ok {
+				c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+					Op: VM.OpUnionDistinct,
+					P1: int32(ephemeralTableID),
+					P4: regs,
+				})
+			}
+		} else {
+			c.program.Instructions = append(c.program.Instructions, inst)
+		}
+	}
+
+	rightCompiler := NewCompiler()
+	rightCompiler.TableColIndices = c.TableColIndices
+	rightCompiler.TableColOrder = c.TableColOrder
+	rightProg := rightCompiler.CompileSelect(stmt.SetOpRight)
+
+	for i := 1; i < len(rightProg.Instructions)-1; i++ {
+		inst := rightProg.Instructions[i]
+		if inst.Op == VM.OpResultRow {
+			if regs, ok := inst.P4.([]int); ok {
+				c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+					Op: VM.OpUnionDistinct,
+					P1: int32(ephemeralTableID),
+					P4: regs,
+				})
+			}
+		} else {
+			c.program.Instructions = append(c.program.Instructions, inst)
+		}
+	}
+}
+
+func (c *Compiler) compileSetOpExcept(stmt *QP.SelectStmt, numCols int) {
+	ephemeralTableID := 1
+
+	c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+		Op: VM.OpEphemeralCreate,
+		P1: int32(ephemeralTableID),
+	})
+
+	rightCompiler := NewCompiler()
+	rightCompiler.TableColIndices = c.TableColIndices
+	rightCompiler.TableColOrder = c.TableColOrder
+	rightProg := rightCompiler.CompileSelect(stmt.SetOpRight)
+
+	for i := 1; i < len(rightProg.Instructions)-1; i++ {
+		inst := rightProg.Instructions[i]
+		if inst.Op == VM.OpResultRow {
+			if regs, ok := inst.P4.([]int); ok {
+				c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+					Op: VM.OpEphemeralInsert,
+					P1: int32(ephemeralTableID),
+					P4: regs,
+				})
+			}
+		} else {
+			c.program.Instructions = append(c.program.Instructions, inst)
+		}
+	}
+
+	leftCompiler := NewCompiler()
+	leftCompiler.TableColIndices = c.TableColIndices
+	leftCompiler.TableColOrder = c.TableColOrder
+	leftProg := leftCompiler.CompileSelect(stmt)
+
+	for i := 1; i < len(leftProg.Instructions)-1; i++ {
+		inst := leftProg.Instructions[i]
+		if inst.Op == VM.OpResultRow {
+			if regs, ok := inst.P4.([]int); ok {
+				skipLabel := len(c.program.Instructions) + 2
+				c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+					Op: VM.OpExcept,
+					P1: int32(ephemeralTableID),
+					P2: int32(skipLabel),
+					P4: regs,
+				})
+				c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+					Op: VM.OpResultRow,
+					P4: regs,
+				})
+			}
+		} else {
+			c.program.Instructions = append(c.program.Instructions, inst)
+		}
+	}
+}
+
+func (c *Compiler) compileSetOpIntersect(stmt *QP.SelectStmt, numCols int) {
+	ephemeralTableID := 1
+
+	c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+		Op: VM.OpEphemeralCreate,
+		P1: int32(ephemeralTableID),
+	})
+
+	rightCompiler := NewCompiler()
+	rightCompiler.TableColIndices = c.TableColIndices
+	rightCompiler.TableColOrder = c.TableColOrder
+	rightProg := rightCompiler.CompileSelect(stmt.SetOpRight)
+
+	for i := 1; i < len(rightProg.Instructions)-1; i++ {
+		inst := rightProg.Instructions[i]
+		if inst.Op == VM.OpResultRow {
+			if regs, ok := inst.P4.([]int); ok {
+				c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+					Op: VM.OpEphemeralInsert,
+					P1: int32(ephemeralTableID),
+					P4: regs,
+				})
+			}
+		} else {
+			c.program.Instructions = append(c.program.Instructions, inst)
+		}
+	}
+
+	leftCompiler := NewCompiler()
+	leftCompiler.TableColIndices = c.TableColIndices
+	leftCompiler.TableColOrder = c.TableColOrder
+	leftProg := leftCompiler.CompileSelect(stmt)
+
+	for i := 1; i < len(leftProg.Instructions)-1; i++ {
+		inst := leftProg.Instructions[i]
+		if inst.Op == VM.OpResultRow {
+			if regs, ok := inst.P4.([]int); ok {
+				skipLabel := len(c.program.Instructions) + 2
+				c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+					Op: VM.OpIntersect,
+					P1: int32(ephemeralTableID),
+					P2: int32(skipLabel),
+					P4: regs,
+				})
+				c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+					Op: VM.OpResultRow,
+					P4: regs,
+				})
+			}
+		} else {
+			c.program.Instructions = append(c.program.Instructions, inst)
+		}
+	}
+}
+
 func (c *Compiler) SetTableSchema(schema map[string]int, schemaOrder []string) {
-	c.vmCompiler.TableColIndices = schema
-	c.vmCompiler.TableColOrder = schemaOrder
+	c.TableColIndices = schema
+	c.TableColOrder = schemaOrder
 }
 
-// SetMultiTableSchema sets multi-table schema for JOIN queries
 func (c *Compiler) SetMultiTableSchema(schemas map[string]map[string]int, colOrder []string) {
-	c.vmCompiler.TableSchemas = schemas
-	c.vmCompiler.TableColOrder = colOrder
+	c.TableSchemas = schemas
+	c.TableColOrder = colOrder
 }
 
-// GetVMCompiler returns the underlying VM compiler (for internal use)
-func (c *Compiler) GetVMCompiler() *VM.Compiler {
-	return c.vmCompiler
-}
-
-// Compile compiles SQL string into bytecode program
 func Compile(sql string) (*VM.Program, error) {
 	return CompileWithSchema(sql, nil)
 }
 
-// CompileWithSchema compiles SQL with table schema information
 func CompileWithSchema(sql string, tableColumns []string) (*VM.Program, error) {
 	tokenizer := QP.NewTokenizer(sql)
 	tokens, err := tokenizer.Tokenize()
@@ -87,7 +738,7 @@ func CompileWithSchema(sql string, tableColumns []string) (*VM.Program, error) {
 	c := NewCompiler()
 	c.SetTableSchema(make(map[string]int), tableColumns)
 	for i, col := range tableColumns {
-		c.vmCompiler.TableColIndices[col] = i
+		c.TableColIndices[col] = i
 	}
 
 	switch s := stmt.(type) {
@@ -128,4 +779,8 @@ func MustCompile(sql string) *VM.Program {
 		panic(err)
 	}
 	return prog
+}
+
+func (c *Compiler) GetVMCompiler() *Compiler {
+	return c
 }

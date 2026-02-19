@@ -1,13 +1,14 @@
 package sqlvibe
 
 import (
-"fmt"
-"strings"
+	"fmt"
+	"strings"
 
-"github.com/sqlvibe/sqlvibe/internal/CG"
-"github.com/sqlvibe/sqlvibe/internal/QP"
-"github.com/sqlvibe/sqlvibe/internal/VM"
+	"github.com/sqlvibe/sqlvibe/internal/CG"
+	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/sqlvibe/sqlvibe/internal/VM"
 )
+
 func (db *Database) ExecVM(sql string) (*Rows, error) {
 	tokenizer := QP.NewTokenizer(sql)
 	tokens, err := tokenizer.Tokenize()
@@ -315,7 +316,7 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		// Single table query - set TableColIndices normally
 		cg.SetTableSchema(make(map[string]int), tableCols)
 		for i, col := range tableCols {
-			cg.GetVMCompiler().TableColIndices[col] = i
+			cg.TableColIndices[col] = i
 		}
 	}
 
