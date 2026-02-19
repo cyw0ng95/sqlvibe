@@ -29,7 +29,7 @@ func NewCompiler() *Compiler {
 
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *Program {
 	util.AssertNotNil(stmt, "SelectStmt")
-	
+
 	// Handle SET operations (UNION, EXCEPT, INTERSECT)
 	if stmt.SetOp != "" && stmt.SetOpRight != nil {
 		return c.compileSetOp(stmt)
@@ -933,10 +933,10 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 func (c *Compiler) compileCaseExpr(caseExpr *QP.CaseExpr) int {
 	// Allocate result register that all branches will write to
 	resultReg := c.ra.Alloc()
-	
+
 	// Track jump positions for when each WHEN succeeds (to skip remaining conditions)
 	endJumps := make([]int, 0)
-	
+
 	// Check if this is Simple CASE (has operand) or Searched CASE (no operand)
 	var operandReg int
 	isSimpleCase := caseExpr.Operand != nil
@@ -944,11 +944,11 @@ func (c *Compiler) compileCaseExpr(caseExpr *QP.CaseExpr) int {
 		// Simple CASE: evaluate operand once and compare to each WHEN value
 		operandReg = c.compileExpr(caseExpr.Operand)
 	}
-	
+
 	// Process each WHEN clause in order
 	for _, when := range caseExpr.Whens {
 		var condReg int
-		
+
 		if isSimpleCase {
 			// Simple CASE: compare operand to WHEN value
 			// Evaluate WHEN value
@@ -961,23 +961,23 @@ func (c *Compiler) compileCaseExpr(caseExpr *QP.CaseExpr) int {
 			// Searched CASE: evaluate condition as boolean
 			condReg = c.compileExpr(when.Condition)
 		}
-		
+
 		// If condition is false, jump to next WHEN (or ELSE)
 		// OpIfNot: jump to P2 if register P1 is false/zero/null
 		skipIdx := c.program.EmitOp(OpIfNot, int32(condReg), 0)
-		
+
 		// Condition is true: evaluate and store THEN result
 		thenReg := c.compileExpr(when.Result)
 		c.program.EmitCopy(thenReg, resultReg)
-		
+
 		// Jump to end (skip remaining WHEN clauses and ELSE)
 		jumpToEnd := c.program.EmitOp(OpGoto, 0, 0)
 		endJumps = append(endJumps, jumpToEnd)
-		
+
 		// Fix the skip jump to point here (start of next WHEN or ELSE)
 		c.program.Fixup(skipIdx)
 	}
-	
+
 	// ELSE clause: reached if no WHEN condition matched
 	if caseExpr.Else != nil {
 		elseReg := c.compileExpr(caseExpr.Else)
@@ -986,12 +986,12 @@ func (c *Compiler) compileCaseExpr(caseExpr *QP.CaseExpr) int {
 		// No ELSE clause: result is NULL
 		c.program.EmitLoadConst(resultReg, nil)
 	}
-	
+
 	// All end jumps point here
 	for _, jumpIdx := range endJumps {
 		c.program.Fixup(jumpIdx)
 	}
-	
+
 	return resultReg
 }
 
@@ -1042,7 +1042,7 @@ func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *Program {
 		// Pass empty map to signal all defaults should be used
 		c.program.Instructions = append(c.program.Instructions, Instruction{
 			Op: OpInsert,
-			P1: 0, // cursor ID
+			P1: 0,                // cursor ID
 			P4: map[string]int{}, // Empty map signals use all defaults
 		})
 	} else {
@@ -1329,21 +1329,18 @@ func CompileWithSchema(sql string, tableColumns []string) (*Program, error) {
 		c.TableColIndices[col] = i
 	}
 
-	switch s := stmt.(type) {
-	case *QP.SelectStmt:
-		if hasAggregates(s) {
-			return c.CompileAggregate(s), nil
-		}
-		return c.CompileSelect(s), nil
-	case *QP.InsertStmt:
-		return c.CompileInsert(s), nil
-	case *QP.UpdateStmt:
-		return c.CompileUpdate(s), nil
-	case *QP.DeleteStmt:
-		return c.CompileDelete(s), nil
-	default:
-		return nil, fmt.Errorf("unsupported statement type: %T", stmt)
+	if sel, ok := stmt.(*QP.SelectStmt); ok {
+		return c.CompileSelectStmt(sel), nil
 	}
+	return nil, fmt.Errorf("not a SELECT statement")
+}
+
+// CompileSelectStmt compiles a SelectStmt, checking for aggregates
+func (c *Compiler) CompileSelectStmt(stmt *QP.SelectStmt) *Program {
+	if hasAggregates(stmt) {
+		return c.CompileAggregate(stmt)
+	}
+	return c.CompileSelect(stmt)
 }
 
 func hasAggregates(stmt *QP.SelectStmt) bool {

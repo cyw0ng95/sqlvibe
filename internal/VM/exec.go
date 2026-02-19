@@ -808,11 +808,11 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpCast:
 			val := vm.registers[inst.P1]
-			
+
 			// Try to get TypeSpec from P4, fall back to string for backward compatibility
 			var typeName string
 			var precision, scale int
-			
+
 			if typeSpec, ok := inst.P4.(QP.TypeSpec); ok {
 				typeName = typeSpec.Name
 				precision = typeSpec.Precision
@@ -821,7 +821,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 				// Backward compatibility: P4 is a string
 				typeName = typeStr
 			}
-			
+
 			if val != nil && typeName != "" {
 				upperType := strings.ToUpper(typeName)
 				switch upperType {
@@ -850,7 +850,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 				case "NUMERIC", "DECIMAL":
 					// Handle NUMERIC/DECIMAL with precision and scale
 					var floatVal float64
-					
+
 					if s, ok := val.(string); ok {
 						if fv, err := strconv.ParseFloat(s, 64); err == nil {
 							floatVal = fv
@@ -862,14 +862,14 @@ func (vm *VM) Exec(ctx interface{}) error {
 					} else if fv, ok := val.(float64); ok {
 						floatVal = fv
 					}
-					
+
 					// Apply precision and scale if specified
 					if precision > 0 && scale > 0 {
 						// Round to specified scale
 						multiplier := math.Pow(10, float64(scale))
 						floatVal = math.Round(floatVal*multiplier) / multiplier
 					}
-					
+
 					vm.registers[inst.P1] = floatVal
 				case "TEXT", "VARCHAR", "CHAR", "CHARACTER":
 					if s, ok := val.(string); ok {
@@ -1270,7 +1270,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpOpenRead:
 			cursorID := int(inst.P1)
 			util.Assert(cursorID >= 0 && cursorID < MaxCursors, "cursor ID %d out of bounds [0, %d)", cursorID, MaxCursors)
-			
+
 			tableName := inst.P3
 			if tableName == "" {
 				continue
@@ -1297,7 +1297,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpRewind:
 			cursorID := int(inst.P1)
 			util.Assert(cursorID >= 0 && cursorID < MaxCursors, "cursor ID %d out of bounds", cursorID)
-			
+
 			target := int(inst.P2)
 			cursor := vm.cursors.Get(cursorID)
 			if cursor != nil {
@@ -1312,7 +1312,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpNext:
 			cursorID := int(inst.P1)
 			util.Assert(cursorID >= 0 && cursorID < MaxCursors, "cursor ID %d out of bounds", cursorID)
-			
+
 			target := int(inst.P2)
 			cursor := vm.cursors.Get(cursorID)
 			if cursor != nil {

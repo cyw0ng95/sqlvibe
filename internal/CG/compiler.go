@@ -27,6 +27,10 @@ func NewCompiler() *Compiler {
 }
 
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program {
+	if hasAggregates(stmt) {
+		return c.CompileAggregate(stmt)
+	}
+
 	if stmt.SetOp != "" && stmt.SetOpRight != nil {
 		return c.compileSetOp(stmt)
 	}
@@ -406,9 +410,9 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
 		c.program.EmitOpenTable(0, tableName)
 	}
 
-	aggInfo := &AggregateInfo{
+	aggInfo := &VM.AggregateInfo{
 		GroupByExprs: make([]QP.Expr, 0),
-		Aggregates:   make([]AggregateDef, 0),
+		Aggregates:   make([]VM.AggregateDef, 0),
 		NonAggCols:   make([]QP.Expr, 0),
 		HavingExpr:   stmt.Having,
 	}
@@ -421,7 +425,7 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
 		if fc, ok := col.(*QP.FuncCall); ok {
 			switch fc.Name {
 			case "COUNT", "SUM", "AVG", "MIN", "MAX":
-				aggDef := AggregateDef{
+				aggDef := VM.AggregateDef{
 					Function: fc.Name,
 					Args:     fc.Args,
 				}
@@ -442,18 +446,6 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
 
 	c.program.Emit(VM.OpHalt)
 	return c.program
-}
-
-type AggregateInfo struct {
-	GroupByExprs []QP.Expr
-	Aggregates   []AggregateDef
-	NonAggCols   []QP.Expr
-	HavingExpr   QP.Expr
-}
-
-type AggregateDef struct {
-	Function string
-	Args     []QP.Expr
 }
 
 func (c *Compiler) resolveColumnCount(columns []QP.Expr) int {
