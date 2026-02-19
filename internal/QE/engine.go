@@ -53,7 +53,7 @@ type Cursor struct {
 func NewQueryEngine(pm *DS.PageManager, data map[string][]map[string]interface{}) *QueryEngine {
 	util.AssertNotNil(pm, "PageManager")
 	util.AssertNotNil(data, "data")
-	
+
 	return &QueryEngine{
 		vm:         nil,
 		pm:         pm,
@@ -72,7 +72,7 @@ func (qe *QueryEngine) SetOuterAlias(alias string) {
 func (qe *QueryEngine) RegisterTable(name string, schema map[string]ColumnType) {
 	util.Assert(name != "", "table name cannot be empty")
 	util.AssertNotNil(schema, "schema")
-	
+
 	btree := DS.NewBTree(qe.pm, 0, true)
 	qe.tables[name] = &TableReader{
 		Name:   name,
@@ -152,7 +152,7 @@ func (qe *QueryEngine) NextRow(cursorID int) (map[string]interface{}, error) {
 		if !cursor.btree.Valid() {
 			return nil, nil
 		}
-		
+
 		key, err := cursor.btree.Key()
 		if err != nil {
 			return nil, err
@@ -1166,6 +1166,17 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			}
 		}
 		return nil
+	case "NULLIF":
+		// NULLIF(a, b) returns NULL if a = b, otherwise returns a
+		if len(fc.Args) != 2 {
+			return nil
+		}
+		a := qe.evalValue(row, fc.Args[0])
+		b := qe.evalValue(row, fc.Args[1])
+		if qe.valuesEqual(a, b) {
+			return nil
+		}
+		return a
 	case "MAX":
 		if len(fc.Args) == 0 {
 			return nil

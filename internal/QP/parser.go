@@ -1435,7 +1435,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		p.advance()
 		return &ColumnRef{Name: "*"}, nil
 	case TokenKeyword:
-		if tok.Literal == "AVG" || tok.Literal == "MIN" || tok.Literal == "MAX" || tok.Literal == "COUNT" || tok.Literal == "SUM" || tok.Literal == "COALESCE" || tok.Literal == "IFNULL" {
+		if tok.Literal == "AVG" || tok.Literal == "MIN" || tok.Literal == "MAX" || tok.Literal == "COUNT" || tok.Literal == "SUM" || tok.Literal == "COALESCE" || tok.Literal == "IFNULL" || tok.Literal == "NULLIF" {
 			p.advance()
 			if p.current().Type == TokenLeftParen {
 				p.advance()
