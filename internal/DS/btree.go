@@ -10,36 +10,36 @@ import (
 
 // BTree represents a B-Tree using the new encoding infrastructure
 type BTree struct {
-	pm           *PageManager
-	om           *OverflowManager
-	balancer     *PageBalancer
-	freelist     *FreelistManager
-	rootPage     uint32
-	isTable      bool
+	pm       *PageManager
+	om       *OverflowManager
+	balancer *PageBalancer
+	freelist *FreelistManager
+	rootPage uint32
+	isTable  bool
 }
 
 // BTreeCursor represents a position in the B-Tree
 type BTreeCursor struct {
-	bt       *BTree
-	path     []cursorLevel // Path from root to current position
-	valid    bool
+	bt    *BTree
+	path  []cursorLevel // Path from root to current position
+	valid bool
 }
 
 type cursorLevel struct {
-	pageNum  uint32
-	cellIdx  int
+	pageNum uint32
+	cellIdx int
 }
 
 // NewBTree creates a new B-Tree
 func NewBTree(pm *PageManager, rootPage uint32, isTable bool) *BTree {
 	util.AssertNotNil(pm, "PageManager")
 	return &BTree{
-		pm:           pm,
-		om:           NewOverflowManager(pm),
-		balancer:     NewPageBalancer(pm),
-		freelist:     NewFreelistManager(pm, 0),
-		rootPage:     rootPage,
-		isTable:      isTable,
+		pm:       pm,
+		om:       NewOverflowManager(pm),
+		balancer: NewPageBalancer(pm),
+		freelist: NewFreelistManager(pm, 0),
+		rootPage: rootPage,
+		isTable:  isTable,
 	}
 }
 
@@ -71,11 +71,11 @@ func (bt *BTree) searchPage(page *Page, key []byte) ([]byte, error) {
 	util.AssertNotNil(page, "page")
 	util.Assert(len(page.Data) >= 12, "page data too small: %d bytes", len(page.Data))
 	util.Assert(len(key) > 0, "search key cannot be empty")
-	
+
 	pageType := page.Data[0]
 	util.Assert(pageType == 0x0d || pageType == 0x02 || pageType == 0x05 || pageType == 0x0a,
 		"invalid page type: 0x%02x", pageType)
-	
+
 	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
 	util.Assert(numCells >= 0 && numCells < 65536, "invalid cell count: %d", numCells)
 
@@ -86,7 +86,7 @@ func (bt *BTree) searchPage(page *Page, key []byte) ([]byte, error) {
 		if cellIdx >= numCells {
 			return nil, nil // Not found
 		}
-		
+
 		util.Assert(cellIdx >= 0, "cellIdx cannot be negative: %d", cellIdx)
 
 		// Read cell
@@ -126,7 +126,7 @@ func (bt *BTree) searchPage(page *Page, key []byte) ([]byte, error) {
 
 	// Interior page - recurse
 	util.Assert(pageType == 0x05 || pageType == 0x0a, "unexpected page type for interior: 0x%02x", pageType)
-	
+
 	var childPage uint32
 	if cellIdx < numCells {
 		cellPointerOffset := 8 + cellIdx*2
@@ -152,7 +152,7 @@ func (bt *BTree) searchPage(page *Page, key []byte) ([]byte, error) {
 		util.Assert(len(page.Data) >= 12, "page too small for rightmost pointer")
 		childPage = binary.BigEndian.Uint32(page.Data[8:12])
 	}
-	
+
 	util.Assert(childPage > 0, "child page number cannot be zero")
 
 	childPageData, err := bt.pm.ReadPage(childPage)
@@ -168,10 +168,10 @@ func (bt *BTree) findCell(page *Page, key []byte) int {
 	util.AssertNotNil(page, "page")
 	util.Assert(len(key) > 0, "search key cannot be empty")
 	util.Assert(len(page.Data) >= 5, "page data too small for header")
-	
+
 	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
 	pageType := page.Data[0]
-	
+
 	util.Assert(pageType == 0x0d || pageType == 0x02 || pageType == 0x05 || pageType == 0x0a,
 		"invalid page type in findCell: 0x%02x", pageType)
 
@@ -219,7 +219,7 @@ func (bt *BTree) findCell(page *Page, key []byte) int {
 func (bt *BTree) Insert(key []byte, value []byte) error {
 	util.Assert(len(key) > 0, "insert key cannot be empty")
 	// Note: value can be empty for index entries
-	
+
 	if bt.rootPage == 0 {
 		// Create root page
 		pageNum, err := bt.pm.AllocatePage()
@@ -253,7 +253,7 @@ func (bt *BTree) Insert(key []byte, value []byte) error {
 func (bt *BTree) insertIntoPage(pageNum uint32, key []byte, value []byte) error {
 	util.Assert(pageNum > 0, "page number cannot be zero")
 	util.Assert(len(key) > 0, "insert key cannot be empty")
-	
+
 	page, err := bt.pm.ReadPage(pageNum)
 	if err != nil {
 		return err
@@ -270,10 +270,12 @@ func (bt *BTree) insertIntoPage(pageNum uint32, key []byte, value []byte) error 
 		}
 
 		// Check if child split
-		overfull, _ := bt.balancer.IsPageOverfull(childPage)
+		overfull, err := bt.balancer.IsPageOverfull(childPage)
+		if err != nil {
+			return err
+		}
 		if overfull {
-			// TODO: Handle split and update parent
-			return fmt.Errorf("page splitting not fully implemented yet")
+			return bt.splitChildAndUpdateParent(pageNum, childPage)
 		}
 
 		return nil
@@ -285,10 +287,12 @@ func (bt *BTree) insertIntoPage(pageNum uint32, key []byte, value []byte) error 
 	}
 
 	// Check if page needs splitting
-	overfull, _ := bt.balancer.IsPageOverfull(pageNum)
+	overfull, err := bt.balancer.IsPageOverfull(pageNum)
+	if err != nil {
+		return err
+	}
 	if overfull {
-		// TODO: Implement split logic
-		return fmt.Errorf("page splitting not fully implemented yet")
+		return bt.splitLeafAndUpdateParent(pageNum)
 	}
 
 	return nil
@@ -319,20 +323,20 @@ func (bt *BTree) findChildForInsert(page *Page, key []byte) uint32 {
 func (bt *BTree) insertCell(pageNum uint32, key []byte, value []byte) error {
 	util.Assert(pageNum > 0, "page number cannot be zero")
 	util.Assert(len(key) > 0, "insert key cannot be empty")
-	
+
 	page, err := bt.pm.ReadPage(pageNum)
 	if err != nil {
 		return err
 	}
-	
+
 	util.Assert(len(page.Data) >= 8, "page data too small for header")
-	
+
 	pageType := page.Data[0]
 	util.Assert(pageType == 0x0d || pageType == 0x02, "insertCell only for leaf pages, got: 0x%02x", pageType)
-	
+
 	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
 	contentStart := int(binary.BigEndian.Uint16(page.Data[5:7]))
-	
+
 	util.Assert(numCells >= 0, "invalid cell count: %d", numCells)
 	util.Assert(contentStart > 0 && contentStart <= len(page.Data), "invalid content start: %d", contentStart)
 
@@ -355,7 +359,7 @@ func (bt *BTree) insertCell(pageNum uint32, key []byte, value []byte) error {
 	// Calculate new content start (growing downward from end of page)
 	newContentStart := contentStart - len(cellData)
 	util.Assert(newContentStart > 0, "new content start %d must be positive", newContentStart)
-	
+
 	// Ensure we have space (simple check - proper check would consider fragmentation)
 	headerEnd := 8 + (numCells+1)*2 // Header + all cell pointers including new one
 	if newContentStart < headerEnd {
@@ -441,7 +445,7 @@ func (c *BTreeCursor) Valid() bool {
 func (c *BTreeCursor) Key() ([]byte, error) {
 	util.AssertTrue(c.valid, "cursor must be valid")
 	util.Assert(len(c.path) > 0, "cursor path cannot be empty")
-	
+
 	if !c.valid || len(c.path) == 0 {
 		return nil, fmt.Errorf("invalid cursor position")
 	}
@@ -477,7 +481,7 @@ func (c *BTreeCursor) Key() ([]byte, error) {
 func (c *BTreeCursor) Value() ([]byte, error) {
 	util.AssertTrue(c.valid, "cursor must be valid")
 	util.Assert(len(c.path) > 0, "cursor path cannot be empty")
-	
+
 	if !c.valid || len(c.path) == 0 {
 		return nil, fmt.Errorf("invalid cursor position")
 	}
@@ -508,7 +512,7 @@ func (c *BTreeCursor) Value() ([]byte, error) {
 func (c *BTreeCursor) Next() error {
 	util.AssertTrue(c.valid, "cursor must be valid to advance")
 	util.Assert(len(c.path) > 0, "cursor path cannot be empty")
-	
+
 	if !c.valid || len(c.path) == 0 {
 		return fmt.Errorf("invalid cursor position")
 	}
@@ -530,4 +534,119 @@ func (c *BTreeCursor) Next() error {
 	// TODO: Implement proper cursor navigation across pages
 	c.valid = false
 	return nil
+}
+
+// splitLeafAndUpdateParent splits a leaf page and updates the parent
+func (bt *BTree) splitLeafAndUpdateParent(pageNum uint32) error {
+	rightPage, dividerKey, err := bt.balancer.SplitLeafPage(pageNum)
+	if err != nil {
+		return fmt.Errorf("failed to split leaf page: %w", err)
+	}
+
+	// Convert dividerKey to appropriate type based on tree type
+	if bt.isTable {
+		// For table: dividerKey is encoded rowid (varint)
+		rowid, _ := GetVarint(dividerKey)
+		return bt.addDividerToParent(bt.rootPage, pageNum, rightPage, rowid, nil)
+	} else {
+		// For index: dividerKey is the key bytes
+		return bt.addDividerToParent(bt.rootPage, pageNum, rightPage, 0, dividerKey)
+	}
+}
+
+// splitChildAndUpdateParent splits a child page and updates the parent
+func (bt *BTree) splitChildAndUpdateParent(parentPageNum, childPageNum uint32) error {
+	rightPage, dividerKey, err := bt.balancer.SplitLeafPage(childPageNum)
+	if err != nil {
+		return fmt.Errorf("failed to split child page: %w", err)
+	}
+
+	// Convert dividerKey to appropriate type based on tree type
+	if bt.isTable {
+		rowid, _ := GetVarint(dividerKey)
+		if err := bt.addDividerToParent(parentPageNum, childPageNum, rightPage, rowid, nil); err != nil {
+			return fmt.Errorf("failed to add divider to parent: %w", err)
+		}
+	} else {
+		if err := bt.addDividerToParent(parentPageNum, childPageNum, rightPage, 0, dividerKey); err != nil {
+			return fmt.Errorf("failed to add divider to parent: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// addDividerToParent adds a divider key to an interior page
+func (bt *BTree) addDividerToParent(parentPageNum, leftChild, rightChild uint32, dividerRowid int64, dividerKey []byte) error {
+	parentPage, err := bt.pm.ReadPage(parentPageNum)
+	if err != nil {
+		return fmt.Errorf("failed to read parent page: %w", err)
+	}
+
+	pageType := parentPage.Data[0]
+	isTableInterior := (pageType == 0x05)
+
+	numCells := int(binary.BigEndian.Uint16(parentPage.Data[3:5]))
+	contentStart := int(binary.BigEndian.Uint16(parentPage.Data[5:7]))
+
+	// Encode interior cell
+	var cellData []byte
+	if isTableInterior {
+		cellData = EncodeTableInteriorCell(leftChild, dividerRowid)
+	} else {
+		cellData = EncodeIndexInteriorCell(leftChild, dividerKey, 0)
+	}
+
+	// Find insertion point
+	insertIdx := 0
+	for i := 0; i < numCells; i++ {
+		cellPointerOffset := 8 + i*2
+		cellOffset := int(binary.BigEndian.Uint16(parentPage.Data[cellPointerOffset : cellPointerOffset+2]))
+
+		var shouldInsertBefore bool
+		if isTableInterior {
+			cell, _ := DecodeTableInteriorCell(parentPage.Data[cellOffset:])
+			shouldInsertBefore = cell.Rowid < dividerRowid
+		} else {
+			cell, _ := DecodeIndexInteriorCell(parentPage.Data[cellOffset:])
+			shouldInsertBefore = bytes.Compare(cell.Key, dividerKey) < 0
+		}
+
+		if shouldInsertBefore {
+			insertIdx = i + 1
+		}
+	}
+
+	newContentStart := contentStart - len(cellData)
+	headerEnd := 8 + (numCells+1)*2
+	if newContentStart < headerEnd {
+		return fmt.Errorf("parent page full")
+	}
+
+	// Shift existing cells if needed
+	if insertIdx < numCells {
+		for i := numCells; i > insertIdx; i-- {
+			srcOffset := 8 + (i-1)*2
+			dstOffset := 8 + i*2
+			copy(parentPage.Data[dstOffset:dstOffset+2], parentPage.Data[srcOffset:srcOffset+2])
+		}
+	}
+
+	// Write new cell pointer
+	pointerOffset := 8 + insertIdx*2
+	binary.BigEndian.PutUint16(parentPage.Data[pointerOffset:pointerOffset+2], uint16(newContentStart))
+
+	// Write cell data
+	copy(parentPage.Data[newContentStart:newContentStart+len(cellData)], cellData)
+
+	// Update header
+	binary.BigEndian.PutUint16(parentPage.Data[3:5], uint16(numCells+1))
+	binary.BigEndian.PutUint16(parentPage.Data[5:7], uint16(newContentStart))
+
+	// Update rightmost pointer if appending
+	if insertIdx == numCells {
+		binary.BigEndian.PutUint32(parentPage.Data[8:12], rightChild)
+	}
+
+	return bt.pm.WritePage(parentPage)
 }
