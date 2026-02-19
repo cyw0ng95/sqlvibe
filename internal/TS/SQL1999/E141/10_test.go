@@ -8,7 +8,7 @@ import (
 	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
 )
 
-func TestSQL1999_F301_E14109_L1(t *testing.T) {
+func TestSQL1999_F301_E14110_L1Part1(t *testing.T) {
 	sqlvibePath := ":memory:"
 	sqlitePath := ":memory:"
 

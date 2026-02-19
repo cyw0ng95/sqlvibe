@@ -451,15 +451,15 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 	cursorID := 0 // Default cursor ID
 
 	// DEBUG: Print what we're compiling
-	fmt.Printf("DEBUG compileColumnRef: col.Table=%q, col.Name=%q\n", col.Table, col.Name)
+	// fmt.Printf("DEBUG compileColumnRef: col.Table=%q, col.Name=%q\n", col.Table, col.Name)
 
 	// Determine cursor ID from table qualifier (for JOINs)
 	if col.Table != "" && c.tableCursors != nil {
 		if cid, ok := c.tableCursors[col.Table]; ok {
 			cursorID = cid
-			fmt.Printf("DEBUG compileColumnRef: found cursor %d for table %q\n", cid, col.Table)
+			// fmt.Printf("DEBUG compileColumnRef: found cursor %d for table %q\n", cid, col.Table)
 		} else {
-			fmt.Printf("DEBUG compileColumnRef: table %q NOT in tableCursors (keys: %v)\n", col.Table, c.tableCursors)
+			// fmt.Printf("DEBUG compileColumnRef: table %q NOT in tableCursors (keys: %v)\n", col.Table, c.tableCursors)
 		}
 	}
 
@@ -491,18 +491,18 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 	// Store "table.column" in P3 for outer reference lookup
 	if colIdx == -1 && col.Table != "" {
 		qualifiedName := col.Table + "." + col.Name
-		fmt.Printf("DEBUG compileColumnRef: OUTER REFERENCE - emitting OpColumn with P3=%q, cursorID=%d, colIdx=-1\n", qualifiedName, cursorID)
+		// fmt.Printf("DEBUG compileColumnRef: OUTER REFERENCE - emitting OpColumn with P3=%q, cursorID=%d, colIdx=-1\n", qualifiedName, cursorID)
 		c.program.EmitColumnWithTable(reg, cursorID, -1, qualifiedName)
 		return reg
 	}
 	// If column not found and no table qualifier, emit NULL
 	if colIdx == -1 {
-		fmt.Printf("DEBUG compileColumnRef: column not found, emitting NULL\n")
+		// fmt.Printf("DEBUG compileColumnRef: column not found, emitting NULL\n")
 		c.program.EmitLoadConst(reg, nil)
 		return reg
 	}
 	// Pass table qualifier in P3 for correlation check
-	fmt.Printf("DEBUG compileColumnRef: emitting OpColumn with tableQualifier=%q, cursorID=%d, colIdx=%d\n", col.Table, cursorID, colIdx)
+	// fmt.Printf("DEBUG compileColumnRef: emitting OpColumn with tableQualifier=%q, cursorID=%d, colIdx=%d\n", col.Table, cursorID, colIdx)
 	c.program.EmitColumnWithTable(reg, cursorID, colIdx, col.Table)
 	return reg
 }
