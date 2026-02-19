@@ -453,16 +453,10 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 	colIdx := -1  // Use -1 as sentinel for unknown columns
 	cursorID := 0 // Default cursor ID
 
-	// DEBUG: Print what we're compiling
-	// fmt.Printf("DEBUG compileColumnRef: col.Table=%q, col.Name=%q\n", col.Table, col.Name)
-
 	// Determine cursor ID from table qualifier (for JOINs)
 	if col.Table != "" && c.tableCursors != nil {
 		if cid, ok := c.tableCursors[col.Table]; ok {
 			cursorID = cid
-			// fmt.Printf("DEBUG compileColumnRef: found cursor %d for table %q\n", cid, col.Table)
-		} else {
-			// fmt.Printf("DEBUG compileColumnRef: table %q NOT in tableCursors (keys: %v)\n", col.Table, c.tableCursors)
 		}
 	}
 
@@ -476,14 +470,25 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 			}
 		}
 
-		// Fall back to single table schema (for non-JOIN queries)
+		// For single-table queries with table alias: check if the table qualifier
+		// is in tableCursors (meaning it's a valid table name/alias for this query)
+		// and fall back to TableColIndices
+		if colIdx == -1 && col.Table != "" && c.tableCursors != nil && c.TableColIndices != nil {
+			if _, tableExists := c.tableCursors[col.Table]; tableExists {
+				if idx, ok := c.TableColIndices[col.Name]; ok {
+					colIdx = idx
+				}
+			}
+		}
+
+		// Fall back to single table schema (for non-JOIN queries without qualifier)
 		if colIdx == -1 && c.TableColIndices != nil {
 			if idx, ok := c.TableColIndices[col.Name]; ok {
 				colIdx = idx
 			}
 		}
 
-		// Fall back to SELECT position (for aliases)
+		// Fall back to SELECT position (for column aliases in ORDER BY)
 		if colIdx == -1 && c.columnIndices != nil {
 			if idx, ok := c.columnIndices[col.Name]; ok {
 				colIdx = idx
@@ -494,18 +499,15 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 	// Store "table.column" in P3 for outer reference lookup
 	if colIdx == -1 && col.Table != "" {
 		qualifiedName := col.Table + "." + col.Name
-		// fmt.Printf("DEBUG compileColumnRef: OUTER REFERENCE - emitting OpColumn with P3=%q, cursorID=%d, colIdx=-1\n", qualifiedName, cursorID)
 		c.program.EmitColumnWithTable(reg, cursorID, -1, qualifiedName)
 		return reg
 	}
 	// If column not found and no table qualifier, emit NULL
 	if colIdx == -1 {
-		// fmt.Printf("DEBUG compileColumnRef: column not found, emitting NULL\n")
 		c.program.EmitLoadConst(reg, nil)
 		return reg
 	}
 	// Pass table qualifier in P3 for correlation check
-	// fmt.Printf("DEBUG compileColumnRef: emitting OpColumn with tableQualifier=%q, cursorID=%d, colIdx=%d\n", col.Table, cursorID, colIdx)
 	c.program.EmitColumnWithTable(reg, cursorID, colIdx, col.Table)
 	return reg
 }
@@ -927,41 +929,77 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 }
 
 func (c *Compiler) compileCaseExpr(caseExpr *QP.CaseExpr) int {
-	elseReg := c.ra.Alloc()
-	if caseExpr.Else != nil {
-		elseReg = c.compileExpr(caseExpr.Else)
-	} else {
-		c.program.EmitLoadConst(elseReg, nil)
+	// Allocate result register that all branches will write to
+	resultReg := c.ra.Alloc()
+	
+	// Track jump positions for when each WHEN succeeds (to skip remaining conditions)
+	endJumps := make([]int, 0)
+	
+	// Check if this is Simple CASE (has operand) or Searched CASE (no operand)
+	var operandReg int
+	isSimpleCase := caseExpr.Operand != nil
+	if isSimpleCase {
+		// Simple CASE: evaluate operand once and compare to each WHEN value
+		operandReg = c.compileExpr(caseExpr.Operand)
 	}
-
-	resultReg := elseReg
-
-	for i := len(caseExpr.Whens) - 1; i >= 0; i-- {
-		when := caseExpr.Whens[i]
-		condReg := c.compileExpr(when.Condition)
+	
+	// Process each WHEN clause in order
+	for _, when := range caseExpr.Whens {
+		var condReg int
+		
+		if isSimpleCase {
+			// Simple CASE: compare operand to WHEN value
+			// Evaluate WHEN value
+			whenValueReg := c.compileExpr(when.Condition)
+			// Compare: operand == whenValue
+			condReg = c.ra.Alloc()
+			eqIdx := c.program.EmitOp(OpEq, int32(operandReg), int32(whenValueReg))
+			c.program.Instructions[eqIdx].P4 = condReg
+		} else {
+			// Searched CASE: evaluate condition as boolean
+			condReg = c.compileExpr(when.Condition)
+		}
+		
+		// If condition is false, jump to next WHEN (or ELSE)
+		// OpIfNot: jump to P2 if register P1 is false/zero/null
+		skipIdx := c.program.EmitOp(OpIfNot, int32(condReg), 0)
+		
+		// Condition is true: evaluate and store THEN result
 		thenReg := c.compileExpr(when.Result)
-
-		currResult := c.ra.Alloc()
-		zeroReg := c.ra.Alloc()
-		c.program.EmitLoadConst(zeroReg, int64(0))
-		match := c.program.EmitEq(condReg, zeroReg, 0)
-		c.program.Fixup(match)
-		c.program.EmitCopy(thenReg, currResult)
-		resultReg = currResult
-		_ = resultReg
+		c.program.EmitCopy(thenReg, resultReg)
+		
+		// Jump to end (skip remaining WHEN clauses and ELSE)
+		jumpToEnd := c.program.EmitOp(OpGoto, 0, 0)
+		endJumps = append(endJumps, jumpToEnd)
+		
+		// Fix the skip jump to point here (start of next WHEN or ELSE)
+		c.program.Fixup(skipIdx)
 	}
-
-	dst := c.ra.Alloc()
-	c.program.EmitCopy(elseReg, dst)
-	return dst
+	
+	// ELSE clause: reached if no WHEN condition matched
+	if caseExpr.Else != nil {
+		elseReg := c.compileExpr(caseExpr.Else)
+		c.program.EmitCopy(elseReg, resultReg)
+	} else {
+		// No ELSE clause: result is NULL
+		c.program.EmitLoadConst(resultReg, nil)
+	}
+	
+	// All end jumps point here
+	for _, jumpIdx := range endJumps {
+		c.program.Fixup(jumpIdx)
+	}
+	
+	return resultReg
 }
 
 func (c *Compiler) compileCastExpr(cast *QP.CastExpr) int {
 	srcReg := c.compileExpr(cast.Expr)
 	dst := c.ra.Alloc()
 
+	// Emit OpCast instruction with TypeSpec in P4
 	c.program.EmitOp(OpCast, int32(srcReg), 0)
-	c.program.Instructions[len(c.program.Instructions)-1].P4 = cast.Type
+	c.program.Instructions[len(c.program.Instructions)-1].P4 = cast.TypeSpec
 	c.program.EmitCopy(srcReg, dst)
 
 	return dst
@@ -996,41 +1034,52 @@ func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *Program {
 	// Open cursor for the table (cursor 0)
 	c.program.EmitOpenTable(0, stmt.Table)
 
-	// Insert each row
-	for _, row := range stmt.Values {
-		// Compile each value expression into registers
-		// If columns are specified in INSERT, map values to columns
-		// Otherwise, values map to table column order
-		var insertInfo interface{}
-
-		if len(stmt.Columns) > 0 {
-			// Columns specified: create map of column name to register
-			colMap := make(map[string]int)
-			for i, val := range row {
-				if i < len(stmt.Columns) {
-					reg := c.compileExpr(val)
-					colMap[stmt.Columns[i]] = reg
-				}
-			}
-			insertInfo = colMap
-		} else {
-			// No columns specified: use positional array
-			rowRegs := make([]int, 0)
-			for _, val := range row {
-				reg := c.compileExpr(val)
-				rowRegs = append(rowRegs, reg)
-			}
-			insertInfo = rowRegs
-		}
-
-		// Emit Insert opcode with column mapping or positional registers
-		idx := len(c.program.Instructions)
+	// Handle DEFAULT VALUES
+	if stmt.UseDefaults {
+		// Insert a single row with all defaults
+		// Pass empty map to signal all defaults should be used
 		c.program.Instructions = append(c.program.Instructions, Instruction{
 			Op: OpInsert,
 			P1: 0, // cursor ID
-			P4: insertInfo,
+			P4: map[string]int{}, // Empty map signals use all defaults
 		})
-		_ = idx
+	} else {
+		// Insert each row
+		for _, row := range stmt.Values {
+			// Compile each value expression into registers
+			// If columns are specified in INSERT, map values to columns
+			// Otherwise, values map to table column order
+			var insertInfo interface{}
+
+			if len(stmt.Columns) > 0 {
+				// Columns specified: create map of column name to register
+				colMap := make(map[string]int)
+				for i, val := range row {
+					if i < len(stmt.Columns) {
+						reg := c.compileExpr(val)
+						colMap[stmt.Columns[i]] = reg
+					}
+				}
+				insertInfo = colMap
+			} else {
+				// No columns specified: use positional array
+				rowRegs := make([]int, 0)
+				for _, val := range row {
+					reg := c.compileExpr(val)
+					rowRegs = append(rowRegs, reg)
+				}
+				insertInfo = rowRegs
+			}
+
+			// Emit Insert opcode with column mapping or positional registers
+			idx := len(c.program.Instructions)
+			c.program.Instructions = append(c.program.Instructions, Instruction{
+				Op: OpInsert,
+				P1: 0, // cursor ID
+				P4: insertInfo,
+			})
+			_ = idx
+		}
 	}
 
 	c.program.Emit(OpHalt)

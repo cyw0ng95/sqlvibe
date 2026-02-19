@@ -781,7 +781,7 @@ func (qe *QueryEngine) evalCastExpr(row map[string]interface{}, ce *QP.CastExpr)
 	if val == nil {
 		return nil
 	}
-	switch ce.Type {
+	switch ce.TypeSpec.Name {
 	case "INTEGER", "INT":
 		if s, ok := val.(string); ok {
 			if iv, err := strconv.ParseInt(s, 10, 64); err == nil {

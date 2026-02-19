@@ -50,9 +50,10 @@ type Join struct {
 }
 
 type InsertStmt struct {
-	Table   string
-	Columns []string
-	Values  [][]Expr
+	Table         string
+	Columns       []string
+	Values        [][]Expr
+	UseDefaults   bool // True when using DEFAULT VALUES
 }
 
 func (i *InsertStmt) NodeType() string { return "InsertStmt" }
@@ -91,6 +92,7 @@ type ColumnDef struct {
 	PrimaryKey bool
 	NotNull    bool
 	Default    Expr
+	Check      Expr // CHECK constraint expression
 }
 
 type DropTableStmt struct {
@@ -210,9 +212,16 @@ type CaseWhen struct {
 
 func (e *CaseExpr) exprNode() {}
 
+// TypeSpec represents a SQL type with optional precision and scale
+type TypeSpec struct {
+	Name      string // Type name (e.g., "INTEGER", "DECIMAL", "VARCHAR")
+	Precision int    // For DECIMAL(p,s) or VARCHAR(n), this is p or n
+	Scale     int    // For DECIMAL(p,s), this is s
+}
+
 type CastExpr struct {
-	Expr Expr
-	Type string
+	Expr     Expr
+	TypeSpec TypeSpec // Changed from Type string to TypeSpec
 }
 
 func (e *CastExpr) exprNode() {}
@@ -357,6 +366,10 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 			p.advance()
 		}
 
+		// Check for table alias (with or without AS keyword)
+		if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+			p.advance() // consume AS
+		}
 		if p.current().Type == TokenIdentifier {
 			ref.Alias = p.current().Literal
 			p.advance()
@@ -386,6 +399,10 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				p.advance()
 			}
 
+			// Check for table alias in JOIN (with or without AS keyword)
+			if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+				p.advance() // consume AS
+			}
 			if p.current().Type == TokenIdentifier {
 				rightTable.Alias = p.current().Literal
 				p.advance()
@@ -530,6 +547,18 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 		p.expect(TokenRightParen)
 	}
 
+	// Check for DEFAULT VALUES
+	if p.current().Literal == "DEFAULT" {
+		p.advance()
+		if p.current().Literal == "VALUES" {
+			p.advance()
+			stmt.UseDefaults = true
+			return stmt, nil
+		}
+		// Not DEFAULT VALUES, backtrack would be needed but we'll error for now
+		return nil, fmt.Errorf("expected VALUES after DEFAULT")
+	}
+
 	if p.current().Literal == "VALUES" {
 		p.advance()
 		for {
@@ -539,6 +568,12 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 			p.advance()
 
 			row := make([]Expr, 0)
+			// Don't allow empty VALUES () - that's not standard SQL
+			// Use DEFAULT VALUES instead
+			if p.current().Type == TokenRightParen {
+				return nil, fmt.Errorf("empty VALUES () not supported, use DEFAULT VALUES")
+			}
+			
 			for {
 				expr, err := p.parseExpr()
 				if err != nil {
@@ -716,6 +751,21 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 							return nil, err
 						}
 						col.Default = defaultExpr
+					} else if keyword == "CHECK" {
+						// Parse CHECK constraint
+						p.advance()
+						if p.current().Type == TokenLeftParen {
+							p.advance()
+							// Parse the check expression
+							checkExpr, err := p.parseExpr()
+							if err != nil {
+								return nil, err
+							}
+							col.Check = checkExpr
+							if p.current().Type == TokenRightParen {
+								p.advance()
+							}
+						}
 					} else if keyword == "REFERENCES" {
 						// Skip FOREIGN KEY reference for now
 						p.advance()
@@ -1286,16 +1336,50 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			return nil, fmt.Errorf("expected AS in CAST expression")
 		}
 		p.advance()
-		typeName := ""
+		
+		// Parse type name
+		typeSpec := TypeSpec{}
 		if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
-			typeName = strings.ToUpper(p.current().Literal)
+			typeSpec.Name = strings.ToUpper(p.current().Literal)
 			p.advance()
 		}
+		
+		// Check for precision/scale: TYPE(precision) or TYPE(precision, scale)
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			
+			// Parse precision (first number)
+			if p.current().Type == TokenNumber {
+				if precision, err := strconv.Atoi(p.current().Literal); err == nil {
+					typeSpec.Precision = precision
+				}
+				p.advance()
+			}
+			
+			// Check for scale (optional, after comma)
+			if p.current().Type == TokenComma {
+				p.advance()
+				if p.current().Type == TokenNumber {
+					if scale, err := strconv.Atoi(p.current().Literal); err == nil {
+						typeSpec.Scale = scale
+					}
+					p.advance()
+				}
+			}
+			
+			// Expect closing paren for type parameters
+			if p.current().Type != TokenRightParen {
+				return nil, fmt.Errorf("expected ')' after type parameters")
+			}
+			p.advance()
+		}
+		
+		// Expect closing paren for CAST expression
 		if p.current().Type != TokenRightParen {
 			return nil, fmt.Errorf("expected ')' after CAST type")
 		}
 		p.advance()
-		return &CastExpr{Expr: expr, Type: typeName}, nil
+		return &CastExpr{Expr: expr, TypeSpec: typeSpec}, nil
 	case TokenIdentifier:
 		p.advance()
 

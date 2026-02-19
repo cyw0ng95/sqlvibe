@@ -808,9 +808,22 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpCast:
 			val := vm.registers[inst.P1]
-			targetType, _ := inst.P4.(string)
-			if val != nil {
-				upperType := strings.ToUpper(targetType)
+			
+			// Try to get TypeSpec from P4, fall back to string for backward compatibility
+			var typeName string
+			var precision, scale int
+			
+			if typeSpec, ok := inst.P4.(QP.TypeSpec); ok {
+				typeName = typeSpec.Name
+				precision = typeSpec.Precision
+				scale = typeSpec.Scale
+			} else if typeStr, ok := inst.P4.(string); ok {
+				// Backward compatibility: P4 is a string
+				typeName = typeStr
+			}
+			
+			if val != nil && typeName != "" {
+				upperType := strings.ToUpper(typeName)
 				switch upperType {
 				case "INTEGER", "INT":
 					if s, ok := val.(string); ok {
@@ -824,7 +837,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 					} else if fv, ok := val.(float64); ok {
 						vm.registers[inst.P1] = int64(fv)
 					}
-				case "REAL", "FLOAT", "DOUBLE", "NUMERIC", "DECIMAL":
+				case "REAL", "FLOAT", "DOUBLE":
 					if s, ok := val.(string); ok {
 						if fv, err := strconv.ParseFloat(s, 64); err == nil {
 							vm.registers[inst.P1] = fv
@@ -834,6 +847,30 @@ func (vm *VM) Exec(ctx interface{}) error {
 					} else if iv, ok := val.(int64); ok {
 						vm.registers[inst.P1] = float64(iv)
 					}
+				case "NUMERIC", "DECIMAL":
+					// Handle NUMERIC/DECIMAL with precision and scale
+					var floatVal float64
+					
+					if s, ok := val.(string); ok {
+						if fv, err := strconv.ParseFloat(s, 64); err == nil {
+							floatVal = fv
+						} else {
+							floatVal = 0.0
+						}
+					} else if iv, ok := val.(int64); ok {
+						floatVal = float64(iv)
+					} else if fv, ok := val.(float64); ok {
+						floatVal = fv
+					}
+					
+					// Apply precision and scale if specified
+					if precision > 0 && scale > 0 {
+						// Round to specified scale
+						multiplier := math.Pow(10, float64(scale))
+						floatVal = math.Round(floatVal*multiplier) / multiplier
+					}
+					
+					vm.registers[inst.P1] = floatVal
 				case "TEXT", "VARCHAR", "CHAR", "CHARACTER":
 					if s, ok := val.(string); ok {
 						vm.registers[inst.P1] = s
@@ -841,8 +878,19 @@ func (vm *VM) Exec(ctx interface{}) error {
 						vm.registers[inst.P1] = strconv.FormatInt(iv, 10)
 					} else if fv, ok := val.(float64); ok {
 						vm.registers[inst.P1] = strconv.FormatFloat(fv, 'f', -1, 64)
+					} else if bv, ok := val.([]byte); ok {
+						vm.registers[inst.P1] = string(bv)
 					} else {
 						vm.registers[inst.P1] = fmt.Sprintf("%v", val)
+					}
+				case "BLOB":
+					// Handle BLOB type
+					if s, ok := val.(string); ok {
+						vm.registers[inst.P1] = []byte(s)
+					} else if bv, ok := val.([]byte); ok {
+						vm.registers[inst.P1] = bv
+					} else {
+						vm.registers[inst.P1] = []byte(fmt.Sprintf("%v", val))
 					}
 				}
 			}
