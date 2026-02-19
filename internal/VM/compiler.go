@@ -1358,6 +1358,16 @@ func hasAggregates(stmt *QP.SelectStmt) bool {
 	return stmt.GroupBy != nil
 }
 
+func (c *Compiler) SetTableSchema(schema map[string]int, schemaOrder []string) {
+	c.TableColIndices = schema
+	c.TableColOrder = schemaOrder
+}
+
+func (c *Compiler) SetMultiTableSchema(schemas map[string]map[string]int, colOrder []string) {
+	c.TableSchemas = schemas
+	c.TableColOrder = colOrder
+}
+
 // compileSetOp compiles SET operations (UNION, EXCEPT, INTERSECT)
 func (c *Compiler) compileSetOp(stmt *QP.SelectStmt) *Program {
 	c.program = NewProgram()
