@@ -28,6 +28,109 @@ type Database struct {
 	data           map[string][]map[string]interface{} // table name -> rows -> column name -> value
 	indexes        map[string]*IndexInfo               // index name -> index info
 	isRegistry     *IS.Registry                        // information_schema registry
+	txSnapshot     *dbSnapshot                         // snapshot for transaction rollback
+}
+
+type dbSnapshot struct {
+	data           map[string][]map[string]interface{}
+	tables         map[string]map[string]string
+	primaryKeys    map[string][]string
+	columnOrder    map[string][]string
+	columnDefaults map[string]map[string]interface{}
+	columnNotNull  map[string]map[string]bool
+	columnChecks   map[string]map[string]QP.Expr
+	indexes        map[string]*IndexInfo
+}
+
+func (db *Database) captureSnapshot() *dbSnapshot {
+	snap := &dbSnapshot{
+		data:           make(map[string][]map[string]interface{}),
+		tables:         make(map[string]map[string]string),
+		primaryKeys:    make(map[string][]string),
+		columnOrder:    make(map[string][]string),
+		columnDefaults: make(map[string]map[string]interface{}),
+		columnNotNull:  make(map[string]map[string]bool),
+		columnChecks:   make(map[string]map[string]QP.Expr),
+		indexes:        make(map[string]*IndexInfo),
+	}
+	for tbl, rows := range db.data {
+		rowsCopy := make([]map[string]interface{}, len(rows))
+		for i, row := range rows {
+			rowCopy := make(map[string]interface{}, len(row))
+			for k, v := range row {
+				// Deep copy byte slices to prevent shared state between snapshot and live data
+				if b, ok := v.([]byte); ok {
+					bCopy := make([]byte, len(b))
+					copy(bCopy, b)
+					rowCopy[k] = bCopy
+				} else {
+					rowCopy[k] = v
+				}
+			}
+			rowsCopy[i] = rowCopy
+		}
+		snap.data[tbl] = rowsCopy
+	}
+	for k, v := range db.tables {
+		colsCopy := make(map[string]string, len(v))
+		for ck, cv := range v {
+			colsCopy[ck] = cv
+		}
+		snap.tables[k] = colsCopy
+	}
+	for k, v := range db.primaryKeys {
+		pkCopy := make([]string, len(v))
+		copy(pkCopy, v)
+		snap.primaryKeys[k] = pkCopy
+	}
+	for k, v := range db.columnOrder {
+		colOrdCopy := make([]string, len(v))
+		copy(colOrdCopy, v)
+		snap.columnOrder[k] = colOrdCopy
+	}
+	for k, v := range db.columnDefaults {
+		defCopy := make(map[string]interface{}, len(v))
+		for dk, dv := range v {
+			defCopy[dk] = dv
+		}
+		snap.columnDefaults[k] = defCopy
+	}
+	for k, v := range db.columnNotNull {
+		nnCopy := make(map[string]bool, len(v))
+		for nk, nv := range v {
+			nnCopy[nk] = nv
+		}
+		snap.columnNotNull[k] = nnCopy
+	}
+	for k, v := range db.columnChecks {
+		chkCopy := make(map[string]QP.Expr, len(v))
+		for ck, cv := range v {
+			chkCopy[ck] = cv
+		}
+		snap.columnChecks[k] = chkCopy
+	}
+	for k, v := range db.indexes {
+		idxCopy := &IndexInfo{
+			Name:    v.Name,
+			Table:   v.Table,
+			Unique:  v.Unique,
+			Columns: make([]string, len(v.Columns)),
+		}
+		copy(idxCopy.Columns, v.Columns)
+		snap.indexes[k] = idxCopy
+	}
+	return snap
+}
+
+func (db *Database) restoreSnapshot(snap *dbSnapshot) {
+	db.data = snap.data
+	db.tables = snap.tables
+	db.primaryKeys = snap.primaryKeys
+	db.columnOrder = snap.columnOrder
+	db.columnDefaults = snap.columnDefaults
+	db.columnNotNull = snap.columnNotNull
+	db.columnChecks = snap.columnChecks
+	db.indexes = snap.indexes
 }
 
 type IndexInfo struct {
@@ -350,6 +453,7 @@ func (db *Database) Exec(sql string) (Result, error) {
 			return Result{}, fmt.Errorf("failed to begin transaction: %w", err)
 		}
 		db.activeTx = tx
+		db.txSnapshot = db.captureSnapshot()
 		return Result{}, nil
 	case "CommitStmt":
 		if db.activeTx == nil {
@@ -360,6 +464,7 @@ func (db *Database) Exec(sql string) (Result, error) {
 			return Result{}, fmt.Errorf("failed to commit transaction: %w", err)
 		}
 		db.activeTx = nil
+		db.txSnapshot = nil
 		return Result{}, nil
 	case "RollbackStmt":
 		if db.activeTx == nil {
@@ -369,6 +474,11 @@ func (db *Database) Exec(sql string) (Result, error) {
 		if err != nil {
 			return Result{}, fmt.Errorf("failed to rollback transaction: %w", err)
 		}
+		if db.txSnapshot != nil {
+			db.restoreSnapshot(db.txSnapshot)
+			db.txSnapshot = nil
+		}
+		// activeTx is cleared after snapshot restore so the engine sees clean state
 		db.activeTx = nil
 		return Result{}, nil
 	}

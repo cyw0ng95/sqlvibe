@@ -407,6 +407,31 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 			c.program.EmitCopy(argRegs[0], dst)
 		}
 		return dst
+	case "NULLIF":
+		// NULLIF(a, b) = NULL if a == b, else a
+		if len(argRegs) >= 2 {
+			cmpReg := c.ra.Alloc()
+			c.program.EmitOpWithDst(VM.OpEq, int32(argRegs[0]), int32(argRegs[1]), cmpReg)
+
+			// If cmpReg is 0 or NULL (values are not equal), jump to copy section
+			notEqJump := c.program.EmitOp(VM.OpIfNot, int32(cmpReg), 0)
+
+			// Equal: result is NULL
+			c.program.EmitLoadConst(dst, nil)
+
+			// Jump to end
+			endJump := c.program.EmitOp(VM.OpGoto, 0, 0)
+
+			// Not equal: copy first arg
+			c.program.Fixup(notEqJump)
+			c.program.EmitCopy(argRegs[0], dst)
+
+			// End
+			c.program.Fixup(endJump)
+		} else {
+			c.program.EmitLoadConst(dst, nil)
+		}
+		return dst
 	case "INSTR":
 		if len(argRegs) >= 2 {
 			c.program.EmitOpWithDst(VM.OpInstr, int32(argRegs[0]), int32(argRegs[1]), dst)
