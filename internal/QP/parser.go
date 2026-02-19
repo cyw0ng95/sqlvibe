@@ -708,11 +708,14 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 						col.Type += " UNIQUE"
 						p.advance()
 					} else if keyword == "DEFAULT" {
-						// Skip DEFAULT value for now
+						// Parse DEFAULT value
 						p.advance()
-						if p.current().Type == TokenString || p.current().Type == TokenNumber {
-							p.advance()
+						// Parse the default expression
+						defaultExpr, err := p.parseExpr()
+						if err != nil {
+							return nil, err
 						}
+						col.Default = defaultExpr
 					} else if keyword == "REFERENCES" {
 						// Skip FOREIGN KEY reference for now
 						p.advance()
