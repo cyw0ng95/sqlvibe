@@ -13,6 +13,7 @@ const (
 	TokenEOF
 	TokenIdentifier
 	TokenString
+	TokenHexString
 	TokenNumber
 	TokenKeyword
 	TokenExplain
@@ -95,6 +96,8 @@ var keywords = map[string]TokenType{
 	"RIGHT":             TokenKeyword,
 	"OUTER":             TokenKeyword,
 	"CROSS":             TokenKeyword,
+	"NATURAL":           TokenKeyword,
+	"USING":             TokenKeyword,
 	"ON":                TokenKeyword,
 	"AS":                TokenKeyword,
 	"ORDER":             TokenKeyword,
@@ -109,6 +112,8 @@ var keywords = map[string]TokenType{
 	"ALL":               TokenAll,
 	"EXCEPT":            TokenKeyword,
 	"INTERSECT":         TokenKeyword,
+	"WITH":              TokenKeyword,
+	"RECURSIVE":         TokenKeyword,
 	"CASE":              TokenKeyword,
 	"WHEN":              TokenKeyword,
 	"THEN":              TokenKeyword,
@@ -152,6 +157,20 @@ var keywords = map[string]TokenType{
 	"CURRENT_TIMESTAMP": TokenKeyword,
 	"LOCALTIME":         TokenKeyword,
 	"LOCALTIMESTAMP":    TokenKeyword,
+	"OVER":              TokenKeyword,
+	"PARTITION":         TokenKeyword,
+	"LAG":               TokenKeyword,
+	"LEAD":              TokenKeyword,
+	"FIRST_VALUE":       TokenKeyword,
+	"LAST_VALUE":        TokenKeyword,
+	"ROW_NUMBER":        TokenKeyword,
+	"RANK":              TokenKeyword,
+	"DENSE_RANK":        TokenKeyword,
+	"NTILE":             TokenKeyword,
+	"UNBOUNDED":         TokenKeyword,
+	"PRECEDING":         TokenKeyword,
+	"FOLLOWING":         TokenKeyword,
+	"CURRENT":           TokenKeyword,
 }
 
 type Token struct {
@@ -186,7 +205,12 @@ func (t *Tokenizer) Tokenize() ([]Token, error) {
 
 		ch := t.input[t.pos]
 
-		if unicode.IsLetter(rune(ch)) || ch == '_' {
+		// Check for hex string (x'...') BEFORE checking for identifier
+		if (ch == 'x' || ch == 'X') && t.pos+1 < len(t.input) && (t.input[t.pos+1] == '\'' || t.input[t.pos+1] == '"') {
+			if err := t.readHexString(); err != nil {
+				return nil, err
+			}
+		} else if unicode.IsLetter(rune(ch)) || ch == '_' {
 			if err := t.readIdentifier(); err != nil {
 				return nil, err
 			}
@@ -250,9 +274,11 @@ func (t *Tokenizer) readIdentifier() error {
 	upper := strings.ToUpper(literal)
 
 	if tokenType, ok := keywords[upper]; ok {
-		t.addToken(tokenType, literal)
+		// Store keywords in uppercase for consistent parser checks
+		t.addToken(tokenType, upper)
 	} else {
-		t.addToken(TokenIdentifier, literal)
+		// Unquoted identifiers are case-insensitive in SQLite (store as lowercase)
+		t.addToken(TokenIdentifier, strings.ToLower(literal))
 	}
 	return nil
 }
@@ -287,25 +313,74 @@ func (t *Tokenizer) readString() error {
 	t.pos++
 
 	t.start = t.pos
+	var sb strings.Builder
 	for t.pos < len(t.input) {
 		if t.input[t.pos] == quote {
+			// Check for doubled quote escape (e.g., '' inside single-quoted string)
+			if t.pos+1 < len(t.input) && t.input[t.pos+1] == quote {
+				sb.WriteByte(quote)
+				t.pos += 2
+				continue
+			}
 			break
 		}
-		if t.input[t.pos] == '\\' && t.pos+1 < len(t.input) {
-			t.pos += 2
-		} else {
-			t.pos++
-		}
+		sb.WriteByte(t.input[t.pos])
+		t.pos++
 	}
 
 	if t.pos >= len(t.input) {
 		return fmt.Errorf("unterminated string at position %d", t.start)
 	}
 
-	literal := t.input[t.start:t.pos]
+	literal := sb.String()
 	t.pos++
 	t.addToken(TokenString, literal)
 	return nil
+}
+
+func (t *Tokenizer) readHexString() error {
+	// Skip the 'x' character and get the quote
+	t.pos++
+	quote := t.input[t.pos]
+	t.pos++
+
+	t.start = t.pos
+	for t.pos < len(t.input) {
+		if t.input[t.pos] == quote {
+			break
+		}
+		t.pos++
+	}
+
+	if t.pos >= len(t.input) {
+		return fmt.Errorf("unterminated hex string at position %d", t.start)
+	}
+
+	hexStr := t.input[t.start:t.pos]
+	t.pos++
+
+	bytes, err := parseHexString(hexStr)
+	if err != nil {
+		return err
+	}
+	t.addToken(TokenHexString, string(bytes))
+	return nil
+}
+
+func parseHexString(s string) ([]byte, error) {
+	if len(s)%2 != 0 {
+		return nil, fmt.Errorf("invalid hex string: odd length")
+	}
+	result := make([]byte, len(s)/2)
+	for i := 0; i < len(s); i += 2 {
+		var b byte
+		n, err := fmt.Sscanf(s[i:i+2], "%2x", &b)
+		if err != nil || n != 1 {
+			return nil, fmt.Errorf("invalid hex string: %s", s[i:i+2])
+		}
+		result[i/2] = b
+	}
+	return result, nil
 }
 
 func (t *Tokenizer) readOperator() error {

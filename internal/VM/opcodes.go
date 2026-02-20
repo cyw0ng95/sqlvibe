@@ -66,6 +66,7 @@ const (
 	OpAggStep
 	OpAggFinal
 	OpCount
+	OpAggregate
 
 	// Comparison
 	OpEq
@@ -107,6 +108,7 @@ const (
 	OpReplace
 	OpInstr
 	OpLike
+	OpNotLike
 	OpGlob
 
 	// Aggregate functions
@@ -158,6 +160,15 @@ const (
 	OpDelete
 	OpUpdate
 
+	// Set operations
+	OpUnionAll
+	OpUnionDistinct
+	OpExcept
+	OpIntersect
+	OpEphemeralCreate
+	OpEphemeralInsert
+	OpEphemeralFind
+
 	// Null handling
 	OpIfNot
 	OpIf
@@ -170,6 +181,13 @@ const (
 	OpArrayToList
 	OpStrGroupConcat
 
+	// Subquery
+	OpScalarSubquery
+	OpExistsSubquery
+	OpNotExistsSubquery
+	OpInSubquery
+	OpNotInSubquery
+
 	// Misc
 	OpSql
 	OpCursorHint
@@ -178,6 +196,9 @@ const (
 	OpOverlaps
 	OpRealToInt
 	OpHalt
+	OpTypeof
+	OpRandom
+	OpCallScalar // Generic scalar function call: P4=*ScalarCallInfo, result in P4.Dst
 
 	// JSON operations (future)
 	OpJson
@@ -251,6 +272,7 @@ var OpCodeInfo = map[OpCode]string{
 	OpAggStep:   "AggStep",
 	OpAggFinal:  "AggFinal",
 	OpCount:     "Count",
+	OpAggregate: "Aggregate",
 
 	// Comparison
 	OpEq:      "Eq",
@@ -289,10 +311,11 @@ var OpCodeInfo = map[OpCode]string{
 	OpTrim:    "Trim",
 	OpLTrim:   "LTrim",
 	OpRTrim:   "RTrim",
-	OpReplace: "Replace",
-	OpInstr:   "Instr",
-	OpLike:    "Like",
-	OpGlob:    "Glob",
+	OpReplace:  "Replace",
+	OpInstr:    "Instr",
+	OpLike:     "Like",
+	OpNotLike:  "NotLike",
+	OpGlob:     "Glob",
 
 	// Aggregate functions
 	OpSum:   "Sum",
@@ -343,6 +366,15 @@ var OpCodeInfo = map[OpCode]string{
 	OpDelete: "Delete",
 	OpUpdate: "Update",
 
+	// Set operations
+	OpUnionAll:        "UnionAll",
+	OpUnionDistinct:   "UnionDistinct",
+	OpExcept:          "Except",
+	OpIntersect:       "Intersect",
+	OpEphemeralCreate: "EphemeralCreate",
+	OpEphemeralInsert: "EphemeralInsert",
+	OpEphemeralFind:   "EphemeralFind",
+
 	// Null handling
 	OpIfNot: "IfNot",
 	OpIf:    "If",
@@ -355,6 +387,13 @@ var OpCodeInfo = map[OpCode]string{
 	OpArrayToList:    "ArrayToList",
 	OpStrGroupConcat: "GroupConcat",
 
+	// Subquery
+	OpScalarSubquery:    "ScalarSubquery",
+	OpExistsSubquery:    "ExistsSubquery",
+	OpNotExistsSubquery: "NotExistsSubquery",
+	OpInSubquery:        "InSubquery",
+	OpNotInSubquery:     "NotInSubquery",
+
 	// Misc
 	OpSql:        "Sql",
 	OpCursorHint: "CursorHint",
@@ -363,6 +402,9 @@ var OpCodeInfo = map[OpCode]string{
 	OpOverlaps:   "Overlaps",
 	OpRealToInt:  "RealToInt",
 	OpHalt:       "Halt",
+	OpTypeof:     "Typeof",
+	OpRandom:     "Random",
+	OpCallScalar: "CallScalar",
 
 	// JSON operations (future)
 	OpJson:        "Json",

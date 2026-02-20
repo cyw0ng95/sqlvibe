@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 // Varint encoding/decoding following SQLite format
@@ -18,6 +20,10 @@ var (
 // PutVarint encodes an int64 as a varint and returns the number of bytes written
 // Maximum 9 bytes (8 bytes with 7 bits + 1 byte with 8 bits)
 func PutVarint(buf []byte, v int64) int {
+	util.AssertNotNil(buf, "buf")
+	requiredLen := VarintLen(v)
+	util.Assert(len(buf) >= requiredLen, "buf too small for varint: %d bytes, need at least %d", len(buf), requiredLen)
+	
 	uv := uint64(v)
 
 	// Handle single byte case (0-127)
@@ -41,6 +47,8 @@ func PutVarint(buf []byte, v int64) int {
 
 // GetVarint decodes a varint from buf and returns (value, bytes_read)
 func GetVarint(buf []byte) (int64, int) {
+	util.AssertNotNil(buf, "buf")
+	
 	if len(buf) == 0 {
 		return 0, 0
 	}

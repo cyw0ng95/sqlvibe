@@ -404,6 +404,25 @@ func (p *Program) EmitColumn(dst, cursor, col int) int {
 	return idx
 }
 
+// EmitColumnWithTable emits column load with table qualifier for correlation check
+func (p *Program) EmitColumnWithTable(dst, cursor, col int, tableQualifier string) int {
+	idx := len(p.Instructions)
+	p.Instructions = append(p.Instructions, Instruction{
+		Op: OpColumn,
+		P1: int32(cursor),
+		P2: int32(col),
+		P3: tableQualifier,
+		P4: dst,
+	})
+	if dst >= p.NumRegs {
+		p.NumRegs = dst + 1
+	}
+	if cursor >= p.NumCursors {
+		p.NumCursors = cursor + 1
+	}
+	return idx
+}
+
 func (p *Program) EmitResultRow(regs []int) int {
 	idx := len(p.Instructions)
 	p.Instructions = append(p.Instructions, Instruction{
