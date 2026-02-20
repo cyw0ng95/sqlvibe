@@ -1,6 +1,7 @@
 package sqlvibe
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -106,6 +107,12 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 
 	// SELECT with FROM - use existing VM query execution
+
+	// Handle derived table in FROM clause (nested subqueries)
+	if stmt.From.Subquery != nil {
+		return db.execDerivedTableQuery(stmt)
+	}
+
 	tableName := stmt.From.Name
 
 	// Handle information_schema virtual tables
@@ -697,6 +704,38 @@ func (db *Database) validateInsertColumnCount(sql string, tableName string, tabl
 	if !ok || insertStmt.UseDefaults || len(insertStmt.Values) == 0 {
 		return nil
 	}
+
+	// Build a set of valid column names from the target table
+	validCols := make(map[string]bool)
+	for _, col := range tableCols {
+		validCols[strings.ToLower(col)] = true
+	}
+
+	// Check that all explicitly specified column names exist in the table
+	if len(insertStmt.Columns) > 0 {
+		for _, col := range insertStmt.Columns {
+			if !validCols[strings.ToLower(col)] {
+				return fmt.Errorf("table %s has no column named %s", tableName, col)
+			}
+		}
+	}
+
+	// Check for invalid column references in VALUES (unquoted identifiers that aren't table columns)
+	// Also include explicit INSERT column names if specified
+	for _, col := range insertStmt.Columns {
+		validCols[strings.ToLower(col)] = true
+	}
+	for _, row := range insertStmt.Values {
+		for _, val := range row {
+			if cr, ok := val.(*QP.ColumnRef); ok && cr.Table == "" && cr.Name != "*" {
+				colLower := strings.ToLower(cr.Name)
+				if !validCols[colLower] {
+					return fmt.Errorf("no such column: %s", cr.Name)
+				}
+			}
+		}
+	}
+
 	if len(insertStmt.Columns) > 0 {
 		// Explicit columns: each row must have exactly that many values
 		for _, row := range insertStmt.Values {
@@ -802,6 +841,10 @@ func literalToString(val interface{}) string {
 	if lit, ok := val.(*QP.Literal); ok {
 		val = lit.Value
 	}
+	// Handle QP.Expr (e.g., DEFAULT (1+1)) - serialize back to SQL
+	if expr, ok := val.(QP.Expr); ok {
+		return exprToSQL(expr)
+	}
 	switch v := val.(type) {
 	case int64:
 		return fmt.Sprintf("%d", v)
@@ -809,11 +852,62 @@ func literalToString(val interface{}) string {
 		return fmt.Sprintf("%v", v)
 	case string:
 		return "'" + strings.ReplaceAll(v, "'", "''") + "'"
+	case []byte:
+		return "X'" + hex.EncodeToString(v) + "'"
 	case bool:
 		if v {
 			return "1"
 		}
 		return "0"
+	default:
+		return "NULL"
+	}
+}
+
+// exprToSQL converts a QP expression to a SQL string representation.
+func exprToSQL(expr QP.Expr) string {
+	if expr == nil {
+		return "NULL"
+	}
+	switch e := expr.(type) {
+	case *QP.Literal:
+		if e.Value == nil {
+			return "NULL"
+		}
+		return literalToString(e.Value)
+	case *QP.ColumnRef:
+		if e.Table != "" {
+			return e.Table + "." + e.Name
+		}
+		return e.Name
+	case *QP.BinaryExpr:
+		var op string
+		switch e.Op {
+		case QP.TokenPlus:
+			op = "+"
+		case QP.TokenMinus:
+			op = "-"
+		case QP.TokenAsterisk:
+			op = "*"
+		case QP.TokenSlash:
+			op = "/"
+		case QP.TokenPercent:
+			op = "%"
+		default:
+			op = "+"
+		}
+		return "(" + exprToSQL(e.Left) + " " + op + " " + exprToSQL(e.Right) + ")"
+	case *QP.UnaryExpr:
+		if e.Op == QP.TokenMinus {
+			return "-" + exprToSQL(e.Expr)
+		}
+		return exprToSQL(e.Expr)
+	case *QP.FuncCall:
+		args := make([]string, len(e.Args))
+		for i, arg := range e.Args {
+			args[i] = exprToSQL(arg)
+		}
+		return e.Name + "(" + strings.Join(args, ", ") + ")"
 	default:
 		return "NULL"
 	}

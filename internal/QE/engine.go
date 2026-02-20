@@ -830,6 +830,26 @@ func (qe *QueryEngine) evalCastExpr(row map[string]interface{}, ce *QP.CastExpr)
 		return fmt.Sprintf("%v", val)
 	case "BLOB":
 		return val
+	case "DATE", "TIME", "TIMESTAMP", "DATETIME", "YEAR":
+		// SQLite treats DATE/TIME/TIMESTAMP as NUMERIC affinity (leading-integer parsing)
+		if s, ok := val.(string); ok {
+			s = strings.TrimSpace(s)
+			// Extract leading integer (SQLite's sqlite3Atoi64 behavior)
+			end := 0
+			for end < len(s) && (s[end] >= '0' && s[end] <= '9' || (end == 0 && (s[end] == '-' || s[end] == '+'))) {
+				end++
+			}
+			if end > 0 {
+				if iv, err := strconv.ParseInt(s[:end], 10, 64); err == nil {
+					return iv
+				}
+			}
+			return int64(0)
+		}
+		if fv, ok := val.(float64); ok {
+			return int64(fv)
+		}
+		return val
 	default:
 		return val
 	}
@@ -1488,51 +1508,60 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 		return strings.ReplaceAll(strStr, searchStr, replaceStr)
 	case "DATE":
 		if len(fc.Args) == 0 {
-			return time.Now().Format("2006-01-02")
+			return time.Now().UTC().Format("2006-01-02")
 		}
 		val := qe.evalValue(row, fc.Args[0])
 		if val == nil {
 			return nil
 		}
 		if s, ok := val.(string); ok {
-			if t, err := time.Parse("2006-01-02", s); err == nil {
-				return t.Format("2006-01-02")
+			if strings.ToLower(s) == "now" {
+				return time.Now().UTC().Format("2006-01-02")
 			}
-			if t, err := time.Parse(time.RFC3339, s); err == nil {
-				return t.Format("2006-01-02")
+			for _, layout := range []string{"2006-01-02", "2006-01-02 15:04:05", time.RFC3339} {
+				if t, err := time.Parse(layout, s); err == nil {
+					return t.Format("2006-01-02")
+				}
 			}
 			return s
 		}
 		return nil
 	case "TIME":
 		if len(fc.Args) == 0 {
-			return time.Now().Format("15:04:05")
+			return time.Now().UTC().Format("15:04:05")
 		}
 		val := qe.evalValue(row, fc.Args[0])
 		if val == nil {
 			return nil
 		}
 		if s, ok := val.(string); ok {
-			if t, err := time.Parse("15:04:05", s); err == nil {
-				return t.Format("15:04:05")
+			if strings.ToLower(s) == "now" {
+				return time.Now().UTC().Format("15:04:05")
+			}
+			for _, layout := range []string{"15:04:05", "2006-01-02 15:04:05", time.RFC3339} {
+				if t, err := time.Parse(layout, s); err == nil {
+					return t.Format("15:04:05")
+				}
 			}
 			return s
 		}
 		return nil
 	case "DATETIME", "TIMESTAMP":
 		if len(fc.Args) == 0 {
-			return time.Now().Format("2006-01-02 15:04:05")
+			return time.Now().UTC().Format("2006-01-02 15:04:05")
 		}
 		val := qe.evalValue(row, fc.Args[0])
 		if val == nil {
 			return nil
 		}
 		if s, ok := val.(string); ok {
-			if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
-				return t.Format("2006-01-02 15:04:05")
+			if strings.ToLower(s) == "now" {
+				return time.Now().UTC().Format("2006-01-02 15:04:05")
 			}
-			if t, err := time.Parse(time.RFC3339, s); err == nil {
-				return t.Format("2006-01-02 15:04:05")
+			for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02", time.RFC3339} {
+				if t, err := time.Parse(layout, s); err == nil {
+					return t.Format("2006-01-02 15:04:05")
+				}
 			}
 			return s
 		}
@@ -1558,20 +1587,26 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 		}
 		formatStr, _ := format.(string)
 		tsStr, _ := timestamp.(string)
-		t, err := time.Parse("2006-01-02 15:04:05", tsStr)
-		if err != nil {
-			t, err = time.Parse(time.RFC3339, tsStr)
+		var t time.Time
+		if strings.ToLower(tsStr) == "now" {
+			t = time.Now().UTC()
+		} else {
+			var err error
+			for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02", time.RFC3339} {
+				t, err = time.Parse(layout, tsStr)
+				if err == nil {
+					break
+				}
+			}
 			if err != nil {
 				return nil
 			}
 		}
-		sqliteFormat := strings.ReplaceAll(formatStr, "%Y", "2006")
-		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%m", "01")
-		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%d", "02")
-		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%H", "15")
-		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%M", "04")
-		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%S", "05")
-		sqliteFormat = strings.ReplaceAll(sqliteFormat, "%s", "05")
+		sqliteFormat := strings.NewReplacer(
+			"%Y", "2006", "%m", "01", "%d", "02",
+			"%H", "15", "%M", "04", "%S", "05",
+			"%j", "002", "%f", "05.000000",
+		).Replace(formatStr)
 		return t.Format(sqliteFormat)
 	case "NOW":
 		return time.Now().Format("2006-01-02 15:04:05")

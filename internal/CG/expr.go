@@ -507,7 +507,14 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 			c.program.EmitOpWithDst(VM.OpAtan2, int32(argRegs[0]), int32(argRegs[1]), dst)
 		}
 	default:
-		c.program.EmitLoadConst(dst, nil)
+		// Unknown function: use OpCallScalar to evaluate at runtime via evaluateFuncCallOnRow
+		info := &VM.ScalarCallInfo{
+			Name:    strings.ToUpper(call.Name),
+			ArgRegs: argRegs,
+			Dst:     dst,
+		}
+		c.program.EmitOp(VM.OpCallScalar, 0, 0)
+		c.program.Instructions[len(c.program.Instructions)-1].P4 = info
 		return dst
 	}
 

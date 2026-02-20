@@ -416,6 +416,20 @@ func (p *Parser) parseTableRef() *TableRef {
 		p.advance()
 	}
 
+	// Skip INDEXED BY hint: INDEXED BY index_name or NOT INDEXED
+	if p.current().Type == TokenKeyword && p.current().Literal == "INDEXED" {
+		p.advance() // consume INDEXED
+		if p.current().Type == TokenKeyword && p.current().Literal == "BY" {
+			p.advance() // consume BY
+			p.advance() // consume index_name
+		}
+	} else if p.current().Type == TokenKeyword && p.current().Literal == "NOT" {
+		if p.peek().Type == TokenKeyword && strings.ToUpper(p.peek().Literal) == "INDEXED" {
+			p.advance() // consume NOT
+			p.advance() // consume INDEXED
+		}
+	}
+
 	return ref
 }
 
@@ -1999,6 +2013,8 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				p.expect(TokenRightParen)
 				return &FuncCall{Name: tok.Literal, Args: args, Distinct: distinct}, nil
 			}
+			// Keyword used as column reference (e.g., alias 'count' in HAVING count > 1)
+			return &ColumnRef{Name: tok.Literal}, nil
 		}
 		if tok.Literal == "NULL" {
 			p.advance()
@@ -2024,6 +2040,25 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			return nil, fmt.Errorf("near \"UNIQUE\": syntax error")
 		}
 		p.advance()
+		// If keyword is followed by (, treat as a generic function call (e.g., DATE(...), STRFTIME(...))
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			args := make([]Expr, 0)
+			for !p.isEOF() && p.current().Type != TokenRightParen {
+				arg, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				if arg != nil {
+					args = append(args, arg)
+				}
+				if p.current().Type == TokenComma {
+					p.advance()
+				}
+			}
+			p.expect(TokenRightParen)
+			return &FuncCall{Name: tok.Literal, Args: args}, nil
+		}
 		// Check for table.column format (e.g., e.dept_id)
 		if p.current().Type == TokenDot {
 			p.advance()

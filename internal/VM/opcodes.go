@@ -198,6 +198,7 @@ const (
 	OpHalt
 	OpTypeof
 	OpRandom
+	OpCallScalar // Generic scalar function call: P4=*ScalarCallInfo, result in P4.Dst
 
 	// JSON operations (future)
 	OpJson
@@ -403,6 +404,7 @@ var OpCodeInfo = map[OpCode]string{
 	OpHalt:       "Halt",
 	OpTypeof:     "Typeof",
 	OpRandom:     "Random",
+	OpCallScalar: "CallScalar",
 
 	// JSON operations (future)
 	OpJson:        "Json",

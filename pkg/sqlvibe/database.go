@@ -342,6 +342,11 @@ func (db *Database) evalConstantExpression(stmt *QP.SelectStmt) (*Rows, error) {
 			colName = "expr"
 			colValue = c.Value
 		case *QP.FuncCall:
+			// LOCALTIME/LOCALTIMESTAMP are not supported as standalone functions (SQLite behavior)
+			upperName := strings.ToUpper(c.Name)
+			if upperName == "LOCALTIME" || upperName == "LOCALTIMESTAMP" {
+				return nil, fmt.Errorf("no such column: %s", c.Name)
+			}
 			colName = c.Name
 			colValue = db.engine.EvalExpr(emptyRow, c)
 		default:
@@ -1462,9 +1467,60 @@ func (db *Database) execDerivedTableQuery(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 	db.data[tempName] = rowMaps
 
-	// Rewrite stmt.From to use temp table name instead of subquery
+	// Rewrite stmt.From to use temp table name instead of subquery.
+	// Preserve any Join from the original From (e.g., comma join of two derived tables).
 	origFrom := stmt.From
-	stmt.From = &QP.TableRef{Name: tempName, Alias: alias}
+	newFrom := &QP.TableRef{Name: tempName, Alias: alias, Join: origFrom.Join}
+
+	// If the Join's right side is also a derived table, materialize it too
+	var joinRightTempName string
+	var joinRightOrigRef *QP.TableRef
+	if origFrom.Join != nil && origFrom.Join.Right != nil && origFrom.Join.Right.Subquery != nil {
+		joinRightOrigRef = origFrom.Join.Right
+		rightSubq := joinRightOrigRef.Subquery
+		rightAlias := joinRightOrigRef.Alias
+		if rightAlias == "" {
+			rightAlias = "__subq_right__"
+		}
+		rightRows, rerr := db.execSelectStmt(rightSubq)
+		if rerr != nil {
+			delete(db.tables, tempName)
+			delete(db.columnOrder, tempName)
+			delete(db.data, tempName)
+			stmt.From = origFrom
+			return nil, rerr
+		}
+		if rightRows == nil {
+			rightRows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
+		}
+		joinRightTempName = rightAlias
+		rightColTypes := make(map[string]string)
+		for _, col := range rightRows.Columns {
+			rightColTypes[col] = "TEXT"
+		}
+		db.tables[joinRightTempName] = rightColTypes
+		db.columnOrder[joinRightTempName] = rightRows.Columns
+		rightRowMaps := make([]map[string]interface{}, len(rightRows.Data))
+		for i, row := range rightRows.Data {
+			rm := make(map[string]interface{})
+			for j, col := range rightRows.Columns {
+				if j < len(row) {
+					rm[col] = row[j]
+				}
+			}
+			rightRowMaps[i] = rm
+		}
+		db.data[joinRightTempName] = rightRowMaps
+		// Update the join right ref to point to the materialized temp table
+		newFrom.Join = &QP.Join{
+			Type:  origFrom.Join.Type,
+			Left:  origFrom.Join.Left,
+			Right: &QP.TableRef{Name: joinRightTempName, Alias: rightAlias},
+			Cond:  origFrom.Join.Cond,
+		}
+	}
+
+	stmt.From = newFrom
 
 	// Execute outer query
 	rows, err := db.execVMQuery("", stmt)
@@ -1474,6 +1530,11 @@ func (db *Database) execDerivedTableQuery(stmt *QP.SelectStmt) (*Rows, error) {
 	delete(db.tables, tempName)
 	delete(db.columnOrder, tempName)
 	delete(db.data, tempName)
+	if joinRightTempName != "" {
+		delete(db.tables, joinRightTempName)
+		delete(db.columnOrder, joinRightTempName)
+		delete(db.data, joinRightTempName)
+	}
 
 	if err != nil {
 		return nil, err

@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
@@ -729,6 +730,18 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpCallScalar:
+			if info, ok := inst.P4.(*ScalarCallInfo); ok {
+				// Build synthetic FuncCall with arg values from registers
+				argExprs := make([]QP.Expr, len(info.ArgRegs))
+				for i, reg := range info.ArgRegs {
+					argExprs[i] = &QP.Literal{Value: vm.registers[reg]}
+				}
+				syntheticCall := &QP.FuncCall{Name: info.Name, Args: argExprs}
+				vm.registers[info.Dst] = vm.evaluateFuncCallOnRow(nil, nil, syntheticCall)
+			}
+			continue
+
 		case OpRound:
 			src := vm.registers[inst.P1]
 			if dst, ok := inst.P4.(int); ok {
@@ -965,6 +978,13 @@ func (vm *VM) Exec(ctx interface{}) error {
 						vm.registers[inst.P1] = bv
 					} else {
 						vm.registers[inst.P1] = []byte(fmt.Sprintf("%v", val))
+					}
+				case "DATE", "TIME", "TIMESTAMP", "DATETIME", "YEAR":
+					// SQLite treats DATE/TIME/TIMESTAMP as NUMERIC affinity (leading-integer parsing)
+					if s, ok := val.(string); ok {
+						vm.registers[inst.P1] = parseNumericPrefix(s)
+					} else if fv, ok := val.(float64); ok {
+						vm.registers[inst.P1] = int64(fv)
 					}
 				}
 			}
@@ -2450,9 +2470,24 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 					state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
 				}
 			case "AVG":
-				// AVG = SUM / COUNT of non-NULL values
+				// AVG = SUM / COUNT of non-NULL values; accumulate in float64 to match SQLite precision
 				if value != nil {
-					state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
+					var fv float64
+					switch v := value.(type) {
+					case int64:
+						fv = float64(v)
+					case float64:
+						fv = v
+					default:
+						continue
+					}
+					if state.Sums[aggIdx] == nil {
+						state.Sums[aggIdx] = fv
+					} else if s, ok := state.Sums[aggIdx].(float64); ok {
+						state.Sums[aggIdx] = s + fv
+					} else {
+						state.Sums[aggIdx] = fv
+					}
 					state.Counts[aggIdx]++
 				}
 			case "MIN":
@@ -2577,6 +2612,14 @@ type AggregateInfo struct {
 	SelectExprs  []QP.Expr      // Full original SELECT expressions (for post-agg eval)
 }
 
+// ScalarCallInfo holds info for OpCallScalar: a function name, arg register indices, and a dst register.
+type ScalarCallInfo struct {
+	Name    string // function name (uppercase)
+	ArgRegs []int  // register indices for arguments
+	Dst     int    // destination register
+	Call    *QP.FuncCall // original call expression (nil args are evaluated at runtime)
+}
+
 // AggregateDef defines an aggregate function
 type AggregateDef struct {
 	Function string    // COUNT, SUM, AVG, MIN, MAX
@@ -2685,6 +2728,17 @@ func (vm *VM) applyTypeCast(val interface{}, typeName string) interface{} {
 		if b, ok := val.([]byte); ok {
 			return b
 		}
+	case "DATE", "TIME", "TIMESTAMP", "DATETIME", "YEAR":
+		// SQLite treats DATE/TIME/TIMESTAMP as NUMERIC affinity (equivalent to INTEGER cast)
+		// Uses leading-integer parsing for strings (SQLite's sqlite3Atoi64 behavior)
+		switch v := val.(type) {
+		case int64:
+			return v
+		case float64:
+			return int64(v)
+		case string:
+			return parseNumericPrefix(v)
+		}
 	}
 	return val
 }
@@ -2782,6 +2836,68 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 				return "text"
 			}
 		}
+	}
+	// Date/time functions
+	switch funcName {
+	case "CURRENT_DATE":
+		return time.Now().UTC().Format("2006-01-02")
+	case "CURRENT_TIME":
+		return time.Now().UTC().Format("15:04:05")
+	case "CURRENT_TIMESTAMP":
+		return time.Now().UTC().Format("2006-01-02 15:04:05")
+	case "LOCALTIME":
+		return time.Now().Local().Format("15:04:05")
+	case "LOCALTIMESTAMP":
+		return time.Now().Local().Format("2006-01-02 15:04:05")
+	case "DATE":
+		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0)))
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		for i := 1; i < len(e.Args); i++ {
+			mod, _ := vm.evaluateExprOnRow(row, columns, e.Args[i]).(string)
+			t = applyDateModifier(t, mod)
+		}
+		return t.Format("2006-01-02")
+	case "TIME":
+		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0)))
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		for i := 1; i < len(e.Args); i++ {
+			mod, _ := vm.evaluateExprOnRow(row, columns, e.Args[i]).(string)
+			t = applyDateModifier(t, mod)
+		}
+		return t.Format("15:04:05")
+	case "DATETIME":
+		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0)))
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		for i := 1; i < len(e.Args); i++ {
+			mod, _ := vm.evaluateExprOnRow(row, columns, e.Args[i]).(string)
+			t = applyDateModifier(t, mod)
+		}
+		return t.Format("2006-01-02 15:04:05")
+	case "STRFTIME":
+		if len(e.Args) < 2 {
+			return nil
+		}
+		fmtStr, _ := vm.evaluateExprOnRow(row, columns, e.Args[0]).(string)
+		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, e.Args[1]))
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		for i := 2; i < len(e.Args); i++ {
+			mod, _ := vm.evaluateExprOnRow(row, columns, e.Args[i]).(string)
+			t = applyDateModifier(t, mod)
+		}
+		goFmt := strings.NewReplacer(
+			"%Y", "2006", "%m", "01", "%d", "02",
+			"%H", "15", "%M", "04", "%S", "05",
+			"%j", "002", "%f", "05.000000",
+		).Replace(fmtStr)
+		return t.Format(goFmt)
 	}
 	return nil
 }
@@ -2934,6 +3050,84 @@ func parseNumericPrefix(s string) int64 {
 	return 0
 }
 
+// parseDateTimeValue parses a value into a time.Time, trying common SQLite date formats.
+// Returns zero time if parsing fails.
+func parseDateTimeValue(val interface{}) time.Time {
+	var s string
+	switch v := val.(type) {
+	case string:
+		s = v
+	case nil:
+		return time.Time{}
+	default:
+		return time.Time{}
+	}
+	if strings.ToLower(s) == "now" {
+		return time.Now().UTC()
+	}
+	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02", "15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+// applyDateModifier applies a SQLite date modifier string (e.g., "+1 day") to a time.Time.
+func applyDateModifier(t time.Time, mod string) time.Time {
+	mod = strings.TrimSpace(mod)
+	if mod == "" {
+		return t
+	}
+	// Parse sign
+	sign := 1
+	if len(mod) > 0 && mod[0] == '-' {
+		sign = -1
+		mod = mod[1:]
+	} else if len(mod) > 0 && mod[0] == '+' {
+		mod = mod[1:]
+	}
+	mod = strings.TrimSpace(mod)
+	// Parse number and unit
+	var numStr string
+	var unit string
+	for i, ch := range mod {
+		if ch >= '0' && ch <= '9' || (ch == '.' && numStr != "") {
+			numStr += string(ch)
+		} else {
+			unit = strings.ToLower(strings.TrimSpace(mod[i:]))
+			break
+		}
+	}
+	n, err := strconv.Atoi(numStr)
+	if err != nil {
+		return t
+	}
+	n *= sign
+	switch unit {
+	case "day", "days":
+		return t.AddDate(0, 0, n)
+	case "month", "months":
+		return t.AddDate(0, n, 0)
+	case "year", "years":
+		return t.AddDate(n, 0, 0)
+	case "hour", "hours":
+		return t.Add(time.Duration(n) * time.Hour)
+	case "minute", "minutes":
+		return t.Add(time.Duration(n) * time.Minute)
+	case "second", "seconds":
+		return t.Add(time.Duration(n) * time.Second)
+	}
+	return t
+}
+
+// safeArg returns e.Args[i] or nil if out of bounds.
+func safeArg(args []QP.Expr, i int) QP.Expr {
+	if i >= 0 && i < len(args) {
+		return args[i]
+	}
+	return nil
+}
 
 func matchLikePattern(value, pattern string, vi, pi int) bool {
 	if pi >= len(pattern) {
