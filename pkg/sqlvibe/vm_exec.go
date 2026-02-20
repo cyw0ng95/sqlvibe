@@ -113,6 +113,19 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 		return db.execDerivedTableQuery(stmt)
 	}
 
+	// Delegate to execVMQuery which handles ORDER BY + LIMIT correctly
+	// (including ORDER BY columns not in SELECT via extraOrderByCols mechanism).
+	return db.execVMQuery("", stmt)
+}
+
+// execSelectStmtWithContext executes a SelectStmt with outer row context for correlated subqueries
+func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[string]interface{}) (*Rows, error) {
+	if stmt.From == nil {
+		// SELECT without FROM - compile and execute directly (no correlation possible)
+		return db.execSelectStmt(stmt)
+	}
+
+	// SELECT with FROM - use existing VM query execution with context
 	tableName := stmt.From.Name
 
 	// Handle information_schema virtual tables
@@ -144,98 +157,38 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 	compiler.SetTableSchema(colIndices, tableCols)
 
-	program := compiler.CompileSelect(stmt)
-	ctx := newDsVmContext(db)
-	vm := VM.NewVMWithContext(program, ctx)
-
-	// Reset VM state before opening cursor manually
-	vm.Reset()
-	vm.SetPC(0)
-
-	// Open table cursor (use alias if present, otherwise table name)
-	cursorName := tableName
-	if stmt.From.Alias != "" {
-		cursorName = stmt.From.Alias
-	}
-
-	// Get table data from DS context
-	if tableData, err := ctx.GetTableData(tableName); err == nil && tableData != nil {
-		vm.Cursors().OpenTableAtID(0, cursorName, tableData, tableCols)
-	}
-
-	// Execute without calling Reset again (use Exec instead of Run)
-	err := vm.Exec(nil)
-	if err == VM.ErrHalt {
-		err = nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	results := vm.Results()
-
-	// Apply DISTINCT deduplication if requested
-	if stmt.Distinct {
-		results = deduplicateRows(results)
-	}
-
-	// Get column names from SELECT
-	cols := make([]string, 0)
-	for i, col := range stmt.Columns {
-		switch e := col.(type) {
-		case *QP.ColumnRef:
-			if e.Name == "*" {
-				cols = append(cols, tableCols...)
-			} else {
-				cols = append(cols, e.Name)
+	// For ORDER BY with columns not in SELECT, temporarily add them to the projection
+	// so the VM returns them; WHERE is applied first, then sort+limit+strip.
+	// Save original Columns to restore after compilation (avoid mutating shared AST).
+	origColumns := stmt.Columns
+	var extraOrderByCols []string
+	if len(stmt.OrderBy) > 0 {
+		selectColSet := make(map[string]bool)
+		for _, col := range stmt.Columns {
+			if cr, ok := col.(*QP.ColumnRef); ok {
+				selectColSet[cr.Name] = true
+				if cr.Name == "*" {
+					for _, tc := range tableCols {
+						selectColSet[tc] = true
+					}
+				}
+			} else if alias, ok := col.(*QP.AliasExpr); ok {
+				selectColSet[alias.Alias] = true
 			}
-		case *QP.AliasExpr:
-			cols = append(cols, e.Alias)
-		default:
-			cols = append(cols, fmt.Sprintf("col%d", i))
+		}
+		for _, ob := range stmt.OrderBy {
+			for _, ref := range collectColumnRefs(ob.Expr) {
+				if !selectColSet[ref] {
+					selectColSet[ref] = true
+					extraOrderByCols = append(extraOrderByCols, ref)
+					stmt.Columns = append(stmt.Columns, &QP.ColumnRef{Name: ref})
+				}
+			}
 		}
 	}
-
-	return &Rows{Columns: cols, Data: results}, nil
-}
-
-// execSelectStmtWithContext executes a SelectStmt with outer row context for correlated subqueries
-func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[string]interface{}) (*Rows, error) {
-	if stmt.From == nil {
-		// SELECT without FROM - compile and execute directly (no correlation possible)
-		return db.execSelectStmt(stmt)
-	}
-
-	// SELECT with FROM - use existing VM query execution with context
-	tableName := stmt.From.Name
-
-	// Handle information_schema virtual tables
-	if strings.ToLower(stmt.From.Schema) == "information_schema" {
-		fullName := stmt.From.Schema + "." + tableName
-		return db.queryInformationSchema(stmt, fullName)
-	}
-
-	if tableName != "" {
-		// Check if table exists via table registry
-		if _, exists := db.tables[tableName]; !exists {
-			return nil, fmt.Errorf("no such table: %s", tableName)
-		}
-	}
-
-	tableCols := db.columnOrder[tableName]
-	if tableCols == nil {
-		tableCols = db.getOrderedColumns(tableName)
-	}
-
-	compiler := CG.NewCompiler()
-	// Build column index map
-	colIndices := make(map[string]int)
-	for i, colName := range tableCols {
-		colIndices[colName] = i
-	}
-	compiler.SetTableSchema(colIndices, tableCols)
 
 	program := compiler.CompileSelect(stmt)
+	stmt.Columns = origColumns // restore immediately after compilation
 
 	// Create context with outer row
 	ctx := &dbVmContextWithOuter{
@@ -255,8 +208,10 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 	// Get table data from DS context
 	tableData, _ := ctx.GetTableData(tableName)
-	vm.Cursors().OpenTableAtID(0, cursorName, tableData, tableCols)
-	// fmt.Printf("DEBUG execSelectStmtWithContext: Cursor 0 opened, about to Exec\n")
+
+	if tableData != nil {
+		vm.Cursors().OpenTableAtID(0, cursorName, tableData, tableCols)
+	}
 
 	// Execute without calling Reset again (use Exec instead of Run)
 	err := vm.Exec(nil)
@@ -272,6 +227,37 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	// Apply DISTINCT deduplication if requested
 	if stmt.Distinct {
 		results = deduplicateRows(results)
+	}
+
+	// Sort+limit+strip using the extended column set (WHERE already applied by VM)
+	if len(extraOrderByCols) > 0 {
+		numSelectCols := len(stmt.Columns) // after restore, this is the projected count
+		// Build allCols = projected cols + extra order-by cols
+		projCols := make([]string, numSelectCols)
+		for i, col := range stmt.Columns {
+			if cr, ok := col.(*QP.ColumnRef); ok {
+				projCols[i] = cr.Name
+			} else if alias, ok := col.(*QP.AliasExpr); ok {
+				projCols[i] = alias.Alias
+			}
+		}
+		allCols := append(projCols, extraOrderByCols...)
+		results = db.engine.SortRows(results, stmt.OrderBy, allCols)
+		if stmt.Limit != nil {
+			if limited, err2 := db.applyLimit(&Rows{Data: results}, stmt.Limit, stmt.Offset); err2 == nil {
+				results = limited.Data
+			}
+		}
+		// Strip extra columns
+		for i, row := range results {
+			if len(row) > numSelectCols {
+				results[i] = row[:numSelectCols]
+			}
+		}
+	} else if stmt.Limit != nil {
+		if limited, err2 := db.applyLimit(&Rows{Data: results}, stmt.Limit, stmt.Offset); err2 == nil {
+			results = limited.Data
+		}
 	}
 
 	// Get column names from SELECT

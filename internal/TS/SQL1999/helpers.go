@@ -136,8 +136,11 @@ func CompareQueryResults(t *testing.T, sqlvibeDB *sqlvibe.Database, sqliteDB *sq
 		return
 	}
 
-	// For ORDER BY RANDOM(), rows come in different random orders; sort both before comparing
-	if strings.Contains(strings.ToUpper(sql), "ORDER BY RANDOM()") {
+	// When there is no ORDER BY (or ORDER BY RANDOM()), row order is implementation-defined.
+	// Sort both result sets lexicographically before comparing so we compare content, not order.
+	upperSQL := strings.ToUpper(sql)
+	hasOrderBy := strings.Contains(upperSQL, "ORDER BY") && !strings.Contains(upperSQL, "ORDER BY RANDOM()")
+	if !hasOrderBy {
 		rowKey := func(data []interface{}) string {
 			parts := make([]string, len(data))
 			for i, v := range data {
