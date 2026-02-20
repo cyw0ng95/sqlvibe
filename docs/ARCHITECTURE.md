@@ -4,247 +4,269 @@
 
 **Project Name**: sqlvibe - SQLite-Compatible Database Engine in Go  
 **Language**: Golang  
-**Goal**: Achieve SQLite features and compatibility with blackbox-level correctness verification
+**Version**: v0.6.x (latest release: v0.5.2 — see [HISTORY.md](HISTORY.md))  
+**Goal**: Achieve SQLite features and compatibility with blackbox-level correctness verification  
+**SQL Compatibility**: SQL:1999 — 56/56 test suites passing (100%)
+
+---
 
 ## 1. System Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              User Interface Layer                            │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  Library Binding (pkg/sqlvibe)  │  CLI Tool (cmd/sqlvibe)                │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           User Interface Layer                                │
+├──────────────────────────────────────────────────────────────────────────────┤
+│   pkg/sqlvibe (Public API / Library Binding)   │   cmd/sqlvibe (CLI Tool)    │
+└──────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           Core Subsystems                                    │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌──────────────────────┐    ┌──────────────────────┐    ┌──────────────┐ │
-│  │   Query Processing   │───▶│  Code Generator     │───▶│  Virtual     │ │
-│  │       (QP)           │    │       (CG)          │    │  Machine     │ │
-│  │                      │    │                     │    │     (VM)     │ │
-│  │  - Tokenizer         │    │  - Expression       │    │              │ │
-│  │  - Parser            │    │    Compiler         │    │  - Bytecode  │ │
-│  │  - Planner           │    │  - DML Compiler     │    │    Executor  │ │
-│  │  - AST Generator     │    │  - Aggregate        │    │  - Register  │ │
-│  │                      │    │    Compiler         │    │    Manager   │ │
-│  │                      │    │  - Optimizer        │    │  - Cursor    │ │
-│  │                      │    │    (future)         │    │    Manager   │ │
-│  └──────────────────────┘    └──────────────────────┘    └──────────────┘ │
-│                                                                             │
-│              ▼                                                              │
-│  ┌──────────────────────────────────────────────────────────────────┐       │
-│  │                     Transaction Monitor (TM)                    │       │
-│  │                                                                  │       │
-│  │  - ACID Transaction Management                                   │       │
-│  │  - Concurrency Control (Lock Manager)                            │       │
-│  │  - Write-Ahead Log (WAL)                                        │       │
-│  └──────────────────────────────────────────────────────────────────┘       │
-│              │                                                          │
-│              ▼                                                          │
-│  ┌──────────────────────────────────────────────────────────────────┐       │
-│  │                      Data Storage (DS)                          │       │
-│  │                                                                  │       │
-│  │  - B-Tree Storage Engine                                         │       │
-│  │  - Page Cache / Buffer Pool                                     │       │
-│  │  - Free List Manager                                             │       │
-│  │  - Database Header                                               │       │
-│  └──────────────────────────────────────────────────────────────────┘       │
-│              │                                                          │
-│              ▼                                                          │
-│  ┌──────────────────────────────────────────────────────────────────┐       │
-│  │                   Platform Bridges (PB)                         │       │
-│  │                                                                  │       │
-│  │  - VFS Implementations (Unix, Windows, Memory)                  │       │
-│  │  - File Locking                                                 │       │
-│  │  - Memory Management (mmap)                                     │       │
-│  └──────────────────────────────────────────────────────────────────┘       │
-│                                      │                                     │
-│                                      ▼                                     │
-│  ┌──────────────────────────────────────────────────────────────────┐       │
-│  │                  System Framework (SF)                           │       │
-│  │                                                                  │       │
-│  │  - VFS Interface                                                 │       │
-│  │  - Logging Infrastructure                                        │       │
-│  │  - Error Handling                                               │       │
-│  └──────────────────────────────────────────────────────────────────┘       │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           SQL Processing Pipeline                             │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────────┐   │
+│  │  Query Processing│───▶│  Code Generator  │───▶│   Virtual Machine    │   │
+│  │      (QP)        │    │      (CG)        │    │        (VM)          │   │
+│  │                  │    │                  │    │                      │   │
+│  │  - Tokenizer     │    │  - SELECT/DML    │    │  - Bytecode Executor │   │
+│  │  - Parser (AST)  │    │    Compiler      │    │  - Register Manager  │   │
+│  │  - JOIN / SET-OP │    │  - Aggregate     │    │  - Cursor Manager    │   │
+│  │  - CTE / Window  │    │    Compiler      │    │  - SET Operations    │   │
+│  │  - Subquery      │    │  - Expression    │    │  - Subquery Exec     │   │
+│  └──────────────────┘    │    Compiler      │    │  - Window Functions  │   │
+│                          │  - Optimizer     │    └──────────────────────┘   │
+│                          └──────────────────┘                               │
+│                                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           Core Subsystems                                    │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌──────────────────────┐    ┌──────────────────────┐                     │
-│  │   Query Processing   │───▶│  Query Execution     │                     │
-│  │       (QP)           │    │       (QE)           │                     │
-│  │                      │    │                      │                     │
-│  │  - Tokenizer         │    │  - VM Executor       │                     │
-│  │  - Parser            │    │  - Operator Engine   │                     │
-│  │  - Planner           │    │  - Result Set       │                     │
-│  │  - Optimizer         │    │                      │                     │
-│  └──────────────────────┘    └──────────────────────┘                     │
-│              │                                  │                           │
-│              ▼                                  ▼                           │
-│  ┌──────────────────────────────────────────────────────────────────┐       │
-│  │                     Transaction Monitor (TM)                    │       │
-│  │                                                                  │       │
-│  │  - ACID Transaction Management                                   │       │
-│  │  - Concurrency Control (Lock Manager)                            │       │
-│  │  - Write-Ahead Log (WAL)                                        │       │
-│  └──────────────────────────────────────────────────────────────────┘       │
-│              │                                                          │
-│              ▼                                                          │
-│  ┌──────────────────────────────────────────────────────────────────┐       │
-│  │                      Data Storage (DS)                           │       │
-│  │                                                                  │       │
-│  │  - B-Tree Storage Engine                                         │       │
-│  │  - Page Cache / Buffer Pool                                      │       │
-│  │  - File Manager                                                   │       │
-│  └──────────────────────────────────────────────────────────────────┘       │
-│                                      │                                     │
-│                                      ▼                                     │
-│  ┌──────────────────────────────────────────────────────────────────┐       │
-│  │                   Platform Bridges (PB)                         │       │
-│  │                                                                  │       │
-│  │  - OS File Operations Abstraction                               │       │
-│  │  - File Locking                                                 │       │
-│  │  - Memory Management (mmap)                                     │       │
-│  └──────────────────────────────────────────────────────────────────┘       │
-│                                      │                                     │
-│                                      ▼                                     │
-│  ┌──────────────────────────────────────────────────────────────────┐       │
-│  │                  System Framework (SF)                           │       │
-│  │                                                                  │       │
-│  │  - Logging Infrastructure                                        │       │
-│  │  - Error Handling                                               │       │
-│  └──────────────────────────────────────────────────────────────────┘       │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         Schema & Execution Services                           │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  ┌──────────────────────────┐    ┌────────────────────────────────────────┐  │
+│  │  Information Schema (IS) │    │        Query Execution (QE)            │  │
+│  │                          │    │                                        │  │
+│  │  - Registry              │    │  - Expression evaluator                │  │
+│  │  - TABLES view           │    │  - Operator engine                     │  │
+│  │  - COLUMNS view          │    │  - String functions                    │  │
+│  │  - CONSTRAINTS view      │    │  - Scalar sub-expressions              │  │
+│  │  - VIEWS view            │    └────────────────────────────────────────┘  │
+│  │  - Schema extractor      │                                                 │
+│  └──────────────────────────┘                                                 │
+│                                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                       Storage & Transaction Layer                             │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │                    Transaction Monitor (TM)                            │  │
+│  │  - ACID transaction lifecycle   - Lock Manager (SHARED/RESERVED/EXCL) │  │
+│  │  - Write-Ahead Log (WAL)        - Rollback support                     │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                               │                                               │
+│                               ▼                                               │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │                      Data Storage (DS)                                 │  │
+│  │  - SQLite-compatible B-Tree     - Page cache / buffer pool             │  │
+│  │  - Varint & record encoding     - Overflow page chains                 │  │
+│  │  - Page balancing (split/merge) - Freelist management                  │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                               │                                               │
+│                               ▼                                               │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │                    Platform Bridges (PB)                               │  │
+│  │  - VFS abstraction layer        - Unix VFS implementation              │  │
+│  │  - Memory VFS (:memory:)        - File locking                         │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                               │                                               │
+│                               ▼                                               │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │                    System Framework (SF)                               │  │
+│  │  - VFS interface definition     - Level-based logging                  │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
-
-## 2. Subsystem Detailed Design
-
-### 2.1 Platform Bridges (PB)
-
-**Purpose**: Abstract OS-level operations for portability and testability
-
-**Components**:
-
-| Component | Responsibility |
-|-----------|----------------|
-| `file.go` | File open, read, write, sync, lock operations |
-| `mmap.go` | Memory-mapped file I/O (optional, for performance) |
-| `memory.go` | Memory allocation and management |
-| `os_unix.go` | Unix-specific implementations |
-| `os_windows.go` | Windows-specific implementations |
-
-**Interface Design**:
-```go
-type File interface {
-    Open(path string, flag int) (File, error)
-    ReadAt(p []byte, off int64) (n int, err error)
-    WriteAt(p []byte, off int64) (n int, err error)
-    Sync() error
-    Close() error
-    Lock(lockType LockType) error
-    Unlock() error
-    Size() (int64, error)
-}
-```
-
-**Key Design Decisions**:
-- Use OS-native file locking for database locking
-- Support custom page sizes (power of 2: 512-65536 bytes)
 
 ---
 
-### 2.2 System Framework (SF)
+## 2. Project File Structure
 
-**Purpose**: Core infrastructure and utilities for the database engine
-
-**Components**:
-
-| Component | Responsibility |
-|-----------|----------------|
-| `log.go` | Level-based logging (Debug, Info, Warn, Error, Fatal) |
-
-**Interface Design**:
-```go
-type Level int
-
-const (
-    LevelDebug Level = iota
-    LevelInfo
-    LevelWarn
-    LevelError
-    LevelFatal
-)
-
-func Debug(format string, args ...interface{})
-func Info(format string, args ...interface{})
-func Warn(format string, args ...interface{})
-func Error(format string, args ...interface{})
-func Fatal(format string, args ...interface{})
-func SetLevel(level Level)
 ```
-
-**Key Design Decisions**:
-- Thread-safe implementation using mutex
-- Configurable log levels for different environments
+sqlvibe/
+├── cmd/
+│   └── sqlvibe/              # CLI application
+│       └── main.go
+├── pkg/
+│   └── sqlvibe/              # Public API (library binding)
+│       ├── database.go       # Database struct, Open/Close, Exec/Query
+│       ├── vm_exec.go        # VM-based execution path (ExecVM)
+│       ├── vm_context.go     # VmContext bridge to Database
+│       ├── setops.go         # UNION/INTERSECT/EXCEPT post-processing
+│       ├── window.go         # Window function (OVER) post-processing
+│       ├── explain.go        # EXPLAIN support
+│       ├── pragma.go         # PRAGMA statement handlers
+│       └── version.go        # Version constant
+├── internal/
+│   ├── SF/                   # System Framework
+│   │   ├── log.go            # Level-based structured logging
+│   │   └── vfs/vfs.go        # VFS interface definition
+│   ├── PB/                   # Platform Bridges
+│   │   ├── file.go           # OS file operations wrapper
+│   │   ├── vfs_unix.go       # Unix VFS implementation
+│   │   ├── vfs_memory.go     # In-memory VFS implementation (:memory:)
+│   │   └── vfs/vfs.go        # PB VFS interface
+│   ├── DS/                   # Data Storage
+│   │   ├── page.go           # Page struct, header, constants
+│   │   ├── manager.go        # PageManager: allocate/read/write pages
+│   │   ├── btree.go          # B-Tree: search, insert, delete, iterate
+│   │   ├── balance.go        # Page balancing: split, merge, redistribute
+│   │   ├── cache.go          # Page cache / buffer pool
+│   │   ├── cell.go           # Cell encoding/decoding (all 4 page types)
+│   │   ├── encoding.go       # Varint and SQLite record encoding
+│   │   ├── overflow.go       # Overflow page chain management
+│   │   └── freelist.go       # Freelist trunk/leaf management
+│   ├── QP/                   # Query Processing
+│   │   ├── tokenizer.go      # SQL lexer (tokenizer)
+│   │   └── parser.go         # Recursive-descent parser, AST definitions
+│   ├── CG/                   # Code Generator
+│   │   ├── compiler.go       # Main compiler: SELECT, FROM, JOIN, SET-OPs, CTE
+│   │   ├── expr.go           # Expression compilation (binary, unary, functions)
+│   │   └── optimizer.go      # Bytecode optimizer (index usage, filters)
+│   ├── VM/                   # Virtual Machine
+│   │   ├── engine.go         # VM struct, error types, VmContext interface
+│   │   ├── exec.go           # Instruction dispatcher and opcode handlers
+│   │   ├── opcodes.go        # Opcode definitions (~200 opcodes)
+│   │   ├── program.go        # Program (bytecode container), fixup support
+│   │   ├── registers.go      # RegisterAllocator
+│   │   ├── cursor.go         # CursorArray, cursor state (MaxCursors=256)
+│   │   ├── compiler.go       # VM-level compiler wrapper
+│   │   ├── instruction.go    # Instruction struct
+│   │   ├── query_engine.go   # QueryEngine: runs programs with schema
+│   │   ├── query_expr.go     # Expression evaluation at VM level
+│   │   └── query_operators.go# Operator evaluation helpers
+│   ├── QE/                   # Query Execution (expression engine)
+│   │   ├── engine.go         # Expression engine, schema registration
+│   │   ├── expr.go           # Low-level expression evaluation
+│   │   └── operators.go      # Operator implementations
+│   ├── TM/                   # Transaction Monitor
+│   │   ├── transaction.go    # Transaction lifecycle (Begin/Commit/Rollback)
+│   │   ├── lock.go           # Lock manager (SHARED/RESERVED/EXCLUSIVE)
+│   │   └── wal.go            # Write-Ahead Log
+│   ├── IS/                   # Information Schema
+│   │   ├── registry.go       # Central schema registry
+│   │   ├── information_schema.go # Type definitions and constants
+│   │   ├── schema_extractor.go   # Extract schema from SQL DDL
+│   │   ├── schema_parser.go      # Schema SQL parsing helpers
+│   │   ├── tables_view.go        # INFORMATION_SCHEMA.TABLES
+│   │   ├── columns_view.go       # INFORMATION_SCHEMA.COLUMNS
+│   │   ├── constraints_view.go   # INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+│   │   ├── referential_view.go   # INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS
+│   │   └── views_view.go         # INFORMATION_SCHEMA.VIEWS
+│   ├── TS/                   # Test Suites
+│   │   ├── SQL1999/          # SQL:1999 compatibility tests (56 suites)
+│   │   ├── Benchmark/        # Performance benchmarks
+│   │   └── PlainFuzzer/      # Go native fuzzing harness
+│   └── util/
+│       ├── assert.go         # Defensive-programming assertion helpers
+│       └── assert_test.go
+├── docs/
+│   ├── ARCHITECTURE.md       # This document
+│   ├── HISTORY.md            # Release history
+│   ├── SQL1999.md            # SQL:1999 test suite status
+│   └── plan-v0.6.0.md        # Development plan
+├── go.mod
+├── go.sum
+├── Makefile
+└── AGENTS.md                 # OpenCode agent guidance
+```
 
 ---
 
-### 2.3 Data Storage (DS)
+## 3. Subsystem Details
 
-**Purpose**: Persistent data management using B-Tree structure
+### 3.1 System Framework (SF)
+
+**Purpose**: Core infrastructure shared by all subsystems
 
 **Components**:
 
-| Component | Responsibility |
-|-----------|----------------|
-| `page.go` | Page structure definitions and SQLite header |
-| `manager.go` | Page I/O coordination and allocation |
-| `btree.go` | B-Tree implementation for tables/indexes |
-| `cache.go` | Page cache / buffer pool |
-| `cell.go` | Cell format encoding/decoding |
-| `encoding.go` | Varint and record encoding |
-| `cursor.go` | BTree cursor for iteration |
-| `balance.go` | Page balancing algorithms |
-| `overflow.go` | Overflow page handling |
-| `freelist.go` | Freelist management |
+| File | Responsibility |
+|------|----------------|
+| `log.go` | Level-based logging: Debug, Info, Warn, Error, Fatal |
+| `vfs/vfs.go` | VFS interface definition (implemented by PB) |
+
+**Key Design Decisions**:
+- Thread-safe logging via mutex
+- Configurable log levels per environment
+- VFS interface decouples storage from OS
+
+---
+
+### 3.2 Platform Bridges (PB)
+
+**Purpose**: Portable OS-level I/O abstraction
+
+**Components**:
+
+| File | Responsibility |
+|------|----------------|
+| `file.go` | File open, read (ReadAt), write (WriteAt), sync, size, lock |
+| `vfs_unix.go` | Unix implementation of the VFS interface |
+| `vfs_memory.go` | In-memory VFS for `:memory:` databases |
+| `vfs/vfs.go` | PB-level VFS interface |
+
+**Key Design Decisions**:
+- VFS plug-in model: swap Unix ↔ Memory without changing upper layers
+- OS-native advisory file locking (POSIX `fcntl`)
+- ReadAt/WriteAt semantics (no seek state, safe for concurrent use)
+
+---
+
+### 3.3 Data Storage (DS)
+
+**Purpose**: SQLite-compatible persistent storage via B-Tree
+
+**Components**:
+
+| File | Responsibility |
+|------|----------------|
+| `page.go` | Page struct, 100-byte SQLite header, page-type constants |
+| `manager.go` | PageManager: page allocation, read, write, flush |
+| `btree.go` | B-Tree: search, insert, delete, full-scan cursor |
+| `balance.go` | Page split, merge, and cell redistribution |
+| `cache.go` | LRU page cache / buffer pool |
+| `cell.go` | Cell encode/decode for all 4 page types |
+| `encoding.go` | Varint (1-9 byte) and SQLite record-format encoding |
+| `overflow.go` | Overflow page chain: read, write, free |
+| `freelist.go` | Freelist trunk/leaf management: allocate/free pages |
 
 **Database File Format** (SQLite-compatible):
 
 ```
-┌─────────────────────────────────────┐
-│     Database Header (100 bytes)     │
-├─────────────────────────────────────┤
-│  Magic Header String "SQLite..."   │
-│  Page Size (2 bytes, big-endian)   │
-│  Write Format Version              │
-│  Read Format Version               │
-│  Reserved Space                   │
-│  Max Embedded Payload Fraction    │
-│  Min Embedded Payload Fraction    │
-│  Leaf Payload Fraction            │
-│  File Change Counter              │
-│  Database Size (in pages)         │
-│  First Freelist Trunk Page        │
-│  Total Freelist Pages            │
-│  Schema Cookie                   │
-│  Schema Format Number             │
-│  Default Page Cache Size          │
-│  Largest B-Tree Root Page        │
-│  Text Encoding (1=UTF-8)          │
-│  User Version                     │
-│  Incremental Vacuum Mode         │
-│  Application ID                   │
-│  Version Valid For                │
-│  SQLite Version                   │
-└─────────────────────────────────────┘
+┌────────────────────────────────────┐
+│     Database Header (100 bytes)    │
+├────────────────────────────────────┤
+│  Magic: "SQLite format 3\x00"      │
+│  Page Size (big-endian uint16)     │
+│  Write/Read Format Version         │
+│  Reserved Bytes per Page           │
+│  Max/Min Embedded Payload Fraction │
+│  File Change Counter               │
+│  Database Size in Pages            │
+│  First Freelist Trunk Page         │
+│  Total Freelist Pages              │
+│  Schema Cookie                     │
+│  Schema Format Number              │
+│  Default Page Cache Size           │
+│  Text Encoding (1=UTF-8)           │
+│  Application ID                    │
+│  SQLite Version Number             │
+└────────────────────────────────────┘
 ```
 
 **Page Types**:
@@ -255,22 +277,17 @@ func SetLevel(level Level)
 | Interior Table | 0x05 | B-Tree interior node for table |
 | Leaf Index | 0x0a | B-Tree leaf node for index |
 | Leaf Table | 0x0d | B-Tree leaf node for table |
-| Lock Byte | 0xff | Locking page |
-| Freelist | 0xfe | Freelist page |
-| Pointer Map | 0xfd | Pointer map page |
 
-**B-Tree Page Structure**:
-
-Each BTree page starts with a header:
+**Page Header Layouts**:
 
 *Leaf Page Header (8 bytes)*:
 ```
 Offset  Size  Description
 ------  ----  -----------
-0       1     Page type (0x0d for table leaf, 0x0a for index leaf)
+0       1     Page type (0x0d / 0x0a)
 1       2     First freeblock offset (0 if none)
 3       2     Number of cells on page
-5       2     Start of cell content area (0 means 65536)
+5       2     Cell content area start (0 means 65536)
 7       1     Fragmented free bytes
 ```
 
@@ -278,742 +295,441 @@ Offset  Size  Description
 ```
 Offset  Size  Description
 ------  ----  -----------
-0       1     Page type (0x05 for table interior, 0x02 for index interior)
-1       2     First freeblock offset
-3       2     Number of cells
-5       2     Start of cell content area
-7       1     Fragmented free bytes
-8       4     Right-most pointer (page number)
+0       1     Page type (0x05 / 0x02)
+1-7           Same as leaf
+8       4     Right-most child page number
 ```
 
 **Cell Formats**:
 
-- **Table Leaf Cell**: Payload size (varint) + Rowid (varint) + Payload bytes + [Overflow page]
-- **Table Interior Cell**: Left child page (4 bytes) + Rowid (varint)
-- **Index Leaf Cell**: Payload size (varint) + Payload bytes + [Overflow page]
-- **Index Interior Cell**: Left child page (4 bytes) + Payload size (varint) + Payload bytes + [Overflow page]
+| Cell Type | Format |
+|-----------|--------|
+| Table Leaf | payload_size(varint) + rowid(varint) + payload + [overflow_page] |
+| Table Interior | left_child(4 bytes) + rowid(varint) |
+| Index Leaf | payload_size(varint) + payload + [overflow_page] |
+| Index Interior | left_child(4 bytes) + payload_size(varint) + payload + [overflow_page] |
 
 **Varint Encoding**:
-
-SQLite uses variable-length integers (1-9 bytes for 64-bit values):
-- First 7 bits of each byte are data
-- MSB indicates if more bytes follow
-- Maximum 9 bytes (8 bytes with 7 bits + 1 byte with 8 bits)
+- 1–9 bytes per 64-bit integer
+- Bits 0-6 of each byte are data; bit 7 signals continuation
+- Maximum 9 bytes (final byte uses all 8 bits)
 
 **Record Format**:
-
 ```
-Header size (varint)
-Serial type codes (varint for each column)
-Data for each column
+header_size(varint)  serial_type_1(varint) ... serial_type_N(varint)
+data_1 ... data_N
 ```
 
 **Serial Type Codes**:
-- 0: NULL, 1-6: Integers (various sizes), 7: IEEE float
-- 8,9: Constants 0,1 (schema v4+)
-- N≥12 and even: BLOB (N-12)/2 bytes
-- N≥13 and odd: TEXT (N-13)/2 bytes
+- 0: NULL, 1–6: integers (1–8 bytes), 7: IEEE 754 float64
+- 8, 9: integer constants 0, 1 (schema v4+)
+- N≥12 even: BLOB of (N-12)/2 bytes
+- N≥13 odd: TEXT of (N-13)/2 bytes
 
-**Overflow Pages**:
-
-When payload exceeds page capacity:
-1. **Local Payload**: Portion stored on BTree page
-2. **Overflow Chain**: Remainder in linked overflow pages
-
-*Overflow Page Format*:
-```
-Next overflow page number (4 bytes, 0 if last)
-Payload continuation bytes
-```
-
-*Local Payload Calculation*:
-- U = usable page size (page_size - reserved_space)
-- M = ((U-12)*32/255)-23  (min local)
-- X = U-35                  (max local)
-
-**Page Balancing**:
-
-Operations triggered on insert/delete:
-- **Split**: Divide overfull page into two pages
-- **Merge**: Combine underfull sibling pages
-- **Redistribute**: Move cells between siblings
-
-**Freelist Management**:
-
-Free pages managed via freelist trunk and leaf pages:
-- **Trunk Page**: Contains next trunk pointer and array of leaf page numbers
-- Operations: Allocate (pop), Deallocate (push), Compact
-
-**BTree Cursor**:
-
-Maintains position for tree traversal:
-- Path from root to current page (stack)
-- Current page and cell index
-- Operations: First(), Last(), Seek(key), Next(), Previous()
-
-**B-Tree Implementation**:
-
-```go
-type BTree struct {
-    file     *os.File
-    cache    *PageCache
-    rootPage uint32
-    isTable  bool  // true=table, false=index
-}
-
-type Page struct {
-    Type       PageType
-    Size       uint16
-    FreeOffset uint16
-    Cells      []Cell
-    // ... page-specific data
-}
-
-type Cell struct {
-    Key      []byte
-    Payload  []byte
-    Overflow uint32  // overflow page number
-}
-```
-
-**Key Design Decisions**:
-- SQLite-compatible file format for maximum compatibility
-- Page size configurable (512-65536 bytes, power of 2)
-- Support both INTKEY (table) and INDEXKEY (index) modes
-- Handle overflow pages for large values
-- Maintain freelist for space reuse
-- Implement page balancing to maintain tree properties
-
-**References**:
-- **SQLite File Format**: https://www.sqlite.org/fileformat2.html
-- **SQLite BTree Module**: https://www.sqlite.org/btreemodule.html
+**Page Size Constraints**: 512–65536 bytes, must be a power of 2.
 
 ---
 
-### 2.4 Query Processing (QP)
+### 3.4 Transaction Monitor (TM)
 
-**Purpose**: Parse and plan SQL queries
-
-**Components**:
-
-| Component | Responsibility |
-|-----------|----------------|
-| `tokenizer.go` | Lexical analysis of SQL |
-| `parser.go` | SQL syntax parsing and AST building |
-| `ast.go` | Abstract Syntax Tree node definitions |
-| `planner.go` | Query planning (TODO) |
-| `resolver.go` | Schema resolution (TODO) |
-
-**SQL Parsing Architecture**:
-
-```
-SQL Text
-    │
-    ▼
-┌─────────────┐
-│  Tokenizer  │ ─── Token stream
-└─────────────┘
-    │
-    ▼
-┌─────────────┐
-│   Parser    │ ─── AST (Abstract Syntax Tree)
-└─────────────┘
-    │
-    ▼
-┌─────────────┐
-│  Resolver   │ ─── Resolved AST with types
-└─────────────┘
-    │
-    ▼
-┌─────────────┐
-│   Planner   │ ─── Execution Plan
-└─────────────┘
-```
-
-**Supported SQL Features** (Phase 1-2):
-
-| Category | Features |
-|----------|----------|
-| DDL | CREATE TABLE, CREATE INDEX, DROP TABLE, DROP INDEX |
-| DML | INSERT, SELECT, UPDATE, DELETE |
-| Expressions | Literals, column refs, operators, functions |
-| Clauses | WHERE, ORDER BY, LIMIT, OFFSET |
-| Aggregates | COUNT, SUM, AVG, MIN, MAX |
-
-**AST Node Types**:
-```go
-type Node interface {
-    Pos() token.Pos
-    End() token.Pos
-}
-
-type SelectStmt struct {
-    Columns     []Expr
-    From        *TableRef
-    Where       Expr
-    OrderBy     []SortSpec
-    Limit       Expr
-    Offset      Expr
-}
-
-type InsertStmt struct {
-    Table       *TableRef
-    Columns     []string
-    Values      [][]Expr
-}
-
-type UpdateStmt struct {
-    Table       *TableRef
-    Set         []SetClause
-    Where       Expr
-}
-
-type DeleteStmt struct {
-    Table       *TableRef
-    Where       Expr
-}
-```
-
-**Key Design Decisions**:
-- Use goyacc for parser generation
-- Implement recursive descent tokenizer for speed
-- Support SQLite's flexible typing (manifest typing)
-- Build query plans as operator trees
-
----
-
-### 2.5 Query Execution (QE)
-
-**Purpose**: Execute query plans and produce results
+**Purpose**: ACID transaction lifecycle and concurrency control
 
 **Components**:
 
-| Component | Responsibility |
-|-----------|----------------|
-| `vm.go` | Virtual machine for bytecode execution |
-| `engine.go` | Query execution engine |
-| `operators.go` | Physical operators (scan, filter, join, etc.) |
-| `record.go` | Row/tuple representation |
-| `expr.go` | Expression evaluator |
-
-**Virtual Machine Architecture**:
-
-```
-Execution Plan (Operator Tree)
-    │
-    ▼
-┌────────────────────────────────────┐
-│         VM / Executor              │
-├────────────────────────────────────┤
-│  - Instruction dispatch            │
-│  - Register management             │
-│  - Cursor management              │
-│  - Aggregate handling             │
-└────────────────────────────────────┘
-    │
-    ▼
-┌────────────────────────────────────┐
-│          Operators                 │
-├────────────────────────────────────┤
-│  - TableScan                       │
-│  - IndexScan                       │
-│  - Filter                          │
-│  - Project                         │
-│  - Sort                            │
-│  - Aggregate                       │
-│  - Limit                           │
-└────────────────────────────────────┘
-    │
-    ▼
-Result Set
-```
-
-**VM Opcodes** (SQLite-compatible subset):
-
-| Opcode | Description |
-|--------|-------------|
-| OpenRead | Open cursor for reading |
-| OpenWrite | Open cursor for writing |
-| Next | Advance cursor |
-| Column | Get column value from cursor |
-| Eq | Equality test |
-| Lt, Le, Gt, Ge | Comparison operators |
-| Add, Sub, Mul, Div | Arithmetic |
-| Concat | String concatenation |
-| Function | Call function |
-| ResultRow | Return result row |
-| Goto | Jump to instruction |
-
-**Execution Example**:
-```go
-// SELECT * FROM users WHERE age > 18 ORDER BY name LIMIT 10
-
-type ExecutionPlan struct {
-    Limit: &LimitOp{
-        Count: 10,
-        Input: &SortOp{
-            KeyCols: []int{1}, // name column
-            Input: &FilterOp{
-                Predicate: &ComparisonOp{
-                    Op: GT,
-                    Left:  &ColumnRef{Index: 2}, // age
-                    Right: &Literal{Value: 18},
-                },
-                Input: &TableScanOp{
-                    Table: "users",
-                },
-            },
-        },
-    },
-}
-```
-
-**Key Design Decisions**:
-- Use volcano-style iterator model
-- Support both pull and push execution
-- Implement materialized and streaming execution
-- Use register-based VM for efficiency
-
----
-
-
-### 2.6 Code Generator (CG)
-
-**Purpose**: Compile AST to bytecode for VM execution
-
-**Components**:
-
-| Component | Responsibility |
-|-----------|----------------|
-| `compiler.go` | Main compiler and SELECT statement compilation |
-| `expr.go` | Expression compilation (literals, binary ops, functions) |
-| `dml.go` | DML statement compilation (INSERT, UPDATE, DELETE) |
-| `aggregate.go` | Aggregate function compilation (COUNT, SUM, AVG, etc.) |
-| `optimizer.go` | Bytecode optimization passes (future) |
-
-**Compilation Pipeline**:
-
-```
-QP.AST (SelectStmt, InsertStmt, etc.)
-    │
-    ▼
-┌────────────────────────────────────┐
-│       CG.Compiler                  │
-├────────────────────────────────────┤
-│  CompileSelect()                   │
-│  CompileInsert()                   │
-│  CompileUpdate()                   │
-│  CompileDelete()                   │
-│  CompileAggregate()                │
-│                                    │
-│  compileExpr()      ───┐           │
-│  compileBinaryExpr()   │           │
-│  compileFuncCall()     │ Internal  │
-│  compileColumnRef()    │ helpers   │
-│  compileLiteral()  ────┘           │
-└────────────────────────────────────┘
-    │
-    ▼
-VM.Program (Bytecode Instructions)
-```
-
-**Interface Design**:
-```go
-type Compiler struct {
-    vmCompiler *VM.Compiler
-}
-
-func NewCompiler() *Compiler
-func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program
-func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *VM.Program
-func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *VM.Program
-func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *VM.Program
-func Compile(sql string) (*VM.Program, error)
-func CompileWithSchema(sql string, tableColumns []string) (*VM.Program, error)
-```
-
-**Key Design Decisions**:
-- Separate compilation from execution (CG vs VM)
-- Support table schema for SELECT * expansion
-- Generate register-based bytecode
-- Enable future optimization passes
-
----
-
-### 2.7 Virtual Machine (VM)
-
-**Purpose**: Execute bytecode programs produced by CG
-
-**Components**:
-
-| Component | Responsibility |
-|-----------|----------------|
-| `engine.go` | VM engine core and execution context |
-| `exec.go` | Instruction dispatcher and opcode handlers |
-| `opcodes.go` | Opcode definitions (100+ opcodes) |
-| `program.go` | Bytecode program representation |
-| `registers.go` | Register allocator |
-| `cursor.go` | Cursor management for table/index access |
-
-**VM Architecture**:
-
-```
-VM.Program (Bytecode)
-    │
-    ▼
-┌────────────────────────────────────┐
-│         VM.Engine                  │
-├────────────────────────────────────┤
-│  Registers: []interface{}          │
-│  Cursors:   *CursorArray          │
-│  PC:        int                    │
-│  Results:   [][]interface{}        │
-└────────────────────────────────────┘
-    │
-    ▼
-┌────────────────────────────────────┐
-│     Instruction Dispatcher         │
-├────────────────────────────────────┤
-│  switch inst.Op {                  │
-│    case OpOpenRead: ...            │
-│    case OpColumn: ...              │
-│    case OpEq: ...                  │
-│    case OpResultRow: ...           │
-│    case OpNext: ...                │
-│    case OpHalt: ...                │
-│  }                                 │
-└────────────────────────────────────┘
-    │
-    ▼
-Results / Side Effects
-```
-
-**Key Opcodes**:
-
-| Category | Opcodes |
-|----------|---------|
-| **Cursor Ops** | OpOpenRead, OpOpenWrite, OpRewind, OpNext, OpClose |
-| **Data Ops** | OpColumn, OpInsert, OpUpdate, OpDelete |
-| **Control Flow** | OpGoto, OpIf, OpIfNot, OpHalt |
-| **Comparison** | OpEq, OpNe, OpLt, OpLe, OpGt, OpGe |
-| **Arithmetic** | OpAdd, OpSubtract, OpMultiply, OpDivide, OpRemainder |
-| **String** | OpConcat, OpSubstr, OpUpper, OpLower, OpTrim |
-| **Aggregate** | OpCount, OpSum, OpAvg, OpMin, OpMax |
-| **Result** | OpResultRow, OpLoadConst, OpCopy |
-
-**Instruction Format**:
-```go
-type Instruction struct {
-    Op OpCode         // Opcode
-    P1 int32          // First operand (often register or cursor ID)
-    P2 int32          // Second operand
-    P3 interface{}    // Third operand (string or other type)
-    P4 interface{}    // Fourth operand (destination register or jump target)
-}
-```
-
-**Execution Example**:
-```
-// SELECT id, name FROM users WHERE age > 18
-
-OpInit                      // Initialize
-OpOpenRead 0, "users"       // Open cursor 0 for users table
-OpRewind 0                  // Position cursor at start
-OpColumn 0, 2, r0           // Load age into r0
-OpLoadConst r1, 18          // Load 18 into r1
-OpGt r0, r1, r2             // Compare: r2 = (age > 18)
-OpLoadConst r3, 0           // Load 0 into r3
-OpEq r2, r3, skipRow        // If r2 == 0, jump to skipRow
-OpColumn 0, 0, r4           // Load id into r4
-OpColumn 0, 1, r5           // Load name into r5
-OpResultRow [r4, r5]        // Emit result row
-skipRow:
-OpNext 0, loop              // Advance cursor, loop if more rows
-OpHalt                      // Done
-```
-
-**Key Design Decisions**:
-- Register-based VM (vs stack-based) for performance
-- Cursor abstraction for table/index access
-- SQLite-compatible opcode set
-- Support for WHERE clause jump targets vs register destinations
-
----
-
-
-### 2.8 Transaction Monitor (TM)
-
-**Purpose**: ACID transaction management and concurrency control
-
-**Components**:
-
-| Component | Responsibility |
-|-----------|----------------|
-| `transaction.go` | Transaction lifecycle management |
-| `lock.go` | Lock manager (db, table, row locks) |
-| `wal.go` | Write-Ahead Log implementation |
-| `journal.go` | Rollback journal |
-| `mvcc.go` | Multi-version concurrency control |
-| `checkpoint.go` | WAL checkpoint management |
+| File | Responsibility |
+|------|----------------|
+| `transaction.go` | Begin, Commit, Rollback; transaction state machine |
+| `lock.go` | Lock manager: SHARED / RESERVED / EXCLUSIVE levels |
+| `wal.go` | Write-Ahead Log (WAL) frame management |
 
 **Transaction States**:
-
 ```
-START ─────▶ ACTIVE ─────▶ COMMITTED
-  │              │              │
-  │              │              │
-  ▼              ▼              ▼
-ROLLBACK    READ_ONLY      (end)
+START ──▶ ACTIVE ──▶ COMMITTED
+            │
+            ▼
+         ROLLED_BACK
 ```
 
 **Concurrency Model** (SQLite-compatible):
 
-| Lock Type | Description | Compatible Locks |
-|-----------|-------------|------------------|
-| UNLOCKED | No lock | all |
+| Lock Type | Description | Compatible With |
+|-----------|-------------|-----------------|
+| UNLOCKED | No lock held | all |
 | SHARED | Read lock | SHARED, RESERVED |
-| RESERVED | Read with pending write | SHARED |
+| RESERVED | Pending write intent | SHARED |
 | EXCLUSIVE | Write lock | none |
 
-**WAL Mode Structure**:
-
+**WAL File Structure**:
 ```
-┌─────────────────────────────────────────────────────┐
-│                    WAL File                          │
-├─────────────────────────────────────────────────────┤
-│  WAL Header (32 bytes)                              │
-│  - Magic                                            │
-│  - Page size                                        │
-│  - Sequence number                                  │
-│  - Checkpoint salt                                 │
-│  - Salt sum                                        │
-│  - Checksum 1, 2                                   │
-├─────────────────────────────────────────────────────┤
-│  Frame Header (24 bytes per frame)                 │
-│  - Page number                                      │
-│  - Commit size                                      │
-│  - Checksum 1, 2                                   │
-├─────────────────────────────────────────────────────┤
-│  Page Data (page size bytes per frame)             │
-└─────────────────────────────────────────────────────┘
+WAL Header (32 bytes): magic, page size, sequence, salt, checksum
+Frame Header (24 bytes each): page number, commit size, salt, checksum
+Frame Data (page_size bytes each): page content
 ```
-
-**Key Design Decisions**:
-- Support both rollback journal and WAL modes
-- Use Checkpoint-After-Commit (default) for simplicity
-- Implement deferred locks for better concurrency
-- Support READ UNCOMMITTED, READ COMMITTED, SERIALIZABLE
 
 ---
 
-## 3. Project Structure
+### 3.5 Query Processing (QP)
 
-```
-sqlvibe/
-├── cmd/
-│   └── sqlvibe/          # CLI application
-│       └── main.go
-├── pkg/
-│   └── sqlvibe/          # Public API
-│       └── version.go
-├── internal/
-│   ├── pb/                # Platform Bridges
-│   │   ├── file.go
-│   │   └── file_test.go
-│   ├── ds/                # Data Storage
-│   │   ├── page.go
-│   │   ├── page_test.go
-│   │   ├── manager.go
-│   │   ├── manager_test.go
-│   │   ├── btree.go
-│   │   ├── btree_test.go
-│   │   └── cache.go
-│   ├── qp/                # Query Processing
-│   │   ├── tokenizer.go
-│   │   ├── tokenizer_test.go
-│   │   ├── parser.go
-│   │   ├── ast.go
-│   │   └── planner.go
-│   ├── qe/                # Query Execution (TODO)
-│   ├── tm/                # Transaction Monitor (TODO)
-│   └── sf/                 # System Framework
-│       └── log.go
-├── test/
-│   └── sqllogictest/     # SQLite logic tests
-├── docs/
-│   ├── ARCHITECTURE.md
-│   └── PHASES.md
-├── agents.md              # OpenCode agent guidance
-├── go.mod
-└── .gitignore
-```
-
-## 4. Subsystem Details
-
-### 4.1 System Framework (SF)
-
-**Purpose**: Core infrastructure and utilities
+**Purpose**: SQL lexing, parsing, and AST construction
 
 **Components**:
 
-| Component | Responsibility |
-|-----------|----------------|
-| `log.go` | Level-based logging infrastructure |
-| | |
-│   └── PHASES.md
-├── go.mod
-├── go.sum
-└── Makefile
+| File | Responsibility |
+|------|----------------|
+| `tokenizer.go` | Lexical analysis; produces `[]Token` |
+| `parser.go` | Recursive-descent parser; produces AST nodes |
+
+**SQL Processing Pipeline**:
 ```
+SQL Text ──▶ Tokenizer ──▶ Token Stream ──▶ Parser ──▶ AST
+```
+
+**Key AST Node Types**:
+```go
+SelectStmt { Distinct, Columns, From, Where, GroupBy, Having,
+             OrderBy, Limit, Offset, SetOp, CTEs }
+InsertStmt { Table, Columns, Values, OnConflict }
+UpdateStmt { Table, Set, Where }
+DeleteStmt { Table, Where }
+CreateTableStmt { Name, Columns, Constraints }
+CreateIndexStmt { Name, Table, Columns, Unique }
+AlterTableStmt  { Table, Action, ... }
+```
+
+**Supported SQL Features** (fully implemented):
+
+| Category | Features |
+|----------|----------|
+| DDL | CREATE TABLE/INDEX/VIEW, DROP TABLE/INDEX/VIEW, ALTER TABLE (ADD/RENAME) |
+| DML | INSERT (multi-row, ON CONFLICT), SELECT, UPDATE, DELETE |
+| Query | DISTINCT, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET |
+| JOIN | INNER JOIN, LEFT JOIN, CROSS JOIN, multiple tables, aliases |
+| Subqueries | Scalar, EXISTS, IN/NOT IN, ALL/ANY, correlated subqueries |
+| Set Ops | UNION, UNION ALL, INTERSECT, EXCEPT |
+| Aggregates | COUNT, SUM, AVG, MIN, MAX, GROUP_CONCAT (with ALL/DISTINCT) |
+| Window | OVER (PARTITION BY … ORDER BY …), LAG/LEAD, ROW_NUMBER, RANK |
+| CTE | WITH … AS (SELECT …) – common table expressions |
+| Expressions | Literals, operators, CASE, CAST, BETWEEN, LIKE/GLOB, IS NULL |
+| Functions | String: LENGTH, SUBSTR, UPPER, LOWER, TRIM, INSTR, REPLACE, COALESCE |
+|  | Math: ABS, ROUND, CEIL, FLOOR, MOD, POW, SQRT, trig functions |
+|  | Date/Time: DATE, TIME, DATETIME, STRFTIME, CURRENT_DATE/TIME/TIMESTAMP |
+|  | Type: TYPEOF, CAST |
+| Transactions | BEGIN, COMMIT, ROLLBACK, SAVEPOINT |
+| Constraints | NOT NULL, UNIQUE, PRIMARY KEY, CHECK, DEFAULT |
+| PRAGMA | table_info, index_list, database_list |
+| Schema | INFORMATION_SCHEMA views (TABLES, COLUMNS, CONSTRAINTS, VIEWS) |
+
+---
+
+### 3.6 Code Generator (CG)
+
+**Purpose**: Compile QP AST nodes into VM bytecode programs
+
+**Components**:
+
+| File | Responsibility |
+|------|----------------|
+| `compiler.go` | Main compilation entry; SELECT, FROM, JOIN, SET-OPs, CTE |
+| `expr.go` | Compile expressions, binary/unary ops, function calls |
+| `optimizer.go` | Bytecode optimization: index scans, filter push-down |
+
+**Compilation Pipeline**:
+```
+QP.AST ──▶ CG.Compiler ──▶ VM.Program (bytecode)
+```
+
+**Key Public API**:
+```go
+func Compile(sql string) (*VM.Program, error)
+func CompileWithSchema(sql string, tableColumns []string) (*VM.Program, error)
+
+type Compiler struct { ... }
+func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program
+func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *VM.Program
+func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *VM.Program
+func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *VM.Program
+```
+
+**Key Design Decisions**:
+- Schema-aware: expands `SELECT *` to explicit column list
+- JOIN compiled to nested-loop cursor opens
+- Set operations compiled using ephemeral tables (OpEphemeral*)
+- CTEs compiled as nested subqueries with bound column names
+- `optimizer.go` detects index-eligible WHERE clauses → OpSeekGE/OpSeekGT
+
+---
+
+### 3.7 Virtual Machine (VM)
+
+**Purpose**: Execute register-based bytecode programs
+
+**Components**:
+
+| File | Responsibility |
+|------|----------------|
+| `engine.go` | VM struct, error types, VmContext interface |
+| `exec.go` | Instruction dispatcher (~200 opcode handlers) |
+| `opcodes.go` | All opcode definitions (OpCode constants + name map) |
+| `program.go` | Program container: instructions, fixup slots, metadata |
+| `registers.go` | RegisterAllocator: tracks live/free registers |
+| `cursor.go` | CursorArray, cursor state; MaxCursors = 256 |
+| `compiler.go` | VM-internal compiler helpers (used by CG) |
+| `instruction.go` | Instruction struct {Op, P1, P2, P3, P4} |
+| `query_engine.go` | QueryEngine: runs a Program with live table data |
+| `query_expr.go` | Expression evaluation (used by QE path) |
+| `query_operators.go` | Low-level operator helpers |
+
+**VM Architecture**:
+```
+VM.Program
+    │
+    ▼
+┌───────────────────────────────────────┐
+│            VM.VM                       │
+├───────────────────────────────────────┤
+│  registers []interface{}              │
+│  cursors   *CursorArray (max 256)     │
+│  pc        int                        │
+│  results   [][]interface{}            │
+│  ctx       VmContext                  │
+└───────────────────────────────────────┘
+    │
+    ▼ (exec.go dispatch loop)
+Opcode Handlers → results / side-effects
+```
+
+**Opcode Categories** (~200 total):
+
+| Category | Examples |
+|----------|---------|
+| Control Flow | OpInit, OpGoto, OpGosub, OpReturn, OpHalt, OpIf, OpIfNot |
+| Cursor Ops | OpOpenRead, OpOpenWrite, OpRewind, OpNext, OpPrev, OpSeek*, OpClose |
+| Data Access | OpColumn, OpRowid, OpInsert, OpUpdate, OpDelete |
+| Comparisons | OpEq, OpNe, OpLt, OpLe, OpGt, OpGe, OpIs, OpIsNot, OpIsNull, OpNotNull |
+| Arithmetic | OpAdd, OpSubtract, OpMultiply, OpDivide, OpRemainder |
+| String | OpConcat, OpSubstr, OpLength, OpUpper, OpLower, OpTrim, OpLike, OpGlob |
+| Math | OpAbs, OpRound, OpCeil, OpFloor, OpPow, OpSqrt, trig ops |
+| Aggregate | OpAggStep, OpAggFinal, OpSum, OpAvg, OpMin, OpMax, OpCount |
+| Set Ops | OpEphemeralCreate, OpEphemeralInsert, OpEphemeralFind |
+| Subquery | OpScalarSubquery, OpExistsSubquery, OpInSubquery |
+| Type/Misc | OpCast, OpTypeof, OpRandom, OpCallScalar, OpNoop |
+
+**Instruction Format**:
+```go
+type Instruction struct {
+    Op OpCode      // operation
+    P1 int32       // first operand  (register / cursor ID)
+    P2 int32       // second operand (jump target / register)
+    P3 interface{} // third operand  (string constant, etc.)
+    P4 interface{} // fourth operand (destination register / metadata)
+}
+```
+
+**VmContext Interface** (bridge to `pkg/sqlvibe`):
+```go
+type VmContext interface {
+    GetTableData(tableName string) ([]map[string]interface{}, error)
+    GetTableColumns(tableName string) ([]string, error)
+    InsertRow(tableName string, row map[string]interface{}) error
+    UpdateRow(tableName string, rowIndex int, row map[string]interface{}) error
+    DeleteRow(tableName string, rowIndex int) error
+}
+```
+
+---
+
+### 3.8 Query Execution (QE)
+
+**Purpose**: Low-level expression and operator evaluation (used alongside VM)
+
+**Components**:
+
+| File | Responsibility |
+|------|----------------|
+| `engine.go` | QueryEngine struct; schema registration; row evaluation |
+| `expr.go` | Expression evaluation over a single row |
+| `operators.go` | Operator implementations (comparison, arithmetic, string) |
+
+---
+
+### 3.9 Information Schema (IS)
+
+**Purpose**: SQLite-compatible INFORMATION_SCHEMA views
+
+**Components**:
+
+| File | Responsibility |
+|------|----------------|
+| `registry.go` | Central in-memory schema registry for all tables/views |
+| `information_schema.go` | Type definitions: TableInfo, ColumnInfo, ConstraintInfo |
+| `schema_extractor.go` | Parse CREATE TABLE SQL to extract schema metadata |
+| `schema_parser.go` | Helpers for schema SQL parsing |
+| `tables_view.go` | INFORMATION_SCHEMA.TABLES virtual view |
+| `columns_view.go` | INFORMATION_SCHEMA.COLUMNS virtual view |
+| `constraints_view.go` | INFORMATION_SCHEMA.TABLE_CONSTRAINTS virtual view |
+| `referential_view.go` | INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS virtual view |
+| `views_view.go` | INFORMATION_SCHEMA.VIEWS virtual view |
+
+---
+
+### 3.10 Public API (pkg/sqlvibe)
+
+**Purpose**: Library entry point — coordinates all subsystems for end users
+
+**Components**:
+
+| File | Responsibility |
+|------|----------------|
+| `database.go` | `Database` struct; Open/Close; DDL handling; transaction management |
+| `vm_exec.go` | `ExecVM` — SQL → QP → CG → VM execution path |
+| `vm_context.go` | `VmContext` implementation bridging Database to VM |
+| `setops.go` | Post-processing for UNION/INTERSECT/EXCEPT deduplication |
+| `window.go` | Post-processing for window functions (OVER clause) |
+| `explain.go` | EXPLAIN statement: prints bytecode program |
+| `pragma.go` | PRAGMA statement handlers (table_info, index_list, …) |
+| `version.go` | `Version` constant |
+
+**Database Struct** (main entry point):
+```go
+type Database struct {
+    pm             *DS.PageManager
+    engine         *VM.QueryEngine
+    txMgr          *TM.TransactionManager
+    isRegistry     *IS.Registry
+    tables         map[string]map[string]string        // schema
+    columnOrder    map[string][]string
+    columnDefaults map[string]map[string]interface{}
+    columnNotNull  map[string]map[string]bool
+    data           map[string][]map[string]interface{} // in-memory rows
+    indexes        map[string]*IndexInfo
+    views          map[string]string
+    tableBTrees    map[string]*DS.BTree
+}
+```
+
+**Execution Flow for a SELECT**:
+```
+db.Exec(sql)
+  │
+  ├─▶ QP.NewTokenizer → QP.NewParser → AST
+  │
+  ├─▶ CG.CompileWithSchema(sql, cols) → VM.Program
+  │
+  ├─▶ VM.QueryEngine.RunProgram(program, tableData)
+  │       └─▶ VM.VM.Execute() (dispatch loop in exec.go)
+  │
+  └─▶ post-processing: window functions, set-op dedup, ORDER BY + LIMIT
+```
+
+---
+
+### 3.11 Test Suites (TS)
+
+**Purpose**: Correctness verification against real SQLite
+
+**Components**:
+
+| Directory | Description |
+|-----------|-------------|
+| `TS/SQL1999/` | 56 test suites covering SQL:1999 E-series and F-series features |
+| `TS/Benchmark/` | Performance benchmarks comparing sqlvibe vs SQLite |
+| `TS/PlainFuzzer/` | Go native fuzzing harness generating random SQL |
+
+**SQL:1999 Coverage** (56/56 passing):
+- **E-series**: E011–E171 (numeric types, strings, identifiers, JOINs, aggregates, window functions, transactions, …)
+- **F-series**: F011–F501 (information schema, joined tables, date/time, CAST, UNION, CASE, LIKE, …)
+
+**Test Strategy**:
+- Every test runs the same SQL against both sqlvibe and the real SQLite (via `go-sqlite`)
+- Results are compared byte-for-byte (with normalization for implementation-defined ordering)
+- Regressions captured in `TestRegression_*` tests named by feature and level
 
 ---
 
 ## 4. Key Interfaces
 
-### Database Connection
+### Database Connection (pkg/sqlvibe)
 
 ```go
-type Database interface {
-    // Lifecycle
-    Open(path string) error
-    Close() error
-    
-    // Transaction
-    Begin() (*Transaction, error)
-    BeginReadOnly() (*Transaction, error)
-    
-    // Execution
-    Exec(sql string, args ...interface{}) (Result, error)
-    Query(sql string, args ...interface{}) (Rows, error)
-    Prepare(sql string) (Statement, error)
-}
+func Open(path string) (*Database, error)
+func OpenMemory() (*Database, error)
 
-type Transaction interface {
-    Commit() error
-    Rollback() error
-    
-    Exec(sql string, args ...interface{}) (Result, error)
-    Query(sql string, args ...interface{}) (Rows, error)
-}
-
-type Statement interface {
-    Bind(...interface{}) error
-    Execute() (Result, error)
-    Query() (Rows, error)
-    Close() error
-}
-
-type Rows interface {
-    Next() bool
-    Scan(...interface{}) error
-    ColumnTypes() ([]ColumnType, error)
-    Close() error
-}
+func (db *Database) Exec(sql string, args ...interface{}) (*Rows, error)
+func (db *Database) Query(sql string, args ...interface{}) (*Rows, error)
+func (db *Database) Close() error
+func (db *Database) Begin() error
+func (db *Database) Commit() error
+func (db *Database) Rollback() error
 ```
 
-### Storage Engine
+### Storage Engine (DS)
 
 ```go
-type StorageEngine interface {
-    // Page operations
-    ReadPage(pageNum uint32) (*Page, error)
-    WritePage(page *Page) error
-    AllocatePage() (uint32, error)
-    FreePage(pageNum uint32) error
-    
-    // B-Tree operations
-    OpenBTree(rootPage uint32, isTable bool) BTree
-    CreateBTree(isTable bool) (BTree, uint32, error)
-    
-    // Transaction
-    Begin() error
-    Commit() error
-    Rollback() error
-}
+type PageManager struct { ... }
+func NewPageManager(vfsFile PB.VFSFile, pageSize int) *PageManager
+func (pm *PageManager) ReadPage(pageNum uint32) (*Page, error)
+func (pm *PageManager) WritePage(page *Page) error
+func (pm *PageManager) AllocatePage() (uint32, error)
+func (pm *PageManager) FreePage(pageNum uint32) error
 
-type BTree interface {
-    Search(key []byte) ([]byte, error)
-    Insert(key, value []byte) error
-    Delete(key []byte) error
-    First() ([]byte, []byte, error)
-    Next(cursor *Cursor) ([]byte, []byte, error)
-    Close() error
-}
+type BTree struct { ... }
+func NewBTree(pm *PageManager, rootPage uint32, isTable bool) *BTree
+func (bt *BTree) Search(key []byte) ([]byte, error)
+func (bt *BTree) Insert(key, value []byte) error
+func (bt *BTree) Delete(key []byte) error
+func (bt *BTree) First() (*BTreeCursor, error)
+func (bt *BTree) Next(cursor *BTreeCursor) ([]byte, []byte, error)
 ```
 
 ---
 
-## 5. Testing Strategy
+## 5. Defensive Programming (Assertions)
 
-### Blackbox Testing with SQLite
-
-The verification strategy compares execution results with real SQLite:
-
-1. **SQL Logic Tests**: Use sqlite's sqllogictest format
-2. **Result Comparison**: Run same SQL on both engines, compare outputs
-3. **Edge Cases**: Focus on type handling, NULLs, boundary conditions
+All subsystems use `internal/util/assert.go` for aggressive bug detection:
 
 ```go
-// Testing approach
-func TestSQLiteCompatibility(t *testing.T) {
-    testCases := []struct {
-        name string
-        sql  string
-    }{
-        {"simple_select", "SELECT * FROM t1"},
-        {"where_clause", "SELECT * FROM t1 WHERE a > 5"},
-        {"join", "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id"},
-        // ... more cases
-    }
-    
-    for _, tc := range testCases {
-        t.Run(tc.name, func(t *testing.T) {
-            // Execute on goLite
-            goLiteResult := executeGoLite(tc.sql)
-            
-            // Execute on SQLite
-            sqliteResult := executeSQLite(tc.sql)
-            
-            // Compare results
-            assert.Equal(t, sqliteResult, goLiteResult)
-        })
-    }
-}
+util.Assert(condition bool, format string, args ...interface{})
+util.AssertNotNil(value interface{}, name string)
+util.AssertTrue(condition bool, message string)
+util.AssertFalse(condition bool, message string)
 ```
 
-### Test Coverage Goals
+**Assertion patterns by subsystem**:
 
-| Phase | Coverage Target | Focus Areas |
-|-------|-----------------|-------------|
-| 1 | Basic ops | DDL, simple SELECT |
-| 2 | Core features | DML, WHERE, ORDER BY |
-| 3 | Transactions | ACID, concurrent access |
-| 4 | Advanced | JOINs, subqueries |
+| Subsystem | Key Assertions |
+|-----------|---------------|
+| DS | Page type in {0x02,0x05,0x0a,0x0d}; page size [512,65536], power-of-2; key non-empty; cell offset bounds |
+| VM | Cursor ID in [0, MaxCursors=256); register index bounds; PC validity |
+| QP | Token slice non-nil; parser state invariants |
+| QE | PageManager non-nil; table name non-empty; schema validity |
+| TM | TransactionManager PageManager non-nil |
+| PB | File offset ≥ 0; buffer non-nil; URI non-empty |
+| pkg | Row scan index bounds |
+
+Assertions fire on **programming errors** (bugs, violated invariants). Runtime errors (I/O failures, bad user input) use normal `error` returns.
 
 ---
 
 ## 6. Design Rationale
 
-### Why This Architecture?
+### Architecture Decisions
 
-1. **Modularity**: Each subsystem can be developed and tested independently
-2. **SQLite Compatibility**: Following SQLite's well-documented architecture
-3. **Go Idioms**: Using Go's strengths (goroutines for concurrency, interfaces)
-4. **Testability**: Clear boundaries enable unit and integration testing
+| Decision | Rationale |
+|----------|-----------|
+| Register-based VM | Faster than stack-based; closer to SQLite's VDBE |
+| Separate CG from VM | Clean AST-to-bytecode separation; enables future optimization passes |
+| SQLite-compatible file format | Existing tools (DB Browser, `.dump`, etc.) work on sqlvibe files |
+| VFS abstraction (PB) | `:memory:` databases use same code path as on-disk; testability |
+| In-memory rows + B-Tree | Pragmatic: rows kept in memory maps for fast iteration; B-Tree for persistence |
+| IS as virtual views | Zero-cost schema introspection without extra storage |
+| Aggressive assertions | Catch bugs at the invariant boundary, not deep inside data structures |
 
 ### Trade-offs
 
 | Decision | Pros | Cons |
 |----------|------|------|
-| SQLite-compatible file format | Tools compatibility | Complex implementation |
-| B-Tree (not LSM) | Range queries, proven | More complex than LSM |
-| WAL (not rollback journal) | Better concurrency | More complex checkpoint |
-| Register-based VM | Fast execution | More complex than stack |
-
-### Future Enhancements
-
-- FTS (Full-Text Search)
-- JSON support
-- Window functions
-- R-Tree for spatial queries
-- Foreign key constraints
+| SQLite-compatible file format | Full tool ecosystem | Complex cell/page encoding |
+| B-Tree (not LSM) | Range queries, proven design | More complex than hash/LSM |
+| WAL mode | Better read concurrency | Requires checkpoint management |
+| In-memory row store | Simple, fast for testing | Not persistent across restart |
+| Register-based VM | Efficient execution | More complex register allocation |
