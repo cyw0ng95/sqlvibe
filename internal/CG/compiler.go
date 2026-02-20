@@ -437,10 +437,15 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
 			default:
 				aggInfo.NonAggCols = append(aggInfo.NonAggCols, col)
 			}
+		} else if exprHasAggregate(col) {
+			// Expression containing aggregates (e.g. MAX(id)+1) - extract embedded aggregates
+			extractAggregatesFromExpr(col, aggInfo)
 		} else {
 			aggInfo.NonAggCols = append(aggInfo.NonAggCols, col)
 		}
 	}
+	// Store original SELECT expressions for post-aggregate evaluation
+	aggInfo.SelectExprs = stmt.Columns
 
 	c.program.Instructions = append(c.program.Instructions, VM.Instruction{
 		Op: VM.OpAggregate,
@@ -759,14 +764,65 @@ func hasAggregates(stmt *QP.SelectStmt) bool {
 		return false
 	}
 	for _, col := range stmt.Columns {
-		if fc, ok := col.(*QP.FuncCall); ok {
-			switch fc.Name {
-			case "COUNT", "SUM", "AVG", "MIN", "MAX", "TOTAL":
-				return true
-			}
+		if exprHasAggregate(col) {
+			return true
 		}
 	}
 	return stmt.GroupBy != nil
+}
+
+// exprHasAggregate recursively checks if an expression contains an aggregate function.
+func exprHasAggregate(expr QP.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *QP.FuncCall:
+		switch e.Name {
+		case "COUNT", "SUM", "AVG", "MIN", "MAX", "TOTAL":
+			return true
+		}
+	case *QP.BinaryExpr:
+		return exprHasAggregate(e.Left) || exprHasAggregate(e.Right)
+	case *QP.UnaryExpr:
+		return exprHasAggregate(e.Expr)
+	case *QP.AliasExpr:
+		return exprHasAggregate(e.Expr)
+	case *QP.CastExpr:
+		return exprHasAggregate(e.Expr)
+	}
+	return false
+}
+
+// extractAggregatesFromExpr extracts aggregate function calls embedded in an expression.
+func extractAggregatesFromExpr(expr QP.Expr, aggInfo *VM.AggregateInfo) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.(type) {
+	case *QP.FuncCall:
+		switch e.Name {
+		case "COUNT", "SUM", "AVG", "MIN", "MAX":
+			// Check if already registered
+			for _, existing := range aggInfo.Aggregates {
+				if existing.Function == e.Name {
+					return
+				}
+			}
+			aggInfo.Aggregates = append(aggInfo.Aggregates, VM.AggregateDef{
+				Function: e.Name,
+				Args:     e.Args,
+				Distinct: e.Distinct,
+			})
+		}
+	case *QP.BinaryExpr:
+		extractAggregatesFromExpr(e.Left, aggInfo)
+		extractAggregatesFromExpr(e.Right, aggInfo)
+	case *QP.UnaryExpr:
+		extractAggregatesFromExpr(e.Expr, aggInfo)
+	case *QP.AliasExpr:
+		extractAggregatesFromExpr(e.Expr, aggInfo)
+	}
 }
 
 func MustCompile(sql string) *VM.Program {

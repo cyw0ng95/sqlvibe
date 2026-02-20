@@ -114,10 +114,9 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 
 	if tableName != "" {
-		// Check if table exists via DS context
-		ctx := newDsVmContext(db)
-		if tableData, err := ctx.GetTableData(tableName); err != nil || tableData == nil {
-			return nil, fmt.Errorf("table not found: %s", tableName)
+		// Check if table exists via table registry
+		if _, exists := db.tables[tableName]; !exists {
+			return nil, fmt.Errorf("no such table: %s", tableName)
 		}
 	}
 
@@ -204,10 +203,9 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 
 	if tableName != "" {
-		// Check if table exists via DS context
-		ctx := newDsVmContext(db)
-		if tableData, err := ctx.GetTableData(tableName); err != nil || tableData == nil {
-			return nil, fmt.Errorf("table not found: %s", tableName)
+		// Check if table exists via table registry
+		if _, exists := db.tables[tableName]; !exists {
+			return nil, fmt.Errorf("no such table: %s", tableName)
 		}
 	}
 
@@ -291,10 +289,9 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	}
 
 	if tableName != "" {
-		// Check if table exists via DS context
-		ctx := newDsVmContext(db)
-		if tableData, err := ctx.GetTableData(tableName); err != nil || tableData == nil {
-			return nil, fmt.Errorf("table not found: %s", tableName)
+		// Check if table exists via table registry
+		if _, exists := db.tables[tableName]; !exists {
+			return nil, fmt.Errorf("no such table: %s", tableName)
 		}
 	}
 
@@ -430,6 +427,44 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	return &Rows{Columns: cols, Data: results}, nil
 }
 
+// validateInsertColumnCount checks that INSERT column count matches value count.
+func (db *Database) validateInsertColumnCount(sql string, tableName string, tableCols []string) error {
+	upperSQL := strings.ToUpper(sql)
+	if !strings.HasPrefix(upperSQL, "INSERT") {
+		return nil
+	}
+	tokens, err := QP.NewTokenizer(sql).Tokenize()
+	if err != nil {
+		return nil
+	}
+	parser := QP.NewParser(tokens)
+	stmt, err := parser.Parse()
+	if err != nil {
+		return nil
+	}
+	insertStmt, ok := stmt.(*QP.InsertStmt)
+	if !ok || insertStmt.UseDefaults || len(insertStmt.Values) == 0 {
+		return nil
+	}
+	if len(insertStmt.Columns) > 0 {
+		// Explicit columns: each row must have exactly that many values
+		for _, row := range insertStmt.Values {
+			if len(row) != len(insertStmt.Columns) {
+				return fmt.Errorf("%d values for %d columns", len(row), len(insertStmt.Columns))
+			}
+		}
+	} else {
+		// No columns specified: each row must have exactly table column count
+		numTableCols := len(tableCols)
+		for _, row := range insertStmt.Values {
+			if numTableCols > 0 && len(row) != numTableCols {
+				return fmt.Errorf("table %s has %d columns but %d values were supplied", tableName, numTableCols, len(row))
+			}
+		}
+	}
+	return nil
+}
+
 func (db *Database) applyDefaults(sql string, tableName string, tableCols []string) string {
 	upperSQL := strings.ToUpper(sql)
 	if !strings.HasPrefix(upperSQL, "INSERT") {
@@ -555,6 +590,11 @@ func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
 	tableCols := db.columnOrder[tableName]
 	if tableCols == nil {
 		tableCols = db.getOrderedColumns(tableName)
+	}
+
+	// Validate INSERT column/value count before preprocessing
+	if err := db.validateInsertColumnCount(sql, tableName, tableCols); err != nil {
+		return Result{}, err
 	}
 
 	// Pre-process INSERT to add defaults for missing columns

@@ -85,9 +85,23 @@ func FetchAllRowsSQLite(rows *sql.Rows) ([]map[string]interface{}, error) {
 }
 
 func CompareQueryResults(t *testing.T, sqlvibeDB *sqlvibe.Database, sqliteDB *sql.DB, sql string, testName string) {
-	sqlvibeRows, err := sqlvibeDB.Query(sql)
-	if err != nil {
-		t.Errorf("%s: sqlvibe query error: %v", testName, err)
+	sqlvibeRows, sqlvibeErr := sqlvibeDB.Query(sql)
+	sqliteRows, sqliteErr := sqliteDB.Query(sql)
+	if sqliteRows != nil {
+		defer sqliteRows.Close()
+	}
+
+	// If both error, behavior agrees — pass
+	if sqlvibeErr != nil && sqliteErr != nil {
+		return
+	}
+	// If only one errors, that's a mismatch
+	if sqlvibeErr != nil {
+		t.Errorf("%s: sqlvibe query error: %v", testName, sqlvibeErr)
+		return
+	}
+	if sqliteErr != nil {
+		t.Errorf("%s: sqlite query error: %v", testName, sqliteErr)
 		return
 	}
 
@@ -96,13 +110,6 @@ func CompareQueryResults(t *testing.T, sqlvibeDB *sqlvibe.Database, sqliteDB *sq
 		t.Errorf("%s: sqlvibe fetch error: %v", testName, err)
 		return
 	}
-
-	sqliteRows, err := sqliteDB.Query(sql)
-	if err != nil {
-		t.Errorf("%s: sqlite query error: %v", testName, err)
-		return
-	}
-	defer sqliteRows.Close()
 
 	sqliteResults, err := FetchAllRowsSQLite(sqliteRows)
 	if err != nil {

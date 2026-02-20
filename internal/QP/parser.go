@@ -56,7 +56,8 @@ type InsertStmt struct {
 	Table       string
 	Columns     []string
 	Values      [][]Expr
-	UseDefaults bool // True when using DEFAULT VALUES
+	UseDefaults bool      // True when using DEFAULT VALUES
+	SelectQuery *SelectStmt // Non-nil for INSERT ... SELECT
 }
 
 func (i *InsertStmt) NodeType() string { return "InsertStmt" }
@@ -661,6 +662,15 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 			}
 			p.advance()
 		}
+	}
+
+	// Handle INSERT ... SELECT
+	if p.current().Type == TokenKeyword && p.current().Literal == "SELECT" {
+		sel, err := p.parseSelect()
+		if err != nil {
+			return nil, err
+		}
+		stmt.SelectQuery = sel
 	}
 
 	return stmt, nil

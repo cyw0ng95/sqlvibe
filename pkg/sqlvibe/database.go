@@ -427,6 +427,9 @@ func (db *Database) Exec(sql string) (Result, error) {
 		return Result{}, nil
 	case "InsertStmt":
 		stmt := ast.(*QP.InsertStmt)
+		if stmt.SelectQuery != nil {
+			return db.execInsertSelect(stmt)
+		}
 		return db.execVMDML(sql, stmt.Table)
 	case "UpdateStmt":
 		stmt := ast.(*QP.UpdateStmt)
@@ -1495,4 +1498,51 @@ if lit, ok := expr.(*QP.Literal); ok {
 return lit.Value
 }
 return nil
+}
+
+// execInsertSelect handles INSERT INTO table SELECT ...
+func (db *Database) execInsertSelect(stmt *QP.InsertStmt) (Result, error) {
+	if _, exists := db.tables[stmt.Table]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
+	}
+
+	// Execute the SELECT query to get rows to insert
+	rows, err := db.execSelectStmt(stmt.SelectQuery)
+	if err != nil {
+		return Result{}, fmt.Errorf("INSERT SELECT: %w", err)
+	}
+	if rows == nil || len(rows.Data) == 0 {
+		return Result{}, nil
+	}
+
+	tableCols := db.columnOrder[stmt.Table]
+	insertCols := stmt.Columns
+	if len(insertCols) == 0 {
+		insertCols = tableCols
+	}
+
+	var affected int64
+	for _, rowData := range rows.Data {
+		// Build INSERT for this row
+		colParts := make([]string, 0, len(insertCols))
+		valParts := make([]string, 0, len(insertCols))
+		for i, col := range insertCols {
+			colParts = append(colParts, col)
+			var val interface{}
+			if i < len(rowData) {
+				val = rowData[i]
+			}
+			valParts = append(valParts, literalToString(val))
+		}
+		insertSQL := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+			stmt.Table,
+			strings.Join(colParts, ", "),
+			strings.Join(valParts, ", "))
+		res, err := db.execVMDML(insertSQL, stmt.Table)
+		if err != nil {
+			return Result{}, err
+		}
+		affected += res.RowsAffected
+	}
+	return Result{RowsAffected: affected}, nil
 }

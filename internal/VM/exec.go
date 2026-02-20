@@ -2386,11 +2386,11 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 					state.Counts[aggIdx]++
 				}
 			case "MIN":
-				if state.Mins[aggIdx] == nil || vm.compareVals(value, state.Mins[aggIdx]) < 0 {
+				if value != nil && (state.Mins[aggIdx] == nil || vm.compareVals(value, state.Mins[aggIdx]) < 0) {
 					state.Mins[aggIdx] = value
 				}
 			case "MAX":
-				if state.Maxs[aggIdx] == nil || vm.compareVals(value, state.Maxs[aggIdx]) > 0 {
+				if value != nil && (state.Maxs[aggIdx] == nil || vm.compareVals(value, state.Maxs[aggIdx]) > 0) {
 					state.Maxs[aggIdx] = value
 				}
 			}
@@ -2439,6 +2439,24 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 
 	for _, key := range groupKeys {
 		state := groups[key]
+
+		// Apply HAVING filter if present
+		if aggInfo.HavingExpr != nil {
+			if !vm.evaluateHaving(state, aggInfo) {
+				continue
+			}
+		}
+
+		// If SelectExprs is set, use them for the result row ordering
+		if len(aggInfo.SelectExprs) > 0 {
+			resultRow := make([]interface{}, 0, len(aggInfo.SelectExprs))
+			for _, expr := range aggInfo.SelectExprs {
+				resultRow = append(resultRow, vm.resolveSelectExpr(expr, state, aggInfo))
+			}
+			vm.results = append(vm.results, resultRow)
+			continue
+		}
+
 		// Build result row: non-agg columns + aggregates
 		resultRow := make([]interface{}, 0)
 
@@ -2475,15 +2493,26 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 			resultRow = append(resultRow, aggValue)
 		}
 
-		// Apply HAVING filter if present
-		if aggInfo.HavingExpr != nil {
-			if !vm.evaluateHaving(state, aggInfo) {
-				continue
-			}
-		}
-
 		vm.results = append(vm.results, resultRow)
 	}
+}
+
+// AggregateInfo contains information about aggregate queries
+type AggregateInfo struct {
+	GroupByExprs []QP.Expr      // GROUP BY expressions
+	Aggregates   []AggregateDef // Aggregate functions in SELECT
+	NonAggCols   []QP.Expr      // Non-aggregate columns in SELECT
+	HavingExpr   QP.Expr        // HAVING clause expression
+	WhereExpr    QP.Expr        // WHERE clause expression
+	SelectExprs  []QP.Expr      // Full original SELECT expressions (for post-agg eval)
+}
+
+// AggregateDef defines an aggregate function
+type AggregateDef struct {
+	Function string    // COUNT, SUM, AVG, MIN, MAX
+	Args     []QP.Expr // Arguments to the aggregate
+	Distinct bool      // true if DISTINCT was specified (e.g. COUNT(DISTINCT col))
+	Alias    string    // Optional output alias (e.g. COUNT(*) AS cnt)
 }
 
 // AggregateState tracks aggregate values for a group
@@ -2771,6 +2800,12 @@ func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interfa
 		return vm.addValues(left, right)
 	case QP.TokenMinus:
 		return vm.subtractValues(left, right)
+	case QP.TokenAsterisk:
+		return vm.multiplyValues(left, right)
+	case QP.TokenSlash:
+		return vm.divideValues(left, right)
+	case QP.TokenPercent:
+		return vm.moduloValues(left, right)
 	case QP.TokenGt:
 		return vm.compareVals(left, right) > 0
 	case QP.TokenGe:
@@ -2783,6 +2818,49 @@ func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interfa
 		return vm.compareVals(left, right) == 0
 	case QP.TokenNe:
 		return vm.compareVals(left, right) != 0
+	default:
+		return nil
+	}
+}
+
+// resolveSelectExpr evaluates a SELECT expression in the context of computed aggregate state.
+// It resolves aggregate functions (MAX, MIN, SUM, etc.) to their computed values.
+func (vm *VM) resolveSelectExpr(expr QP.Expr, state *AggregateState, aggInfo *AggregateInfo) interface{} {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *QP.Literal:
+		return e.Value
+	case *QP.ColumnRef:
+		// Check NonAggCols
+		for i, nonAggExpr := range aggInfo.NonAggCols {
+			if colRef, ok := nonAggExpr.(*QP.ColumnRef); ok && colRef.Name == e.Name {
+				if i < len(state.NonAggValues) {
+					return state.NonAggValues[i]
+				}
+			}
+		}
+		return nil
+	case *QP.FuncCall:
+		return vm.resolveHavingOperand(expr, state, aggInfo)
+	case *QP.AliasExpr:
+		return vm.resolveSelectExpr(e.Expr, state, aggInfo)
+	case *QP.BinaryExpr:
+		left := vm.resolveSelectExpr(e.Left, state, aggInfo)
+		right := vm.resolveSelectExpr(e.Right, state, aggInfo)
+		return vm.evaluateBinaryOp(left, right, e.Op)
+	case *QP.UnaryExpr:
+		val := vm.resolveSelectExpr(e.Expr, state, aggInfo)
+		if e.Op == QP.TokenMinus {
+			switch v := val.(type) {
+			case int64:
+				return -v
+			case float64:
+				return -v
+			}
+		}
+		return val
 	default:
 		return nil
 	}
@@ -2876,6 +2954,71 @@ func (vm *VM) addValues(a, b interface{}) interface{} {
 	}
 	if aIsFloat && bIsInt {
 		return aFloat + float64(bInt)
+	}
+
+	return nil
+}
+
+// multiplyValues multiplies two values
+func (vm *VM) multiplyValues(a, b interface{}) interface{} {
+	if a == nil || b == nil {
+		return nil
+	}
+
+	aInt, aIsInt := a.(int64)
+	bInt, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		return aInt * bInt
+	}
+
+	aFloat, aIsFloat := a.(float64)
+	bFloat, bIsFloat := b.(float64)
+	if aIsFloat && bIsFloat {
+		return aFloat * bFloat
+	}
+	if aIsInt && bIsFloat {
+		return float64(aInt) * bFloat
+	}
+	if aIsFloat && bIsInt {
+		return aFloat * float64(bInt)
+	}
+
+	return nil
+}
+
+// moduloValues computes the modulo of two values
+func (vm *VM) moduloValues(a, b interface{}) interface{} {
+	if a == nil || b == nil {
+		return nil
+	}
+
+	aInt, aIsInt := a.(int64)
+	bInt, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		if bInt == 0 {
+			return nil
+		}
+		return aInt % bInt
+	}
+
+	aFloat, aIsFloat := a.(float64)
+	bFloat, bIsFloat := b.(float64)
+	if aIsFloat || aIsInt {
+		af := aFloat
+		if aIsInt {
+			af = float64(aInt)
+		}
+		bf := bFloat
+		if bIsFloat {
+			bf = bFloat
+		} else if bIsInt {
+			bf = float64(bInt)
+		}
+		if bf == 0 {
+			return nil
+		}
+		// Float modulo via truncation
+		return af - float64(int64(af/bf))*bf
 	}
 
 	return nil
