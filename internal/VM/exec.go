@@ -617,10 +617,19 @@ func (vm *VM) Exec(ctx interface{}) error {
 			continue
 
 		case OpLike:
+			// NULL LIKE anything = NULL (treat as false/not match)
+			if vm.registers[inst.P1] == nil {
+				if dst, ok := inst.P4.(int); ok {
+					vm.registers[dst] = int64(0)
+				}
+				continue
+			}
 			pattern := ""
 			str := ""
 			if v, ok := vm.registers[inst.P1].(string); ok {
 				str = v
+			} else {
+				str = fmt.Sprintf("%v", vm.registers[inst.P1])
 			}
 			if v, ok := vm.registers[inst.P2].(string); ok {
 				pattern = v
@@ -2542,14 +2551,69 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 	case *QP.Literal:
 		return e.Value
 	case *QP.ColumnRef:
-		return row[e.Name]
+		if val, ok := row[e.Name]; ok {
+			return val
+		}
+		// Try without table prefix
+		name := e.Name
+		if idx := strings.LastIndex(name, "."); idx >= 0 {
+			name = name[idx+1:]
+		}
+		return row[name]
+	case *QP.AliasExpr:
+		return vm.evaluateExprOnRow(row, columns, e.Expr)
+	case *QP.UnaryExpr:
+		val := vm.evaluateExprOnRow(row, columns, e.Expr)
+		if e.Op == QP.TokenMinus {
+			switch v := val.(type) {
+			case int64:
+				return -v
+			case float64:
+				return -v
+			}
+		}
+		return val
 	case *QP.BinaryExpr:
 		left := vm.evaluateExprOnRow(row, columns, e.Left)
 		right := vm.evaluateExprOnRow(row, columns, e.Right)
 		return vm.evaluateBinaryOp(left, right, e.Op)
+	case *QP.FuncCall:
+		return vm.evaluateFuncCallOnRow(row, columns, e)
 	default:
 		return nil
 	}
+}
+
+// evaluateFuncCallOnRow evaluates a function call against a row for aggregate WHERE/CHECK filtering
+func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string, e *QP.FuncCall) interface{} {
+	funcName := strings.ToUpper(e.Name)
+	switch funcName {
+	case "LENGTH", "LEN":
+		if len(e.Args) > 0 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if val == nil {
+				return nil
+			}
+			return int64(len(fmt.Sprintf("%v", val)))
+		}
+	case "UPPER":
+		if len(e.Args) > 0 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if val == nil {
+				return nil
+			}
+			return strings.ToUpper(fmt.Sprintf("%v", val))
+		}
+	case "LOWER":
+		if len(e.Args) > 0 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if val == nil {
+				return nil
+			}
+			return strings.ToLower(fmt.Sprintf("%v", val))
+		}
+	}
+	return nil
 }
 
 // evaluateBoolExprOnRow evaluates a WHERE-clause expression as a boolean against a row
@@ -2578,6 +2642,66 @@ func (vm *VM) evaluateBoolExprOnRow(row map[string]interface{}, columns []string
 				return left != nil
 			}
 			return left != right
+		case QP.TokenLike:
+			left := vm.evaluateExprOnRow(row, columns, e.Left)
+			right := vm.evaluateExprOnRow(row, columns, e.Right)
+			if left == nil || right == nil {
+				return false
+			}
+			return vmMatchLike(fmt.Sprintf("%v", left), fmt.Sprintf("%v", right))
+		case QP.TokenNotLike:
+			left := vm.evaluateExprOnRow(row, columns, e.Left)
+			right := vm.evaluateExprOnRow(row, columns, e.Right)
+			if left == nil || right == nil {
+				return false
+			}
+			return !vmMatchLike(fmt.Sprintf("%v", left), fmt.Sprintf("%v", right))
+		case QP.TokenBetween:
+			val := vm.evaluateExprOnRow(row, columns, e.Left)
+			if rangeExpr, ok := e.Right.(*QP.BinaryExpr); ok {
+				lo := vm.evaluateExprOnRow(row, columns, rangeExpr.Left)
+				hi := vm.evaluateExprOnRow(row, columns, rangeExpr.Right)
+				return vm.compareVals(val, lo) >= 0 && vm.compareVals(val, hi) <= 0
+			}
+			return false
+		case QP.TokenNotBetween:
+			val := vm.evaluateExprOnRow(row, columns, e.Left)
+			if rangeExpr, ok := e.Right.(*QP.BinaryExpr); ok {
+				lo := vm.evaluateExprOnRow(row, columns, rangeExpr.Left)
+				hi := vm.evaluateExprOnRow(row, columns, rangeExpr.Right)
+				return vm.compareVals(val, lo) < 0 || vm.compareVals(val, hi) > 0
+			}
+			return false
+		case QP.TokenIn:
+			val := vm.evaluateExprOnRow(row, columns, e.Left)
+			if listLit, ok := e.Right.(*QP.Literal); ok {
+				if items, ok := listLit.Value.([]interface{}); ok {
+					for _, item := range items {
+						if vm.compareVals(val, item) == 0 {
+							return true
+						}
+					}
+					return false
+				}
+			}
+			result := vm.evaluateBinaryOp(val, vm.evaluateExprOnRow(row, columns, e.Right), e.Op)
+			if bv, ok := result.(bool); ok {
+				return bv
+			}
+			return false
+		case QP.TokenNotIn:
+			val := vm.evaluateExprOnRow(row, columns, e.Left)
+			if listLit, ok := e.Right.(*QP.Literal); ok {
+				if items, ok := listLit.Value.([]interface{}); ok {
+					for _, item := range items {
+						if vm.compareVals(val, item) == 0 {
+							return false
+						}
+					}
+					return true
+				}
+			}
+			return true
 		default:
 			result := vm.evaluateBinaryOp(
 				vm.evaluateExprOnRow(row, columns, e.Left),
@@ -2605,6 +2729,38 @@ func (vm *VM) evaluateBoolExprOnRow(row map[string]interface{}, columns []string
 		}
 		return result != nil
 	}
+}
+
+// vmMatchLike matches a string against a LIKE pattern
+func vmMatchLike(value, pattern string) bool {
+	return matchLikePattern(value, pattern, 0, 0)
+}
+
+func matchLikePattern(value, pattern string, vi, pi int) bool {
+	if pi >= len(pattern) {
+		return vi >= len(value)
+	}
+	if vi >= len(value) {
+		for ; pi < len(pattern); pi++ {
+			if pattern[pi] != '%' {
+				return false
+			}
+		}
+		return true
+	}
+	pchar := pattern[pi]
+	if pchar == '%' {
+		for i := vi; i <= len(value); i++ {
+			if matchLikePattern(value, pattern, i, pi+1) {
+				return true
+			}
+		}
+		return false
+	}
+	if pchar == '_' || strings.ToUpper(string(pchar)) == strings.ToUpper(string(value[vi])) {
+		return matchLikePattern(value, pattern, vi+1, pi+1)
+	}
+	return false
 }
 
 

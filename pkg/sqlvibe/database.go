@@ -2,6 +2,7 @@ package sqlvibe
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
@@ -28,6 +29,7 @@ type Database struct {
 	columnChecks   map[string]map[string]QP.Expr       // table name -> column name -> CHECK expression
 	data           map[string][]map[string]interface{} // table name -> rows -> column name -> value
 	indexes        map[string]*IndexInfo               // index name -> index info
+	views          map[string]string                   // view name -> SELECT SQL
 	isRegistry     *IS.Registry                        // information_schema registry
 	txSnapshot     *dbSnapshot                         // snapshot for transaction rollback
 	tableBTrees    map[string]*DS.BTree                // table name -> B-Tree for storage
@@ -277,6 +279,7 @@ func Open(path string) (*Database, error) {
 		columnChecks:   make(map[string]map[string]QP.Expr),
 		data:           data,
 		indexes:        make(map[string]*IndexInfo),
+		views:          make(map[string]string),
 		tableBTrees:    make(map[string]*DS.BTree),
 	}, nil
 }
@@ -367,6 +370,11 @@ func (db *Database) Exec(sql string) (Result, error) {
 			return Result{}, fmt.Errorf("table %s already exists", stmt.Name)
 		}
 
+		// Handle CREATE TABLE ... AS SELECT
+		if stmt.AsSelect != nil {
+			return db.execCreateTableAsSelect(stmt)
+		}
+
 		schema := make(map[string]QE.ColumnType)
 		colTypes := make(map[string]string)
 		var pkCols []string
@@ -397,6 +405,10 @@ func (db *Database) Exec(sql string) (Result, error) {
 				db.columnChecks[stmt.Name][col.Name] = col.Check
 			}
 		}
+		// Store table-level CHECK constraints under special keys
+		for i, tableCheck := range stmt.TableChecks {
+			db.columnChecks[stmt.Name][fmt.Sprintf("__table_check_%d__", i)] = tableCheck
+		}
 		db.engine.RegisterTable(stmt.Name, schema)
 		db.tables[stmt.Name] = colTypes
 		var colOrder []string
@@ -424,13 +436,33 @@ func (db *Database) Exec(sql string) (Result, error) {
 		return db.execVMDML(sql, stmt.Table)
 	case "DropTableStmt":
 		stmt := ast.(*QP.DropTableStmt)
-		if _, exists := db.tables[stmt.Name]; exists {
-			delete(db.tables, stmt.Name)
-			delete(db.data, stmt.Name)
-			delete(db.primaryKeys, stmt.Name)
-			delete(db.columnDefaults, stmt.Name)
+		if _, exists := db.tables[stmt.Name]; !exists {
+			if stmt.IfExists {
+				return Result{}, nil
+			}
 		}
+		delete(db.tables, stmt.Name)
+		delete(db.data, stmt.Name)
+		delete(db.primaryKeys, stmt.Name)
+		delete(db.columnDefaults, stmt.Name)
+		delete(db.columnOrder, stmt.Name)
+		delete(db.columnChecks, stmt.Name)
+		delete(db.columnNotNull, stmt.Name)
+		delete(db.tableBTrees, stmt.Name)
 		return Result{}, nil
+	case "CreateViewStmt":
+		return db.execCreateView(ast.(*QP.CreateViewStmt), sql)
+	case "DropViewStmt":
+		stmt := ast.(*QP.DropViewStmt)
+		if _, exists := db.views[stmt.Name]; !exists {
+			if stmt.IfExists {
+				return Result{}, nil
+			}
+		}
+		delete(db.views, stmt.Name)
+		return Result{}, nil
+	case "AlterTableStmt":
+		return db.execAlterTable(ast.(*QP.AlterTableStmt))
 	case "CreateIndexStmt":
 		stmt := ast.(*QP.CreateIndexStmt)
 		if _, exists := db.indexes[stmt.Name]; exists {
@@ -548,6 +580,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		// Handle sqlite_master virtual table
 		if tableName == "sqlite_master" {
 			return db.querySqliteMaster(stmt)
+		}
+
+		// Handle views by substituting the view SQL
+		if viewSQL, isView := db.views[tableName]; isView {
+			return db.queryView(viewSQL, stmt, sql)
 		}
 
 		// Handle information_schema virtual tables
@@ -843,25 +880,30 @@ func (db *Database) querySqliteMaster(stmt *QP.SelectStmt) (*Rows, error) {
 			"sql":      sql,
 		})
 	}
+	// Include views
+	for viewName, viewSQL := range db.views {
+		allResults = append(allResults, map[string]interface{}{
+			"type":     "view",
+			"name":     viewName,
+			"tbl_name": viewName,
+			"rootpage": int64(0),
+			"sql":      "CREATE VIEW " + viewName + " AS " + viewSQL,
+		})
+	}
+	// Include indexes
+	for idxName, idx := range db.indexes {
+		allResults = append(allResults, map[string]interface{}{
+			"type":     "index",
+			"name":     idxName,
+			"tbl_name": idx.Table,
+			"rootpage": int64(0),
+			"sql":      fmt.Sprintf("CREATE INDEX %s ON %s", idxName, idx.Table),
+		})
+	}
 
 	filtered := make([]map[string]interface{}, 0)
 	for _, row := range allResults {
-		// Simple WHERE filtering for sqlite_master (limited support)
-		include := true
-		if stmt.Where != nil {
-			// Only support simple equality checks for now
-			if binExpr, ok := stmt.Where.(*QP.BinaryExpr); ok && binExpr.Op == QP.TokenEq {
-				if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
-					if lit, ok := binExpr.Right.(*QP.Literal); ok {
-						// Check if column value matches literal
-						if row[colRef.Name] != lit.Value {
-							include = false
-						}
-					}
-				}
-			}
-		}
-		if include {
+		if db.evalWhereOnMap(stmt.Where, row) {
 			filtered = append(filtered, row)
 		}
 	}
@@ -880,6 +922,48 @@ func (db *Database) querySqliteMaster(stmt *QP.SelectStmt) (*Rows, error) {
 			resultRow = append(resultRow, row[colName])
 		}
 		resultData = append(resultData, resultRow)
+	}
+
+	// Sort by name if ORDER BY name is requested
+	if stmt.OrderBy != nil {
+		for _, ob := range stmt.OrderBy {
+			if cr, ok := ob.Expr.(*QP.ColumnRef); ok && cr.Name == "name" {
+				sort.Slice(resultData, func(i, j int) bool {
+					nameIdx := -1
+					for k, c := range cols {
+						if c == "name" {
+							nameIdx = k
+							break
+						}
+					}
+					if nameIdx < 0 {
+						return false
+					}
+					ni := fmt.Sprintf("%v", resultData[i][nameIdx])
+					nj := fmt.Sprintf("%v", resultData[j][nameIdx])
+					if ob.Desc {
+						return ni > nj
+					}
+					return ni < nj
+				})
+			}
+		}
+	} else {
+		// Default sort by name for deterministic output
+		nameIdx := -1
+		for k, c := range cols {
+			if c == "name" {
+				nameIdx = k
+				break
+			}
+		}
+		if nameIdx >= 0 {
+			sort.Slice(resultData, func(i, j int) bool {
+				ni := fmt.Sprintf("%v", resultData[i][nameIdx])
+				nj := fmt.Sprintf("%v", resultData[j][nameIdx])
+				return ni < nj
+			})
+		}
 	}
 
 	return &Rows{Columns: cols, Data: resultData}, nil
@@ -1119,4 +1203,296 @@ func (db *Database) getRightColumns(right []map[string]interface{}) []string {
 		cols = append(cols, k)
 	}
 	return cols
+}
+
+// execCreateView handles CREATE VIEW
+func (db *Database) execCreateView(stmt *QP.CreateViewStmt, origSQL string) (Result, error) {
+if _, exists := db.views[stmt.Name]; exists {
+if stmt.IfNotExists {
+return Result{}, nil
+}
+return Result{}, fmt.Errorf("view %s already exists", stmt.Name)
+}
+// Also check tables
+if _, exists := db.tables[stmt.Name]; exists {
+return Result{}, fmt.Errorf("view %s already exists as a table", stmt.Name)
+}
+// Reconstruct the SELECT SQL from the statement - we need to store it
+// Find the AS keyword position in origSQL to extract SELECT part
+upper := strings.ToUpper(origSQL)
+asIdx := strings.Index(upper, " AS ")
+if asIdx < 0 {
+asIdx = strings.Index(upper, "\nAS\n")
+}
+var selectSQL string
+if asIdx >= 0 {
+selectSQL = strings.TrimSpace(origSQL[asIdx+4:])
+} else {
+// Fallback: rebuild from stmt
+selectSQL = "SELECT * FROM unknown"
+}
+db.views[stmt.Name] = selectSQL
+return Result{}, nil
+}
+
+// queryView executes a query against a view by executing the underlying SELECT
+func (db *Database) queryView(viewSQL string, outerStmt *QP.SelectStmt, origSQL string) (*Rows, error) {
+// Execute the underlying view SELECT
+rows, err := db.Query(viewSQL)
+if err != nil {
+return nil, err
+}
+if rows == nil {
+return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+}
+
+// Apply outer SELECT column filtering if needed
+if len(outerStmt.Columns) > 0 {
+if cr, ok := outerStmt.Columns[0].(*QP.ColumnRef); ok && cr.Name == "*" {
+// SELECT * - return all
+} else {
+// Filter to requested columns
+reqCols := make([]string, 0)
+colIdx := make(map[string]int)
+for i, col := range rows.Columns {
+colIdx[col] = i
+}
+for _, c := range outerStmt.Columns {
+if cr, ok := c.(*QP.ColumnRef); ok {
+reqCols = append(reqCols, cr.Name)
+} else if ae, ok := c.(*QP.AliasExpr); ok {
+if cr, ok := ae.Expr.(*QP.ColumnRef); ok {
+reqCols = append(reqCols, cr.Name)
+}
+}
+}
+if len(reqCols) > 0 {
+newData := make([][]interface{}, len(rows.Data))
+for i, row := range rows.Data {
+newRow := make([]interface{}, len(reqCols))
+for j, col := range reqCols {
+if idx, ok := colIdx[col]; ok {
+newRow[j] = row[idx]
+}
+}
+newData[i] = newRow
+}
+rows = &Rows{Columns: reqCols, Data: newData}
+}
+}
+}
+
+// Apply outer WHERE
+if outerStmt.Where != nil {
+colIdx := make(map[string]int)
+for i, col := range rows.Columns {
+colIdx[col] = i
+}
+filtered := make([][]interface{}, 0)
+for _, row := range rows.Data {
+rowMap := make(map[string]interface{})
+for col, idx := range colIdx {
+rowMap[col] = row[idx]
+}
+if db.evalWhereOnMap(outerStmt.Where, rowMap) {
+filtered = append(filtered, row)
+}
+}
+rows.Data = filtered
+}
+
+// Apply outer ORDER BY
+if len(outerStmt.OrderBy) > 0 {
+var err error
+rows, err = db.sortResults(rows, outerStmt.OrderBy)
+if err != nil {
+return nil, err
+}
+}
+
+// Apply outer LIMIT
+if outerStmt.Limit != nil {
+var err error
+rows, err = db.applyLimit(rows, outerStmt.Limit, outerStmt.Offset)
+if err != nil {
+return nil, err
+}
+}
+
+return rows, nil
+}
+
+// evalWhereOnMap evaluates a WHERE expression against a map row
+func (db *Database) evalWhereOnMap(expr QP.Expr, row map[string]interface{}) bool {
+if expr == nil {
+return true
+}
+switch e := expr.(type) {
+case *QP.BinaryExpr:
+switch e.Op {
+case QP.TokenAnd:
+return db.evalWhereOnMap(e.Left, row) && db.evalWhereOnMap(e.Right, row)
+case QP.TokenOr:
+return db.evalWhereOnMap(e.Left, row) || db.evalWhereOnMap(e.Right, row)
+default:
+lv := db.evalExprOnMap(e.Left, row)
+rv := db.evalExprOnMap(e.Right, row)
+return db.engine.CompareVals(lv, rv) == 0
+}
+case *QP.UnaryExpr:
+if e.Op == QP.TokenNot {
+return !db.evalWhereOnMap(e.Expr, row)
+}
+}
+return true
+}
+
+func (db *Database) evalExprOnMap(expr QP.Expr, row map[string]interface{}) interface{} {
+if expr == nil {
+return nil
+}
+switch e := expr.(type) {
+case *QP.Literal:
+return e.Value
+case *QP.ColumnRef:
+if v, ok := row[e.Name]; ok {
+return v
+}
+if idx := strings.LastIndex(e.Name, "."); idx >= 0 {
+return row[e.Name[idx+1:]]
+}
+return nil
+}
+return nil
+}
+
+// execCreateTableAsSelect handles CREATE TABLE ... AS SELECT
+func (db *Database) execCreateTableAsSelect(stmt *QP.CreateTableStmt) (Result, error) {
+// Execute the SELECT
+// Build SQL for the inner SELECT
+rows, err := db.execSelectStmt(stmt.AsSelect)
+if err != nil {
+return Result{}, err
+}
+if rows == nil {
+rows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
+}
+
+// Create the table with columns from SELECT result
+schema := make(map[string]QE.ColumnType)
+colTypes := make(map[string]string)
+db.columnDefaults[stmt.Name] = make(map[string]interface{})
+db.columnNotNull[stmt.Name] = make(map[string]bool)
+db.columnChecks[stmt.Name] = make(map[string]QP.Expr)
+
+for _, col := range rows.Columns {
+schema[col] = QE.ColumnType{Name: col, Type: "TEXT"}
+colTypes[col] = "TEXT"
+}
+db.engine.RegisterTable(stmt.Name, schema)
+db.tables[stmt.Name] = colTypes
+db.columnOrder[stmt.Name] = rows.Columns
+
+bt := DS.NewBTree(db.pm, 0, true)
+db.tableBTrees[stmt.Name] = bt
+
+// Insert rows
+db.data[stmt.Name] = make([]map[string]interface{}, 0, len(rows.Data))
+for _, row := range rows.Data {
+rowMap := make(map[string]interface{})
+for i, col := range rows.Columns {
+if i < len(row) {
+rowMap[col] = row[i]
+}
+}
+db.data[stmt.Name] = append(db.data[stmt.Name], rowMap)
+}
+
+return Result{}, nil
+}
+
+// execAlterTable handles ALTER TABLE statements
+func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
+switch stmt.Action {
+case "ADD_COLUMN":
+if _, exists := db.tables[stmt.Table]; !exists {
+return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
+}
+col := stmt.Column
+db.tables[stmt.Table][col.Name] = col.Type
+db.columnOrder[stmt.Table] = append(db.columnOrder[stmt.Table], col.Name)
+db.engine.RegisterTable(stmt.Table, db.buildSchema(stmt.Table))
+
+// Add default value for existing rows
+var defaultVal interface{}
+if col.Default != nil {
+defaultVal = db.evalConstExpr(col.Default)
+}
+
+// Update existing rows with the new column
+for i := range db.data[stmt.Table] {
+if db.data[stmt.Table][i] == nil {
+db.data[stmt.Table][i] = make(map[string]interface{})
+}
+db.data[stmt.Table][i][col.Name] = defaultVal
+}
+
+if col.Default != nil {
+if db.columnDefaults[stmt.Table] == nil {
+db.columnDefaults[stmt.Table] = make(map[string]interface{})
+}
+db.columnDefaults[stmt.Table][col.Name] = col.Default
+}
+if col.NotNull {
+if db.columnNotNull[stmt.Table] == nil {
+db.columnNotNull[stmt.Table] = make(map[string]bool)
+}
+db.columnNotNull[stmt.Table][col.Name] = true
+}
+return Result{}, nil
+
+case "RENAME_TO":
+if _, exists := db.tables[stmt.Table]; !exists {
+return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
+}
+// Rename table
+db.tables[stmt.NewName] = db.tables[stmt.Table]
+db.data[stmt.NewName] = db.data[stmt.Table]
+db.columnOrder[stmt.NewName] = db.columnOrder[stmt.Table]
+db.primaryKeys[stmt.NewName] = db.primaryKeys[stmt.Table]
+db.columnDefaults[stmt.NewName] = db.columnDefaults[stmt.Table]
+db.columnNotNull[stmt.NewName] = db.columnNotNull[stmt.Table]
+db.columnChecks[stmt.NewName] = db.columnChecks[stmt.Table]
+db.tableBTrees[stmt.NewName] = db.tableBTrees[stmt.Table]
+
+delete(db.tables, stmt.Table)
+delete(db.data, stmt.Table)
+delete(db.columnOrder, stmt.Table)
+delete(db.primaryKeys, stmt.Table)
+delete(db.columnDefaults, stmt.Table)
+delete(db.columnNotNull, stmt.Table)
+delete(db.columnChecks, stmt.Table)
+delete(db.tableBTrees, stmt.Table)
+return Result{}, nil
+}
+return Result{}, nil
+}
+
+func (db *Database) buildSchema(tableName string) map[string]QE.ColumnType {
+schema := make(map[string]QE.ColumnType)
+for col, typ := range db.tables[tableName] {
+schema[col] = QE.ColumnType{Name: col, Type: typ}
+}
+return schema
+}
+
+// evalConstExpr evaluates a constant expression (literal, etc.)
+func (db *Database) evalConstExpr(expr QP.Expr) interface{} {
+if expr == nil {
+return nil
+}
+if lit, ok := expr.(*QP.Literal); ok {
+return lit.Value
+}
+return nil
 }

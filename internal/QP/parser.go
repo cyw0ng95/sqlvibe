@@ -82,9 +82,12 @@ type DeleteStmt struct {
 func (d *DeleteStmt) NodeType() string { return "DeleteStmt" }
 
 type CreateTableStmt struct {
-	Name        string
-	Columns     []ColumnDef
-	IfNotExists bool
+	Name         string
+	Columns      []ColumnDef
+	IfNotExists  bool
+	Temporary    bool
+	AsSelect     *SelectStmt // CREATE TABLE ... AS SELECT
+	TableChecks  []Expr      // table-level CHECK constraints
 }
 
 func (c *CreateTableStmt) NodeType() string { return "CreateTableStmt" }
@@ -98,8 +101,36 @@ type ColumnDef struct {
 	Check      Expr // CHECK constraint expression
 }
 
+// CreateViewStmt represents CREATE VIEW
+type CreateViewStmt struct {
+	Name        string
+	Select      *SelectStmt
+	IfNotExists bool
+}
+
+func (c *CreateViewStmt) NodeType() string { return "CreateViewStmt" }
+
+// DropViewStmt represents DROP VIEW
+type DropViewStmt struct {
+	Name     string
+	IfExists bool
+}
+
+func (d *DropViewStmt) NodeType() string { return "DropViewStmt" }
+
+// AlterTableStmt represents ALTER TABLE
+type AlterTableStmt struct {
+	Table  string
+	Action string // "ADD_COLUMN" or "RENAME_TO"
+	Column *ColumnDef
+	NewName string
+}
+
+func (a *AlterTableStmt) NodeType() string { return "AlterTableStmt" }
+
 type DropTableStmt struct {
-	Name string
+	Name     string
+	IfExists bool
 }
 
 func (d *DropTableStmt) NodeType() string { return "DropTableStmt" }
@@ -274,6 +305,8 @@ func (p *Parser) Parse() (ASTNode, error) {
 			return p.parseCommit()
 		case "ROLLBACK":
 			return p.parseRollback()
+		case "ALTER":
+			return p.parseAlterTable()
 		}
 	case TokenExplain:
 		return p.parseExplain()
@@ -716,14 +749,22 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 		return p.parseCreateIndex(false)
 	}
 
-	if p.current().Literal == "TABLE" {
+	// Handle TEMPORARY/TEMP prefix
+	temporary := false
+	if strings.ToUpper(p.current().Literal) == "TEMPORARY" || strings.ToUpper(p.current().Literal) == "TEMP" {
+		temporary = true
 		p.advance()
-		stmt := &CreateTableStmt{}
+	}
+
+	// Handle VIEW
+	if strings.ToUpper(p.current().Literal) == "VIEW" {
+		p.advance()
+		stmt := &CreateViewStmt{}
 		if p.current().Type == TokenKeyword && p.current().Literal == "IF" {
 			p.advance()
-			if p.current().Type == TokenKeyword && p.current().Literal == "NOT" {
+			if p.current().Type == TokenNot {
 				p.advance()
-				if p.current().Type == TokenKeyword && p.current().Literal == "EXISTS" {
+				if p.current().Type == TokenExists {
 					stmt.IfNotExists = true
 					p.advance()
 				}
@@ -731,6 +772,46 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 		}
 		stmt.Name = p.current().Literal
 		p.advance()
+		// Consume AS
+		if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+			p.advance()
+		}
+		// Parse SELECT
+		sel, err := p.parseSelect()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Select = sel
+		return stmt, nil
+	}
+
+	if p.current().Literal == "TABLE" {
+		p.advance()
+		stmt := &CreateTableStmt{Temporary: temporary}
+		if p.current().Type == TokenKeyword && p.current().Literal == "IF" {
+			p.advance()
+			if p.current().Type == TokenNot {
+				p.advance()
+				if p.current().Type == TokenExists {
+					stmt.IfNotExists = true
+					p.advance()
+				}
+			}
+		}
+		// Handle TEMPORARY/TEMP prefix already consumed by caller
+		stmt.Name = p.current().Literal
+		p.advance()
+
+		// Handle CREATE TABLE ... AS SELECT
+		if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "AS" {
+			p.advance()
+			sel, err := p.parseSelect()
+			if err != nil {
+				return nil, err
+			}
+			stmt.AsSelect = sel
+			return stmt, nil
+		}
 
 		if p.current().Type == TokenLeftParen {
 			p.advance()
@@ -837,6 +918,15 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 					}
 				}
 
+				// Validate: column-level PKs must be singular
+				if col.PrimaryKey {
+					for _, existingCol := range stmt.Columns {
+						if existingCol.PrimaryKey {
+							return nil, fmt.Errorf("table %q has more than one primary key", stmt.Name)
+						}
+					}
+				}
+
 				stmt.Columns = append(stmt.Columns, col)
 
 				if p.current().Type != TokenComma {
@@ -884,7 +974,10 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 						p.advance()
 						if p.current().Type == TokenLeftParen {
 							p.advance()
-							_, _ = p.parseExpr()
+							checkExpr, _ := p.parseExpr()
+							if checkExpr != nil {
+								stmt.TableChecks = append(stmt.TableChecks, checkExpr)
+							}
 							if p.current().Type == TokenRightParen {
 								p.advance()
 							}
@@ -964,15 +1057,158 @@ func (p *Parser) parseDrop() (ASTNode, error) {
 
 	if p.current().Literal == "TABLE" {
 		p.advance()
-		return &DropTableStmt{Name: p.current().Literal}, nil
+		// Parse optional IF EXISTS
+		ifExists := false
+		if p.current().Type == TokenKeyword && p.current().Literal == "IF" {
+			p.advance()
+			if p.current().Type == TokenNot {
+				p.advance()
+			}
+			if p.current().Type == TokenExists {
+				ifExists = true
+				p.advance()
+			}
+		}
+		// Skip RESTRICT/CASCADE keywords - but RESTRICT should error like SQLite
+		name := p.current().Literal
+		p.advance()
+		for p.current().Type == TokenKeyword &&
+			(p.current().Literal == "RESTRICT" || p.current().Literal == "CASCADE") {
+			if p.current().Literal == "RESTRICT" {
+				return nil, fmt.Errorf("near \"RESTRICT\": syntax error")
+			}
+			p.advance()
+		}
+		return &DropTableStmt{Name: name, IfExists: ifExists}, nil
+	}
+
+	if strings.ToUpper(p.current().Literal) == "VIEW" {
+		p.advance()
+		ifExists := false
+		if p.current().Type == TokenKeyword && p.current().Literal == "IF" {
+			p.advance()
+			if p.current().Type == TokenNot {
+				p.advance()
+			}
+			if p.current().Type == TokenExists {
+				ifExists = true
+				p.advance()
+			}
+		}
+		name := p.current().Literal
+		p.advance()
+		for p.current().Type == TokenKeyword &&
+			(p.current().Literal == "RESTRICT" || p.current().Literal == "CASCADE") {
+			if p.current().Literal == "RESTRICT" {
+				return nil, fmt.Errorf("near \"RESTRICT\": syntax error")
+			}
+			p.advance()
+		}
+		return &DropViewStmt{Name: name, IfExists: ifExists}, nil
 	}
 
 	if p.current().Literal == "INDEX" {
 		p.advance()
+		// Handle IF EXISTS
+		if p.current().Type == TokenKeyword && p.current().Literal == "IF" {
+			p.advance()
+			if p.current().Type == TokenNot {
+				p.advance()
+			}
+			if p.current().Type == TokenExists {
+				p.advance() // consume EXISTS, index name is next
+			}
+		}
 		return &DropIndexStmt{Name: p.current().Literal}, nil
 	}
 
 	return nil, nil
+}
+
+func (p *Parser) parseAlterTable() (ASTNode, error) {
+	p.advance() // consume "ALTER"
+	if p.current().Type == TokenKeyword && p.current().Literal == "TABLE" {
+		p.advance() // consume "TABLE"
+	}
+	stmt := &AlterTableStmt{
+		Table: p.current().Literal,
+	}
+	p.advance() // consume table name
+
+	kw := strings.ToUpper(p.current().Literal)
+	switch kw {
+	case "ADD":
+		p.advance() // consume "ADD"
+		// Optional COLUMN keyword
+		if strings.ToUpper(p.current().Literal) == "COLUMN" {
+			p.advance()
+		}
+		col := &ColumnDef{
+			Name: p.current().Literal,
+		}
+		p.advance()
+		if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+			col.Type = p.current().Literal
+			p.advance()
+			// Parse type modifiers
+			if p.current().Type == TokenLeftParen {
+				for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+					p.advance()
+				}
+				if p.current().Type == TokenRightParen {
+					p.advance()
+				}
+			}
+		}
+		// Parse column constraints
+		for p.current().Type == TokenKeyword || p.current().Type == TokenNot {
+			keyword := strings.ToUpper(p.current().Literal)
+			if p.current().Type == TokenNot {
+				p.advance()
+				if strings.ToUpper(p.current().Literal) == "NULL" {
+					col.NotNull = true
+					p.advance()
+				}
+			} else if keyword == "NOT" {
+				p.advance()
+				if strings.ToUpper(p.current().Literal) == "NULL" {
+					col.NotNull = true
+					p.advance()
+				}
+			} else if keyword == "DEFAULT" {
+				p.advance()
+				defExpr, err := p.parseExpr()
+				if err != nil {
+					break
+				}
+				col.Default = defExpr
+			} else if keyword == "PRIMARY" {
+				col.PrimaryKey = true
+				p.advance()
+				if strings.ToUpper(p.current().Literal) == "KEY" {
+					p.advance()
+				}
+			} else if keyword == "UNIQUE" || keyword == "REFERENCES" || keyword == "CHECK" {
+				// Skip for simplicity
+				for p.current().Type != TokenEOF && p.current().Type != TokenComma {
+					p.advance()
+				}
+				break
+			} else {
+				break
+			}
+		}
+		stmt.Action = "ADD_COLUMN"
+		stmt.Column = col
+	case "RENAME":
+		p.advance() // consume "RENAME"
+		if strings.ToUpper(p.current().Literal) == "TO" {
+			p.advance()
+		}
+		stmt.Action = "RENAME_TO"
+		stmt.NewName = p.current().Literal
+	}
+	return stmt, nil
 }
 
 func (p *Parser) parsePragma() (ASTNode, error) {
@@ -1835,17 +2071,22 @@ return false
 // applyLikeEscape pre-processes a LIKE pattern by converting escape sequences.
 // It replaces escapeChar+X with \X (backslash escape used by likeMatchRecursive).
 func applyLikeEscape(pattern string, escapeChar rune) string {
-runes := []rune(pattern)
-out := make([]rune, 0, len(runes))
-for i := 0; i < len(runes); i++ {
-if runes[i] == escapeChar && i+1 < len(runes) {
-next := runes[i+1]
-// escape_char followed by any char: treat next char as literal
-out = append(out, '\\', next)
-i++ // skip next char
-} else {
-out = append(out, runes[i])
-}
-}
-return string(out)
+	runes := []rune(pattern)
+	out := make([]rune, 0, len(runes))
+	for i := 0; i < len(runes); i++ {
+		if runes[i] == escapeChar {
+			if i+1 < len(runes) {
+				next := runes[i+1]
+				// escape_char followed by any char: treat next char as literal
+				out = append(out, '\\', next)
+				i++ // skip next char
+			} else {
+				// Escape char at end of pattern - invalid, never matches
+				return "\x00__INVALID_ESCAPE_PATTERN__"
+			}
+		} else {
+			out = append(out, runes[i])
+		}
+	}
+	return string(out)
 }
