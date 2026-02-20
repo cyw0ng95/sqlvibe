@@ -840,6 +840,21 @@ func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error)
 		return rows, nil
 	}
 
+	// Validate integer ORDER BY column references
+	numCols := len(rows.Columns)
+	for i, ob := range orderBy {
+		if lit, ok := ob.Expr.(*QP.Literal); ok {
+			if n, ok := lit.Value.(int64); ok {
+				// SQLite uses 1-based integer ORDER BY column references
+				if n < 1 || int(n) > numCols {
+					return nil, fmt.Errorf("%dst ORDER BY term out of range - should be between 1 and %d", i+1, numCols)
+				}
+				// Replace literal with column reference (1-based → 0-based)
+				orderBy[i].Expr = &QP.ColumnRef{Name: rows.Columns[n-1]}
+			}
+		}
+	}
+
 	sorted := db.engine.SortRows(rows.Data, orderBy, rows.Columns)
 	return &Rows{Columns: rows.Columns, Data: sorted}, nil
 }

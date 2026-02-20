@@ -312,13 +312,22 @@ func (qe *QueryEngine) SortRows(data [][]interface{}, orderBy []QP.OrderBy, cols
 			if nullA && nullB {
 				cmp = 0
 			} else if nullA {
-				if ob.Desc {
-					cmp = 1
+				// NULL handling with NULLS FIRST/LAST
+				if ob.Nulls == "FIRST" {
+					cmp = -1 // NULLs come first
+				} else if ob.Nulls == "LAST" {
+					cmp = 1 // NULLs come last
+				} else if ob.Desc {
+					cmp = 1 // Default for DESC: NULLs last
 				} else {
-					cmp = -1
+					cmp = -1 // Default for ASC: NULLs first
 				}
 			} else if nullB {
-				if ob.Desc {
+				if ob.Nulls == "FIRST" {
+					cmp = 1
+				} else if ob.Nulls == "LAST" {
+					cmp = -1
+				} else if ob.Desc {
 					cmp = -1
 				} else {
 					cmp = 1

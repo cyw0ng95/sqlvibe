@@ -628,8 +628,16 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		if p.current().Literal == "BY" {
 			p.advance()
 			for {
+				// Detect invalid ORDER BY expressions starting with IS keyword
+				if p.current().Type == TokenIs {
+					p.parseError = fmt.Errorf("near \"IS\": syntax error")
+					break
+				}
 				expr, err := p.parseExpr()
 				if err != nil {
+					break
+				}
+				if expr == nil {
 					break
 				}
 				ob := OrderBy{Expr: expr, Desc: false, Nulls: ""}
@@ -642,12 +650,17 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				// NULLS FIRST/LAST and bare FIRST/LAST are not supported by the SQLite version used in testing
 				curLit := strings.ToUpper(p.current().Literal)
 				if curLit == "NULLS" {
-					p.parseError = fmt.Errorf("near \"FIRST\": syntax error")
 					p.advance() // consume NULLS
-					if strings.ToUpper(p.current().Literal) == "FIRST" || strings.ToUpper(p.current().Literal) == "LAST" {
+					curLit2 := strings.ToUpper(p.current().Literal)
+					if curLit2 == "FIRST" {
+						ob.Nulls = "FIRST"
+						p.advance()
+					} else if curLit2 == "LAST" {
+						ob.Nulls = "LAST"
 						p.advance()
 					}
 				} else if curLit == "FIRST" || curLit == "LAST" {
+					// Bare FIRST/LAST after ORDER BY expression (e.g., "IS NULL FIRST") is not supported
 					p.parseError = fmt.Errorf("near \"%s\": syntax error", p.current().Literal)
 					p.advance()
 				}

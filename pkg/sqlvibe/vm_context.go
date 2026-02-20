@@ -2,12 +2,63 @@ package sqlvibe
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 	"github.com/sqlvibe/sqlvibe/internal/util"
 )
+
+// applyTypeAffinity coerces row values to match declared column type affinities.
+// This mirrors SQLite's type affinity rules.
+func (db *Database) applyTypeAffinity(tableName string, row map[string]interface{}) {
+	colTypes, ok := db.tables[tableName]
+	if !ok {
+		return
+	}
+	for colName, declaredType := range colTypes {
+		val, exists := row[colName]
+		if !exists || val == nil {
+			continue
+		}
+		upper := strings.ToUpper(declaredType)
+		switch {
+		case strings.Contains(upper, "REAL") || strings.Contains(upper, "FLOAT") || strings.Contains(upper, "DOUBLE"):
+			// REAL affinity: coerce integers and numeric strings to float64
+			switch v := val.(type) {
+			case int64:
+				row[colName] = float64(v)
+			case int:
+				row[colName] = float64(v)
+			case string:
+				if f, err := strconv.ParseFloat(v, 64); err == nil {
+					row[colName] = f
+				}
+			}
+		case strings.Contains(upper, "INT"):
+			// INTEGER affinity: coerce real values that are integers to int64
+			switch v := val.(type) {
+			case float64:
+				if v == float64(int64(v)) {
+					row[colName] = int64(v)
+				}
+			case string:
+				if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+					row[colName] = i
+				}
+			}
+		case strings.Contains(upper, "TEXT") || strings.Contains(upper, "CHAR") || strings.Contains(upper, "CLOB"):
+			// TEXT affinity: coerce non-strings to their string representation
+			switch v := val.(type) {
+			case int64:
+				row[colName] = strconv.FormatInt(v, 10)
+			case float64:
+				row[colName] = strconv.FormatFloat(v, 'g', -1, 64)
+			}
+		}
+	}
+}
 
 // autoAssignPK assigns an auto-increment value to a single INTEGER PRIMARY KEY column
 // when its value is nil, mimicking SQLite's rowid alias behavior.
@@ -153,6 +204,9 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		if ctx.db.data[tableName] == nil {
 			ctx.db.data[tableName] = make([]map[string]interface{}, 0)
 		}
+
+		// Apply type affinity coercion based on declared column types
+		ctx.db.applyTypeAffinity(tableName, row)
 
 		// Auto-assign integer primary key if nil
 		ctx.db.autoAssignPK(tableName, row)
