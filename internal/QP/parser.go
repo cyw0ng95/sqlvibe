@@ -245,6 +245,17 @@ type AliasExpr struct {
 
 func (e *AliasExpr) exprNode() {}
 
+// WindowFuncExpr represents a window function call: func(...) OVER ([PARTITION BY ...] [ORDER BY ...])
+type WindowFuncExpr struct {
+	Name      string // Function name: COUNT, SUM, AVG, LAG, LEAD, FIRST_VALUE, LAST_VALUE, ROW_NUMBER, RANK
+	Args      []Expr // Function arguments
+	IsStar    bool   // COUNT(*)
+	Partition []Expr // PARTITION BY expressions
+	OrderBy   []Expr // ORDER BY expressions (simplified: no ASC/DESC for now)
+}
+
+func (e *WindowFuncExpr) exprNode() {}
+
 type CaseExpr struct {
 	Operand Expr
 	Whens   []CaseWhen
@@ -1985,18 +1996,21 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		p.advance()
 		return &ColumnRef{Name: "*"}, nil
 	case TokenKeyword:
-		if tok.Literal == "AVG" || tok.Literal == "MIN" || tok.Literal == "MAX" || tok.Literal == "COUNT" || tok.Literal == "SUM" || tok.Literal == "COALESCE" || tok.Literal == "IFNULL" || tok.Literal == "NULLIF" {
+		if tok.Literal == "AVG" || tok.Literal == "MIN" || tok.Literal == "MAX" || tok.Literal == "COUNT" || tok.Literal == "SUM" || tok.Literal == "COALESCE" || tok.Literal == "IFNULL" || tok.Literal == "NULLIF" || tok.Literal == "LAG" || tok.Literal == "LEAD" || tok.Literal == "FIRST_VALUE" || tok.Literal == "LAST_VALUE" || tok.Literal == "ROW_NUMBER" || tok.Literal == "RANK" || tok.Literal == "DENSE_RANK" || tok.Literal == "NTILE" {
 			p.advance()
 			if p.current().Type == TokenLeftParen {
 				p.advance()
 
 				// Handle DISTINCT or ALL keywords in aggregate functions
 				distinct := false
+				isStar := false
 				if p.current().Type == TokenKeyword && p.current().Literal == "DISTINCT" {
 					distinct = true
 					p.advance()
 				} else if p.current().Type == TokenAll {
 					p.advance()
+				} else if p.current().Type == TokenAsterisk {
+					isStar = true
 				}
 
 				args := make([]Expr, 0)
@@ -2011,6 +2025,15 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 					}
 				}
 				p.expect(TokenRightParen)
+				// Check for OVER clause (window function)
+				if p.current().Type == TokenKeyword && p.current().Literal == "OVER" {
+					p.advance() // consume OVER
+					partition, orderBy, err := p.parseWindowSpec()
+					if err != nil {
+						return nil, err
+					}
+					return &WindowFuncExpr{Name: tok.Literal, Args: args, IsStar: isStar, Partition: partition, OrderBy: orderBy}, nil
+				}
 				return &FuncCall{Name: tok.Literal, Args: args, Distinct: distinct}, nil
 			}
 			// Keyword used as column reference (e.g., alias 'count' in HAVING count > 1)
@@ -2266,6 +2289,84 @@ func (p *Parser) parseWithClause() (ASTNode, error) {
 	}
 	mainSelect.CTEs = ctes
 	return mainSelect, nil
+}
+
+// parseWindowSpec parses the window specification after OVER: ([PARTITION BY ...] [ORDER BY ...])
+func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []Expr, err error) {
+	if p.current().Type != TokenLeftParen {
+		return nil, nil, nil // OVER without parens - treat as empty window
+	}
+	p.advance() // consume '('
+
+	// Parse PARTITION BY
+	if p.current().Type == TokenKeyword && p.current().Literal == "PARTITION" {
+		p.advance() // consume PARTITION
+		if p.current().Type == TokenKeyword && p.current().Literal == "BY" {
+			p.advance() // consume BY
+		}
+		for !p.isEOF() && p.current().Type != TokenRightParen {
+			if p.current().Type == TokenKeyword && p.current().Literal == "ORDER" {
+				break
+			}
+			expr, e := p.parseExpr()
+			if e != nil {
+				return nil, nil, e
+			}
+			partition = append(partition, expr)
+			if p.current().Type == TokenComma {
+				p.advance()
+			}
+		}
+	}
+
+	// Parse ORDER BY
+	if p.current().Type == TokenKeyword && p.current().Literal == "ORDER" {
+		p.advance() // consume ORDER
+		if p.current().Type == TokenKeyword && p.current().Literal == "BY" {
+			p.advance() // consume BY
+		}
+		for !p.isEOF() && p.current().Type != TokenRightParen {
+			expr, e := p.parseExpr()
+			if e != nil {
+				return nil, nil, e
+			}
+			// Skip ASC/DESC
+			if p.current().Type == TokenKeyword && (p.current().Literal == "ASC" || p.current().Literal == "DESC") {
+				p.advance()
+			}
+			// Skip NULLS FIRST/LAST
+			if p.current().Type == TokenKeyword && p.current().Literal == "NULLS" {
+				p.advance()
+				if p.current().Type == TokenKeyword && (p.current().Literal == "FIRST" || p.current().Literal == "LAST") {
+					p.advance()
+				}
+			}
+			orderBy = append(orderBy, expr)
+			if p.current().Type == TokenComma {
+				p.advance()
+			}
+		}
+	}
+
+	// Skip ROWS/RANGE frame spec
+	if p.current().Type == TokenKeyword && (p.current().Literal == "ROWS" || p.current().Literal == "RANGE") {
+		// consume until closing paren
+		depth := 1
+		for !p.isEOF() && depth > 0 {
+			if p.current().Type == TokenLeftParen {
+				depth++
+			} else if p.current().Type == TokenRightParen {
+				depth--
+				if depth == 0 {
+					break
+				}
+			}
+			p.advance()
+		}
+	}
+
+	p.expect(TokenRightParen)
+	return partition, orderBy, nil
 }
 
 // evalConstExpr evaluates a constant expression (one with no column references)

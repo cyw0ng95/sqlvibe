@@ -157,6 +157,20 @@ var keywords = map[string]TokenType{
 	"CURRENT_TIMESTAMP": TokenKeyword,
 	"LOCALTIME":         TokenKeyword,
 	"LOCALTIMESTAMP":    TokenKeyword,
+	"OVER":              TokenKeyword,
+	"PARTITION":         TokenKeyword,
+	"LAG":               TokenKeyword,
+	"LEAD":              TokenKeyword,
+	"FIRST_VALUE":       TokenKeyword,
+	"LAST_VALUE":        TokenKeyword,
+	"ROW_NUMBER":        TokenKeyword,
+	"RANK":              TokenKeyword,
+	"DENSE_RANK":        TokenKeyword,
+	"NTILE":             TokenKeyword,
+	"UNBOUNDED":         TokenKeyword,
+	"PRECEDING":         TokenKeyword,
+	"FOLLOWING":         TokenKeyword,
+	"CURRENT":           TokenKeyword,
 }
 
 type Token struct {

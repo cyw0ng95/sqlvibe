@@ -682,6 +682,10 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		// This allows SQLite-style alias references like: SELECT a AS x ... WHERE x > 0
 		resolveSelectAliases(stmt)
 
+		// Extract and replace window function columns with NULL placeholders for VM execution
+		// Window functions will be computed as a post-processing step
+		windowFuncs, windowExtraCols := extractWindowFunctions(stmt)
+
 		// Handle derived table in FROM clause: SELECT ... FROM (SELECT ...) AS alias
 		if stmt.From.Subquery != nil {
 			return db.execDerivedTableQuery(stmt)
@@ -780,6 +784,14 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 		}
 
+		// Apply window functions if any exist in SELECT columns
+		if len(windowFuncs) > 0 {
+			rows, err = applyWindowFunctionsToRows(rows, windowFuncs, windowExtraCols)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		// Handle ORDER BY - sort results
 		if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
 			rows, err = db.sortResults(rows, stmt.OrderBy)
@@ -797,6 +809,16 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		}
 
 		return rows, nil
+	}
+
+	// For non-SELECT DML statements (INSERT, UPDATE, DELETE) called via Query(),
+	// execute them via Exec and return empty results (matching SQLite driver behavior).
+	if ast.NodeType() == "InsertStmt" || ast.NodeType() == "UpdateStmt" || ast.NodeType() == "DeleteStmt" || ast.NodeType() == "CreateTableStmt" || ast.NodeType() == "DropTableStmt" || ast.NodeType() == "CreateViewStmt" || ast.NodeType() == "DropViewStmt" || ast.NodeType() == "AlterTableStmt" || ast.NodeType() == "CreateIndexStmt" || ast.NodeType() == "DropIndexStmt" {
+		_, err := db.Exec(sql)
+		if err != nil {
+			return nil, err
+		}
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
 
 	return nil, nil

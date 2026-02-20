@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -2515,14 +2516,25 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 	for key := range groups {
 		groupKeys = append(groupKeys, key)
 	}
-	// Sort the keys
-	for i := 0; i < len(groupKeys); i++ {
-		for j := i + 1; j < len(groupKeys); j++ {
-			if groupKeys[i] > groupKeys[j] {
-				groupKeys[i], groupKeys[j] = groupKeys[j], groupKeys[i]
+	// Sort the keys: NULL ("<nil>") groups sort first (matching SQLite behavior),
+	// then remaining keys in ascending order. Try numeric comparison when both
+	// keys are parseable as numbers (so "10" > "3" numerically).
+	sort.SliceStable(groupKeys, func(i, j int) bool {
+		ki, kj := groupKeys[i], groupKeys[j]
+		if ki == "<nil>" {
+			return true
+		}
+		if kj == "<nil>" {
+			return false
+		}
+		// Try numeric comparison
+		if fi, erri := strconv.ParseFloat(ki, 64); erri == nil {
+			if fj, errj := strconv.ParseFloat(kj, 64); errj == nil {
+				return fi < fj
 			}
 		}
-	}
+		return ki < kj
+	})
 
 	// SQL standard: aggregate without GROUP BY on empty table must return 1 row
 	// with COUNT=0 and NULL for other aggregates.
@@ -3315,6 +3327,38 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 	switch e := expr.(type) {
 	case *QP.FuncCall:
 		funcName := strings.ToUpper(e.Name)
+		argKey := fmt.Sprintf("%v", e.Args)
+		for i, aggDef := range aggInfo.Aggregates {
+			if aggDef.Function != funcName {
+				continue
+			}
+			// Match by args too (e.g., SUM(i) vs SUM(r))
+			if fmt.Sprintf("%v", aggDef.Args) != argKey {
+				continue
+			}
+			switch funcName {
+			case "COUNT":
+				if aggDef.Distinct && state.DistinctSets[i] != nil {
+					return int64(len(state.DistinctSets[i]))
+				}
+				if isCountStar(aggDef) {
+					return int64(state.Count)
+				}
+				return int64(state.Counts[i])
+			case "SUM":
+				return state.Sums[i]
+			case "AVG":
+				if state.Counts[i] > 0 && state.Sums[i] != nil {
+					return vm.divideValues(state.Sums[i], int64(state.Counts[i]))
+				}
+				return nil
+			case "MIN":
+				return state.Mins[i]
+			case "MAX":
+				return state.Maxs[i]
+			}
+		}
+		// Fallback: if no arg-matching entry found, try first matching function name
 		for i, aggDef := range aggInfo.Aggregates {
 			if aggDef.Function != funcName {
 				continue

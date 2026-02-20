@@ -507,21 +507,56 @@ func (c *Compiler) compileJoinChain3(tables []*QP.TableRef, joinSteps []chainJoi
 	t1LeftCheckPos := len(c.program.Instructions)
 	if isLeft0 {
 		skipNullRow0 := c.program.EmitOp(VM.OpIf, int32(matchReg0), 0)
-		// Re-read t1 columns; emit NULL for t2 and t3 columns
-		for i, col := range columns {
-			if c.exprCursorID(col) >= 1 {
-				c.program.EmitOp(VM.OpNull, int32(colRegs[i]), 0)
-			} else {
-				c.emitColumnForLeftJoinNullRow(col, colRegs[i])
+		if !isLeft1 && len(joinSteps) > 1 && joinSteps[1].cond != nil {
+			// Mixed LEFT JOIN t2 + INNER JOIN t3: scan t3 for matches before emitting null-t2 row.
+			// Only emit a row if at least one t3 row matches the INNER JOIN condition.
+			nullRewind2 := c.program.EmitOp(VM.OpRewind, 2, 0)
+			nullT3LoopStart := len(c.program.Instructions)
+			// Re-read t1 columns; emit NULL for t2 columns (t3 columns will be filled from cursor 2)
+			for i, col := range columns {
+				if c.exprCursorID(col) == 1 {
+					c.program.EmitOp(VM.OpNull, int32(colRegs[i]), 0)
+				} else if c.exprCursorID(col) != 2 {
+					c.emitColumnForLeftJoinNullRow(col, colRegs[i])
+				} else {
+					reg := c.compileExpr(col)
+					c.program.EmitOp(VM.OpMove, int32(reg), int32(colRegs[i]))
+				}
 			}
-		}
-		if where != nil {
-			nullWhere0Reg := c.compileExpr(where)
-			nullWhere0Skip := c.program.EmitOp(VM.OpIfNot, int32(nullWhere0Reg), 0)
-			c.program.EmitResultRow(colRegs)
-			c.program.Instructions[nullWhere0Skip].P2 = int32(len(c.program.Instructions))
+			null23CondReg := c.compileExpr(joinSteps[1].cond)
+			nullSkip23 := c.program.EmitOp(VM.OpIfNot, int32(null23CondReg), 0)
+			if where != nil {
+				nullWhereReg := c.compileExpr(where)
+				nullWhereSkip := c.program.EmitOp(VM.OpIfNot, int32(nullWhereReg), 0)
+				c.program.EmitResultRow(colRegs)
+				c.program.Instructions[nullWhereSkip].P2 = int32(len(c.program.Instructions))
+			} else {
+				c.program.EmitResultRow(colRegs)
+			}
+			nullT3NextPos := len(c.program.Instructions)
+			nullNext2 := c.program.EmitOp(VM.OpNext, 2, 0)
+			c.program.EmitGoto(nullT3LoopStart)
+			c.program.Instructions[nullSkip23].P2 = int32(nullT3NextPos)
+			nullT3DonePos := len(c.program.Instructions)
+			c.program.FixupWithPos(nullRewind2, nullT3DonePos)
+			c.program.FixupWithPos(nullNext2, nullT3DonePos)
 		} else {
-			c.program.EmitResultRow(colRegs)
+			// Pure LEFT JOIN (no INNER JOIN after): emit null row for t2 and t3
+			for i, col := range columns {
+				if c.exprCursorID(col) >= 1 {
+					c.program.EmitOp(VM.OpNull, int32(colRegs[i]), 0)
+				} else {
+					c.emitColumnForLeftJoinNullRow(col, colRegs[i])
+				}
+			}
+			if where != nil {
+				nullWhere0Reg := c.compileExpr(where)
+				nullWhere0Skip := c.program.EmitOp(VM.OpIfNot, int32(nullWhere0Reg), 0)
+				c.program.EmitResultRow(colRegs)
+				c.program.Instructions[nullWhere0Skip].P2 = int32(len(c.program.Instructions))
+			} else {
+				c.program.EmitResultRow(colRegs)
+			}
 		}
 		c.program.Instructions[skipNullRow0].P2 = int32(len(c.program.Instructions))
 	}
@@ -1197,9 +1232,11 @@ func extractAggregatesFromExpr(expr QP.Expr, aggInfo *VM.AggregateInfo) {
 		upperName := strings.ToUpper(e.Name)
 		switch upperName {
 		case "COUNT", "SUM", "AVG", "MIN", "MAX":
-			// Check if already registered
+			// Check if already registered with the same args (not just same function name)
+			// e.g., SUM(i) and SUM(r) are different aggregates
+			argKey := fmt.Sprintf("%v", e.Args)
 			for _, existing := range aggInfo.Aggregates {
-				if existing.Function == upperName {
+				if existing.Function == upperName && fmt.Sprintf("%v", existing.Args) == argKey {
 					return
 				}
 			}

@@ -423,20 +423,29 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		// Don't set TableColIndices for JOINs - use TableSchemas instead
 		cg.SetMultiTableSchema(multiTableSchemas, tableCols)
 		// Build TableColSources for deterministic column-to-table assignment
-		// tableCols = leftCols + rightCols (or reordered for RIGHT JOIN)
-		// Use current stmt.From.Name (which may have been swapped for RIGHT JOIN)
-		leftTableName := stmt.From.Name
-		rightTableName := stmt.From.Join.Right.Name
-		leftColsLen := len(db.columnOrder[leftTableName])
-		rightColsLen := len(db.columnOrder[rightTableName])
+		// Use alias when available to correctly handle self-joins (e.g. t1 t1a JOIN t1 t1b)
+		leftRef := stmt.From.Name
+		if stmt.From.Alias != "" {
+			leftRef = stmt.From.Alias
+		}
+		rightRef := stmt.From.Join.Right.Name
+		if stmt.From.Join.Right.Alias != "" {
+			rightRef = stmt.From.Join.Right.Alias
+		}
+		leftColsLen := len(db.columnOrder[stmt.From.Name])
+		rightColsLen := len(db.columnOrder[stmt.From.Join.Right.Name])
 		sources := make([]string, len(tableCols))
 		for i := range tableCols {
 			if i < leftColsLen {
-				sources[i] = leftTableName
+				sources[i] = leftRef
 			} else if i < leftColsLen+rightColsLen {
-				sources[i] = rightTableName
+				sources[i] = rightRef
 			} else if stmt.From.Join.Right.Join != nil {
-				sources[i] = stmt.From.Join.Right.Join.Right.Name
+				thirdRef := stmt.From.Join.Right.Join.Right.Name
+				if stmt.From.Join.Right.Join.Right.Alias != "" {
+					thirdRef = stmt.From.Join.Right.Join.Right.Alias
+				}
+				sources[i] = thirdRef
 			}
 		}
 		cg.TableColSources = sources
