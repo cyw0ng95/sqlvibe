@@ -946,10 +946,10 @@ func (vm *VM) Exec(ctx interface{}) error {
 					}
 
 					// Apply precision and scale if specified
+					// Note: SQLite does NOT round for DECIMAL/NUMERIC - just returns float value
 					if precision > 0 && scale > 0 {
-						// Round to specified scale
-						multiplier := math.Pow(10, float64(scale))
-						floatVal = math.Round(floatVal*multiplier) / multiplier
+						// SQLite compatibility: don't round, just pass through as float
+						_ = precision
 					}
 
 					vm.registers[inst.P1] = floatVal
@@ -2648,6 +2648,55 @@ func (vm *VM) evaluateAggregateArg(row map[string]interface{}, columns []string,
 	return vm.evaluateExprOnRow(row, columns, args[0])
 }
 
+// applyTypeCast applies a SQL type cast to a value, returning the cast result.
+func (vm *VM) applyTypeCast(val interface{}, typeName string) interface{} {
+	if val == nil {
+		return nil
+	}
+	upperType := strings.ToUpper(typeName)
+	switch upperType {
+	case "INTEGER", "INT":
+		switch v := val.(type) {
+		case int64:
+			return v
+		case float64:
+			return int64(v)
+		case string:
+			if iv, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+				return iv
+			} else if fv, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+				return int64(fv)
+			}
+			return int64(0)
+		}
+	case "REAL", "FLOAT", "DOUBLE":
+		switch v := val.(type) {
+		case float64:
+			return v
+		case int64:
+			return float64(v)
+		case string:
+			if fv, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+				return fv
+			}
+			return float64(0)
+		}
+	case "TEXT":
+		if b, ok := val.([]byte); ok {
+			return string(b)
+		}
+		return fmt.Sprintf("%v", val)
+	case "BLOB":
+		if s, ok := val.(string); ok {
+			return []byte(s)
+		}
+		if b, ok := val.([]byte); ok {
+			return b
+		}
+	}
+	return val
+}
+
 // evaluateExprOnRow evaluates an expression against a row
 func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, expr QP.Expr) interface{} {
 	if expr == nil {
@@ -2686,6 +2735,9 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 		return vm.evaluateBinaryOp(left, right, e.Op)
 	case *QP.FuncCall:
 		return vm.evaluateFuncCallOnRow(row, columns, e)
+	case *QP.CastExpr:
+		val := vm.evaluateExprOnRow(row, columns, e.Expr)
+		return vm.applyTypeCast(val, e.TypeSpec.Name)
 	default:
 		return nil
 	}
@@ -2980,6 +3032,18 @@ func (vm *VM) resolveSelectExpr(expr QP.Expr, state *AggregateState, aggInfo *Ag
 		return vm.resolveHavingOperand(expr, state, aggInfo)
 	case *QP.AliasExpr:
 		return vm.resolveSelectExpr(e.Expr, state, aggInfo)
+	case *QP.CastExpr:
+		// First check if this exact CastExpr is stored as a NonAggCol (by pointer equality)
+		for i, nonAggExpr := range aggInfo.NonAggCols {
+			if nonAggExpr == expr {
+				if i < len(state.NonAggValues) {
+					return state.NonAggValues[i]
+				}
+			}
+		}
+		// CAST(expr AS type) wrapping an aggregate - resolve inner expr then apply cast
+		val := vm.resolveSelectExpr(e.Expr, state, aggInfo)
+		return vm.applyTypeCast(val, e.TypeSpec.Name)
 	case *QP.BinaryExpr:
 		left := vm.resolveSelectExpr(e.Left, state, aggInfo)
 		right := vm.resolveSelectExpr(e.Right, state, aggInfo)
@@ -3029,6 +3093,14 @@ func (vm *VM) resolveSelectExpr(expr QP.Expr, state *AggregateState, aggInfo *Ag
 		}
 		return nil
 	default:
+		// Look for this expression in NonAggCols by pointer equality (for unknown expr types)
+		for i, nonAggExpr := range aggInfo.NonAggCols {
+			if nonAggExpr == expr {
+				if i < len(state.NonAggValues) {
+					return state.NonAggValues[i]
+				}
+			}
+		}
 		return nil
 	}
 }

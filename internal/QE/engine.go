@@ -818,6 +818,9 @@ func (qe *QueryEngine) evalCastExpr(row map[string]interface{}, ce *QP.CastExpr)
 		if s, ok := val.(string); ok {
 			return s
 		}
+		if bv, ok := val.([]byte); ok {
+			return string(bv)
+		}
 		if iv, ok := val.(int64); ok {
 			return strconv.FormatInt(iv, 10)
 		}

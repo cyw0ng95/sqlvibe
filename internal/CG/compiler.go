@@ -954,6 +954,8 @@ func extractAggregatesFromExpr(expr QP.Expr, aggInfo *VM.AggregateInfo) {
 			extractAggregatesFromExpr(when.Result, aggInfo)
 		}
 		extractAggregatesFromExpr(e.Else, aggInfo)
+	case *QP.CastExpr:
+		extractAggregatesFromExpr(e.Expr, aggInfo)
 	}
 }
 

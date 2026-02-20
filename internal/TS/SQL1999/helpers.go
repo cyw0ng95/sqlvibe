@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 
 	_ "github.com/glebarez/go-sqlite"
 	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
@@ -175,6 +176,30 @@ func CompareQueryResults(t *testing.T, sqlvibeDB *sqlvibe.Database, sqliteDB *sq
 		for j := range sqlvibeVals {
 			sqlvibeVal := sqlvibeVals[j]
 			sqliteVal := sqliteVals[j]
+
+			// Normalize time.Time values from SQLite driver to string for comparison
+			if t2, ok := sqliteVal.(time.Time); ok {
+				// Try date-only format first, then datetime
+				dateStr := t2.Format("2006-01-02")
+				datetimeStr := t2.Format("2006-01-02 15:04:05")
+				svStr := fmt.Sprintf("%v", sqlvibeVal)
+				if svStr == dateStr || svStr == datetimeStr {
+					continue // match
+				}
+				// Also try with seconds for datetime
+				datetimeStrFull := t2.UTC().Format("2006-01-02 15:04:05")
+				if svStr == datetimeStrFull {
+					continue
+				}
+			}
+			// Normalize []byte (BLOB) from SQLite to string for comparison
+			if blob, ok := sqliteVal.([]byte); ok {
+				if svStr, ok2 := sqlvibeVal.(string); ok2 {
+					if svStr == string(blob) {
+						continue
+					}
+				}
+			}
 
 			sqlvibeStr := fmt.Sprintf("%v", sqlvibeVal)
 			sqliteStr := fmt.Sprintf("%v", sqliteVal)
