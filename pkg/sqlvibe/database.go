@@ -8,7 +8,7 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/IS"
 	"github.com/sqlvibe/sqlvibe/internal/PB"
-	"github.com/sqlvibe/sqlvibe/internal/QE"
+	"github.com/sqlvibe/sqlvibe/internal/VM"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 	"github.com/sqlvibe/sqlvibe/internal/TM"
 	"github.com/sqlvibe/sqlvibe/internal/util"
@@ -16,7 +16,7 @@ import (
 
 type Database struct {
 	pm             *DS.PageManager
-	engine         *QE.QueryEngine
+	engine         *VM.QueryEngine
 	tx             *Transaction
 	txMgr          *TM.TransactionManager
 	activeTx       *TM.Transaction
@@ -262,7 +262,7 @@ func Open(path string) (*Database, error) {
 	}
 
 	data := make(map[string][]map[string]interface{})
-	engine := QE.NewQueryEngine(pm, data)
+	engine := VM.NewQueryEngine(pm, data)
 	txMgr := TM.NewTransactionManager(pm)
 
 	return &Database{
@@ -415,7 +415,7 @@ func (db *Database) Exec(sql string) (Result, error) {
 			return db.execCreateTableAsSelect(stmt)
 		}
 
-		schema := make(map[string]QE.ColumnType)
+		schema := make(map[string]VM.ColumnType)
 		colTypes := make(map[string]string)
 		var pkCols []string
 		db.columnDefaults[stmt.Name] = make(map[string]interface{})
@@ -430,7 +430,7 @@ func (db *Database) Exec(sql string) (Result, error) {
 				return Result{}, fmt.Errorf("duplicate column name: %s", col.Name)
 			}
 			seenCols[col.Name] = true
-			schema[col.Name] = QE.ColumnType{Name: col.Name, Type: col.Type}
+			schema[col.Name] = VM.ColumnType{Name: col.Name, Type: col.Type}
 			colTypes[col.Name] = col.Type
 			if col.PrimaryKey {
 				pkCols = append(pkCols, col.Name)
@@ -983,10 +983,10 @@ func (db *Database) MustExec(sql string, params ...interface{}) Result {
 }
 
 func (db *Database) tryUseIndex(tableName string, where QP.Expr) []map[string]interface{} {
-	// Convert IndexInfo to QE.IndexInfo
-	qeIndexes := make(map[string]*QE.IndexInfo)
+	// Convert IndexInfo to VM.IndexInfo
+	qeIndexes := make(map[string]*VM.IndexInfo)
 	for name, idx := range db.indexes {
-		qeIndexes[name] = &QE.IndexInfo{
+		qeIndexes[name] = &VM.IndexInfo{
 			Name:    idx.Name,
 			Table:   idx.Table,
 			Columns: idx.Columns,
@@ -1765,7 +1765,7 @@ rows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
 }
 
 // Create the table with columns from SELECT result
-schema := make(map[string]QE.ColumnType)
+schema := make(map[string]VM.ColumnType)
 colTypes := make(map[string]string)
 db.columnDefaults[stmt.Name] = make(map[string]interface{})
 db.columnNotNull[stmt.Name] = make(map[string]bool)
@@ -1774,7 +1774,7 @@ db.columnChecks[stmt.Name] = make(map[string]QP.Expr)
 for _, col := range rows.Columns {
 	// Try to infer column type from the source table schema
 	colType := db.inferColumnTypeFromSelect(col, stmt.AsSelect)
-	schema[col] = QE.ColumnType{Name: col, Type: colType}
+	schema[col] = VM.ColumnType{Name: col, Type: colType}
 	colTypes[col] = colType
 }
 db.engine.RegisterTable(stmt.Name, schema)
@@ -1924,10 +1924,10 @@ return Result{}, nil
 return Result{}, nil
 }
 
-func (db *Database) buildSchema(tableName string) map[string]QE.ColumnType {
-schema := make(map[string]QE.ColumnType)
+func (db *Database) buildSchema(tableName string) map[string]VM.ColumnType {
+schema := make(map[string]VM.ColumnType)
 for col, typ := range db.tables[tableName] {
-schema[col] = QE.ColumnType{Name: col, Type: typ}
+schema[col] = VM.ColumnType{Name: col, Type: typ}
 }
 return schema
 }
