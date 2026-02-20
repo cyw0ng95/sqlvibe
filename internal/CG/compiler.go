@@ -6,6 +6,7 @@ import (
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
 	VM "github.com/sqlvibe/sqlvibe/internal/VM"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 type Compiler struct {
@@ -29,6 +30,7 @@ func NewCompiler() *Compiler {
 }
 
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program {
+	util.AssertNotNil(stmt, "SelectStmt")
 	if hasAggregates(stmt) {
 		return c.CompileAggregate(stmt)
 	}
@@ -139,6 +141,9 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 }
 
 func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.Expr, columns []QP.Expr) {
+	util.AssertNotNil(leftTable, "leftTable")
+	util.AssertNotNil(join, "join")
+	util.Assert(join.Right != nil, "join.Right cannot be nil")
 	leftTableName := leftTable.Name
 	rightTableName := join.Right.Name
 
@@ -350,6 +355,8 @@ func (c *Compiler) Program() *VM.Program {
 }
 
 func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *VM.Program {
+	util.AssertNotNil(stmt, "InsertStmt")
+	util.Assert(stmt.Table != "", "InsertStmt.Table cannot be empty")
 	c.program = VM.NewProgram()
 	c.ra = VM.NewRegisterAllocator(16)
 
@@ -397,6 +404,8 @@ func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *VM.Program {
 }
 
 func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *VM.Program {
+	util.AssertNotNil(stmt, "UpdateStmt")
+	util.Assert(stmt.Table != "", "UpdateStmt.Table cannot be empty")
 	c.program = VM.NewProgram()
 	c.ra = VM.NewRegisterAllocator(16)
 
@@ -458,6 +467,8 @@ func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *VM.Program {
 }
 
 func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *VM.Program {
+	util.AssertNotNil(stmt, "DeleteStmt")
+	util.Assert(stmt.Table != "", "DeleteStmt.Table cannot be empty")
 	c.program = VM.NewProgram()
 	c.ra = VM.NewRegisterAllocator(16)
 
@@ -501,6 +512,7 @@ func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *VM.Program {
 }
 
 func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
+	util.AssertNotNil(stmt, "SelectStmt for aggregate")
 	c.program = VM.NewProgram()
 	c.ra = VM.NewRegisterAllocator(32)
 

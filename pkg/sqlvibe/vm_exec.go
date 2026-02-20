@@ -7,6 +7,7 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/CG"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 	"github.com/sqlvibe/sqlvibe/internal/VM"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 func (db *Database) ExecVM(sql string) (*Rows, error) {
@@ -815,6 +816,8 @@ func literalToString(val interface{}) string {
 }
 
 func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
+	util.Assert(sql != "", "sql cannot be empty")
+	util.Assert(tableName != "", "tableName cannot be empty")
 	// Check if table exists (strip schema prefix if present)
 	checkName := tableName
 	if idx := strings.Index(tableName, "."); idx >= 0 {

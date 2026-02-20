@@ -6,6 +6,7 @@ import (
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 // autoAssignPK assigns an auto-increment value to a single INTEGER PRIMARY KEY column
@@ -56,6 +57,7 @@ type dsVmContext struct {
 }
 
 func newDsVmContext(db *Database) *dsVmContext {
+	util.AssertNotNil(db, "Database")
 	return &dsVmContext{
 		db:         db,
 		pm:         db.pm,
@@ -64,6 +66,7 @@ func newDsVmContext(db *Database) *dsVmContext {
 }
 
 func (ctx *dsVmContext) GetTableData(tableName string) ([]map[string]interface{}, error) {
+	util.Assert(tableName != "", "tableName cannot be empty")
 	// Resolve case-insensitive table name
 	tableName = ctx.db.resolveTableName(tableName)
 	// First check if there's in-memory data (fallback from previous writes)
@@ -129,6 +132,7 @@ func (ctx *dsVmContext) GetTableData(tableName string) ([]map[string]interface{}
 }
 
 func (ctx *dsVmContext) GetTableColumns(tableName string) ([]string, error) {
+	util.Assert(tableName != "", "tableName cannot be empty")
 	if ctx.db.columnOrder == nil {
 		return nil, nil
 	}
@@ -137,6 +141,8 @@ func (ctx *dsVmContext) GetTableColumns(tableName string) ([]string, error) {
 }
 
 func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) error {
+	util.Assert(tableName != "", "tableName cannot be empty")
+	util.AssertNotNil(row, "row")
 	tableName = ctx.db.resolveTableName(tableName)
 	bt, ok := ctx.tableTrees[tableName]
 	if !ok || bt == nil || bt.RootPage() == 0 {
@@ -255,6 +261,9 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 }
 
 func (ctx *dsVmContext) UpdateRow(tableName string, rowIndex int, row map[string]interface{}) error {
+	util.Assert(tableName != "", "tableName cannot be empty")
+	util.Assert(rowIndex >= 0, "rowIndex cannot be negative: %d", rowIndex)
+	util.AssertNotNil(row, "row")
 	tableName = ctx.db.resolveTableName(tableName)
 	// Fall back to in-memory
 	if ctx.db.data[tableName] == nil {
@@ -268,6 +277,8 @@ func (ctx *dsVmContext) UpdateRow(tableName string, rowIndex int, row map[string
 }
 
 func (ctx *dsVmContext) DeleteRow(tableName string, rowIndex int) error {
+	util.Assert(tableName != "", "tableName cannot be empty")
+	util.Assert(rowIndex >= 0, "rowIndex cannot be negative: %d", rowIndex)
 	tableName = ctx.db.resolveTableName(tableName)
 	// Fall back to in-memory
 	if ctx.db.data[tableName] == nil {

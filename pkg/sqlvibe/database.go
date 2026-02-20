@@ -1292,6 +1292,8 @@ func (db *Database) getRightColumns(right []map[string]interface{}) []string {
 
 // execCreateView handles CREATE VIEW
 func (db *Database) execCreateView(stmt *QP.CreateViewStmt, origSQL string) (Result, error) {
+	util.AssertNotNil(stmt, "CreateViewStmt")
+	util.Assert(stmt.Name != "", "CreateViewStmt.Name cannot be empty")
 if _, exists := db.views[stmt.Name]; exists {
 if stmt.IfNotExists {
 return Result{}, nil
@@ -1572,6 +1574,8 @@ return Result{}, nil
 
 // execAlterTable handles ALTER TABLE statements
 func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
+	util.AssertNotNil(stmt, "AlterTableStmt")
+	util.Assert(stmt.Table != "", "AlterTableStmt.Table cannot be empty")
 switch stmt.Action {
 case "ADD_COLUMN":
 if _, exists := db.tables[stmt.Table]; !exists {
@@ -1658,6 +1662,9 @@ return nil
 
 // execInsertSelect handles INSERT INTO table SELECT ...
 func (db *Database) execInsertSelect(stmt *QP.InsertStmt) (Result, error) {
+	util.AssertNotNil(stmt, "InsertStmt")
+	util.Assert(stmt.Table != "", "InsertStmt.Table cannot be empty")
+	util.Assert(stmt.SelectQuery != nil, "InsertStmt.SelectQuery cannot be nil for INSERT...SELECT")
 	if _, exists := db.tables[stmt.Table]; !exists {
 		return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
 	}
