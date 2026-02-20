@@ -304,13 +304,8 @@ func (t *Tokenizer) readString() error {
 			}
 			break
 		}
-		if t.input[t.pos] == '\\' && t.pos+1 < len(t.input) {
-			sb.WriteByte(t.input[t.pos+1])
-			t.pos += 2
-		} else {
-			sb.WriteByte(t.input[t.pos])
-			t.pos++
-		}
+		sb.WriteByte(t.input[t.pos])
+		t.pos++
 	}
 
 	if t.pos >= len(t.input) {
