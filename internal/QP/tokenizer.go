@@ -112,6 +112,8 @@ var keywords = map[string]TokenType{
 	"ALL":               TokenAll,
 	"EXCEPT":            TokenKeyword,
 	"INTERSECT":         TokenKeyword,
+	"WITH":              TokenKeyword,
+	"RECURSIVE":         TokenKeyword,
 	"CASE":              TokenKeyword,
 	"WHEN":              TokenKeyword,
 	"THEN":              TokenKeyword,

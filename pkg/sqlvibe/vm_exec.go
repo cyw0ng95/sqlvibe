@@ -175,14 +175,16 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	// Get column names from SELECT
 	cols := make([]string, 0)
 	for i, col := range stmt.Columns {
-		if colRef, ok := col.(*QP.ColumnRef); ok {
-			// Handle SELECT * - expand to table columns
-			if colRef.Name == "*" {
+		switch e := col.(type) {
+		case *QP.ColumnRef:
+			if e.Name == "*" {
 				cols = append(cols, tableCols...)
 			} else {
-				cols = append(cols, colRef.Name)
+				cols = append(cols, e.Name)
 			}
-		} else {
+		case *QP.AliasExpr:
+			cols = append(cols, e.Alias)
+		default:
 			cols = append(cols, fmt.Sprintf("col%d", i))
 		}
 	}
@@ -268,14 +270,16 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	// Get column names from SELECT
 	cols := make([]string, 0)
 	for i, col := range stmt.Columns {
-		if colRef, ok := col.(*QP.ColumnRef); ok {
-			// Handle SELECT * - expand to table columns
-			if colRef.Name == "*" {
+		switch e := col.(type) {
+		case *QP.ColumnRef:
+			if e.Name == "*" {
 				cols = append(cols, tableCols...)
 			} else {
-				cols = append(cols, colRef.Name)
+				cols = append(cols, e.Name)
 			}
-		} else {
+		case *QP.AliasExpr:
+			cols = append(cols, e.Alias)
+		default:
 			cols = append(cols, fmt.Sprintf("col%d", i))
 		}
 	}

@@ -628,6 +628,47 @@ func (db *Database) Query(sql string) (*Rows, error) {
 
 	if ast.NodeType() == "SelectStmt" {
 		stmt := ast.(*QP.SelectStmt)
+
+		// Handle CTE (WITH ... AS (...) SELECT ...) by materializing temp tables
+		if len(stmt.CTEs) > 0 {
+			var cteNames []string
+			for _, cte := range stmt.CTEs {
+				cteRows, err := db.execSelectStmt(cte.Select)
+				if err != nil {
+					return nil, err
+				}
+				if cteRows == nil {
+					cteRows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
+				}
+				colTypes := make(map[string]string)
+				for _, col := range cteRows.Columns {
+					colTypes[col] = "TEXT"
+				}
+				db.tables[cte.Name] = colTypes
+				db.columnOrder[cte.Name] = cteRows.Columns
+				rowMaps := make([]map[string]interface{}, len(cteRows.Data))
+				for i, row := range cteRows.Data {
+					rm := make(map[string]interface{})
+					for j, col := range cteRows.Columns {
+						if j < len(row) {
+							rm[col] = row[j]
+						}
+					}
+					rowMaps[i] = rm
+				}
+				db.data[cte.Name] = rowMaps
+				cteNames = append(cteNames, cte.Name)
+			}
+			stmt.CTEs = nil
+			rows, err := db.execSelectStmt(stmt)
+			for _, name := range cteNames {
+				delete(db.tables, name)
+				delete(db.columnOrder, name)
+				delete(db.data, name)
+			}
+			return rows, err
+		}
+
 		if stmt.From == nil {
 			return db.evalConstantExpression(stmt)
 		}
@@ -699,6 +740,10 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			}
 
 			// Combine results using SetOp logic
+			// Validate column count match (SQLite requires same number of columns)
+			if len(leftRows.Columns) != len(rightRows.Columns) {
+				return nil, fmt.Errorf("SELECTs to the left and right of %s do not have the same number of result columns", stmt.SetOp)
+			}
 			combinedData := db.applySetOp(leftRows.Data, rightRows.Data, stmt.SetOp, stmt.SetOpAll)
 
 			// Apply ORDER BY and LIMIT if present
@@ -993,11 +1038,20 @@ func (db *Database) querySqliteMaster(stmt *QP.SelectStmt) (*Rows, error) {
 		}
 	}
 
+	sqliteMasterCols := []string{"type", "name", "tbl_name", "rootpage", "sql"}
+
 	cols := make([]string, 0)
 	for _, col := range stmt.Columns {
 		if cr, ok := col.(*QP.ColumnRef); ok {
-			cols = append(cols, cr.Name)
+			if cr.Name == "*" {
+				cols = append(cols, sqliteMasterCols...)
+			} else {
+				cols = append(cols, cr.Name)
+			}
 		}
+	}
+	if len(cols) == 0 {
+		cols = sqliteMasterCols
 	}
 
 	resultData := make([][]interface{}, 0)
@@ -1332,9 +1386,29 @@ func (db *Database) execDerivedTableQuery(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 
 	// Execute the subquery to materialize its rows
-	subRows, err := db.execSelectStmt(subq)
-	if err != nil {
-		return nil, err
+	// For UNION/EXCEPT/INTERSECT subqueries, use the SetOp path to avoid VM cursor conflicts
+	var subRows *Rows
+	var err error
+	if subq.SetOp != "" && subq.SetOpRight != nil {
+		leftStmt := *subq
+		leftStmt.SetOp = ""
+		leftStmt.SetOpAll = false
+		leftStmt.SetOpRight = nil
+		leftRows, lerr := db.execSelectStmt(&leftStmt)
+		if lerr != nil {
+			return nil, lerr
+		}
+		rightRows, rerr := db.execSelectStmt(subq.SetOpRight)
+		if rerr != nil {
+			return nil, rerr
+		}
+		combined := db.applySetOp(leftRows.Data, rightRows.Data, subq.SetOp, subq.SetOpAll)
+		subRows = &Rows{Columns: leftRows.Columns, Data: combined}
+	} else {
+		subRows, err = db.execSelectStmt(subq)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if subRows == nil {
 		subRows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
@@ -1405,6 +1479,32 @@ return nil, err
 }
 if rows == nil {
 return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+}
+
+// Handle UNION/EXCEPT/INTERSECT with view on left side
+if outerStmt.SetOp != "" && outerStmt.SetOpRight != nil {
+	rightRows, err := db.execSelectStmt(outerStmt.SetOpRight)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows.Columns) != len(rightRows.Columns) {
+		return nil, fmt.Errorf("SELECTs to the left and right of %s do not have the same number of result columns", outerStmt.SetOp)
+	}
+	combined := db.applySetOp(rows.Data, rightRows.Data, outerStmt.SetOp, outerStmt.SetOpAll)
+	result := &Rows{Columns: rows.Columns, Data: combined}
+	if len(outerStmt.OrderBy) > 0 {
+		result, err = db.sortResults(result, outerStmt.OrderBy)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if outerStmt.Limit != nil {
+		result, err = db.applyLimit(result, outerStmt.Limit, outerStmt.Offset)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
 }
 
 // Apply outer SELECT column filtering if needed
@@ -1547,8 +1647,10 @@ db.columnNotNull[stmt.Name] = make(map[string]bool)
 db.columnChecks[stmt.Name] = make(map[string]QP.Expr)
 
 for _, col := range rows.Columns {
-schema[col] = QE.ColumnType{Name: col, Type: "TEXT"}
-colTypes[col] = "TEXT"
+	// Try to infer column type from the source table schema
+	colType := db.inferColumnTypeFromSelect(col, stmt.AsSelect)
+	schema[col] = QE.ColumnType{Name: col, Type: colType}
+	colTypes[col] = colType
 }
 db.engine.RegisterTable(stmt.Name, schema)
 db.tables[stmt.Name] = colTypes
@@ -1572,7 +1674,63 @@ db.data[stmt.Name] = append(db.data[stmt.Name], rowMap)
 return Result{}, nil
 }
 
-// execAlterTable handles ALTER TABLE statements
+// inferColumnTypeFromSelect tries to determine a column's type from its source in a SELECT statement.
+// Falls back to "TEXT" if the type cannot be determined.
+func (db *Database) inferColumnTypeFromSelect(colName string, sel *QP.SelectStmt) string {
+	if sel == nil || sel.From == nil {
+		return "TEXT"
+	}
+	srcTable := sel.From.Name
+	if srcTable == "" {
+		return "TEXT"
+	}
+	srcTypes, hasSrc := db.tables[srcTable]
+	// Scan SELECT columns to find matching expressions
+	for _, expr := range sel.Columns {
+		switch e := expr.(type) {
+		case *QP.ColumnRef:
+			// Direct column reference: SELECT a FROM t1 → column 'a' gets t1's type
+			if e.Name == colName && hasSrc {
+				if typ, ok := srcTypes[e.Name]; ok {
+					return normalizeTypeForPragma(typ)
+				}
+			}
+		case *QP.AliasExpr:
+			alias := e.Alias
+			if alias == colName {
+				// Check if inner is a simple column ref
+				if cr, ok := e.Expr.(*QP.ColumnRef); ok && hasSrc {
+					if typ, ok := srcTypes[cr.Name]; ok {
+						return normalizeTypeForPragma(typ)
+					}
+				}
+				// Expression alias (e.g. a * 2 AS double_a): SQLite uses empty type
+				return ""
+			}
+		}
+	}
+	// Direct column lookup in source table
+	if hasSrc {
+		if typ, ok := srcTypes[colName]; ok {
+			return normalizeTypeForPragma(typ)
+		}
+	}
+	return "TEXT"
+}
+
+// normalizeTypeForPragma maps declared types to the type SQLite uses in PRAGMA table_info for CTAS.
+func normalizeTypeForPragma(typ string) string {
+	switch strings.ToUpper(typ) {
+	case "INTEGER", "INT", "TINYINT", "SMALLINT", "MEDIUMINT", "BIGINT":
+		return "INT"
+	case "REAL", "FLOAT", "DOUBLE":
+		return "REAL"
+	case "BLOB":
+		return "BLOB"
+	default:
+		return typ
+	}
+}
 func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 	util.AssertNotNil(stmt, "AlterTableStmt")
 	util.Assert(stmt.Table != "", "AlterTableStmt.Table cannot be empty")

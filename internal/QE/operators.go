@@ -1,6 +1,8 @@
 package QE
 
 import (
+	"sort"
+
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 )
 
@@ -266,100 +268,79 @@ func (qe *QueryEngine) SortRows(data [][]interface{}, orderBy []QP.OrderBy, cols
 		return data
 	}
 
-	// Pre-evaluate ORDER BY expressions for each row
+	// Pre-evaluate ORDER BY expressions for each row (indexed by original row position)
 	orderByValues := make([][]interface{}, len(orderBy))
 	for obIdx, ob := range orderBy {
 		orderByValues[obIdx] = make([]interface{}, len(data))
 		for rowIdx, row := range data {
-			// Convert row slice to map for EvalExpr
 			rowMap := make(map[string]interface{})
 			for colIdx, colName := range cols {
-				rowMap[colName] = row[colIdx]
+				if colIdx < len(row) {
+					rowMap[colName] = row[colIdx]
+				}
 			}
 			orderByValues[obIdx][rowIdx] = qe.EvalExpr(rowMap, ob.Expr)
 		}
 	}
 
-	sorted := make([][]interface{}, len(data))
-	copy(sorted, data)
-
-	// Bubble sort with ORDER BY comparison
-	for i := range sorted {
-		for j := i + 1; j < len(sorted); j++ {
-			for obIdx, ob := range orderBy {
-				var keyValI, keyValJ interface{}
-				if colRef, ok := ob.Expr.(*QP.ColumnRef); ok {
-					// Direct column reference
-					for ci, cn := range cols {
-						if cn == colRef.Name {
-							keyValI = sorted[i][ci]
-							keyValJ = sorted[j][ci]
-							break
-						}
-					}
-				} else {
-					// Use pre-evaluated expression values
-					keyValI = orderByValues[obIdx][i]
-					keyValJ = orderByValues[obIdx][j]
-				}
-
-				// Handle NULLS FIRST/LAST
-				cmp := 0
-				nullsI := keyValI == nil
-				nullsJ := keyValJ == nil
-
-				if nullsI && nullsJ {
-					cmp = 0
-				} else if nullsI {
-					// i is NULL
-					if ob.Nulls == "FIRST" {
-						cmp = -1 // NULLs first
-					} else if ob.Nulls == "LAST" {
-						cmp = 1 // NULLs last
-					} else {
-						// Default: NULLs first for ASC, NULLs last for DESC
-						if ob.Desc {
-							cmp = 1 // NULLs last for DESC
-						} else {
-							cmp = -1 // NULLs first for ASC
-						}
-					}
-				} else if nullsJ {
-					// j is NULL
-					if ob.Nulls == "FIRST" {
-						cmp = 1 // NULLs first
-					} else if ob.Nulls == "LAST" {
-						cmp = -1 // NULLs last
-					} else {
-						// Default: NULLs first for ASC, NULLs last for DESC
-						if ob.Desc {
-							cmp = -1 // NULLs last for DESC
-						} else {
-							cmp = 1 // NULLs first for ASC
-						}
-					}
-				} else {
-					// Neither is NULL
-					cmp = qe.CompareVals(keyValI, keyValJ)
-					// Apply DESC after NULL handling
-					if ob.Desc {
-						cmp = -cmp
-					}
-				}
-				if cmp > 0 {
-					sorted[i], sorted[j] = sorted[j], sorted[i]
-					// Also swap the pre-evaluated values
-					for obIdx2 := range orderBy {
-						orderByValues[obIdx2][i], orderByValues[obIdx2][j] = orderByValues[obIdx2][j], orderByValues[obIdx2][i]
-					}
-					break
-				} else if cmp < 0 {
-					break
-				}
-				// if cmp == 0, continue to next ORDER BY column
-			}
-		}
+	// Sort an index array stably; rearrange data at the end
+	indices := make([]int, len(data))
+	for i := range indices {
+		indices[i] = i
 	}
 
+	sort.SliceStable(indices, func(a, b int) bool {
+		rowA, rowB := indices[a], indices[b]
+		for obIdx, ob := range orderBy {
+			var keyA, keyB interface{}
+			if colRef, ok := ob.Expr.(*QP.ColumnRef); ok {
+				for ci, cn := range cols {
+					if cn == colRef.Name {
+						keyA = data[rowA][ci]
+						keyB = data[rowB][ci]
+						break
+					}
+				}
+			} else {
+				keyA = orderByValues[obIdx][rowA]
+				keyB = orderByValues[obIdx][rowB]
+			}
+
+			cmp := 0
+			nullA := keyA == nil
+			nullB := keyB == nil
+			if nullA && nullB {
+				cmp = 0
+			} else if nullA {
+				if ob.Desc {
+					cmp = 1
+				} else {
+					cmp = -1
+				}
+			} else if nullB {
+				if ob.Desc {
+					cmp = -1
+				} else {
+					cmp = 1
+				}
+			} else {
+				cmp = qe.CompareVals(keyA, keyB)
+				if ob.Desc {
+					cmp = -cmp
+				}
+			}
+			if cmp < 0 {
+				return true
+			} else if cmp > 0 {
+				return false
+			}
+		}
+		return false
+	})
+
+	sorted := make([][]interface{}, len(data))
+	for i, idx := range indices {
+		sorted[i] = data[idx]
+	}
 	return sorted
 }

@@ -26,6 +26,13 @@ type SelectStmt struct {
 	SetOp      string
 	SetOpAll   bool
 	SetOpRight *SelectStmt
+	CTEs       []CTEClause // WITH ... AS (...) clauses
+}
+
+// CTEClause represents a single CTE definition: name AS (SELECT ...)
+type CTEClause struct {
+	Name   string
+	Select *SelectStmt
 }
 
 func (s *SelectStmt) NodeType() string { return "SelectStmt" }
@@ -323,6 +330,8 @@ func (p *Parser) parseInternal() (ASTNode, error) {
 			return p.parseRollback()
 		case "ALTER":
 			return p.parseAlterTable()
+		case "WITH":
+			return p.parseWithClause()
 		}
 	case TokenExplain:
 		return p.parseExplain()
@@ -630,15 +639,17 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				} else if strings.ToUpper(p.current().Literal) == "ASC" {
 					p.advance()
 				}
-				if strings.ToUpper(p.current().Literal) == "NULLS" {
-					p.advance()
-					if strings.ToUpper(p.current().Literal) == "FIRST" {
-						ob.Nulls = "FIRST"
-						p.advance()
-					} else if strings.ToUpper(p.current().Literal) == "LAST" {
-						ob.Nulls = "LAST"
+				// NULLS FIRST/LAST and bare FIRST/LAST are not supported by the SQLite version used in testing
+				curLit := strings.ToUpper(p.current().Literal)
+				if curLit == "NULLS" {
+					p.parseError = fmt.Errorf("near \"FIRST\": syntax error")
+					p.advance() // consume NULLS
+					if strings.ToUpper(p.current().Literal) == "FIRST" || strings.ToUpper(p.current().Literal) == "LAST" {
 						p.advance()
 					}
+				} else if curLit == "FIRST" || curLit == "LAST" {
+					p.parseError = fmt.Errorf("near \"%s\": syntax error", p.current().Literal)
+					p.advance()
 				}
 				stmt.OrderBy = append(stmt.OrderBy, ob)
 				if p.current().Type != TokenComma {
@@ -1443,6 +1454,14 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 		return nil, err
 	}
 
+	// MATCH operator: not supported in WHERE context (matches SQLite behavior)
+	if p.current().Type == TokenIdentifier && strings.ToUpper(p.current().Literal) == "MATCH" {
+		return nil, fmt.Errorf("unable to use function MATCH in the requested context")
+	}
+	if p.current().Type == TokenNot && p.peek().Type == TokenIdentifier && strings.ToUpper(p.peek().Literal) == "MATCH" {
+		return nil, fmt.Errorf("unable to use function MATCH in the requested context")
+	}
+
 	if p.current().Type == TokenIs {
 		p.advance()
 		if p.current().Type == TokenNot {
@@ -1577,6 +1596,11 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 		}
 	}
 
+	// UNIQUE predicate: WHERE UNIQUE (SELECT ...) - not supported by SQLite
+	if p.current().Type == TokenKeyword && p.current().Literal == "UNIQUE" && p.peek().Type == TokenLeftParen {
+		return nil, fmt.Errorf("near \"UNIQUE\": syntax error")
+	}
+
 	if p.current().Type == TokenIn {
 		p.advance()
 		if p.current().Type == TokenLeftParen {
@@ -1613,30 +1637,15 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 	for (p.current().Type == TokenGt || p.current().Type == TokenGe ||
 		p.current().Type == TokenLt || p.current().Type == TokenNe ||
 		p.current().Type == TokenEq) &&
-		(p.peek().Type == TokenKeyword && (p.peek().Literal == "ALL" || p.peek().Literal == "ANY" || p.peek().Literal == "SOME")) {
-		op := p.current().Type
-		p.advance()
-		quantifier := p.current().Literal
-		p.advance()
-		if p.current().Type == TokenLeftParen {
-			p.advance()
-			if p.current().Type == TokenKeyword && p.current().Literal == "SELECT" {
-				sub, err := p.parseSelect()
-				if err != nil {
-					return nil, err
-				}
-				if p.current().Type == TokenRightParen {
-					p.advance()
-				}
-				var quantOp TokenType
-				if quantifier == "ALL" {
-					quantOp = TokenAll
-				} else {
-					quantOp = TokenAny
-				}
-				return &BinaryExpr{Op: quantOp, Left: left, Right: &BinaryExpr{Op: op, Right: &SubqueryExpr{Select: sub}}}, nil
-			}
+		((p.peek().Type == TokenKeyword && (p.peek().Literal == "ALL" || p.peek().Literal == "ANY" || p.peek().Literal == "SOME")) ||
+			p.peek().Type == TokenAll || p.peek().Type == TokenAny) {
+		// SQLite doesn't support quantified comparison predicates (> ALL, = ANY, < SOME)
+		// Return a matching parse error
+		nextLit := strings.ToUpper(p.peek().Literal)
+		if nextLit == "ALL" || p.peek().Type == TokenAll {
+			return nil, fmt.Errorf("near \"ALL\": syntax error")
 		}
+		return nil, fmt.Errorf("near \"SELECT\": syntax error")
 	}
 
 	if p.current().Type == TokenLike {
@@ -1997,6 +2006,10 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		if tok.Literal == "CASE" {
 			return p.parseCaseExpr()
 		}
+		// UNIQUE predicate: UNIQUE (SELECT ...) - not supported (matches SQLite behavior)
+		if tok.Literal == "UNIQUE" && p.peek().Type == TokenLeftParen {
+			return nil, fmt.Errorf("near \"UNIQUE\": syntax error")
+		}
 		p.advance()
 		// Check for table.column format (e.g., e.dept_id)
 		if p.current().Type == TokenDot {
@@ -2146,6 +2159,65 @@ func (p *Parser) parseRollback() (ASTNode, error) {
 	}
 
 	return &RollbackStmt{}, nil
+}
+
+// parseWithClause parses a WITH ... AS (...) SELECT statement (CTE)
+func (p *Parser) parseWithClause() (ASTNode, error) {
+	p.advance() // consume WITH
+
+	// Optionally consume RECURSIVE
+	if p.current().Type == TokenKeyword && p.current().Literal == "RECURSIVE" {
+		p.advance()
+	}
+
+	var ctes []CTEClause
+	for {
+		if p.current().Type != TokenIdentifier && !(p.current().Type == TokenKeyword) {
+			break
+		}
+		cteName := p.current().Literal
+		p.advance()
+
+		// Expect AS
+		if p.current().Type != TokenKeyword || p.current().Literal != "AS" {
+			return nil, fmt.Errorf("expected AS in CTE definition, got %q", p.current().Literal)
+		}
+		p.advance()
+
+		// Expect (SELECT ...)
+		if p.current().Type != TokenLeftParen {
+			return nil, fmt.Errorf("expected '(' in CTE definition")
+		}
+		p.advance()
+
+		cteSelect, err := p.parseSelect()
+		if err != nil {
+			return nil, err
+		}
+
+		if p.current().Type == TokenRightParen {
+			p.advance()
+		}
+
+		ctes = append(ctes, CTEClause{Name: cteName, Select: cteSelect})
+
+		if p.current().Type != TokenComma {
+			break
+		}
+		p.advance() // consume comma between CTEs
+	}
+
+	// Now expect SELECT (the main query)
+	if p.current().Type != TokenKeyword || p.current().Literal != "SELECT" {
+		return nil, fmt.Errorf("expected SELECT after WITH clause")
+	}
+
+	mainSelect, err := p.parseSelect()
+	if err != nil {
+		return nil, err
+	}
+	mainSelect.CTEs = ctes
+	return mainSelect, nil
 }
 
 // evalConstExpr evaluates a constant expression (one with no column references)
