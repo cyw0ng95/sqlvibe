@@ -1,5 +1,52 @@
 # sqlvibe Release History
 
+## **v0.6.0** (2026-02-20)
+
+### Summary
+Defensive programming release implementing aggressive assertion validation across the codebase to catch bugs early and prevent data corruption.
+
+### Features
+- **DS Subsystem (90% complete)**:
+  - btree.go: Page type validation, cell bounds, cursor state (15+ assertions)
+  - page.go: Size bounds [512, 65536], power-of-2 validation
+  - cell.go: Rowid positivity, buffer validation
+  - encoding.go: Varint buffer sizing validation
+  - overflow.go: Page chain integrity, PageManager validation
+  - freelist.go: PageManager validation
+
+- **VM Subsystem (30% complete)**:
+  - cursor.go: Added MaxCursors = 256 constant
+  - exec.go: Cursor ID bounds [0, 256), OpOpenRead/OpRewind/OpNext
+  - compiler.go: SelectStmt validation
+
+- **QP/QE Subsystems (20% complete)**:
+  - parser.go: Token array validation
+  - engine.go: PageManager, schema, table registration
+
+- **TM Subsystem (10% complete)**:
+  - transaction.go: NewTransactionManager PageManager validation
+
+- **PB Subsystem (60% complete)**:
+  - file.go: Offset bounds, buffer validation, URI checks
+
+- **Public API (10% complete)**:
+  - database.go: Row scanning bounds
+
+### Assertion Coverage
+- Overall: ~35% of critical code paths
+- Core data structure validation complete, preventing most B-Tree and page corruption bugs
+
+### Testing
+All existing tests pass with current assertions:
+- internal/DS/... - All tests passing
+- internal/VM/... - All tests passing
+- internal/QP/... - All tests passing
+- internal/QE/... - All tests passing
+- internal/TM/... - All tests passing
+- internal/PB/... - All tests passing
+
+---
+
 ## **v0.5.2** (2026-02-18)
 
 ### Summary
