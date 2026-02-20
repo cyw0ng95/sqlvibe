@@ -813,7 +813,7 @@ func (db *Database) Query(sql string) (*Rows, error) {
 
 	// For non-SELECT DML statements (INSERT, UPDATE, DELETE) called via Query(),
 	// execute them via Exec and return empty results (matching SQLite driver behavior).
-	if ast.NodeType() == "InsertStmt" || ast.NodeType() == "UpdateStmt" || ast.NodeType() == "DeleteStmt" || ast.NodeType() == "CreateTableStmt" || ast.NodeType() == "DropTableStmt" || ast.NodeType() == "CreateViewStmt" || ast.NodeType() == "DropViewStmt" || ast.NodeType() == "AlterTableStmt" || ast.NodeType() == "CreateIndexStmt" || ast.NodeType() == "DropIndexStmt" {
+	if isDMLStatement(ast.NodeType()) {
 		_, err := db.Exec(sql)
 		if err != nil {
 			return nil, err
@@ -822,6 +822,20 @@ func (db *Database) Query(sql string) (*Rows, error) {
 	}
 
 	return nil, nil
+}
+
+// isDMLStatement returns true if the AST node type represents a data/schema manipulation statement
+// (as opposed to a query statement).
+func isDMLStatement(nodeType string) bool {
+	switch nodeType {
+	case "InsertStmt", "UpdateStmt", "DeleteStmt",
+		"CreateTableStmt", "DropTableStmt",
+		"CreateViewStmt", "DropViewStmt",
+		"AlterTableStmt",
+		"CreateIndexStmt", "DropIndexStmt":
+		return true
+	}
+	return false
 }
 
 func (db *Database) Close() error {

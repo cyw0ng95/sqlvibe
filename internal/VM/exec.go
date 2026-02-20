@@ -2519,6 +2519,7 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 	// Sort the keys: NULL ("<nil>") groups sort first (matching SQLite behavior),
 	// then remaining keys in ascending order. Try numeric comparison when both
 	// keys are parseable as numbers (so "10" > "3" numerically).
+	// If only one key is numeric, fall through to lexicographic string comparison.
 	sort.SliceStable(groupKeys, func(i, j int) bool {
 		ki, kj := groupKeys[i], groupKeys[j]
 		if ki == "<nil>" {
@@ -2527,7 +2528,7 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 		if kj == "<nil>" {
 			return false
 		}
-		// Try numeric comparison
+		// Numeric comparison when both keys are valid numbers; otherwise string comparison.
 		if fi, erri := strconv.ParseFloat(ki, 64); erri == nil {
 			if fj, errj := strconv.ParseFloat(kj, 64); errj == nil {
 				return fi < fj
