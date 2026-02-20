@@ -613,15 +613,17 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		}
 		stmt.SetOpRight = right
 		// Hoist ORDER BY and LIMIT/OFFSET from right to outer (they apply to the full set op result)
-		if right.OrderBy != nil && stmt.OrderBy == nil {
-			stmt.OrderBy = right.OrderBy
-			right.OrderBy = nil
-		}
-		if right.Limit != nil && stmt.Limit == nil {
-			stmt.Limit = right.Limit
-			stmt.Offset = right.Offset
-			right.Limit = nil
-			right.Offset = nil
+		if right != nil {
+			if right.OrderBy != nil && stmt.OrderBy == nil {
+				stmt.OrderBy = right.OrderBy
+				right.OrderBy = nil
+			}
+			if right.Limit != nil && stmt.Limit == nil {
+				stmt.Limit = right.Limit
+				stmt.Offset = right.Offset
+				right.Limit = nil
+				right.Offset = nil
+			}
 		}
 	}
 
