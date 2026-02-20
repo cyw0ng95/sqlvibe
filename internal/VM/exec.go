@@ -625,10 +625,10 @@ func (vm *VM) Exec(ctx interface{}) error {
 			continue
 
 		case OpLike:
-			// NULL LIKE anything = NULL (treat as false/not match)
-			if vm.registers[inst.P1] == nil {
+			// NULL LIKE anything = NULL (treat as NULL/false)
+			if vm.registers[inst.P1] == nil || vm.registers[inst.P2] == nil {
 				if dst, ok := inst.P4.(int); ok {
-					vm.registers[dst] = int64(0)
+					vm.registers[dst] = nil
 				}
 				continue
 			}
@@ -645,6 +645,33 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = int64(0)
 				if likeMatch(str, pattern) {
+					vm.registers[dst] = int64(1)
+				}
+			}
+			continue
+
+		case OpNotLike:
+			// NULL NOT LIKE anything = NULL (treat as NULL/false)
+			if vm.registers[inst.P1] == nil || vm.registers[inst.P2] == nil {
+				if dst, ok := inst.P4.(int); ok {
+					vm.registers[dst] = nil
+				}
+				continue
+			}
+			str := ""
+			pattern := ""
+			if v, ok := vm.registers[inst.P1].(string); ok {
+				str = v
+			} else {
+				str = fmt.Sprintf("%v", vm.registers[inst.P1])
+			}
+			if v, ok := vm.registers[inst.P2].(string); ok {
+				pattern = v
+			}
+			if dst, ok := inst.P4.(int); ok {
+				if likeMatch(str, pattern) {
+					vm.registers[dst] = int64(0)
+				} else {
 					vm.registers[dst] = int64(1)
 				}
 			}
@@ -1243,6 +1270,12 @@ func (vm *VM) Exec(ctx interface{}) error {
 			dstReg := int(inst.P1)
 			valueReg := int(inst.P2)
 			value := vm.registers[valueReg]
+
+			// NULL NOT IN (...) = NULL (per SQL standard)
+			if value == nil {
+				vm.registers[dstReg] = nil
+				continue
+			}
 
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)

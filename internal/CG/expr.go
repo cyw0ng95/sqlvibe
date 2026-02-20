@@ -189,11 +189,7 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		c.program.EmitOpWithDst(VM.OpGlob, int32(leftReg), int32(rightReg), dst)
 		return dst
 	case QP.TokenNotLike:
-		likeResult := c.ra.Alloc()
-		c.program.EmitOpWithDst(VM.OpLike, int32(leftReg), int32(rightReg), likeResult)
-		oneReg := c.ra.Alloc()
-		c.program.EmitLoadConst(oneReg, int64(1))
-		c.program.EmitOpWithDst(VM.OpSubtract, int32(oneReg), int32(likeResult), dst)
+		c.program.EmitOpWithDst(VM.OpNotLike, int32(leftReg), int32(rightReg), dst)
 		return dst
 	case QP.TokenBetween:
 		if binExpr, ok := expr.Right.(*QP.BinaryExpr); ok && binExpr.Op == QP.TokenAnd {
