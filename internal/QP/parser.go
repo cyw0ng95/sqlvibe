@@ -583,18 +583,18 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 					break
 				}
 				ob := OrderBy{Expr: expr, Desc: false, Nulls: ""}
-				if p.current().Literal == "DESC" {
+				if strings.ToUpper(p.current().Literal) == "DESC" {
 					ob.Desc = true
 					p.advance()
-				} else if p.current().Literal == "ASC" {
+				} else if strings.ToUpper(p.current().Literal) == "ASC" {
 					p.advance()
 				}
-				if p.current().Literal == "NULLS" {
+				if strings.ToUpper(p.current().Literal) == "NULLS" {
 					p.advance()
-					if p.current().Literal == "FIRST" {
+					if strings.ToUpper(p.current().Literal) == "FIRST" {
 						ob.Nulls = "FIRST"
 						p.advance()
-					} else if p.current().Literal == "LAST" {
+					} else if strings.ToUpper(p.current().Literal) == "LAST" {
 						ob.Nulls = "LAST"
 						p.advance()
 					}
@@ -1157,10 +1157,13 @@ func (p *Parser) parseDrop() (ASTNode, error) {
 		// Skip RESTRICT/CASCADE keywords - but RESTRICT should error like SQLite
 		name := p.current().Literal
 		p.advance()
-		for p.current().Type == TokenKeyword &&
-			(p.current().Literal == "RESTRICT" || p.current().Literal == "CASCADE") {
-			if p.current().Literal == "RESTRICT" {
+		for p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+			upper := strings.ToUpper(p.current().Literal)
+			if upper == "RESTRICT" {
 				return nil, fmt.Errorf("near \"RESTRICT\": syntax error")
+			}
+			if upper != "CASCADE" {
+				break
 			}
 			p.advance()
 		}
@@ -1182,10 +1185,13 @@ func (p *Parser) parseDrop() (ASTNode, error) {
 		}
 		name := p.current().Literal
 		p.advance()
-		for p.current().Type == TokenKeyword &&
-			(p.current().Literal == "RESTRICT" || p.current().Literal == "CASCADE") {
-			if p.current().Literal == "RESTRICT" {
+		for p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+			upper := strings.ToUpper(p.current().Literal)
+			if upper == "RESTRICT" {
 				return nil, fmt.Errorf("near \"RESTRICT\": syntax error")
+			}
+			if upper != "CASCADE" {
+				break
 			}
 			p.advance()
 		}
