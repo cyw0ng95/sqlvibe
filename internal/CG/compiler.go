@@ -192,10 +192,23 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 	c.program.EmitOpenTable(0, leftTableName)
 	c.program.EmitOpenTable(1, rightTableName)
 
+	isLeftJoin := joinType == "LEFT"
+
 	leftRewind := c.program.EmitOp(VM.OpRewind, 0, 0)
 
 	rightRewindPos := len(c.program.Instructions)
 	c.program.EmitOp(VM.OpRewind, 1, 0)
+
+	// For LEFT JOIN, allocate a "match found" register and reset it after each OpRewind(1)
+	var matchReg int
+	if isLeftJoin {
+		matchReg = c.ra.Alloc()
+		c.program.EmitLoadConst(matchReg, int64(0))
+	}
+
+	// innerLoopStart is the position of the first inner loop instruction
+	// (after OpRewind and matchReg reset) - this is where we jump back to on each iteration
+	innerLoopStart := len(c.program.Instructions)
 
 	var skipPos int
 	if join.Cond != nil {
@@ -208,6 +221,11 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 	for _, col := range columns {
 		reg := c.compileExpr(col)
 		colRegs = append(colRegs, reg)
+	}
+
+	// For LEFT JOIN, mark match found BEFORE WHERE check (ON condition is what determines match)
+	if isLeftJoin {
+		c.program.EmitLoadConst(matchReg, int64(1))
 	}
 
 	var whereSkipPos int
@@ -231,10 +249,39 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 		c.program.Instructions[whereSkipPos].P2 = int32(rightNextPos)
 	}
 
-	c.program.EmitGoto(rightRewindPos + 1)
+	// Jump back to inner loop start (after matchReg reset and after OpRewind)
+	c.program.EmitGoto(innerLoopStart)
 
 	rightDonePos := len(c.program.Instructions)
+
+	// For LEFT JOIN: if no match was found, emit left row with NULLs for right columns
+	var skipNullRowPos int
+	if isLeftJoin {
+		// OpIf(matchReg, skipNullRow) - skip null row emission if match was found
+		skipNullRowPos = c.program.EmitOp(VM.OpIf, int32(matchReg), 0)
+		// Re-read left columns and null out right columns
+		for i, col := range columns {
+			if c.exprCursorID(col) == 1 {
+				c.program.EmitOp(VM.OpNull, int32(colRegs[i]), 0)
+			} else {
+				// Re-read from cursor 0 (left table)
+				c.emitColumnForLeftJoinNullRow(col, colRegs[i])
+			}
+		}
+		// Also apply WHERE filter on null row (right columns are NULL here)
+		if where != nil {
+			nullWhereReg := c.compileExpr(where)
+			nullWhereSkipPos := c.program.EmitOp(VM.OpIfNot, int32(nullWhereReg), 0)
+			c.program.EmitResultRow(colRegs)
+			c.program.Instructions[nullWhereSkipPos].P2 = int32(len(c.program.Instructions))
+		} else {
+			c.program.EmitResultRow(colRegs)
+		}
+		c.program.Instructions[skipNullRowPos].P2 = int32(len(c.program.Instructions))
+	}
+
 	leftNext := c.program.EmitOp(VM.OpNext, 0, 0)
+	// Go back to rightRewindPos to re-rewind right cursor and reset matchReg for next left row
 	c.program.EmitGoto(rightRewindPos)
 
 	leftDonePos := len(c.program.Instructions)
@@ -243,6 +290,47 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 	c.program.FixupWithPos(leftRewind, leftDonePos)
 	c.program.FixupWithPos(rightNext, rightDonePos)
 	c.program.FixupWithPos(leftNext, leftDonePos)
+}
+
+// exprCursorID returns which cursor (0=left, 1=right) the expression reads from.
+func (c *Compiler) exprCursorID(col QP.Expr) int {
+	switch e := col.(type) {
+	case *QP.ColumnRef:
+		if e.Table != "" && c.tableCursors != nil {
+			if id, ok := c.tableCursors[e.Table]; ok {
+				return id
+			}
+		}
+		return 0
+	case *QP.AliasExpr:
+		return c.exprCursorID(e.Expr)
+	default:
+		return 0
+	}
+}
+
+// emitColumnForLeftJoinNullRow re-reads a left-table column expression into reg.
+func (c *Compiler) emitColumnForLeftJoinNullRow(col QP.Expr, reg int) {
+	switch e := col.(type) {
+	case *QP.ColumnRef:
+		colIdx := -1
+		if e.Table != "" && c.TableSchemas != nil {
+			if schema, ok := c.TableSchemas[e.Table]; ok {
+				if idx, ok2 := schema[e.Name]; ok2 {
+					colIdx = idx
+				}
+			}
+		} else if c.TableColIndices != nil {
+			if idx, ok := c.TableColIndices[e.Name]; ok {
+				colIdx = idx
+			}
+		}
+		c.program.EmitColumnWithTable(reg, 0, colIdx, e.Table)
+	case *QP.AliasExpr:
+		c.emitColumnForLeftJoinNullRow(e.Expr, reg)
+	default:
+		// For complex expressions, just re-read (may be stale but better than nil)
+	}
 }
 
 func (c *Compiler) Program() *VM.Program {

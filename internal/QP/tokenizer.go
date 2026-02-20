@@ -293,13 +293,22 @@ func (t *Tokenizer) readString() error {
 	t.pos++
 
 	t.start = t.pos
+	var sb strings.Builder
 	for t.pos < len(t.input) {
 		if t.input[t.pos] == quote {
+			// Check for doubled quote escape (e.g., '' inside single-quoted string)
+			if t.pos+1 < len(t.input) && t.input[t.pos+1] == quote {
+				sb.WriteByte(quote)
+				t.pos += 2
+				continue
+			}
 			break
 		}
 		if t.input[t.pos] == '\\' && t.pos+1 < len(t.input) {
+			sb.WriteByte(t.input[t.pos+1])
 			t.pos += 2
 		} else {
+			sb.WriteByte(t.input[t.pos])
 			t.pos++
 		}
 	}
@@ -308,7 +317,7 @@ func (t *Tokenizer) readString() error {
 		return fmt.Errorf("unterminated string at position %d", t.start)
 	}
 
-	literal := t.input[t.start:t.pos]
+	literal := sb.String()
 	t.pos++
 	t.addToken(TokenString, literal)
 	return nil
