@@ -96,6 +96,8 @@ var keywords = map[string]TokenType{
 	"RIGHT":             TokenKeyword,
 	"OUTER":             TokenKeyword,
 	"CROSS":             TokenKeyword,
+	"NATURAL":           TokenKeyword,
+	"USING":             TokenKeyword,
 	"ON":                TokenKeyword,
 	"AS":                TokenKeyword,
 	"ORDER":             TokenKeyword,
@@ -110,6 +112,8 @@ var keywords = map[string]TokenType{
 	"ALL":               TokenAll,
 	"EXCEPT":            TokenKeyword,
 	"INTERSECT":         TokenKeyword,
+	"WITH":              TokenKeyword,
+	"RECURSIVE":         TokenKeyword,
 	"CASE":              TokenKeyword,
 	"WHEN":              TokenKeyword,
 	"THEN":              TokenKeyword,
@@ -153,6 +157,20 @@ var keywords = map[string]TokenType{
 	"CURRENT_TIMESTAMP": TokenKeyword,
 	"LOCALTIME":         TokenKeyword,
 	"LOCALTIMESTAMP":    TokenKeyword,
+	"OVER":              TokenKeyword,
+	"PARTITION":         TokenKeyword,
+	"LAG":               TokenKeyword,
+	"LEAD":              TokenKeyword,
+	"FIRST_VALUE":       TokenKeyword,
+	"LAST_VALUE":        TokenKeyword,
+	"ROW_NUMBER":        TokenKeyword,
+	"RANK":              TokenKeyword,
+	"DENSE_RANK":        TokenKeyword,
+	"NTILE":             TokenKeyword,
+	"UNBOUNDED":         TokenKeyword,
+	"PRECEDING":         TokenKeyword,
+	"FOLLOWING":         TokenKeyword,
+	"CURRENT":           TokenKeyword,
 }
 
 type Token struct {
@@ -256,9 +274,11 @@ func (t *Tokenizer) readIdentifier() error {
 	upper := strings.ToUpper(literal)
 
 	if tokenType, ok := keywords[upper]; ok {
-		t.addToken(tokenType, literal)
+		// Store keywords in uppercase for consistent parser checks
+		t.addToken(tokenType, upper)
 	} else {
-		t.addToken(TokenIdentifier, literal)
+		// Unquoted identifiers are case-insensitive in SQLite (store as lowercase)
+		t.addToken(TokenIdentifier, strings.ToLower(literal))
 	}
 	return nil
 }
@@ -293,22 +313,26 @@ func (t *Tokenizer) readString() error {
 	t.pos++
 
 	t.start = t.pos
+	var sb strings.Builder
 	for t.pos < len(t.input) {
 		if t.input[t.pos] == quote {
+			// Check for doubled quote escape (e.g., '' inside single-quoted string)
+			if t.pos+1 < len(t.input) && t.input[t.pos+1] == quote {
+				sb.WriteByte(quote)
+				t.pos += 2
+				continue
+			}
 			break
 		}
-		if t.input[t.pos] == '\\' && t.pos+1 < len(t.input) {
-			t.pos += 2
-		} else {
-			t.pos++
-		}
+		sb.WriteByte(t.input[t.pos])
+		t.pos++
 	}
 
 	if t.pos >= len(t.input) {
 		return fmt.Errorf("unterminated string at position %d", t.start)
 	}
 
-	literal := t.input[t.start:t.pos]
+	literal := sb.String()
 	t.pos++
 	t.addToken(TokenString, literal)
 	return nil

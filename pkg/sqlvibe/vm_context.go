@@ -2,10 +2,104 @@ package sqlvibe
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
+
+// applyTypeAffinity coerces row values to match declared column type affinities.
+// This mirrors SQLite's type affinity rules.
+func (db *Database) applyTypeAffinity(tableName string, row map[string]interface{}) {
+	colTypes, ok := db.tables[tableName]
+	if !ok {
+		return
+	}
+	for colName, declaredType := range colTypes {
+		val, exists := row[colName]
+		if !exists || val == nil {
+			continue
+		}
+		upper := strings.ToUpper(declaredType)
+		switch {
+		case strings.Contains(upper, "REAL") || strings.Contains(upper, "FLOAT") || strings.Contains(upper, "DOUBLE"):
+			// REAL affinity: coerce integers and numeric strings to float64
+			switch v := val.(type) {
+			case int64:
+				row[colName] = float64(v)
+			case int:
+				row[colName] = float64(v)
+			case string:
+				if f, err := strconv.ParseFloat(v, 64); err == nil {
+					row[colName] = f
+				}
+			}
+		case strings.Contains(upper, "INT"):
+			// INTEGER affinity: coerce real values that are integers to int64
+			switch v := val.(type) {
+			case float64:
+				if v == float64(int64(v)) {
+					row[colName] = int64(v)
+				}
+			case string:
+				if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+					row[colName] = i
+				}
+			}
+		case strings.Contains(upper, "TEXT") || strings.Contains(upper, "CHAR") || strings.Contains(upper, "CLOB"):
+			// TEXT affinity: coerce non-strings to their string representation
+			switch v := val.(type) {
+			case int64:
+				row[colName] = strconv.FormatInt(v, 10)
+			case float64:
+				row[colName] = strconv.FormatFloat(v, 'g', -1, 64)
+			}
+		}
+	}
+}
+
+// autoAssignPK assigns an auto-increment value to a single INTEGER PRIMARY KEY column
+// when its value is nil, mimicking SQLite's rowid alias behavior.
+func (db *Database) autoAssignPK(tableName string, row map[string]interface{}) {
+	pkCols := db.primaryKeys[tableName]
+	if len(pkCols) != 1 {
+		return
+	}
+	pkCol := pkCols[0]
+	if row[pkCol] != nil {
+		return
+	}
+	// Check that it's an INTEGER column
+	colTypes := db.tables[tableName]
+	if colTypes == nil {
+		return
+	}
+	colType := strings.ToUpper(colTypes[pkCol])
+	if !strings.Contains(colType, "INT") {
+		return
+	}
+	// Find max existing value
+	var maxID int64
+	for _, r := range db.data[tableName] {
+		switch v := r[pkCol].(type) {
+		case int64:
+			if v > maxID {
+				maxID = v
+			}
+		case int:
+			if int64(v) > maxID {
+				maxID = int64(v)
+			}
+		case float64:
+			if int64(v) > maxID {
+				maxID = int64(v)
+			}
+		}
+	}
+	row[pkCol] = maxID + 1
+}
 
 type dsVmContext struct {
 	db         *Database
@@ -14,6 +108,7 @@ type dsVmContext struct {
 }
 
 func newDsVmContext(db *Database) *dsVmContext {
+	util.AssertNotNil(db, "Database")
 	return &dsVmContext{
 		db:         db,
 		pm:         db.pm,
@@ -22,6 +117,9 @@ func newDsVmContext(db *Database) *dsVmContext {
 }
 
 func (ctx *dsVmContext) GetTableData(tableName string) ([]map[string]interface{}, error) {
+	util.Assert(tableName != "", "tableName cannot be empty")
+	// Resolve case-insensitive table name
+	tableName = ctx.db.resolveTableName(tableName)
 	// First check if there's in-memory data (fallback from previous writes)
 	if ctx.db.data != nil && ctx.db.data[tableName] != nil && len(ctx.db.data[tableName]) > 0 {
 		return ctx.db.data[tableName], nil
@@ -85,13 +183,18 @@ func (ctx *dsVmContext) GetTableData(tableName string) ([]map[string]interface{}
 }
 
 func (ctx *dsVmContext) GetTableColumns(tableName string) ([]string, error) {
+	util.Assert(tableName != "", "tableName cannot be empty")
 	if ctx.db.columnOrder == nil {
 		return nil, nil
 	}
+	tableName = ctx.db.resolveTableName(tableName)
 	return ctx.db.columnOrder[tableName], nil
 }
 
 func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) error {
+	util.Assert(tableName != "", "tableName cannot be empty")
+	util.AssertNotNil(row, "row")
+	tableName = ctx.db.resolveTableName(tableName)
 	bt, ok := ctx.tableTrees[tableName]
 	if !ok || bt == nil || bt.RootPage() == 0 {
 		// Fall back to in-memory
@@ -101,6 +204,68 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		if ctx.db.data[tableName] == nil {
 			ctx.db.data[tableName] = make([]map[string]interface{}, 0)
 		}
+
+		// Apply type affinity coercion based on declared column types
+		ctx.db.applyTypeAffinity(tableName, row)
+
+		// Auto-assign integer primary key if nil
+		ctx.db.autoAssignPK(tableName, row)
+
+		// Check NOT NULL constraints
+		tableNotNull := ctx.db.columnNotNull[tableName]
+		for colName, isNotNull := range tableNotNull {
+			if isNotNull {
+				if val, exists := row[colName]; !exists || val == nil {
+					return fmt.Errorf("NOT NULL constraint failed: %s.%s", tableName, colName)
+				}
+			}
+		}
+
+		// Check CHECK constraints using dbVmContext evaluator
+		tableChecks := ctx.db.columnChecks[tableName]
+		for colName, checkExpr := range tableChecks {
+			if checkExpr != nil {
+				dbCtx := &dbVmContext{db: ctx.db}
+				result := dbCtx.evaluateCheckConstraint(checkExpr, row)
+				isValid := false
+				if result != nil {
+					switch v := result.(type) {
+					case bool:
+						isValid = v
+					case int64:
+						isValid = v != 0
+					case float64:
+						isValid = v != 0.0
+					case string:
+						isValid = len(v) > 0
+					default:
+						isValid = true
+					}
+				}
+				if !isValid {
+					return fmt.Errorf("CHECK constraint failed: %s.%s", tableName, colName)
+				}
+			}
+		}
+
+		// Check primary key uniqueness
+		pkCols := ctx.db.primaryKeys[tableName]
+		if len(pkCols) > 0 {
+			for _, existingRow := range ctx.db.data[tableName] {
+				allMatch := true
+				for _, pkCol := range pkCols {
+					pkVal := row[pkCol]
+					if pkVal == nil || existingRow[pkCol] != pkVal {
+						allMatch = false
+						break
+					}
+				}
+				if allMatch {
+					return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
+				}
+			}
+		}
+
 		ctx.db.data[tableName] = append(ctx.db.data[tableName], row)
 		return nil
 	}
@@ -150,6 +315,10 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 }
 
 func (ctx *dsVmContext) UpdateRow(tableName string, rowIndex int, row map[string]interface{}) error {
+	util.Assert(tableName != "", "tableName cannot be empty")
+	util.Assert(rowIndex >= 0, "rowIndex cannot be negative: %d", rowIndex)
+	util.AssertNotNil(row, "row")
+	tableName = ctx.db.resolveTableName(tableName)
 	// Fall back to in-memory
 	if ctx.db.data[tableName] == nil {
 		return fmt.Errorf("table not found")
@@ -162,6 +331,9 @@ func (ctx *dsVmContext) UpdateRow(tableName string, rowIndex int, row map[string
 }
 
 func (ctx *dsVmContext) DeleteRow(tableName string, rowIndex int) error {
+	util.Assert(tableName != "", "tableName cannot be empty")
+	util.Assert(rowIndex >= 0, "rowIndex cannot be negative: %d", rowIndex)
+	tableName = ctx.db.resolveTableName(tableName)
 	// Fall back to in-memory
 	if ctx.db.data[tableName] == nil {
 		return fmt.Errorf("table not found")
@@ -172,6 +344,24 @@ func (ctx *dsVmContext) DeleteRow(tableName string, rowIndex int) error {
 	ctx.db.data[tableName] = append(ctx.db.data[tableName][:rowIndex], ctx.db.data[tableName][rowIndex+1:]...)
 	return nil
 }
+
+// Subquery execution: delegate to dbVmContext for full support
+func (ctx *dsVmContext) ExecuteSubquery(subquery interface{}) (interface{}, error) {
+	return (&dbVmContext{db: ctx.db}).ExecuteSubquery(subquery)
+}
+
+func (ctx *dsVmContext) ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error) {
+	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRows(subquery)
+}
+
+func (ctx *dsVmContext) ExecuteSubqueryWithContext(subquery interface{}, outerRow map[string]interface{}) (interface{}, error) {
+	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryWithContext(subquery, outerRow)
+}
+
+func (ctx *dsVmContext) ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error) {
+	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRowsWithContext(subquery, outerRow)
+}
+
 
 type dbVmContext struct {
 	db *Database
@@ -195,6 +385,9 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 	if ctx.db.data[tableName] == nil {
 		ctx.db.data[tableName] = make([]map[string]interface{}, 0)
 	}
+
+	// Auto-assign integer primary key if nil
+	ctx.db.autoAssignPK(tableName, row)
 
 	// Apply defaults for missing columns and NULL values
 	tableDefaults := ctx.db.columnDefaults[tableName]
@@ -263,12 +456,17 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 	// Check primary key constraints
 	pkCols := ctx.db.primaryKeys[tableName]
 	if len(pkCols) > 0 {
-		for _, pkCol := range pkCols {
-			pkVal := row[pkCol]
-			for _, existingRow := range ctx.db.data[tableName] {
-				if existingRow[pkCol] == pkVal {
-					return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCol)
+		for _, existingRow := range ctx.db.data[tableName] {
+			allMatch := true
+			for _, pkCol := range pkCols {
+				pkVal := row[pkCol]
+				if pkVal == nil || existingRow[pkCol] != pkVal {
+					allMatch = false
+					break
 				}
+			}
+			if allMatch {
+				return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
 			}
 		}
 	}

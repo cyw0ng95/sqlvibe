@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
@@ -588,18 +591,25 @@ func (vm *VM) Exec(ctx interface{}) error {
 			continue
 
 		case OpReplace:
-			src := vm.registers[inst.P1]
+			dst, ok := inst.P4.(int)
+			if !ok {
+				continue
+			}
+			srcVal := vm.registers[dst]
+			if srcVal == nil {
+				// REPLACE(NULL, ...) = NULL
+				continue
+			}
+			srcStr := fmt.Sprintf("%v", srcVal)
 			from := ""
 			to := ""
-			if v, ok := vm.registers[inst.P2].(string); ok {
+			if v, ok := vm.registers[inst.P1].(string); ok {
 				from = v
 			}
-			if v, ok := inst.P4.(string); ok {
+			if v, ok := vm.registers[inst.P2].(string); ok {
 				to = v
 			}
-			if dst, ok := inst.P4.(int); ok {
-				vm.registers[dst] = strings.Replace(fmt.Sprintf("%v", src), from, to, -1)
-			}
+			vm.registers[dst] = strings.Replace(srcStr, from, to, -1)
 			continue
 
 		case OpInstr:
@@ -617,10 +627,19 @@ func (vm *VM) Exec(ctx interface{}) error {
 			continue
 
 		case OpLike:
+			// NULL LIKE anything = NULL (treat as NULL/false)
+			if vm.registers[inst.P1] == nil || vm.registers[inst.P2] == nil {
+				if dst, ok := inst.P4.(int); ok {
+					vm.registers[dst] = nil
+				}
+				continue
+			}
 			pattern := ""
 			str := ""
 			if v, ok := vm.registers[inst.P1].(string); ok {
 				str = v
+			} else {
+				str = fmt.Sprintf("%v", vm.registers[inst.P1])
 			}
 			if v, ok := vm.registers[inst.P2].(string); ok {
 				pattern = v
@@ -628,6 +647,33 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = int64(0)
 				if likeMatch(str, pattern) {
+					vm.registers[dst] = int64(1)
+				}
+			}
+			continue
+
+		case OpNotLike:
+			// NULL NOT LIKE anything = NULL (treat as NULL/false)
+			if vm.registers[inst.P1] == nil || vm.registers[inst.P2] == nil {
+				if dst, ok := inst.P4.(int); ok {
+					vm.registers[dst] = nil
+				}
+				continue
+			}
+			str := ""
+			pattern := ""
+			if v, ok := vm.registers[inst.P1].(string); ok {
+				str = v
+			} else {
+				str = fmt.Sprintf("%v", vm.registers[inst.P1])
+			}
+			if v, ok := vm.registers[inst.P2].(string); ok {
+				pattern = v
+			}
+			if dst, ok := inst.P4.(int); ok {
+				if likeMatch(str, pattern) {
+					vm.registers[dst] = int64(0)
+				} else {
 					vm.registers[dst] = int64(1)
 				}
 			}
@@ -657,10 +703,58 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpTypeof:
+			src := vm.registers[inst.P1]
+			if dst, ok := inst.P4.(int); ok {
+				if src == nil {
+					vm.registers[dst] = "null"
+				} else {
+					switch src.(type) {
+					case int64:
+						vm.registers[dst] = "integer"
+					case float64:
+						vm.registers[dst] = "real"
+					case string:
+						vm.registers[dst] = "text"
+					case []byte:
+						vm.registers[dst] = "blob"
+					default:
+						vm.registers[dst] = "text"
+					}
+				}
+			}
+			continue
+
+		case OpRandom:
+			if dst, ok := inst.P4.(int); ok {
+				vm.registers[dst] = rand.Int63()
+			}
+			continue
+
+		case OpCallScalar:
+			if info, ok := inst.P4.(*ScalarCallInfo); ok {
+				// Build synthetic FuncCall with arg values from registers
+				argExprs := make([]QP.Expr, len(info.ArgRegs))
+				for i, reg := range info.ArgRegs {
+					argExprs[i] = &QP.Literal{Value: vm.registers[reg]}
+				}
+				syntheticCall := &QP.FuncCall{Name: info.Name, Args: argExprs}
+				vm.registers[info.Dst] = vm.evaluateFuncCallOnRow(nil, nil, syntheticCall)
+			}
+			continue
+
 		case OpRound:
 			src := vm.registers[inst.P1]
 			if dst, ok := inst.P4.(int); ok {
-				vm.registers[dst] = getRound(src, 0)
+				decimals := 0
+				if inst.P2 != 0 {
+					if dv, ok2 := vm.registers[inst.P2].(int64); ok2 {
+						decimals = int(dv)
+					} else if dv, ok2 := vm.registers[inst.P2].(float64); ok2 {
+						decimals = int(dv)
+					}
+				}
+				vm.registers[dst] = getRound(src, decimals)
 			}
 			continue
 
@@ -812,12 +906,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 			// Try to get TypeSpec from P4, fall back to string for backward compatibility
 			var typeName string
-			var precision, scale int
 
 			if typeSpec, ok := inst.P4.(QP.TypeSpec); ok {
 				typeName = typeSpec.Name
-				precision = typeSpec.Precision
-				scale = typeSpec.Scale
 			} else if typeStr, ok := inst.P4.(string); ok {
 				// Backward compatibility: P4 is a string
 				typeName = typeStr
@@ -828,12 +919,13 @@ func (vm *VM) Exec(ctx interface{}) error {
 				switch upperType {
 				case "INTEGER", "INT":
 					if s, ok := val.(string); ok {
-						if iv, err := strconv.ParseInt(s, 10, 64); err == nil {
+						if iv, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
 							vm.registers[inst.P1] = iv
-						} else if fv, err := strconv.ParseFloat(s, 64); err == nil {
+						} else if fv, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
 							vm.registers[inst.P1] = int64(fv)
 						} else {
-							vm.registers[inst.P1] = int64(0)
+							// SQLite-style: parse numeric prefix from string
+							vm.registers[inst.P1] = parseNumericPrefix(s)
 						}
 					} else if fv, ok := val.(float64); ok {
 						vm.registers[inst.P1] = int64(fv)
@@ -865,12 +957,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 					}
 
 					// Apply precision and scale if specified
-					if precision > 0 && scale > 0 {
-						// Round to specified scale
-						multiplier := math.Pow(10, float64(scale))
-						floatVal = math.Round(floatVal*multiplier) / multiplier
-					}
-
+					// SQLite compatibility: DECIMAL/NUMERIC CAST does not round to scale, just returns float value
 					vm.registers[inst.P1] = floatVal
 				case "TEXT", "VARCHAR", "CHAR", "CHARACTER":
 					if s, ok := val.(string); ok {
@@ -892,6 +979,13 @@ func (vm *VM) Exec(ctx interface{}) error {
 						vm.registers[inst.P1] = bv
 					} else {
 						vm.registers[inst.P1] = []byte(fmt.Sprintf("%v", val))
+					}
+				case "DATE", "TIME", "TIMESTAMP", "DATETIME", "YEAR":
+					// SQLite treats DATE/TIME/TIMESTAMP as NUMERIC affinity (leading-integer parsing)
+					if s, ok := val.(string); ok {
+						vm.registers[inst.P1] = parseNumericPrefix(s)
+					} else if fv, ok := val.(float64); ok {
+						vm.registers[inst.P1] = int64(fv)
 					}
 				}
 			}
@@ -1189,6 +1283,12 @@ func (vm *VM) Exec(ctx interface{}) error {
 			dstReg := int(inst.P1)
 			valueReg := int(inst.P2)
 			value := vm.registers[valueReg]
+
+			// NULL NOT IN (...) = NULL (per SQL standard)
+			if value == nil {
+				vm.registers[dstReg] = nil
+				continue
+			}
 
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)
@@ -2312,6 +2412,13 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 	for rowIdx := 0; rowIdx < len(cursor.Data); rowIdx++ {
 		row := cursor.Data[rowIdx]
 
+		// Apply WHERE filter if present
+		if aggInfo.WhereExpr != nil {
+			if !vm.evaluateBoolExprOnRow(row, cursor.Columns, aggInfo.WhereExpr) {
+				continue
+			}
+		}
+
 		// Compute group key from GROUP BY expressions
 		groupKey := vm.computeGroupKey(row, cursor.Columns, aggInfo.GroupByExprs)
 
@@ -2364,17 +2471,32 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 					state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
 				}
 			case "AVG":
-				// AVG = SUM / COUNT of non-NULL values
+				// AVG = SUM / COUNT of non-NULL values; accumulate in float64 to match SQLite precision
 				if value != nil {
-					state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
+					var fv float64
+					switch v := value.(type) {
+					case int64:
+						fv = float64(v)
+					case float64:
+						fv = v
+					default:
+						continue
+					}
+					if state.Sums[aggIdx] == nil {
+						state.Sums[aggIdx] = fv
+					} else if s, ok := state.Sums[aggIdx].(float64); ok {
+						state.Sums[aggIdx] = s + fv
+					} else {
+						state.Sums[aggIdx] = fv
+					}
 					state.Counts[aggIdx]++
 				}
 			case "MIN":
-				if state.Mins[aggIdx] == nil || vm.compareVals(value, state.Mins[aggIdx]) < 0 {
+				if value != nil && (state.Mins[aggIdx] == nil || vm.compareVals(value, state.Mins[aggIdx]) < 0) {
 					state.Mins[aggIdx] = value
 				}
 			case "MAX":
-				if state.Maxs[aggIdx] == nil || vm.compareVals(value, state.Maxs[aggIdx]) > 0 {
+				if value != nil && (state.Maxs[aggIdx] == nil || vm.compareVals(value, state.Maxs[aggIdx]) > 0) {
 					state.Maxs[aggIdx] = value
 				}
 			}
@@ -2394,14 +2516,26 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 	for key := range groups {
 		groupKeys = append(groupKeys, key)
 	}
-	// Sort the keys
-	for i := 0; i < len(groupKeys); i++ {
-		for j := i + 1; j < len(groupKeys); j++ {
-			if groupKeys[i] > groupKeys[j] {
-				groupKeys[i], groupKeys[j] = groupKeys[j], groupKeys[i]
+	// Sort the keys: NULL ("<nil>") groups sort first (matching SQLite behavior),
+	// then remaining keys in ascending order. Try numeric comparison when both
+	// keys are parseable as numbers (so "10" > "3" numerically).
+	// If only one key is numeric, fall through to lexicographic string comparison.
+	sort.SliceStable(groupKeys, func(i, j int) bool {
+		ki, kj := groupKeys[i], groupKeys[j]
+		if ki == "<nil>" {
+			return true
+		}
+		if kj == "<nil>" {
+			return false
+		}
+		// Numeric comparison when both keys are valid numbers; otherwise string comparison.
+		if fi, erri := strconv.ParseFloat(ki, 64); erri == nil {
+			if fj, errj := strconv.ParseFloat(kj, 64); errj == nil {
+				return fi < fj
 			}
 		}
-	}
+		return ki < kj
+	})
 
 	// SQL standard: aggregate without GROUP BY on empty table must return 1 row
 	// with COUNT=0 and NULL for other aggregates.
@@ -2423,6 +2557,24 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 
 	for _, key := range groupKeys {
 		state := groups[key]
+
+		// Apply HAVING filter if present
+		if aggInfo.HavingExpr != nil {
+			if !vm.evaluateHaving(state, aggInfo) {
+				continue
+			}
+		}
+
+		// If SelectExprs is set, use them for the result row ordering
+		if len(aggInfo.SelectExprs) > 0 {
+			resultRow := make([]interface{}, 0, len(aggInfo.SelectExprs))
+			for _, expr := range aggInfo.SelectExprs {
+				resultRow = append(resultRow, vm.resolveSelectExpr(expr, state, aggInfo))
+			}
+			vm.results = append(vm.results, resultRow)
+			continue
+		}
+
 		// Build result row: non-agg columns + aggregates
 		resultRow := make([]interface{}, 0)
 
@@ -2459,15 +2611,34 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 			resultRow = append(resultRow, aggValue)
 		}
 
-		// Apply HAVING filter if present
-		if aggInfo.HavingExpr != nil {
-			if !vm.evaluateHaving(state, aggInfo) {
-				continue
-			}
-		}
-
 		vm.results = append(vm.results, resultRow)
 	}
+}
+
+// AggregateInfo contains information about aggregate queries
+type AggregateInfo struct {
+	GroupByExprs []QP.Expr      // GROUP BY expressions
+	Aggregates   []AggregateDef // Aggregate functions in SELECT
+	NonAggCols   []QP.Expr      // Non-aggregate columns in SELECT
+	HavingExpr   QP.Expr        // HAVING clause expression
+	WhereExpr    QP.Expr        // WHERE clause expression
+	SelectExprs  []QP.Expr      // Full original SELECT expressions (for post-agg eval)
+}
+
+// ScalarCallInfo holds info for OpCallScalar: a function name, arg register indices, and a dst register.
+type ScalarCallInfo struct {
+	Name    string // function name (uppercase)
+	ArgRegs []int  // register indices for arguments
+	Dst     int    // destination register
+	Call    *QP.FuncCall // original call expression (nil args are evaluated at runtime)
+}
+
+// AggregateDef defines an aggregate function
+type AggregateDef struct {
+	Function string    // COUNT, SUM, AVG, MIN, MAX
+	Args     []QP.Expr // Arguments to the aggregate
+	Distinct bool      // true if DISTINCT was specified (e.g. COUNT(DISTINCT col))
+	Alias    string    // Optional output alias (e.g. COUNT(*) AS cnt)
 }
 
 // AggregateState tracks aggregate values for a group
@@ -2525,6 +2696,66 @@ func (vm *VM) evaluateAggregateArg(row map[string]interface{}, columns []string,
 	return vm.evaluateExprOnRow(row, columns, args[0])
 }
 
+// applyTypeCast applies a SQL type cast to a value, returning the cast result.
+func (vm *VM) applyTypeCast(val interface{}, typeName string) interface{} {
+	if val == nil {
+		return nil
+	}
+	upperType := strings.ToUpper(typeName)
+	switch upperType {
+	case "INTEGER", "INT":
+		switch v := val.(type) {
+		case int64:
+			return v
+		case float64:
+			return int64(v)
+		case string:
+			if iv, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+				return iv
+			} else if fv, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+				return int64(fv)
+			}
+			return int64(0)
+		}
+	case "REAL", "FLOAT", "DOUBLE":
+		switch v := val.(type) {
+		case float64:
+			return v
+		case int64:
+			return float64(v)
+		case string:
+			if fv, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+				return fv
+			}
+			return float64(0)
+		}
+	case "TEXT":
+		if b, ok := val.([]byte); ok {
+			return string(b)
+		}
+		return fmt.Sprintf("%v", val)
+	case "BLOB":
+		if s, ok := val.(string); ok {
+			return []byte(s)
+		}
+		if b, ok := val.([]byte); ok {
+			return b
+		}
+	case "DATE", "TIME", "TIMESTAMP", "DATETIME", "YEAR":
+		// SQLite treats DATE/TIME/TIMESTAMP as NUMERIC affinity (equivalent to INTEGER cast)
+		// Uses leading-integer parsing for strings (SQLite's sqlite3Atoi64 behavior)
+		switch v := val.(type) {
+		case int64:
+			return v
+		case float64:
+			return int64(v)
+		case string:
+			return parseNumericPrefix(v)
+		}
+	}
+	return val
+}
+
 // evaluateExprOnRow evaluates an expression against a row
 func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, expr QP.Expr) interface{} {
 	if expr == nil {
@@ -2535,17 +2766,410 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 	case *QP.Literal:
 		return e.Value
 	case *QP.ColumnRef:
-		return row[e.Name]
+		if val, ok := row[e.Name]; ok {
+			return val
+		}
+		// Try without table prefix
+		name := e.Name
+		if idx := strings.LastIndex(name, "."); idx >= 0 {
+			name = name[idx+1:]
+		}
+		return row[name]
+	case *QP.AliasExpr:
+		return vm.evaluateExprOnRow(row, columns, e.Expr)
+	case *QP.UnaryExpr:
+		val := vm.evaluateExprOnRow(row, columns, e.Expr)
+		if e.Op == QP.TokenMinus {
+			switch v := val.(type) {
+			case int64:
+				return -v
+			case float64:
+				return -v
+			}
+		}
+		return val
 	case *QP.BinaryExpr:
 		left := vm.evaluateExprOnRow(row, columns, e.Left)
 		right := vm.evaluateExprOnRow(row, columns, e.Right)
 		return vm.evaluateBinaryOp(left, right, e.Op)
+	case *QP.FuncCall:
+		return vm.evaluateFuncCallOnRow(row, columns, e)
+	case *QP.CastExpr:
+		val := vm.evaluateExprOnRow(row, columns, e.Expr)
+		return vm.applyTypeCast(val, e.TypeSpec.Name)
 	default:
 		return nil
 	}
 }
 
-// evaluateBinaryOp evaluates a binary operation
+// evaluateFuncCallOnRow evaluates a function call against a row for aggregate WHERE/CHECK filtering
+func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string, e *QP.FuncCall) interface{} {
+	funcName := strings.ToUpper(e.Name)
+	switch funcName {
+	case "LENGTH", "LEN":
+		if len(e.Args) > 0 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if val == nil {
+				return nil
+			}
+			return int64(len(fmt.Sprintf("%v", val)))
+		}
+	case "UPPER":
+		if len(e.Args) > 0 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if val == nil {
+				return nil
+			}
+			return strings.ToUpper(fmt.Sprintf("%v", val))
+		}
+	case "LOWER":
+		if len(e.Args) > 0 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if val == nil {
+				return nil
+			}
+			return strings.ToLower(fmt.Sprintf("%v", val))
+		}
+	case "TYPEOF":
+		if len(e.Args) > 0 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if val == nil {
+				return "null"
+			}
+			switch val.(type) {
+			case int64:
+				return "integer"
+			case float64:
+				return "real"
+			case string:
+				return "text"
+			case []byte:
+				return "blob"
+			default:
+				return "text"
+			}
+		}
+	}
+	// Date/time functions
+	switch funcName {
+	case "CURRENT_DATE":
+		return time.Now().UTC().Format("2006-01-02")
+	case "CURRENT_TIME":
+		return time.Now().UTC().Format("15:04:05")
+	case "CURRENT_TIMESTAMP":
+		return time.Now().UTC().Format("2006-01-02 15:04:05")
+	case "LOCALTIME":
+		return time.Now().Local().Format("15:04:05")
+	case "LOCALTIMESTAMP":
+		return time.Now().Local().Format("2006-01-02 15:04:05")
+	case "DATE":
+		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0)))
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		for i := 1; i < len(e.Args); i++ {
+			mod, _ := vm.evaluateExprOnRow(row, columns, e.Args[i]).(string)
+			t = applyDateModifier(t, mod)
+		}
+		return t.Format("2006-01-02")
+	case "TIME":
+		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0)))
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		for i := 1; i < len(e.Args); i++ {
+			mod, _ := vm.evaluateExprOnRow(row, columns, e.Args[i]).(string)
+			t = applyDateModifier(t, mod)
+		}
+		return t.Format("15:04:05")
+	case "DATETIME":
+		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0)))
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		for i := 1; i < len(e.Args); i++ {
+			mod, _ := vm.evaluateExprOnRow(row, columns, e.Args[i]).(string)
+			t = applyDateModifier(t, mod)
+		}
+		return t.Format("2006-01-02 15:04:05")
+	case "STRFTIME":
+		if len(e.Args) < 2 {
+			return nil
+		}
+		fmtStr, _ := vm.evaluateExprOnRow(row, columns, e.Args[0]).(string)
+		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, e.Args[1]))
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		for i := 2; i < len(e.Args); i++ {
+			mod, _ := vm.evaluateExprOnRow(row, columns, e.Args[i]).(string)
+			t = applyDateModifier(t, mod)
+		}
+		goFmt := strings.NewReplacer(
+			"%Y", "2006", "%m", "01", "%d", "02",
+			"%H", "15", "%M", "04", "%S", "05",
+			"%j", "002", "%f", "05.000000",
+		).Replace(fmtStr)
+		return t.Format(goFmt)
+	}
+	return nil
+}
+
+// evaluateBoolExprOnRow evaluates a WHERE-clause expression as a boolean against a row
+func (vm *VM) evaluateBoolExprOnRow(row map[string]interface{}, columns []string, expr QP.Expr) bool {
+	if expr == nil {
+		return true
+	}
+	switch e := expr.(type) {
+	case *QP.BinaryExpr:
+		switch e.Op {
+		case QP.TokenAnd:
+			return vm.evaluateBoolExprOnRow(row, columns, e.Left) && vm.evaluateBoolExprOnRow(row, columns, e.Right)
+		case QP.TokenOr:
+			return vm.evaluateBoolExprOnRow(row, columns, e.Left) || vm.evaluateBoolExprOnRow(row, columns, e.Right)
+		case QP.TokenIs:
+			left := vm.evaluateExprOnRow(row, columns, e.Left)
+			right := vm.evaluateExprOnRow(row, columns, e.Right)
+			if right == nil {
+				return left == nil
+			}
+			return left == right
+		case QP.TokenIsNot:
+			left := vm.evaluateExprOnRow(row, columns, e.Left)
+			right := vm.evaluateExprOnRow(row, columns, e.Right)
+			if right == nil {
+				return left != nil
+			}
+			return left != right
+		case QP.TokenLike:
+			left := vm.evaluateExprOnRow(row, columns, e.Left)
+			right := vm.evaluateExprOnRow(row, columns, e.Right)
+			if left == nil || right == nil {
+				return false
+			}
+			return vmMatchLike(fmt.Sprintf("%v", left), fmt.Sprintf("%v", right))
+		case QP.TokenNotLike:
+			left := vm.evaluateExprOnRow(row, columns, e.Left)
+			right := vm.evaluateExprOnRow(row, columns, e.Right)
+			if left == nil || right == nil {
+				return false
+			}
+			return !vmMatchLike(fmt.Sprintf("%v", left), fmt.Sprintf("%v", right))
+		case QP.TokenBetween:
+			val := vm.evaluateExprOnRow(row, columns, e.Left)
+			if rangeExpr, ok := e.Right.(*QP.BinaryExpr); ok {
+				lo := vm.evaluateExprOnRow(row, columns, rangeExpr.Left)
+				hi := vm.evaluateExprOnRow(row, columns, rangeExpr.Right)
+				return vm.compareVals(val, lo) >= 0 && vm.compareVals(val, hi) <= 0
+			}
+			return false
+		case QP.TokenNotBetween:
+			val := vm.evaluateExprOnRow(row, columns, e.Left)
+			if rangeExpr, ok := e.Right.(*QP.BinaryExpr); ok {
+				lo := vm.evaluateExprOnRow(row, columns, rangeExpr.Left)
+				hi := vm.evaluateExprOnRow(row, columns, rangeExpr.Right)
+				return vm.compareVals(val, lo) < 0 || vm.compareVals(val, hi) > 0
+			}
+			return false
+		case QP.TokenIn:
+			val := vm.evaluateExprOnRow(row, columns, e.Left)
+			if listLit, ok := e.Right.(*QP.Literal); ok {
+				if items, ok := listLit.Value.([]interface{}); ok {
+					for _, item := range items {
+						if vm.compareVals(val, item) == 0 {
+							return true
+						}
+					}
+					return false
+				}
+			}
+			result := vm.evaluateBinaryOp(val, vm.evaluateExprOnRow(row, columns, e.Right), e.Op)
+			if bv, ok := result.(bool); ok {
+				return bv
+			}
+			return false
+		case QP.TokenNotIn:
+			val := vm.evaluateExprOnRow(row, columns, e.Left)
+			if val == nil {
+				// NULL NOT IN (...) → NULL (falsy) per SQL standard
+				return false
+			}
+			if listLit, ok := e.Right.(*QP.Literal); ok {
+				if items, ok := listLit.Value.([]interface{}); ok {
+					for _, item := range items {
+						if vm.compareVals(val, item) == 0 {
+							return false
+						}
+					}
+					return true
+				}
+			}
+			return true
+		default:
+			result := vm.evaluateBinaryOp(
+				vm.evaluateExprOnRow(row, columns, e.Left),
+				vm.evaluateExprOnRow(row, columns, e.Right),
+				e.Op,
+			)
+			if bv, ok := result.(bool); ok {
+				return bv
+			}
+			return false
+		}
+	case *QP.UnaryExpr:
+		if e.Op == QP.TokenNot {
+			return !vm.evaluateBoolExprOnRow(row, columns, e.Expr)
+		}
+		result := vm.evaluateExprOnRow(row, columns, e.Expr)
+		if bv, ok := result.(bool); ok {
+			return bv
+		}
+		return false
+	default:
+		result := vm.evaluateExprOnRow(row, columns, expr)
+		if bv, ok := result.(bool); ok {
+			return bv
+		}
+		return result != nil
+	}
+}
+
+// vmMatchLike matches a string against a LIKE pattern
+func vmMatchLike(value, pattern string) bool {
+	return matchLikePattern(value, pattern, 0, 0)
+}
+
+// parseNumericPrefix parses a numeric prefix from a string like SQLite does.
+// E.g., "2024year" -> 2024, "  3.14abc" -> 3, "abc" -> 0
+func parseNumericPrefix(s string) int64 {
+	s = strings.TrimSpace(s)
+	if len(s) == 0 {
+		return 0
+	}
+	// Find the longest numeric prefix
+	end := 0
+	for end < len(s) && (s[end] >= '0' && s[end] <= '9' || (end == 0 && (s[end] == '-' || s[end] == '+'))) {
+		end++
+	}
+	if end == 0 {
+		return 0
+	}
+	if iv, err := strconv.ParseInt(s[:end], 10, 64); err == nil {
+		return iv
+	}
+	if fv, err := strconv.ParseFloat(s[:end], 64); err == nil {
+		return int64(fv)
+	}
+	return 0
+}
+
+// parseDateTimeValue parses a value into a time.Time, trying common SQLite date formats.
+// Returns zero time if parsing fails.
+func parseDateTimeValue(val interface{}) time.Time {
+	var s string
+	switch v := val.(type) {
+	case string:
+		s = v
+	case nil:
+		return time.Time{}
+	default:
+		return time.Time{}
+	}
+	if strings.ToLower(s) == "now" {
+		return time.Now().UTC()
+	}
+	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02", "15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+// applyDateModifier applies a SQLite date modifier string (e.g., "+1 day") to a time.Time.
+func applyDateModifier(t time.Time, mod string) time.Time {
+	mod = strings.TrimSpace(mod)
+	if mod == "" {
+		return t
+	}
+	// Parse sign
+	sign := 1
+	if len(mod) > 0 && mod[0] == '-' {
+		sign = -1
+		mod = mod[1:]
+	} else if len(mod) > 0 && mod[0] == '+' {
+		mod = mod[1:]
+	}
+	mod = strings.TrimSpace(mod)
+	// Parse number and unit
+	var numStr string
+	var unit string
+	for i, ch := range mod {
+		if ch >= '0' && ch <= '9' || (ch == '.' && numStr != "") {
+			numStr += string(ch)
+		} else {
+			unit = strings.ToLower(strings.TrimSpace(mod[i:]))
+			break
+		}
+	}
+	n, err := strconv.Atoi(numStr)
+	if err != nil {
+		return t
+	}
+	n *= sign
+	switch unit {
+	case "day", "days":
+		return t.AddDate(0, 0, n)
+	case "month", "months":
+		return t.AddDate(0, n, 0)
+	case "year", "years":
+		return t.AddDate(n, 0, 0)
+	case "hour", "hours":
+		return t.Add(time.Duration(n) * time.Hour)
+	case "minute", "minutes":
+		return t.Add(time.Duration(n) * time.Minute)
+	case "second", "seconds":
+		return t.Add(time.Duration(n) * time.Second)
+	}
+	return t
+}
+
+// safeArg returns e.Args[i] or nil if out of bounds.
+func safeArg(args []QP.Expr, i int) QP.Expr {
+	if i >= 0 && i < len(args) {
+		return args[i]
+	}
+	return nil
+}
+
+func matchLikePattern(value, pattern string, vi, pi int) bool {
+	if pi >= len(pattern) {
+		return vi >= len(value)
+	}
+	if vi >= len(value) {
+		for ; pi < len(pattern); pi++ {
+			if pattern[pi] != '%' {
+				return false
+			}
+		}
+		return true
+	}
+	pchar := pattern[pi]
+	if pchar == '%' {
+		for i := vi; i <= len(value); i++ {
+			if matchLikePattern(value, pattern, i, pi+1) {
+				return true
+			}
+		}
+		return false
+	}
+	if pchar == '_' || strings.ToUpper(string(pchar)) == strings.ToUpper(string(value[vi])) {
+		return matchLikePattern(value, pattern, vi+1, pi+1)
+	}
+	return false
+}
+
+
 func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interface{} {
 	// Simple implementation for common operators
 	switch op {
@@ -2553,6 +3177,12 @@ func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interfa
 		return vm.addValues(left, right)
 	case QP.TokenMinus:
 		return vm.subtractValues(left, right)
+	case QP.TokenAsterisk:
+		return vm.multiplyValues(left, right)
+	case QP.TokenSlash:
+		return vm.divideValues(left, right)
+	case QP.TokenPercent:
+		return vm.moduloValues(left, right)
 	case QP.TokenGt:
 		return vm.compareVals(left, right) > 0
 	case QP.TokenGe:
@@ -2566,6 +3196,110 @@ func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interfa
 	case QP.TokenNe:
 		return vm.compareVals(left, right) != 0
 	default:
+		return nil
+	}
+}
+
+// resolveSelectExpr evaluates a SELECT expression in the context of computed aggregate state.
+// It resolves aggregate functions (MAX, MIN, SUM, etc.) to their computed values.
+func (vm *VM) resolveSelectExpr(expr QP.Expr, state *AggregateState, aggInfo *AggregateInfo) interface{} {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *QP.Literal:
+		return e.Value
+	case *QP.ColumnRef:
+		// Check NonAggCols - match by column name through direct ColumnRef or AliasExpr
+		for i, nonAggExpr := range aggInfo.NonAggCols {
+			if colRef, ok := nonAggExpr.(*QP.ColumnRef); ok && colRef.Name == e.Name {
+				if i < len(state.NonAggValues) {
+					return state.NonAggValues[i]
+				}
+			}
+			// Match through alias expression
+			if aliasExpr, ok := nonAggExpr.(*QP.AliasExpr); ok {
+				if innerColRef, ok2 := aliasExpr.Expr.(*QP.ColumnRef); ok2 && innerColRef.Name == e.Name {
+					if i < len(state.NonAggValues) {
+						return state.NonAggValues[i]
+					}
+				}
+			}
+		}
+		return nil
+	case *QP.FuncCall:
+		return vm.resolveHavingOperand(expr, state, aggInfo)
+	case *QP.AliasExpr:
+		return vm.resolveSelectExpr(e.Expr, state, aggInfo)
+	case *QP.CastExpr:
+		// First check if this exact CastExpr is stored as a NonAggCol (by pointer equality)
+		for i, nonAggExpr := range aggInfo.NonAggCols {
+			if nonAggExpr == expr {
+				if i < len(state.NonAggValues) {
+					return state.NonAggValues[i]
+				}
+			}
+		}
+		// CAST(expr AS type) wrapping an aggregate - resolve inner expr then apply cast
+		val := vm.resolveSelectExpr(e.Expr, state, aggInfo)
+		return vm.applyTypeCast(val, e.TypeSpec.Name)
+	case *QP.BinaryExpr:
+		left := vm.resolveSelectExpr(e.Left, state, aggInfo)
+		right := vm.resolveSelectExpr(e.Right, state, aggInfo)
+		return vm.evaluateBinaryOp(left, right, e.Op)
+	case *QP.UnaryExpr:
+		val := vm.resolveSelectExpr(e.Expr, state, aggInfo)
+		if e.Op == QP.TokenMinus {
+			switch v := val.(type) {
+			case int64:
+				return -v
+			case float64:
+				return -v
+			}
+		}
+		return val
+	case *QP.CaseExpr:
+		if e.Operand != nil {
+			// Simple CASE: CASE operand WHEN val THEN result
+			operandVal := vm.resolveSelectExpr(e.Operand, state, aggInfo)
+			for _, when := range e.Whens {
+				whenVal := vm.resolveSelectExpr(when.Condition, state, aggInfo)
+				if vm.compareVals(operandVal, whenVal) == 0 {
+					return vm.resolveSelectExpr(when.Result, state, aggInfo)
+				}
+			}
+		} else {
+			// Searched CASE: CASE WHEN condition THEN result
+			for _, when := range e.Whens {
+				condVal := vm.resolveSelectExpr(when.Condition, state, aggInfo)
+				var isTruthy bool
+				if b, ok := condVal.(bool); ok {
+					isTruthy = b
+				} else if i, ok := condVal.(int64); ok {
+					isTruthy = i != 0
+				} else if f, ok := condVal.(float64); ok {
+					isTruthy = f != 0
+				} else {
+					isTruthy = condVal != nil
+				}
+				if isTruthy {
+					return vm.resolveSelectExpr(when.Result, state, aggInfo)
+				}
+			}
+		}
+		if e.Else != nil {
+			return vm.resolveSelectExpr(e.Else, state, aggInfo)
+		}
+		return nil
+	default:
+		// Look for this expression in NonAggCols by pointer equality (for unknown expr types)
+		for i, nonAggExpr := range aggInfo.NonAggCols {
+			if nonAggExpr == expr {
+				if i < len(state.NonAggValues) {
+					return state.NonAggValues[i]
+				}
+			}
+		}
 		return nil
 	}
 }
@@ -2594,6 +3328,38 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 	switch e := expr.(type) {
 	case *QP.FuncCall:
 		funcName := strings.ToUpper(e.Name)
+		argKey := fmt.Sprintf("%v", e.Args)
+		for i, aggDef := range aggInfo.Aggregates {
+			if aggDef.Function != funcName {
+				continue
+			}
+			// Match by args too (e.g., SUM(i) vs SUM(r))
+			if fmt.Sprintf("%v", aggDef.Args) != argKey {
+				continue
+			}
+			switch funcName {
+			case "COUNT":
+				if aggDef.Distinct && state.DistinctSets[i] != nil {
+					return int64(len(state.DistinctSets[i]))
+				}
+				if isCountStar(aggDef) {
+					return int64(state.Count)
+				}
+				return int64(state.Counts[i])
+			case "SUM":
+				return state.Sums[i]
+			case "AVG":
+				if state.Counts[i] > 0 && state.Sums[i] != nil {
+					return vm.divideValues(state.Sums[i], int64(state.Counts[i]))
+				}
+				return nil
+			case "MIN":
+				return state.Mins[i]
+			case "MAX":
+				return state.Maxs[i]
+			}
+		}
+		// Fallback: if no arg-matching entry found, try first matching function name
 		for i, aggDef := range aggInfo.Aggregates {
 			if aggDef.Function != funcName {
 				continue
@@ -2625,6 +3391,14 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 		for i, nonAggExpr := range aggInfo.NonAggCols {
 			if colRef, ok := nonAggExpr.(*QP.ColumnRef); ok && colRef.Name == e.Name {
 				return state.NonAggValues[i]
+			}
+			// Match through alias expression
+			if aliasExpr, ok := nonAggExpr.(*QP.AliasExpr); ok {
+				if innerColRef, ok2 := aliasExpr.Expr.(*QP.ColumnRef); ok2 && innerColRef.Name == e.Name {
+					if i < len(state.NonAggValues) {
+						return state.NonAggValues[i]
+					}
+				}
 			}
 		}
 		return nil
@@ -2658,6 +3432,71 @@ func (vm *VM) addValues(a, b interface{}) interface{} {
 	}
 	if aIsFloat && bIsInt {
 		return aFloat + float64(bInt)
+	}
+
+	return nil
+}
+
+// multiplyValues multiplies two values
+func (vm *VM) multiplyValues(a, b interface{}) interface{} {
+	if a == nil || b == nil {
+		return nil
+	}
+
+	aInt, aIsInt := a.(int64)
+	bInt, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		return aInt * bInt
+	}
+
+	aFloat, aIsFloat := a.(float64)
+	bFloat, bIsFloat := b.(float64)
+	if aIsFloat && bIsFloat {
+		return aFloat * bFloat
+	}
+	if aIsInt && bIsFloat {
+		return float64(aInt) * bFloat
+	}
+	if aIsFloat && bIsInt {
+		return aFloat * float64(bInt)
+	}
+
+	return nil
+}
+
+// moduloValues computes the modulo of two values
+func (vm *VM) moduloValues(a, b interface{}) interface{} {
+	if a == nil || b == nil {
+		return nil
+	}
+
+	aInt, aIsInt := a.(int64)
+	bInt, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		if bInt == 0 {
+			return nil
+		}
+		return aInt % bInt
+	}
+
+	aFloat, aIsFloat := a.(float64)
+	bFloat, bIsFloat := b.(float64)
+	if aIsFloat || aIsInt {
+		af := aFloat
+		if aIsInt {
+			af = float64(aInt)
+		}
+		bf := bFloat
+		if bIsFloat {
+			bf = bFloat
+		} else if bIsInt {
+			bf = float64(bInt)
+		}
+		if bf == 0 {
+			return nil
+		}
+		// Float modulo via truncation
+		return af - float64(int64(af/bf))*bf
 	}
 
 	return nil

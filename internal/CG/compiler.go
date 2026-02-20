@@ -2,9 +2,11 @@ package CG
 
 import (
 	"fmt"
+	"strings"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
 	VM "github.com/sqlvibe/sqlvibe/internal/VM"
+	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 type Compiler struct {
@@ -15,6 +17,7 @@ type Compiler struct {
 	columnIndices   map[string]int
 	TableColIndices map[string]int
 	TableColOrder   []string
+	TableColSources []string // parallel to TableColOrder: which table each column belongs to
 	tableCursors    map[string]int
 	TableSchemas    map[string]map[string]int
 }
@@ -27,6 +30,7 @@ func NewCompiler() *Compiler {
 }
 
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program {
+	util.AssertNotNil(stmt, "SelectStmt")
 	if hasAggregates(stmt) {
 		return c.CompileAggregate(stmt)
 	}
@@ -136,29 +140,86 @@ func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Ex
 	c.program.FixupWithPos(gotoRewind, rewindPos+1)
 }
 
+// chainJoinStep represents one step in a multi-table join chain.
+type chainJoinStep struct {
+	table    *QP.TableRef
+	joinType string
+	cond     QP.Expr
+}
+
+// flattenJoinChain collects all tables and join steps from a chained join, converting
+// USING clauses to equivalent ON conditions.
+func flattenJoinChain(leftTable *QP.TableRef, firstJoin *QP.Join) ([]*QP.TableRef, []chainJoinStep) {
+	tables := []*QP.TableRef{leftTable}
+	steps := []chainJoinStep{}
+	for j := firstJoin; j != nil; {
+		jt := j.Type
+		if jt == "" {
+			jt = "INNER"
+		}
+		cond := j.Cond
+		// Convert USING → ON condition
+		if len(j.UsingColumns) > 0 && cond == nil {
+			prevTable := tables[len(tables)-1]
+			prevName := prevTable.Name
+			if prevTable.Alias != "" {
+				prevName = prevTable.Alias
+			}
+			rightName := j.Right.Name
+			if j.Right.Alias != "" {
+				rightName = j.Right.Alias
+			}
+			var useCond QP.Expr
+			for i, col := range j.UsingColumns {
+				eq := &QP.BinaryExpr{
+					Op:    QP.TokenEq,
+					Left:  &QP.ColumnRef{Table: prevName, Name: col},
+					Right: &QP.ColumnRef{Table: rightName, Name: col},
+				}
+				if i == 0 {
+					useCond = eq
+				} else {
+					useCond = &QP.BinaryExpr{Op: QP.TokenAnd, Left: useCond, Right: eq}
+				}
+			}
+			cond = useCond
+		}
+		steps = append(steps, chainJoinStep{table: j.Right, joinType: jt, cond: cond})
+		tables = append(tables, j.Right)
+		j = j.Right.Join
+	}
+	return tables, steps
+}
+
 func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.Expr, columns []QP.Expr) {
-	leftTableName := leftTable.Name
-	rightTableName := join.Right.Name
+	util.AssertNotNil(leftTable, "leftTable")
+	util.AssertNotNil(join, "join")
+	util.Assert(join.Right != nil, "join.Right cannot be nil")
+
+	// Flatten join chain and convert USING → ON
+	tables, joinSteps := flattenJoinChain(leftTable, join)
+
+	leftTableName := tables[0].Name
+	rightTableName := tables[1].Name
 
 	if leftTableName == "" || rightTableName == "" {
 		return
 	}
 
-	joinType := join.Type
+	joinType := joinSteps[0].joinType
 	if joinType == "" || joinType == "INNER" || joinType == "CROSS" || joinType == "LEFT" {
 		// Supported
 	} else {
 		return
 	}
 
+	// Setup cursors for all tables
 	c.tableCursors = make(map[string]int)
-	c.tableCursors[leftTableName] = 0
-	if leftTable.Alias != "" {
-		c.tableCursors[leftTable.Alias] = 0
-	}
-	c.tableCursors[rightTableName] = 1
-	if join.Right.Alias != "" {
-		c.tableCursors[join.Right.Alias] = 1
+	for i, t := range tables {
+		c.tableCursors[t.Name] = i
+		if t.Alias != "" {
+			c.tableCursors[t.Alias] = i
+		}
 	}
 
 	if c.TableSchemas == nil {
@@ -180,6 +241,19 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 		}
 	}
 
+	// For chained JOINs (3+ tables), add schemas for extra tables
+	for i := 2; i < len(tables); i++ {
+		t := tables[i]
+		if _, exists := c.TableSchemas[t.Name]; !exists {
+			c.TableSchemas[t.Name] = make(map[string]int)
+		}
+		if t.Alias != "" {
+			if _, exists := c.TableSchemas[t.Alias]; !exists {
+				c.TableSchemas[t.Alias] = make(map[string]int)
+			}
+		}
+	}
+
 	c.columnIndices = make(map[string]int)
 	for i, col := range columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
@@ -189,21 +263,46 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 		}
 	}
 
+	// For 3-table joins, dispatch to specialized handler
+	if len(tables) >= 3 {
+		for i, t := range tables {
+			c.program.EmitOpenTable(i, t.Name)
+		}
+		c.compileJoinChain3(tables, joinSteps, where, columns)
+		return
+	}
+
 	c.program.EmitOpenTable(0, leftTableName)
 	c.program.EmitOpenTable(1, rightTableName)
+
+	// Patch the first join's condition in case USING was converted to ON
+	if joinSteps[0].cond != nil && join.Cond == nil {
+		join.Cond = joinSteps[0].cond
+	}
+
+	isLeftJoin := joinType == "LEFT"
 
 	leftRewind := c.program.EmitOp(VM.OpRewind, 0, 0)
 
 	rightRewindPos := len(c.program.Instructions)
 	c.program.EmitOp(VM.OpRewind, 1, 0)
 
-	var skipPos, nullSkip int
+	// For LEFT JOIN, allocate a "match found" register and reset it after each OpRewind(1)
+	var matchReg int
+	if isLeftJoin {
+		matchReg = c.ra.Alloc()
+		c.program.EmitLoadConst(matchReg, int64(0))
+	}
+
+	// innerLoopStart is the position of the first inner loop instruction
+	// (after OpRewind and matchReg reset) - this is where we jump back to on each iteration
+	innerLoopStart := len(c.program.Instructions)
+
+	var skipPos int
 	if join.Cond != nil {
 		joinCondReg := c.compileExpr(join.Cond)
-		zeroReg := c.ra.Alloc()
-		c.program.EmitLoadConst(zeroReg, int64(0))
-		skipPos = c.program.EmitEq(joinCondReg, zeroReg, 0)
-		nullSkip = c.program.EmitOp(VM.OpIsNull, int32(joinCondReg), 0)
+		// OpIfNot jumps to P2 if joinCondReg is false (0) or null
+		skipPos = c.program.EmitOp(VM.OpIfNot, int32(joinCondReg), 0)
 	}
 
 	colRegs := make([]int, 0)
@@ -212,11 +311,18 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 		colRegs = append(colRegs, reg)
 	}
 
+	// For LEFT JOIN, mark match found BEFORE WHERE check (ON condition is what determines match)
+	if isLeftJoin {
+		c.program.EmitLoadConst(matchReg, int64(1))
+	}
+
+	var whereSkipPos int
+	hasWhere := false
 	if where != nil {
 		whereReg := c.compileExpr(where)
-		zeroReg := c.ra.Alloc()
-		c.program.EmitLoadConst(zeroReg, int64(0))
-		c.program.EmitEq(whereReg, zeroReg, 0)
+		// OpIfNot jumps to P2 if whereReg is false (0) or null - skip this row
+		whereSkipPos = c.program.EmitOp(VM.OpIfNot, int32(whereReg), 0)
+		hasWhere = true
 	}
 
 	c.program.EmitResultRow(colRegs)
@@ -225,14 +331,45 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 	rightNext := c.program.EmitOp(VM.OpNext, 1, 0)
 
 	if join.Cond != nil {
-		c.program.FixupWithPos(skipPos, rightNextPos)
-		c.program.FixupWithPos(nullSkip, rightNextPos)
+		c.program.Instructions[skipPos].P2 = int32(rightNextPos)
+	}
+	if hasWhere {
+		c.program.Instructions[whereSkipPos].P2 = int32(rightNextPos)
 	}
 
-	c.program.EmitGoto(rightRewindPos + 1)
+	// Jump back to inner loop start (after matchReg reset and after OpRewind)
+	c.program.EmitGoto(innerLoopStart)
 
 	rightDonePos := len(c.program.Instructions)
+
+	// For LEFT JOIN: if no match was found, emit left row with NULLs for right columns
+	var skipNullRowPos int
+	if isLeftJoin {
+		// OpIf(matchReg, skipNullRow) - skip null row emission if match was found
+		skipNullRowPos = c.program.EmitOp(VM.OpIf, int32(matchReg), 0)
+		// Re-read left columns and null out right columns
+		for i, col := range columns {
+			if c.exprCursorID(col) == 1 {
+				c.program.EmitOp(VM.OpNull, int32(colRegs[i]), 0)
+			} else {
+				// Re-read from cursor 0 (left table)
+				c.emitColumnForLeftJoinNullRow(col, colRegs[i])
+			}
+		}
+		// Also apply WHERE filter on null row (right columns are NULL here)
+		if where != nil {
+			nullWhereReg := c.compileExpr(where)
+			nullWhereSkipPos := c.program.EmitOp(VM.OpIfNot, int32(nullWhereReg), 0)
+			c.program.EmitResultRow(colRegs)
+			c.program.Instructions[nullWhereSkipPos].P2 = int32(len(c.program.Instructions))
+		} else {
+			c.program.EmitResultRow(colRegs)
+		}
+		c.program.Instructions[skipNullRowPos].P2 = int32(len(c.program.Instructions))
+	}
+
 	leftNext := c.program.EmitOp(VM.OpNext, 0, 0)
+	// Go back to rightRewindPos to re-rewind right cursor and reset matchReg for next left row
 	c.program.EmitGoto(rightRewindPos)
 
 	leftDonePos := len(c.program.Instructions)
@@ -243,11 +380,287 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 	c.program.FixupWithPos(leftNext, leftDonePos)
 }
 
+// compileJoinChain3 generates nested loop VM code for a 3-table JOIN.
+// tables[0]=left(cursor 0), tables[1]=mid(cursor 1), tables[2]=right(cursor 2).
+// joinSteps[0] connects tables[0]→tables[1], joinSteps[1] connects tables[1]→tables[2].
+func (c *Compiler) compileJoinChain3(tables []*QP.TableRef, joinSteps []chainJoinStep, where QP.Expr, columns []QP.Expr) {
+	isLeft0 := joinSteps[0].joinType == "LEFT"
+	isLeft1 := len(joinSteps) > 1 && joinSteps[1].joinType == "LEFT"
+
+	// Outer rewind (cursor 0 = t1)
+	rewind0 := c.program.EmitOp(VM.OpRewind, 0, 0)
+
+	// Per-left-row match tracking registers for LEFT JOINs
+	var matchReg0, matchReg1 int
+
+	// --- T2 rewind section (start of "for each t1 row" loop body) ---
+	t2RewindPos := len(c.program.Instructions)
+	rewind1 := c.program.EmitOp(VM.OpRewind, 1, 0)
+	if isLeft0 {
+		matchReg0 = c.ra.Alloc()
+		c.program.EmitLoadConst(matchReg0, int64(0))
+	}
+
+	// --- T2 loop body ---
+	t2LoopStart := len(c.program.Instructions)
+
+	var skip12 int
+	if joinSteps[0].cond != nil {
+		cond12Reg := c.compileExpr(joinSteps[0].cond)
+		skip12 = c.program.EmitOp(VM.OpIfNot, int32(cond12Reg), 0) // fixup → t2NextPos
+	}
+	if isLeft0 {
+		// Mark t1-t2 match as found
+		c.program.EmitLoadConst(matchReg0, int64(1))
+	}
+
+	// --- T3 rewind (for each t2 row that passed cond12) ---
+	rewind2 := c.program.EmitOp(VM.OpRewind, 2, 0)
+	if isLeft1 {
+		matchReg1 = c.ra.Alloc()
+		c.program.EmitLoadConst(matchReg1, int64(0))
+	}
+
+	// --- T3 loop body ---
+	t3LoopStart := len(c.program.Instructions)
+
+	var skip23 int
+	if len(joinSteps) > 1 && joinSteps[1].cond != nil {
+		cond23Reg := c.compileExpr(joinSteps[1].cond)
+		skip23 = c.program.EmitOp(VM.OpIfNot, int32(cond23Reg), 0) // fixup → t3NextPos
+	}
+	if isLeft1 {
+		c.program.EmitLoadConst(matchReg1, int64(1))
+	}
+
+	// Compile output columns
+	colRegs := make([]int, 0, len(columns))
+	for _, col := range columns {
+		reg := c.compileExpr(col)
+		colRegs = append(colRegs, reg)
+	}
+
+	var whereSkipPos int
+	hasWhere := false
+	if where != nil {
+		whereReg := c.compileExpr(where)
+		whereSkipPos = c.program.EmitOp(VM.OpIfNot, int32(whereReg), 0)
+		hasWhere = true
+	}
+
+	c.program.EmitResultRow(colRegs)
+
+	// --- T3 next ---
+	t3NextPos := len(c.program.Instructions)
+	next2 := c.program.EmitOp(VM.OpNext, 2, 0) // fixup → t2LeftCheckOrNextPos
+	c.program.EmitGoto(t3LoopStart)
+
+	if skip23 != 0 {
+		c.program.Instructions[skip23].P2 = int32(t3NextPos)
+	}
+	if hasWhere {
+		c.program.Instructions[whereSkipPos].P2 = int32(t3NextPos)
+	}
+
+	// --- After T3 loop: LEFT JOIN null row for t2-t3 level ---
+	t2LeftCheckPos := len(c.program.Instructions)
+	if isLeft1 {
+		skipNullRow1 := c.program.EmitOp(VM.OpIf, int32(matchReg1), 0)
+		// Re-read t1 and t2 columns; emit NULL for t3 columns
+		for i, col := range columns {
+			if c.exprCursorID(col) >= 2 {
+				c.program.EmitOp(VM.OpNull, int32(colRegs[i]), 0)
+			} else {
+				c.emitColumnForLeftJoinNullRow(col, colRegs[i])
+			}
+		}
+		if where != nil {
+			nullWhere1Reg := c.compileExpr(where)
+			nullWhere1Skip := c.program.EmitOp(VM.OpIfNot, int32(nullWhere1Reg), 0)
+			c.program.EmitResultRow(colRegs)
+			c.program.Instructions[nullWhere1Skip].P2 = int32(len(c.program.Instructions))
+		} else {
+			c.program.EmitResultRow(colRegs)
+		}
+		c.program.Instructions[skipNullRow1].P2 = int32(len(c.program.Instructions))
+	}
+
+	// --- T2 next ---
+	t2NextPos := len(c.program.Instructions)
+	next1 := c.program.EmitOp(VM.OpNext, 1, 0) // fixup → t1LeftCheckOrNextPos
+	c.program.EmitGoto(t2LoopStart)
+
+	if skip12 != 0 {
+		c.program.Instructions[skip12].P2 = int32(t2NextPos)
+	}
+	// Fix rewind2: if t3 empty → go to t2NextPos (advance t2)
+	// For LEFT JOIN, after empty t3, we still want to check the null row condition
+	if isLeft1 {
+		c.program.FixupWithPos(rewind2, t2LeftCheckPos)
+		c.program.FixupWithPos(next2, t2LeftCheckPos)
+	} else {
+		c.program.FixupWithPos(rewind2, t2NextPos)
+		c.program.FixupWithPos(next2, t2NextPos)
+	}
+
+	// --- After T2 loop: LEFT JOIN null row for t1-t2 level ---
+	t1LeftCheckPos := len(c.program.Instructions)
+	if isLeft0 {
+		skipNullRow0 := c.program.EmitOp(VM.OpIf, int32(matchReg0), 0)
+		if !isLeft1 && len(joinSteps) > 1 && joinSteps[1].cond != nil {
+			// Mixed LEFT JOIN t2 + INNER JOIN t3: scan t3 for matches before emitting null-t2 row.
+			// Only emit a row if at least one t3 row matches the INNER JOIN condition.
+			nullRewind2 := c.program.EmitOp(VM.OpRewind, 2, 0)
+			nullT3LoopStart := len(c.program.Instructions)
+			// Re-read t1 columns; emit NULL for t2 columns (t3 columns will be filled from cursor 2)
+			for i, col := range columns {
+				if c.exprCursorID(col) == 1 {
+					c.program.EmitOp(VM.OpNull, int32(colRegs[i]), 0)
+				} else if c.exprCursorID(col) != 2 {
+					c.emitColumnForLeftJoinNullRow(col, colRegs[i])
+				} else {
+					reg := c.compileExpr(col)
+					c.program.EmitOp(VM.OpMove, int32(reg), int32(colRegs[i]))
+				}
+			}
+			null23CondReg := c.compileExpr(joinSteps[1].cond)
+			nullSkip23 := c.program.EmitOp(VM.OpIfNot, int32(null23CondReg), 0)
+			if where != nil {
+				nullWhereReg := c.compileExpr(where)
+				nullWhereSkip := c.program.EmitOp(VM.OpIfNot, int32(nullWhereReg), 0)
+				c.program.EmitResultRow(colRegs)
+				c.program.Instructions[nullWhereSkip].P2 = int32(len(c.program.Instructions))
+			} else {
+				c.program.EmitResultRow(colRegs)
+			}
+			nullT3NextPos := len(c.program.Instructions)
+			nullNext2 := c.program.EmitOp(VM.OpNext, 2, 0)
+			c.program.EmitGoto(nullT3LoopStart)
+			c.program.Instructions[nullSkip23].P2 = int32(nullT3NextPos)
+			nullT3DonePos := len(c.program.Instructions)
+			c.program.FixupWithPos(nullRewind2, nullT3DonePos)
+			c.program.FixupWithPos(nullNext2, nullT3DonePos)
+		} else {
+			// Pure LEFT JOIN (no INNER JOIN after): emit null row for t2 and t3
+			for i, col := range columns {
+				if c.exprCursorID(col) >= 1 {
+					c.program.EmitOp(VM.OpNull, int32(colRegs[i]), 0)
+				} else {
+					c.emitColumnForLeftJoinNullRow(col, colRegs[i])
+				}
+			}
+			if where != nil {
+				nullWhere0Reg := c.compileExpr(where)
+				nullWhere0Skip := c.program.EmitOp(VM.OpIfNot, int32(nullWhere0Reg), 0)
+				c.program.EmitResultRow(colRegs)
+				c.program.Instructions[nullWhere0Skip].P2 = int32(len(c.program.Instructions))
+			} else {
+				c.program.EmitResultRow(colRegs)
+			}
+		}
+		c.program.Instructions[skipNullRow0].P2 = int32(len(c.program.Instructions))
+	}
+
+	// --- T1 next ---
+	t1NextPos := len(c.program.Instructions)
+	next0 := c.program.EmitOp(VM.OpNext, 0, 0)
+	c.program.EmitGoto(t2RewindPos) // rewind t2 for next t1 row
+
+	haltPos := len(c.program.Instructions)
+	c.program.Emit(VM.OpHalt)
+
+	// Fixup rewind0
+	c.program.FixupWithPos(rewind0, haltPos)
+
+	// Fixup rewind1 and next1: when t2 is empty/exhausted → go to t1 left-check or next
+	if isLeft0 {
+		c.program.FixupWithPos(rewind1, t1LeftCheckPos)
+		c.program.FixupWithPos(next1, t1LeftCheckPos)
+	} else {
+		c.program.FixupWithPos(rewind1, t1NextPos)
+		c.program.FixupWithPos(next1, t1NextPos)
+	}
+
+	// Fixup next0
+	c.program.FixupWithPos(next0, haltPos)
+	_ = t1LeftCheckPos // used conditionally above
+}
+
+// exprCursorID returns which cursor (0=left, 1=right) the expression reads from.
+func (c *Compiler) exprCursorID(col QP.Expr) int {
+	switch e := col.(type) {
+	case *QP.ColumnRef:
+		if e.Table != "" && c.tableCursors != nil {
+			if id, ok := c.tableCursors[e.Table]; ok {
+				return id
+			}
+		}
+		// For unqualified columns in JOIN context, look up in TableSchemas
+		if e.Table == "" && c.TableSchemas != nil && c.tableCursors != nil {
+			for tbl, schema := range c.TableSchemas {
+				if _, ok := schema[e.Name]; ok {
+					if cid, ok2 := c.tableCursors[tbl]; ok2 {
+						return cid
+					}
+				}
+			}
+		}
+		return 0
+	case *QP.AliasExpr:
+		return c.exprCursorID(e.Expr)
+	default:
+		return 0
+	}
+}
+
+// emitColumnForLeftJoinNullRow re-reads a left-table column expression into reg.
+func (c *Compiler) emitColumnForLeftJoinNullRow(col QP.Expr, reg int) {
+	switch e := col.(type) {
+	case *QP.ColumnRef:
+		colIdx := -1
+		cursorID := 0
+		if e.Table != "" && c.TableSchemas != nil {
+			if schema, ok := c.TableSchemas[e.Table]; ok {
+				if idx, ok2 := schema[e.Name]; ok2 {
+					colIdx = idx
+					if c.tableCursors != nil {
+						if cid, ok3 := c.tableCursors[e.Table]; ok3 {
+							cursorID = cid
+						}
+					}
+				}
+			}
+		} else if e.Table == "" && c.TableSchemas != nil && c.tableCursors != nil {
+			// For unqualified columns in JOIN context, look in the left-side table (cursor 0)
+			for tbl, schema := range c.TableSchemas {
+				if cid, ok := c.tableCursors[tbl]; ok && cid == 0 {
+					if idx, ok2 := schema[e.Name]; ok2 {
+						colIdx = idx
+						cursorID = 0
+						break
+					}
+				}
+			}
+		} else if c.TableColIndices != nil {
+			if idx, ok := c.TableColIndices[e.Name]; ok {
+				colIdx = idx
+			}
+		}
+		c.program.EmitColumnWithTable(reg, cursorID, colIdx, e.Table)
+	case *QP.AliasExpr:
+		c.emitColumnForLeftJoinNullRow(e.Expr, reg)
+	default:
+		// For complex expressions, just re-read (may be stale but better than nil)
+	}
+}
+
 func (c *Compiler) Program() *VM.Program {
 	return c.program
 }
 
 func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *VM.Program {
+	util.AssertNotNil(stmt, "InsertStmt")
+	util.Assert(stmt.Table != "", "InsertStmt.Table cannot be empty")
 	c.program = VM.NewProgram()
 	c.ra = VM.NewRegisterAllocator(16)
 
@@ -295,6 +708,8 @@ func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *VM.Program {
 }
 
 func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *VM.Program {
+	util.AssertNotNil(stmt, "UpdateStmt")
+	util.Assert(stmt.Table != "", "UpdateStmt.Table cannot be empty")
 	c.program = VM.NewProgram()
 	c.ra = VM.NewRegisterAllocator(16)
 
@@ -356,6 +771,8 @@ func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *VM.Program {
 }
 
 func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *VM.Program {
+	util.AssertNotNil(stmt, "DeleteStmt")
+	util.Assert(stmt.Table != "", "DeleteStmt.Table cannot be empty")
 	c.program = VM.NewProgram()
 	c.ra = VM.NewRegisterAllocator(16)
 
@@ -399,6 +816,7 @@ func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *VM.Program {
 }
 
 func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
+	util.AssertNotNil(stmt, "SelectStmt for aggregate")
 	c.program = VM.NewProgram()
 	c.ra = VM.NewRegisterAllocator(32)
 
@@ -417,6 +835,7 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
 		Aggregates:   make([]VM.AggregateDef, 0),
 		NonAggCols:   make([]QP.Expr, 0),
 		HavingExpr:   stmt.Having,
+		WhereExpr:    stmt.Where,
 	}
 
 	if stmt.GroupBy != nil {
@@ -425,10 +844,10 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
 
 	for _, col := range stmt.Columns {
 		if fc, ok := col.(*QP.FuncCall); ok {
-			switch fc.Name {
+			switch strings.ToUpper(fc.Name) {
 			case "COUNT", "SUM", "AVG", "MIN", "MAX":
 				aggDef := VM.AggregateDef{
-					Function: fc.Name,
+					Function: strings.ToUpper(fc.Name),
 					Args:     fc.Args,
 					Distinct: fc.Distinct,
 				}
@@ -436,10 +855,15 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
 			default:
 				aggInfo.NonAggCols = append(aggInfo.NonAggCols, col)
 			}
+		} else if exprHasAggregate(col) {
+			// Expression containing aggregates (e.g. MAX(id)+1) - extract embedded aggregates
+			extractAggregatesFromExpr(col, aggInfo)
 		} else {
 			aggInfo.NonAggCols = append(aggInfo.NonAggCols, col)
 		}
 	}
+	// Store original SELECT expressions for post-aggregate evaluation
+	aggInfo.SelectExprs = stmt.Columns
 
 	c.program.Instructions = append(c.program.Instructions, VM.Instruction{
 		Op: VM.OpAggregate,
@@ -758,14 +1182,87 @@ func hasAggregates(stmt *QP.SelectStmt) bool {
 		return false
 	}
 	for _, col := range stmt.Columns {
-		if fc, ok := col.(*QP.FuncCall); ok {
-			switch fc.Name {
-			case "COUNT", "SUM", "AVG", "MIN", "MAX", "TOTAL":
-				return true
-			}
+		if exprHasAggregate(col) {
+			return true
 		}
 	}
 	return stmt.GroupBy != nil
+}
+
+// exprHasAggregate recursively checks if an expression contains an aggregate function.
+func exprHasAggregate(expr QP.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *QP.FuncCall:
+		switch strings.ToUpper(e.Name) {
+		case "COUNT", "SUM", "AVG", "MIN", "MAX", "TOTAL":
+			return true
+		}
+	case *QP.BinaryExpr:
+		return exprHasAggregate(e.Left) || exprHasAggregate(e.Right)
+	case *QP.UnaryExpr:
+		return exprHasAggregate(e.Expr)
+	case *QP.AliasExpr:
+		return exprHasAggregate(e.Expr)
+	case *QP.CastExpr:
+		return exprHasAggregate(e.Expr)
+	case *QP.CaseExpr:
+		if exprHasAggregate(e.Operand) {
+			return true
+		}
+		for _, when := range e.Whens {
+			if exprHasAggregate(when.Condition) || exprHasAggregate(when.Result) {
+				return true
+			}
+		}
+		return exprHasAggregate(e.Else)
+	}
+	return false
+}
+
+// extractAggregatesFromExpr extracts aggregate function calls embedded in an expression.
+func extractAggregatesFromExpr(expr QP.Expr, aggInfo *VM.AggregateInfo) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.(type) {
+	case *QP.FuncCall:
+		upperName := strings.ToUpper(e.Name)
+		switch upperName {
+		case "COUNT", "SUM", "AVG", "MIN", "MAX":
+			// Check if already registered with the same args (not just same function name)
+			// e.g., SUM(i) and SUM(r) are different aggregates
+			argKey := fmt.Sprintf("%v", e.Args)
+			for _, existing := range aggInfo.Aggregates {
+				if existing.Function == upperName && fmt.Sprintf("%v", existing.Args) == argKey {
+					return
+				}
+			}
+			aggInfo.Aggregates = append(aggInfo.Aggregates, VM.AggregateDef{
+				Function: upperName,
+				Args:     e.Args,
+				Distinct: e.Distinct,
+			})
+		}
+	case *QP.BinaryExpr:
+		extractAggregatesFromExpr(e.Left, aggInfo)
+		extractAggregatesFromExpr(e.Right, aggInfo)
+	case *QP.UnaryExpr:
+		extractAggregatesFromExpr(e.Expr, aggInfo)
+	case *QP.AliasExpr:
+		extractAggregatesFromExpr(e.Expr, aggInfo)
+	case *QP.CaseExpr:
+		extractAggregatesFromExpr(e.Operand, aggInfo)
+		for _, when := range e.Whens {
+			extractAggregatesFromExpr(when.Condition, aggInfo)
+			extractAggregatesFromExpr(when.Result, aggInfo)
+		}
+		extractAggregatesFromExpr(e.Else, aggInfo)
+	case *QP.CastExpr:
+		extractAggregatesFromExpr(e.Expr, aggInfo)
+	}
 }
 
 func MustCompile(sql string) *VM.Program {

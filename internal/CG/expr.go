@@ -38,6 +38,10 @@ func (c *Compiler) compileExpr(expr QP.Expr) int {
 	case *QP.SubqueryExpr:
 		return c.compileSubqueryExpr(e)
 
+	case *QP.AliasExpr:
+		// Alias expression: just compile the inner expression (alias is handled by column naming)
+		return c.compileExpr(e.Expr)
+
 	default:
 		reg := c.ra.Alloc()
 		c.program.EmitLoadConst(reg, nil)
@@ -67,6 +71,20 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 			if tableSchema, ok := c.TableSchemas[col.Table]; ok {
 				if idx, ok := tableSchema[col.Name]; ok {
 					colIdx = idx
+				}
+			}
+		}
+
+		// For unqualified column names in JOIN context, search TableSchemas
+		if colIdx == -1 && col.Table == "" && c.TableSchemas != nil && c.tableCursors != nil {
+			// Search each table's schema for the column name
+			for tbl, schema := range c.TableSchemas {
+				if idx, ok := schema[col.Name]; ok {
+					colIdx = idx
+					if cid, ok2 := c.tableCursors[tbl]; ok2 {
+						cursorID = cid
+					}
+					break
 				}
 			}
 		}
@@ -171,11 +189,7 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		c.program.EmitOpWithDst(VM.OpGlob, int32(leftReg), int32(rightReg), dst)
 		return dst
 	case QP.TokenNotLike:
-		likeResult := c.ra.Alloc()
-		c.program.EmitOpWithDst(VM.OpLike, int32(leftReg), int32(rightReg), likeResult)
-		oneReg := c.ra.Alloc()
-		c.program.EmitLoadConst(oneReg, int64(1))
-		c.program.EmitOpWithDst(VM.OpSubtract, int32(oneReg), int32(likeResult), dst)
+		c.program.EmitOpWithDst(VM.OpNotLike, int32(leftReg), int32(rightReg), dst)
 		return dst
 	case QP.TokenBetween:
 		if binExpr, ok := expr.Right.(*QP.BinaryExpr); ok && binExpr.Op == QP.TokenAnd {
@@ -220,6 +234,10 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 				c.program.EmitLoadConst(dst, int64(0))
 
 				for _, val := range values {
+					if val == nil {
+						// NULL in IN list: skip (NULL never makes IN result TRUE)
+						continue
+					}
 					valReg := c.ra.Alloc()
 					c.program.EmitLoadConst(valReg, val)
 
@@ -353,7 +371,7 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 
 	dst := c.ra.Alloc()
 
-	switch call.Name {
+	switch strings.ToUpper(call.Name) {
 	case "ABS":
 		c.program.EmitOpWithDst(VM.OpAbs, int32(argRegs[0]), 0, dst)
 	case "UPPER":
@@ -441,8 +459,19 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 			c.program.EmitCopy(argRegs[0], dst)
 			c.program.EmitOpWithDst(VM.OpReplace, int32(argRegs[1]), int32(argRegs[2]), dst)
 		}
-	case "ROUND":
+	case "TYPEOF":
 		if len(argRegs) >= 1 {
+			c.program.EmitOpWithDst(VM.OpTypeof, int32(argRegs[0]), 0, dst)
+		} else {
+			c.program.EmitLoadConst(dst, "null")
+		}
+	case "RANDOM":
+		c.program.EmitOpWithDst(VM.OpRandom, 0, 0, dst)
+		case "ROUND":
+		if len(argRegs) >= 2 {
+			c.program.EmitOp(VM.OpRound, int32(argRegs[0]), int32(argRegs[1]))
+			c.program.Instructions[len(c.program.Instructions)-1].P4 = dst
+		} else if len(argRegs) >= 1 {
 			c.program.EmitOpWithDst(VM.OpRound, int32(argRegs[0]), 0, dst)
 		}
 	case "CEIL", "CEILING":
@@ -478,7 +507,14 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 			c.program.EmitOpWithDst(VM.OpAtan2, int32(argRegs[0]), int32(argRegs[1]), dst)
 		}
 	default:
-		c.program.EmitLoadConst(dst, nil)
+		// Unknown function: use OpCallScalar to evaluate at runtime via evaluateFuncCallOnRow
+		info := &VM.ScalarCallInfo{
+			Name:    strings.ToUpper(call.Name),
+			ArgRegs: argRegs,
+			Dst:     dst,
+		}
+		c.program.EmitOp(VM.OpCallScalar, 0, 0)
+		c.program.Instructions[len(c.program.Instructions)-1].P4 = info
 		return dst
 	}
 
@@ -614,15 +650,21 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 		}
 
 		if c.TableSchemas != nil && len(c.TableSchemas) > 0 && c.TableColOrder != nil && len(c.TableColOrder) > 0 {
-			for _, colName := range c.TableColOrder {
+			for i, colName := range c.TableColOrder {
 				if colName == "" || strings.HasPrefix(colName, "__") {
 					continue
 				}
 				var tableName string
-				for tbl, schema := range c.TableSchemas {
-					if _, ok := schema[colName]; ok {
-						tableName = tbl
-						break
+				// Use positional source info if available (deterministic)
+				if c.TableColSources != nil && i < len(c.TableColSources) {
+					tableName = c.TableColSources[i]
+				} else {
+					// Fallback: iterate schemas (may be non-deterministic for shared cols)
+					for tbl, schema := range c.TableSchemas {
+						if _, ok := schema[colName]; ok {
+							tableName = tbl
+							break
+						}
 					}
 				}
 				expanded = append(expanded, &QP.ColumnRef{

@@ -20,10 +20,13 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 func (db *Database) pragmaTableInfo(stmt *QP.PragmaStmt) (*Rows, error) {
 	var tableName string
 	if stmt.Value != nil {
-		if lit, ok := stmt.Value.(*QP.Literal); ok {
-			if s, ok := lit.Value.(string); ok {
+		switch v := stmt.Value.(type) {
+		case *QP.Literal:
+			if s, ok := v.Value.(string); ok {
 				tableName = s
 			}
+		case *QP.ColumnRef:
+			tableName = v.Name
 		}
 	}
 
@@ -59,10 +62,13 @@ func (db *Database) pragmaTableInfo(stmt *QP.PragmaStmt) (*Rows, error) {
 func (db *Database) pragmaIndexList(stmt *QP.PragmaStmt) (*Rows, error) {
 	var tableName string
 	if stmt.Value != nil {
-		if lit, ok := stmt.Value.(*QP.Literal); ok {
-			if s, ok := lit.Value.(string); ok {
+		switch v := stmt.Value.(type) {
+		case *QP.Literal:
+			if s, ok := v.Value.(string); ok {
 				tableName = s
 			}
+		case *QP.ColumnRef:
+			tableName = v.Name
 		}
 	}
 
