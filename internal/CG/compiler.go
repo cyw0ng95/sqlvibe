@@ -303,6 +303,16 @@ func (c *Compiler) exprCursorID(col QP.Expr) int {
 				return id
 			}
 		}
+		// For unqualified columns in JOIN context, look up in TableSchemas
+		if e.Table == "" && c.TableSchemas != nil && c.tableCursors != nil {
+			for tbl, schema := range c.TableSchemas {
+				if _, ok := schema[e.Name]; ok {
+					if cid, ok2 := c.tableCursors[tbl]; ok2 {
+						return cid
+					}
+				}
+			}
+		}
 		return 0
 	case *QP.AliasExpr:
 		return c.exprCursorID(e.Expr)

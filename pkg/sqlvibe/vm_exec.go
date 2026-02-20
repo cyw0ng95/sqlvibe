@@ -348,8 +348,6 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 			// For RIGHT JOIN (now swapped to LEFT), collect right-then-left cols for output order
 			if isRightJoin {
 				// tableCols order needs to match original left/right table order for output
-				origLeftCols := db.columnOrder[origLeftName]
-				origRightCols := db.columnOrder[origRightName]
 				tableCols = append(origRightCols, origLeftCols...)
 			} else {
 				tableCols = append(leftCols, rightCols...)

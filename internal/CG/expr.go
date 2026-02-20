@@ -75,6 +75,20 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 			}
 		}
 
+		// For unqualified column names in JOIN context, search TableSchemas
+		if colIdx == -1 && col.Table == "" && c.TableSchemas != nil && c.tableCursors != nil {
+			// Search each table's schema for the column name
+			for tbl, schema := range c.TableSchemas {
+				if idx, ok := schema[col.Name]; ok {
+					colIdx = idx
+					if cid, ok2 := c.tableCursors[tbl]; ok2 {
+						cursorID = cid
+					}
+					break
+				}
+			}
+		}
+
 		if colIdx == -1 && col.Table != "" && c.tableCursors != nil && c.TableColIndices != nil {
 			if _, tableExists := c.tableCursors[col.Table]; tableExists {
 				if idx, ok := c.TableColIndices[col.Name]; ok {
