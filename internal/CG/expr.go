@@ -463,8 +463,19 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 			c.program.EmitCopy(argRegs[0], dst)
 			c.program.EmitOpWithDst(VM.OpReplace, int32(argRegs[1]), int32(argRegs[2]), dst)
 		}
-	case "ROUND":
+	case "TYPEOF":
 		if len(argRegs) >= 1 {
+			c.program.EmitOpWithDst(VM.OpTypeof, int32(argRegs[0]), 0, dst)
+		} else {
+			c.program.EmitLoadConst(dst, "null")
+		}
+	case "RANDOM":
+		c.program.EmitOpWithDst(VM.OpRandom, 0, 0, dst)
+		case "ROUND":
+		if len(argRegs) >= 2 {
+			c.program.EmitOp(VM.OpRound, int32(argRegs[0]), int32(argRegs[1]))
+			c.program.Instructions[len(c.program.Instructions)-1].P4 = dst
+		} else if len(argRegs) >= 1 {
 			c.program.EmitOpWithDst(VM.OpRound, int32(argRegs[0]), 0, dst)
 		}
 	case "CEIL", "CEILING":

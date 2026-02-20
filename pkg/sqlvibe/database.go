@@ -357,6 +357,24 @@ func (db *Database) evalConstantExpression(stmt *QP.SelectStmt) (*Rows, error) {
 }
 
 func (db *Database) Exec(sql string) (Result, error) {
+	// Handle multi-statement SQL (separated by semicolons)
+	stmts := splitStatements(sql)
+	if len(stmts) > 1 {
+		var lastResult Result
+		for _, s := range stmts {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			result, err := db.Exec(s)
+			if err != nil {
+				return Result{}, err
+			}
+			lastResult = result
+		}
+		return lastResult, nil
+	}
+
 	tokenizer := QP.NewTokenizer(sql)
 	tokens, err := tokenizer.Tokenize()
 	if err != nil {

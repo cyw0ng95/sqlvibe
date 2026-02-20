@@ -269,6 +269,7 @@ type Parser struct {
 	tokens     []Token
 	pos        int
 	outerAlias string // Track outer query's table alias for subquery correlation
+	parseError error  // Deferred error from table ref parsing
 }
 
 func NewParser(tokens []Token) *Parser {
@@ -284,6 +285,17 @@ func (p *Parser) Parse() (ASTNode, error) {
 		return nil, nil
 	}
 
+	node, err := p.parseInternal()
+	if err != nil {
+		return nil, err
+	}
+	if p.parseError != nil {
+		return nil, p.parseError
+	}
+	return node, nil
+}
+
+func (p *Parser) parseInternal() (ASTNode, error) {
 	switch p.current().Type {
 	case TokenKeyword:
 		switch p.current().Literal {
@@ -361,6 +373,11 @@ func (p *Parser) parseTableRef() *TableRef {
 	if p.current().Type == TokenLeftParen {
 		// Derived table: (SELECT ...)
 		p.advance() // consume (
+		// VALUES as table source is not supported
+		if p.current().Type == TokenKeyword && p.current().Literal == "VALUES" {
+			p.parseError = fmt.Errorf("near \"(\": syntax error")
+			return ref
+		}
 		subStmt, err := p.parseSelect()
 		if err == nil {
 			ref.Subquery = subStmt
@@ -413,6 +430,30 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 	if p.current().Type == TokenAsterisk {
 		p.advance()
 		stmt.Columns = []Expr{&ColumnRef{Name: "*"}}
+		// Allow additional columns after *: SELECT *, col, expr
+		if p.current().Type == TokenComma {
+			p.advance()
+			for {
+				col, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				if col == nil {
+					break
+				}
+				if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+					p.advance()
+					alias := p.current().Literal
+					p.advance()
+					col = &AliasExpr{Expr: col, Alias: alias}
+				}
+				stmt.Columns = append(stmt.Columns, col)
+				if p.current().Type != TokenComma {
+					break
+				}
+				p.advance()
+			}
+		}
 	} else {
 		for {
 			col, err := p.parseExpr()
@@ -627,9 +668,11 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 	if p.current().Literal == "UNION" || p.current().Literal == "EXCEPT" || p.current().Literal == "INTERSECT" {
 		stmt.SetOp = p.current().Literal
 		p.advance()
-		if p.current().Literal == "ALL" {
+		if p.current().Literal == "ALL" || (p.current().Type == TokenAll) {
 			stmt.SetOpAll = true
 			p.advance()
+		} else if p.current().Literal == "DISTINCT" {
+			return nil, fmt.Errorf("near \"DISTINCT\": syntax error")
 		}
 		right, err := p.parseSelect()
 		if err != nil {
@@ -1760,9 +1803,17 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			}
 			return &SubqueryExpr{Select: sub}, nil
 		}
+		// VALUES as a table source is not supported
+		if p.current().Type == TokenKeyword && p.current().Literal == "VALUES" {
+			return nil, fmt.Errorf("near \"(\": syntax error")
+		}
 		expr, err := p.parseExpr()
 		if err != nil {
 			return nil, err
+		}
+		// Row constructor (1, 2) is not supported by SQLite
+		if p.current().Type == TokenComma {
+			return nil, fmt.Errorf("row value misused")
 		}
 		if p.current().Type == TokenRightParen {
 			p.advance()
@@ -1857,6 +1908,10 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		p.advance()
 
 		if p.current().Type == TokenLeftParen {
+			// ROW(...) is a row constructor not supported by SQLite
+			if tok.Literal == "row" {
+				return nil, fmt.Errorf("no such function: ROW")
+			}
 			p.advance()
 			args := make([]Expr, 0)
 			for !p.isEOF() && p.current().Type != TokenRightParen {
@@ -1926,6 +1981,14 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		if tok.Literal == "NULL" {
 			p.advance()
 			return &Literal{Value: nil}, nil
+		}
+		if tok.Literal == "TRUE" {
+			p.advance()
+			return &Literal{Value: int64(1)}, nil
+		}
+		if tok.Literal == "FALSE" {
+			p.advance()
+			return &Literal{Value: int64(0)}, nil
 		}
 		if tok.Literal == "CURRENT_DATE" || tok.Literal == "CURRENT_TIME" || tok.Literal == "CURRENT_TIMESTAMP" || tok.Literal == "LOCALTIME" || tok.Literal == "LOCALTIMESTAMP" {
 			p.advance()

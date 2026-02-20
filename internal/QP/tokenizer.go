@@ -258,7 +258,8 @@ func (t *Tokenizer) readIdentifier() error {
 	upper := strings.ToUpper(literal)
 
 	if tokenType, ok := keywords[upper]; ok {
-		t.addToken(tokenType, literal)
+		// Store keywords in uppercase for consistent parser checks
+		t.addToken(tokenType, upper)
 	} else {
 		// Unquoted identifiers are case-insensitive in SQLite (store as lowercase)
 		t.addToken(TokenIdentifier, strings.ToLower(literal))

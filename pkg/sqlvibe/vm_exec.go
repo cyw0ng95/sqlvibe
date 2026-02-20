@@ -414,7 +414,42 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		}
 	}
 
+	// Add extra columns for ORDER BY expressions that reference non-SELECT columns
+	// This allows ORDER BY col that isn't in the SELECT list to still sort correctly
+	var extraOrderByCols []string
+	if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
+		selectColNames := make(map[string]bool)
+		for _, col := range stmt.Columns {
+			if cr, ok := col.(*QP.ColumnRef); ok {
+				selectColNames[cr.Name] = true
+				if cr.Name == "*" {
+					// SELECT * includes all columns - no need for extras
+					for _, tc := range tableCols {
+						selectColNames[tc] = true
+					}
+				}
+			} else if alias, ok := col.(*QP.AliasExpr); ok {
+				selectColNames[alias.Alias] = true
+			}
+		}
+		for _, ob := range stmt.OrderBy {
+			refs := collectColumnRefs(ob.Expr)
+			for _, ref := range refs {
+				if !selectColNames[ref] {
+					selectColNames[ref] = true
+					extraOrderByCols = append(extraOrderByCols, ref)
+					stmt.Columns = append(stmt.Columns, &QP.ColumnRef{Name: ref})
+				}
+			}
+		}
+	}
+
 	program := cg.CompileSelect(stmt)
+
+	// Remove extra ORDER BY columns from stmt after compilation
+	if len(extraOrderByCols) > 0 {
+		stmt.Columns = stmt.Columns[:len(stmt.Columns)-len(extraOrderByCols)]
+	}
 
 	ctx := newDsVmContext(db)
 	vm := VM.NewVMWithContext(program, ctx)
@@ -602,6 +637,37 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	}
 	if cols == nil {
 		cols = []string{}
+	}
+
+	// If extra ORDER BY columns were added, sort now with the full columns, then strip extras
+	if len(extraOrderByCols) > 0 {
+		// Build full columns list (SELECT columns + extra ORDER BY cols)
+		fullCols := append(cols, extraOrderByCols...)
+		// Sort using full column set
+		results = db.engine.SortRows(results, stmt.OrderBy, fullCols)
+		// Apply LIMIT/OFFSET if present (to avoid database.go re-applying with wrong cols)
+		if stmt.Limit != nil {
+			rows := &Rows{Columns: fullCols, Data: results}
+			if lr, err2 := db.applyLimit(rows, stmt.Limit, stmt.Offset); err2 == nil {
+				results = lr.Data
+			}
+			// Mark limit as consumed
+			stmt.Limit = nil
+			stmt.Offset = nil
+		}
+		// Strip extra ORDER BY columns from results
+		numSelectCols := len(cols)
+		stripped := make([][]interface{}, len(results))
+		for i, row := range results {
+			if len(row) > numSelectCols {
+				stripped[i] = row[:numSelectCols]
+			} else {
+				stripped[i] = row
+			}
+		}
+		results = stripped
+		// Also mark ORDER BY as consumed so database.go doesn't re-sort
+		stmt.OrderBy = nil
 	}
 
 	return &Rows{Columns: cols, Data: results}, nil
@@ -817,6 +883,39 @@ func deduplicateRows(rows [][]interface{}) [][]interface{} {
 		}
 	}
 	return result
+}
+
+// collectColumnRefs collects all unqualified column names referenced in an expression.
+func collectColumnRefs(expr QP.Expr) []string {
+	if expr == nil {
+		return nil
+	}
+	var refs []string
+	switch e := expr.(type) {
+	case *QP.ColumnRef:
+		if e.Name != "" && e.Name != "*" {
+			refs = append(refs, e.Name)
+		}
+	case *QP.BinaryExpr:
+		refs = append(refs, collectColumnRefs(e.Left)...)
+		refs = append(refs, collectColumnRefs(e.Right)...)
+	case *QP.UnaryExpr:
+		refs = append(refs, collectColumnRefs(e.Expr)...)
+	case *QP.FuncCall:
+		for _, arg := range e.Args {
+			refs = append(refs, collectColumnRefs(arg)...)
+		}
+	case *QP.CaseExpr:
+		refs = append(refs, collectColumnRefs(e.Operand)...)
+		for _, when := range e.Whens {
+			refs = append(refs, collectColumnRefs(when.Condition)...)
+			refs = append(refs, collectColumnRefs(when.Result)...)
+		}
+		refs = append(refs, collectColumnRefs(e.Else)...)
+	case *QP.AliasExpr:
+		refs = append(refs, collectColumnRefs(e.Expr)...)
+	}
+	return refs
 }
 
 // resolveNaturalUsing synthesizes a JOIN ON condition for NATURAL JOIN and JOIN ... USING (cols).

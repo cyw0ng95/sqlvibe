@@ -892,6 +892,16 @@ func exprHasAggregate(expr QP.Expr) bool {
 		return exprHasAggregate(e.Expr)
 	case *QP.CastExpr:
 		return exprHasAggregate(e.Expr)
+	case *QP.CaseExpr:
+		if exprHasAggregate(e.Operand) {
+			return true
+		}
+		for _, when := range e.Whens {
+			if exprHasAggregate(when.Condition) || exprHasAggregate(when.Result) {
+				return true
+			}
+		}
+		return exprHasAggregate(e.Else)
 	}
 	return false
 }
@@ -925,6 +935,13 @@ func extractAggregatesFromExpr(expr QP.Expr, aggInfo *VM.AggregateInfo) {
 		extractAggregatesFromExpr(e.Expr, aggInfo)
 	case *QP.AliasExpr:
 		extractAggregatesFromExpr(e.Expr, aggInfo)
+	case *QP.CaseExpr:
+		extractAggregatesFromExpr(e.Operand, aggInfo)
+		for _, when := range e.Whens {
+			extractAggregatesFromExpr(when.Condition, aggInfo)
+			extractAggregatesFromExpr(when.Result, aggInfo)
+		}
+		extractAggregatesFromExpr(e.Else, aggInfo)
 	}
 }
 

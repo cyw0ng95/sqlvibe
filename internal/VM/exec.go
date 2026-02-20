@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -588,18 +589,25 @@ func (vm *VM) Exec(ctx interface{}) error {
 			continue
 
 		case OpReplace:
-			src := vm.registers[inst.P1]
+			dst, ok := inst.P4.(int)
+			if !ok {
+				continue
+			}
+			srcVal := vm.registers[dst]
+			if srcVal == nil {
+				// REPLACE(NULL, ...) = NULL
+				continue
+			}
+			srcStr := fmt.Sprintf("%v", srcVal)
 			from := ""
 			to := ""
-			if v, ok := vm.registers[inst.P2].(string); ok {
+			if v, ok := vm.registers[inst.P1].(string); ok {
 				from = v
 			}
-			if v, ok := inst.P4.(string); ok {
+			if v, ok := vm.registers[inst.P2].(string); ok {
 				to = v
 			}
-			if dst, ok := inst.P4.(int); ok {
-				vm.registers[dst] = strings.Replace(fmt.Sprintf("%v", src), from, to, -1)
-			}
+			vm.registers[dst] = strings.Replace(srcStr, from, to, -1)
 			continue
 
 		case OpInstr:
@@ -666,10 +674,46 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpTypeof:
+			src := vm.registers[inst.P1]
+			if dst, ok := inst.P4.(int); ok {
+				if src == nil {
+					vm.registers[dst] = "null"
+				} else {
+					switch src.(type) {
+					case int64:
+						vm.registers[dst] = "integer"
+					case float64:
+						vm.registers[dst] = "real"
+					case string:
+						vm.registers[dst] = "text"
+					case []byte:
+						vm.registers[dst] = "blob"
+					default:
+						vm.registers[dst] = "text"
+					}
+				}
+			}
+			continue
+
+		case OpRandom:
+			if dst, ok := inst.P4.(int); ok {
+				vm.registers[dst] = rand.Int63()
+			}
+			continue
+
 		case OpRound:
 			src := vm.registers[inst.P1]
 			if dst, ok := inst.P4.(int); ok {
-				vm.registers[dst] = getRound(src, 0)
+				decimals := 0
+				if inst.P2 != 0 {
+					if dv, ok2 := vm.registers[inst.P2].(int64); ok2 {
+						decimals = int(dv)
+					} else if dv, ok2 := vm.registers[inst.P2].(float64); ok2 {
+						decimals = int(dv)
+					}
+				}
+				vm.registers[dst] = getRound(src, decimals)
 			}
 			continue
 
@@ -837,12 +881,13 @@ func (vm *VM) Exec(ctx interface{}) error {
 				switch upperType {
 				case "INTEGER", "INT":
 					if s, ok := val.(string); ok {
-						if iv, err := strconv.ParseInt(s, 10, 64); err == nil {
+						if iv, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
 							vm.registers[inst.P1] = iv
-						} else if fv, err := strconv.ParseFloat(s, 64); err == nil {
+						} else if fv, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
 							vm.registers[inst.P1] = int64(fv)
 						} else {
-							vm.registers[inst.P1] = int64(0)
+							// SQLite-style: parse numeric prefix from string
+							vm.registers[inst.P1] = parseNumericPrefix(s)
 						}
 					} else if fv, ok := val.(float64); ok {
 						vm.registers[inst.P1] = int64(fv)
@@ -2641,6 +2686,25 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 			}
 			return strings.ToLower(fmt.Sprintf("%v", val))
 		}
+	case "TYPEOF":
+		if len(e.Args) > 0 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if val == nil {
+				return "null"
+			}
+			switch val.(type) {
+			case int64:
+				return "integer"
+			case float64:
+				return "real"
+			case string:
+				return "text"
+			case []byte:
+				return "blob"
+			default:
+				return "text"
+			}
+		}
 	}
 	return nil
 }
@@ -2720,6 +2784,10 @@ func (vm *VM) evaluateBoolExprOnRow(row map[string]interface{}, columns []string
 			return false
 		case QP.TokenNotIn:
 			val := vm.evaluateExprOnRow(row, columns, e.Left)
+			if val == nil {
+				// NULL NOT IN (...) → NULL (falsy) per SQL standard
+				return false
+			}
 			if listLit, ok := e.Right.(*QP.Literal); ok {
 				if items, ok := listLit.Value.([]interface{}); ok {
 					for _, item := range items {
@@ -2764,6 +2832,31 @@ func (vm *VM) evaluateBoolExprOnRow(row map[string]interface{}, columns []string
 func vmMatchLike(value, pattern string) bool {
 	return matchLikePattern(value, pattern, 0, 0)
 }
+
+// parseNumericPrefix parses a numeric prefix from a string like SQLite does.
+// E.g., "2024year" -> 2024, "  3.14abc" -> 3, "abc" -> 0
+func parseNumericPrefix(s string) int64 {
+	s = strings.TrimSpace(s)
+	if len(s) == 0 {
+		return 0
+	}
+	// Find the longest numeric prefix
+	end := 0
+	for end < len(s) && (s[end] >= '0' && s[end] <= '9' || (end == 0 && (s[end] == '-' || s[end] == '+'))) {
+		end++
+	}
+	if end == 0 {
+		return 0
+	}
+	if iv, err := strconv.ParseInt(s[:end], 10, 64); err == nil {
+		return iv
+	}
+	if fv, err := strconv.ParseFloat(s[:end], 64); err == nil {
+		return int64(fv)
+	}
+	return 0
+}
+
 
 func matchLikePattern(value, pattern string, vi, pi int) bool {
 	if pi >= len(pattern) {
@@ -2869,6 +2962,39 @@ func (vm *VM) resolveSelectExpr(expr QP.Expr, state *AggregateState, aggInfo *Ag
 			}
 		}
 		return val
+	case *QP.CaseExpr:
+		if e.Operand != nil {
+			// Simple CASE: CASE operand WHEN val THEN result
+			operandVal := vm.resolveSelectExpr(e.Operand, state, aggInfo)
+			for _, when := range e.Whens {
+				whenVal := vm.resolveSelectExpr(when.Condition, state, aggInfo)
+				if vm.compareVals(operandVal, whenVal) == 0 {
+					return vm.resolveSelectExpr(when.Result, state, aggInfo)
+				}
+			}
+		} else {
+			// Searched CASE: CASE WHEN condition THEN result
+			for _, when := range e.Whens {
+				condVal := vm.resolveSelectExpr(when.Condition, state, aggInfo)
+				var isTruthy bool
+				if b, ok := condVal.(bool); ok {
+					isTruthy = b
+				} else if i, ok := condVal.(int64); ok {
+					isTruthy = i != 0
+				} else if f, ok := condVal.(float64); ok {
+					isTruthy = f != 0
+				} else {
+					isTruthy = condVal != nil
+				}
+				if isTruthy {
+					return vm.resolveSelectExpr(when.Result, state, aggInfo)
+				}
+			}
+		}
+		if e.Else != nil {
+			return vm.resolveSelectExpr(e.Else, state, aggInfo)
+		}
+		return nil
 	default:
 		return nil
 	}

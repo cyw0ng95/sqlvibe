@@ -195,6 +195,8 @@ const (
 	OpOverlaps
 	OpRealToInt
 	OpHalt
+	OpTypeof
+	OpRandom
 
 	// JSON operations (future)
 	OpJson
@@ -397,6 +399,8 @@ var OpCodeInfo = map[OpCode]string{
 	OpOverlaps:   "Overlaps",
 	OpRealToInt:  "RealToInt",
 	OpHalt:       "Halt",
+	OpTypeof:     "Typeof",
+	OpRandom:     "Random",
 
 	// JSON operations (future)
 	OpJson:        "Json",
