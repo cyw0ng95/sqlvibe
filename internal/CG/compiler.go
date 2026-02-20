@@ -197,13 +197,11 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 	rightRewindPos := len(c.program.Instructions)
 	c.program.EmitOp(VM.OpRewind, 1, 0)
 
-	var skipPos, nullSkip int
+	var skipPos int
 	if join.Cond != nil {
 		joinCondReg := c.compileExpr(join.Cond)
-		zeroReg := c.ra.Alloc()
-		c.program.EmitLoadConst(zeroReg, int64(0))
-		skipPos = c.program.EmitEq(joinCondReg, zeroReg, 0)
-		nullSkip = c.program.EmitOp(VM.OpIsNull, int32(joinCondReg), 0)
+		// OpIfNot jumps to P2 if joinCondReg is false (0) or null
+		skipPos = c.program.EmitOp(VM.OpIfNot, int32(joinCondReg), 0)
 	}
 
 	colRegs := make([]int, 0)
@@ -212,11 +210,13 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 		colRegs = append(colRegs, reg)
 	}
 
+	var whereSkipPos int
+	hasWhere := false
 	if where != nil {
 		whereReg := c.compileExpr(where)
-		zeroReg := c.ra.Alloc()
-		c.program.EmitLoadConst(zeroReg, int64(0))
-		c.program.EmitEq(whereReg, zeroReg, 0)
+		// OpIfNot jumps to P2 if whereReg is false (0) or null - skip this row
+		whereSkipPos = c.program.EmitOp(VM.OpIfNot, int32(whereReg), 0)
+		hasWhere = true
 	}
 
 	c.program.EmitResultRow(colRegs)
@@ -225,8 +225,10 @@ func (c *Compiler) compileJoin(leftTable *QP.TableRef, join *QP.Join, where QP.E
 	rightNext := c.program.EmitOp(VM.OpNext, 1, 0)
 
 	if join.Cond != nil {
-		c.program.FixupWithPos(skipPos, rightNextPos)
-		c.program.FixupWithPos(nullSkip, rightNextPos)
+		c.program.Instructions[skipPos].P2 = int32(rightNextPos)
+	}
+	if hasWhere {
+		c.program.Instructions[whereSkipPos].P2 = int32(rightNextPos)
 	}
 
 	c.program.EmitGoto(rightRewindPos + 1)

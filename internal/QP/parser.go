@@ -384,6 +384,18 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				alias := p.current().Literal
 				p.advance()
 				col = &AliasExpr{Expr: col, Alias: alias}
+			} else if p.current().Type == TokenIdentifier {
+				// Implicit alias (without AS): detect by checking next token
+				next := p.peek()
+				if next.Type == TokenComma || next.Type == TokenEOF ||
+					(next.Type == TokenKeyword && (strings.ToUpper(next.Literal) == "FROM" ||
+						strings.ToUpper(next.Literal) == "WHERE" || strings.ToUpper(next.Literal) == "ORDER" ||
+						strings.ToUpper(next.Literal) == "GROUP" || strings.ToUpper(next.Literal) == "HAVING" ||
+						strings.ToUpper(next.Literal) == "LIMIT")) {
+					alias := p.current().Literal
+					p.advance()
+					col = &AliasExpr{Expr: col, Alias: alias}
+				}
 			}
 
 			stmt.Columns = append(stmt.Columns, col)
@@ -421,7 +433,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
 			p.advance() // consume AS
 		}
-		if p.current().Type == TokenIdentifier {
+		if p.current().Type == TokenIdentifier || p.current().Type == TokenString {
 			ref.Alias = p.current().Literal
 			p.advance()
 		}
@@ -454,7 +466,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 			if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
 				p.advance() // consume AS
 			}
-			if p.current().Type == TokenIdentifier {
+			if p.current().Type == TokenIdentifier || p.current().Type == TokenString {
 				rightTable.Alias = p.current().Literal
 				p.advance()
 			}
@@ -469,6 +481,31 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 			}
 
 			join.Left = ref
+			ref.Join = join
+			ref = rightTable
+		}
+
+		// Handle comma-separated tables (implicit cross join): FROM t1 AS a, t2 AS b
+		for p.current().Type == TokenComma {
+			p.advance()
+			// Check if next token is a table-level constraint keyword (end of FROM)
+			if p.current().Type == TokenKeyword {
+				kw := strings.ToUpper(p.current().Literal)
+				if kw == "WHERE" || kw == "ORDER" || kw == "GROUP" || kw == "HAVING" || kw == "LIMIT" {
+					break
+				}
+			}
+			rightTable := &TableRef{Name: p.current().Literal}
+			p.advance()
+			// Check for alias
+			if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+				p.advance()
+			}
+			if p.current().Type == TokenIdentifier || p.current().Type == TokenString {
+				rightTable.Alias = p.current().Literal
+				p.advance()
+			}
+			join := &Join{Type: "CROSS", Right: rightTable, Left: ref}
 			ref.Join = join
 			ref = rightTable
 		}
@@ -575,6 +612,17 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 			return nil, err
 		}
 		stmt.SetOpRight = right
+		// Hoist ORDER BY and LIMIT/OFFSET from right to outer (they apply to the full set op result)
+		if right.OrderBy != nil && stmt.OrderBy == nil {
+			stmt.OrderBy = right.OrderBy
+			right.OrderBy = nil
+		}
+		if right.Limit != nil && stmt.Limit == nil {
+			stmt.Limit = right.Limit
+			stmt.Offset = right.Offset
+			right.Limit = nil
+			right.Offset = nil
+		}
 	}
 
 	return stmt, nil
@@ -845,7 +893,8 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 					Name: p.current().Literal,
 				}
 				p.advance()
-				if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+				if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword ||
+					p.current().Type == TokenAny || p.current().Type == TokenAll {
 					col.Type = p.current().Literal
 					p.advance()
 					if p.current().Type == TokenLeftParen {
@@ -1701,6 +1750,15 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		return &Literal{Value: tok.Literal}, nil
 	case TokenString:
 		p.advance()
+		// Check for qualified column reference with quoted identifier: "table".column
+		if p.current().Type == TokenDot {
+			p.advance()
+			if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+				colName := p.current().Literal
+				p.advance()
+				return &ColumnRef{Table: tok.Literal, Name: colName}, nil
+			}
+		}
 		return &Literal{Value: tok.Literal}, nil
 	case TokenHexString:
 		p.advance()

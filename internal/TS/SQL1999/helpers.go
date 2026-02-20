@@ -128,13 +128,17 @@ func CompareQueryResults(t *testing.T, sqlvibeDB *sqlvibe.Database, sqliteDB *sq
 		sqlvibeRow := sqlvibeResults[i]
 		sqliteRow := sqliteResults[i]
 
-		// Get values in column order from sqlvibe
+		// Get values in column order from sqlvibe - use raw indexed data to handle duplicate column names
 		sqlvibeVals := make([]interface{}, 0, len(sqlvibeRow))
-		for _, colName := range sqlvibeRows.Columns {
-			if v, ok := sqlvibeRow[colName]; ok {
-				sqlvibeVals = append(sqlvibeVals, v)
-			} else {
-				sqlvibeVals = append(sqlvibeVals, nil)
+		if i < len(sqlvibeRows.Data) {
+			sqlvibeVals = append(sqlvibeVals, sqlvibeRows.Data[i]...)
+		} else {
+			for _, colName := range sqlvibeRows.Columns {
+				if v, ok := sqlvibeRow[colName]; ok {
+					sqlvibeVals = append(sqlvibeVals, v)
+				} else {
+					sqlvibeVals = append(sqlvibeVals, nil)
+				}
 			}
 		}
 

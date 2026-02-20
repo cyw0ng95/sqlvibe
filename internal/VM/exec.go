@@ -2833,11 +2833,19 @@ func (vm *VM) resolveSelectExpr(expr QP.Expr, state *AggregateState, aggInfo *Ag
 	case *QP.Literal:
 		return e.Value
 	case *QP.ColumnRef:
-		// Check NonAggCols
+		// Check NonAggCols - match by column name through direct ColumnRef or AliasExpr
 		for i, nonAggExpr := range aggInfo.NonAggCols {
 			if colRef, ok := nonAggExpr.(*QP.ColumnRef); ok && colRef.Name == e.Name {
 				if i < len(state.NonAggValues) {
 					return state.NonAggValues[i]
+				}
+			}
+			// Match through alias expression
+			if aliasExpr, ok := nonAggExpr.(*QP.AliasExpr); ok {
+				if innerColRef, ok2 := aliasExpr.Expr.(*QP.ColumnRef); ok2 && innerColRef.Name == e.Name {
+					if i < len(state.NonAggValues) {
+						return state.NonAggValues[i]
+					}
 				}
 			}
 		}
@@ -2921,6 +2929,14 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 		for i, nonAggExpr := range aggInfo.NonAggCols {
 			if colRef, ok := nonAggExpr.(*QP.ColumnRef); ok && colRef.Name == e.Name {
 				return state.NonAggValues[i]
+			}
+			// Match through alias expression
+			if aliasExpr, ok := nonAggExpr.(*QP.AliasExpr); ok {
+				if innerColRef, ok2 := aliasExpr.Expr.(*QP.ColumnRef); ok2 && innerColRef.Name == e.Name {
+					if i < len(state.NonAggValues) {
+						return state.NonAggValues[i]
+					}
+				}
 			}
 		}
 		return nil

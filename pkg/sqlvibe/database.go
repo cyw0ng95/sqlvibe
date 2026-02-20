@@ -570,6 +570,10 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return db.evalConstantExpression(stmt)
 		}
 
+		// Resolve column aliases in WHERE, GROUP BY, HAVING, ORDER BY
+		// This allows SQLite-style alias references like: SELECT a AS x ... WHERE x > 0
+		resolveSelectAliases(stmt)
+
 		var tableName string
 		var schemaName string
 		if stmt.From != nil {
@@ -1545,4 +1549,54 @@ func (db *Database) execInsertSelect(stmt *QP.InsertStmt) (Result, error) {
 		affected += res.RowsAffected
 	}
 	return Result{RowsAffected: affected}, nil
+}
+
+// resolveSelectAliases resolves column aliases defined in SELECT in WHERE, GROUP BY, HAVING, ORDER BY.
+// This implements SQLite's extension allowing aliases like: SELECT a AS x ... GROUP BY x
+func resolveSelectAliases(stmt *QP.SelectStmt) {
+	// Build alias map: alias_name -> original expression
+	aliasMap := make(map[string]QP.Expr)
+	for _, col := range stmt.Columns {
+		if alias, ok := col.(*QP.AliasExpr); ok {
+			aliasMap[alias.Alias] = alias.Expr
+		}
+	}
+	if len(aliasMap) == 0 {
+		return
+	}
+
+	// Substitute in WHERE
+	stmt.Where = substituteAliasExpr(stmt.Where, aliasMap)
+
+	// Substitute in GROUP BY
+	for i, expr := range stmt.GroupBy {
+		stmt.GroupBy[i] = substituteAliasExpr(expr, aliasMap)
+	}
+
+	// Substitute in HAVING
+	stmt.Having = substituteAliasExpr(stmt.Having, aliasMap)
+}
+
+// substituteAliasExpr recursively substitutes alias references in an expression.
+func substituteAliasExpr(expr QP.Expr, aliasMap map[string]QP.Expr) QP.Expr {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *QP.ColumnRef:
+		if e.Table == "" {
+			if orig, ok := aliasMap[e.Name]; ok {
+				return orig
+			}
+		}
+		return expr
+	case *QP.BinaryExpr:
+		return &QP.BinaryExpr{Op: e.Op, Left: substituteAliasExpr(e.Left, aliasMap), Right: substituteAliasExpr(e.Right, aliasMap)}
+	case *QP.UnaryExpr:
+		return &QP.UnaryExpr{Op: e.Op, Expr: substituteAliasExpr(e.Expr, aliasMap)}
+	case *QP.AliasExpr:
+		return &QP.AliasExpr{Expr: substituteAliasExpr(e.Expr, aliasMap), Alias: e.Alias}
+	default:
+		return expr
+	}
 }
