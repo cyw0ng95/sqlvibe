@@ -62,12 +62,20 @@ type Join struct {
 	Natural      bool     // for NATURAL JOIN
 }
 
+// OnConflict represents the ON CONFLICT clause of an INSERT statement.
+type OnConflict struct {
+	Columns   []string    // conflict target columns, e.g. ON CONFLICT (id)
+	DoNothing bool        // ON CONFLICT DO NOTHING
+	Updates   []SetClause // ON CONFLICT DO UPDATE SET col = expr, ...
+}
+
 type InsertStmt struct {
 	Table       string
 	Columns     []string
 	Values      [][]Expr
-	UseDefaults bool      // True when using DEFAULT VALUES
+	UseDefaults bool        // True when using DEFAULT VALUES
 	SelectQuery *SelectStmt // Non-nil for INSERT ... SELECT
+	OnConflict  *OnConflict // nil if no ON CONFLICT clause
 }
 
 func (i *InsertStmt) NodeType() string { return "InsertStmt" }
@@ -170,7 +178,8 @@ type PragmaStmt struct {
 func (p *PragmaStmt) NodeType() string { return "PragmaStmt" }
 
 type ExplainStmt struct {
-	Query ASTNode
+	QueryPlan bool
+	Query     ASTNode
 }
 
 func (e *ExplainStmt) NodeType() string { return "ExplainStmt" }
@@ -837,6 +846,66 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 			return nil, err
 		}
 		stmt.SelectQuery = sel
+	}
+
+	// Parse ON CONFLICT clause
+	if p.current().Type == TokenKeyword && p.current().Literal == "ON" {
+		p.advance()
+		if p.current().Type != TokenKeyword || p.current().Literal != "CONFLICT" {
+			return nil, fmt.Errorf("expected CONFLICT after ON")
+		}
+		p.advance()
+
+		oc := &OnConflict{}
+
+		// Optional conflict target: (column_list)
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			for {
+				oc.Columns = append(oc.Columns, p.current().Literal)
+				p.advance()
+				if p.current().Type != TokenComma {
+					break
+				}
+				p.advance()
+			}
+			p.expect(TokenRightParen)
+		}
+
+		// DO NOTHING | DO UPDATE SET ...
+		if p.current().Type != TokenKeyword || p.current().Literal != "DO" {
+			return nil, fmt.Errorf("expected DO after ON CONFLICT target")
+		}
+		p.advance()
+
+		if p.current().Literal == "NOTHING" {
+			p.advance()
+			oc.DoNothing = true
+		} else if p.current().Literal == "UPDATE" {
+			p.advance()
+			if p.current().Literal != "SET" {
+				return nil, fmt.Errorf("expected SET after ON CONFLICT DO UPDATE")
+			}
+			p.advance()
+			for {
+				col := &ColumnRef{Name: p.current().Literal}
+				p.advance()
+				p.expect(TokenEq)
+				val, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				oc.Updates = append(oc.Updates, SetClause{Column: col, Value: val})
+				if p.current().Type != TokenComma {
+					break
+				}
+				p.advance()
+			}
+		} else {
+			return nil, fmt.Errorf("expected NOTHING or UPDATE after ON CONFLICT DO")
+		}
+
+		stmt.OnConflict = oc
 	}
 
 	return stmt, nil
@@ -2148,9 +2217,9 @@ func (p *Parser) parseExplain() (ASTNode, error) {
 	explain := &ExplainStmt{}
 
 	isQueryPlan := false
-	if p.current().Type == TokenKeyword && p.current().Literal == "QUERY" {
+	if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) && strings.EqualFold(p.current().Literal, "QUERY") {
 		p.advance()
-		if p.current().Type == TokenKeyword && p.current().Literal == "PLAN" {
+		if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) && strings.EqualFold(p.current().Literal, "PLAN") {
 			p.advance()
 			isQueryPlan = true
 		}
@@ -2184,7 +2253,7 @@ func (p *Parser) parseExplain() (ASTNode, error) {
 		return nil, fmt.Errorf("EXPLAIN not supported for this statement type: %v", p.current())
 	}
 
-	_ = isQueryPlan
+	explain.QueryPlan = isQueryPlan
 	return explain, nil
 }
 

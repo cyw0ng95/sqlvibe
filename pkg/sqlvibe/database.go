@@ -16,6 +16,7 @@ import (
 
 type Database struct {
 	pm             *DS.PageManager
+	cache          *DS.Cache
 	engine         *VM.QueryEngine
 	tx             *Transaction
 	txMgr          *TM.TransactionManager
@@ -33,6 +34,8 @@ type Database struct {
 	isRegistry     *IS.Registry                        // information_schema registry
 	txSnapshot     *dbSnapshot                         // snapshot for transaction rollback
 	tableBTrees    map[string]*DS.BTree                // table name -> B-Tree for storage
+	journalMode    string                              // "delete" or "wal"
+	wal            *TM.WAL                             // WAL instance when in WAL mode
 }
 
 type dbSnapshot struct {
@@ -267,6 +270,7 @@ func Open(path string) (*Database, error) {
 
 	return &Database{
 		pm:             pm,
+		cache:          DS.NewCache(-2000),
 		engine:         engine,
 		txMgr:          txMgr,
 		activeTx:       nil,
@@ -281,6 +285,8 @@ func Open(path string) (*Database, error) {
 		indexes:        make(map[string]*IndexInfo),
 		views:          make(map[string]string),
 		tableBTrees:    make(map[string]*DS.BTree),
+		journalMode:    "delete",
+		wal:            nil,
 	}, nil
 }
 
@@ -469,6 +475,9 @@ func (db *Database) Exec(sql string) (Result, error) {
 		stmt := ast.(*QP.InsertStmt)
 		if stmt.SelectQuery != nil {
 			return db.execInsertSelect(stmt)
+		}
+		if stmt.OnConflict != nil {
+			return db.execInsertOnConflict(stmt)
 		}
 		return db.execVMDML(sql, stmt.Table)
 	case "UpdateStmt":
@@ -839,6 +848,10 @@ func isDMLStatement(nodeType string) bool {
 }
 
 func (db *Database) Close() error {
+	if db.wal != nil {
+		_ = db.wal.Close()
+		db.wal = nil
+	}
 	return db.pm.Close()
 }
 
@@ -1991,6 +2004,147 @@ func (db *Database) execInsertSelect(stmt *QP.InsertStmt) (Result, error) {
 		affected += res.RowsAffected
 	}
 	return Result{RowsAffected: affected}, nil
+}
+
+// execInsertOnConflict handles INSERT ... ON CONFLICT DO NOTHING/UPDATE.
+func (db *Database) execInsertOnConflict(stmt *QP.InsertStmt) (Result, error) {
+	util.AssertNotNil(stmt, "InsertStmt")
+	util.Assert(stmt.Table != "", "InsertStmt.Table cannot be empty")
+	util.AssertNotNil(stmt.OnConflict, "OnConflict cannot be nil")
+
+	tableName := db.resolveTableName(stmt.Table)
+	if _, exists := db.tables[tableName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName)
+	}
+
+	tableCols := db.columnOrder[tableName]
+	if tableCols == nil {
+		tableCols = db.getOrderedColumns(tableName)
+	}
+
+	oc := stmt.OnConflict
+	var affected int64
+
+	for _, row := range stmt.Values {
+		// Determine column-to-value mapping for this row.
+		insertCols := stmt.Columns
+		if len(insertCols) == 0 {
+			insertCols = tableCols
+		}
+
+		// Build a map of column → SQL value string for this row.
+		colVals := make(map[string]string, len(insertCols))
+		for i, col := range insertCols {
+			if i < len(row) {
+				colVals[col] = exprToSQL(row[i])
+			} else {
+				colVals[col] = "NULL"
+			}
+		}
+
+		// Build plain INSERT SQL for this single row.
+		colParts := make([]string, 0, len(insertCols))
+		valParts := make([]string, 0, len(insertCols))
+		for _, col := range insertCols {
+			colParts = append(colParts, col)
+			valParts = append(valParts, colVals[col])
+		}
+		insertSQL := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+			tableName,
+			strings.Join(colParts, ", "),
+			strings.Join(valParts, ", "))
+
+		res, err := db.execVMDML(insertSQL, tableName)
+		if err == nil {
+			affected += res.RowsAffected
+			continue
+		}
+
+		// Check if this is a UNIQUE/PK constraint violation.
+		if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return Result{}, err
+		}
+
+		// Constraint violation — apply conflict resolution.
+		if oc.DoNothing {
+			// Skip this row silently.
+			continue
+		}
+
+		// DO UPDATE SET: build UPDATE SQL replacing excluded.col with actual values.
+		if len(oc.Updates) == 0 {
+			continue
+		}
+
+		// Build WHERE clause from conflict target columns.
+		// If no explicit target columns, use primary key columns.
+		conflictCols := oc.Columns
+		if len(conflictCols) == 0 {
+			conflictCols = db.primaryKeys[tableName]
+		}
+
+		whereParts := make([]string, 0, len(conflictCols))
+		for _, col := range conflictCols {
+			val, ok := colVals[col]
+			if !ok {
+				val = "NULL"
+			}
+			whereParts = append(whereParts, fmt.Sprintf("%s = %s", col, val))
+		}
+		if len(whereParts) == 0 {
+			continue
+		}
+
+		// Build SET clause, resolving excluded.col references.
+		setParts := make([]string, 0, len(oc.Updates))
+		for _, sc := range oc.Updates {
+			colRef, ok := sc.Column.(*QP.ColumnRef)
+			if !ok {
+				continue
+			}
+			valSQL := resolveExcluded(sc.Value, colVals)
+			setParts = append(setParts, fmt.Sprintf("%s = %s", colRef.Name, valSQL))
+		}
+		if len(setParts) == 0 {
+			continue
+		}
+
+		updateSQL := fmt.Sprintf("UPDATE %s SET %s WHERE %s",
+			tableName,
+			strings.Join(setParts, ", "),
+			strings.Join(whereParts, " AND "))
+
+		upRes, upErr := db.execVMDML(updateSQL, tableName)
+		if upErr != nil {
+			return Result{}, upErr
+		}
+		affected += upRes.RowsAffected
+	}
+
+	return Result{RowsAffected: affected}, nil
+}
+
+// resolveExcluded converts an expression to SQL, replacing excluded.col references
+// with the actual literal values from the attempted INSERT row.
+func resolveExcluded(expr QP.Expr, colVals map[string]string) string {
+	if expr == nil {
+		return "NULL"
+	}
+	switch e := expr.(type) {
+	case *QP.ColumnRef:
+		if strings.EqualFold(e.Table, "excluded") {
+			if val, ok := colVals[e.Name]; ok {
+				return val
+			}
+			return "NULL"
+		}
+		if e.Table != "" {
+			return e.Table + "." + e.Name
+		}
+		return e.Name
+	default:
+		return exprToSQL(expr)
+	}
 }
 
 // resolveSelectAliases resolves column aliases defined in SELECT in WHERE, GROUP BY, HAVING, ORDER BY.
