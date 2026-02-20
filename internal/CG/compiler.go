@@ -2,6 +2,7 @@ package CG
 
 import (
 	"fmt"
+	"strings"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
 	VM "github.com/sqlvibe/sqlvibe/internal/VM"
@@ -15,6 +16,7 @@ type Compiler struct {
 	columnIndices   map[string]int
 	TableColIndices map[string]int
 	TableColOrder   []string
+	TableColSources []string // parallel to TableColOrder: which table each column belongs to
 	tableCursors    map[string]int
 	TableSchemas    map[string]map[string]int
 }
@@ -516,10 +518,10 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
 
 	for _, col := range stmt.Columns {
 		if fc, ok := col.(*QP.FuncCall); ok {
-			switch fc.Name {
+			switch strings.ToUpper(fc.Name) {
 			case "COUNT", "SUM", "AVG", "MIN", "MAX":
 				aggDef := VM.AggregateDef{
-					Function: fc.Name,
+					Function: strings.ToUpper(fc.Name),
 					Args:     fc.Args,
 					Distinct: fc.Distinct,
 				}
@@ -868,7 +870,7 @@ func exprHasAggregate(expr QP.Expr) bool {
 	}
 	switch e := expr.(type) {
 	case *QP.FuncCall:
-		switch e.Name {
+		switch strings.ToUpper(e.Name) {
 		case "COUNT", "SUM", "AVG", "MIN", "MAX", "TOTAL":
 			return true
 		}
@@ -891,16 +893,17 @@ func extractAggregatesFromExpr(expr QP.Expr, aggInfo *VM.AggregateInfo) {
 	}
 	switch e := expr.(type) {
 	case *QP.FuncCall:
-		switch e.Name {
+		upperName := strings.ToUpper(e.Name)
+		switch upperName {
 		case "COUNT", "SUM", "AVG", "MIN", "MAX":
 			// Check if already registered
 			for _, existing := range aggInfo.Aggregates {
-				if existing.Function == e.Name {
+				if existing.Function == upperName {
 					return
 				}
 			}
 			aggInfo.Aggregates = append(aggInfo.Aggregates, VM.AggregateDef{
-				Function: e.Name,
+				Function: upperName,
 				Args:     e.Args,
 				Distinct: e.Distinct,
 			})

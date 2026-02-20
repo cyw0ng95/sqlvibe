@@ -298,6 +298,21 @@ func (db *Database) getOrderedColumns(tableName string) []string {
 	return nil
 }
 
+// resolveTableName returns the canonical table name (case-insensitive lookup).
+// Returns the original key if found with exact match, otherwise finds a case-insensitive match.
+func (db *Database) resolveTableName(name string) string {
+	if _, ok := db.tables[name]; ok {
+		return name
+	}
+	lower := strings.ToLower(name)
+	for k := range db.tables {
+		if strings.ToLower(k) == lower {
+			return k
+		}
+	}
+	return name
+}
+
 func (db *Database) evalConstantExpression(stmt *QP.SelectStmt) (*Rows, error) {
 	if len(stmt.Columns) == 0 {
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
@@ -363,7 +378,9 @@ func (db *Database) Exec(sql string) (Result, error) {
 	switch ast.NodeType() {
 	case "CreateTableStmt":
 		stmt := ast.(*QP.CreateTableStmt)
-		if _, exists := db.tables[stmt.Name]; exists {
+		// Case-insensitive existence check
+		resolved := db.resolveTableName(stmt.Name)
+		if _, exists := db.tables[resolved]; exists {
 			if stmt.IfNotExists {
 				return Result{}, nil
 			}
@@ -538,6 +555,33 @@ func (db *Database) Exec(sql string) (Result, error) {
 }
 
 func (db *Database) Query(sql string) (*Rows, error) {
+	// Handle multi-statement SQL (separated by semicolons)
+	// Execute all but the last as Exec, return results of last SELECT
+	stmts := splitStatements(sql)
+	if len(stmts) > 1 {
+		var lastRows *Rows
+		for i, s := range stmts {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if i == len(stmts)-1 {
+				// Execute last statement as query
+				rows, err := db.Query(s)
+				if err != nil {
+					return nil, err
+				}
+				lastRows = rows
+			} else {
+				// Execute intermediate statements as exec
+				if _, err := db.Exec(s); err != nil {
+					return nil, err
+				}
+			}
+		}
+		return lastRows, nil
+	}
+
 	tokenizer := QP.NewTokenizer(sql)
 	tokens, err := tokenizer.Tokenize()
 	if err != nil {
@@ -574,6 +618,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		// This allows SQLite-style alias references like: SELECT a AS x ... WHERE x > 0
 		resolveSelectAliases(stmt)
 
+		// Handle derived table in FROM clause: SELECT ... FROM (SELECT ...) AS alias
+		if stmt.From.Subquery != nil {
+			return db.execDerivedTableQuery(stmt)
+		}
+
 		var tableName string
 		var schemaName string
 		if stmt.From != nil {
@@ -584,14 +633,25 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 		}
 
+		// Resolve case-insensitive table name (unquoted identifiers are case-insensitive)
+		tableName = db.resolveTableName(tableName)
+		stmt.From.Name = tableName
+
 		// Handle sqlite_master virtual table
 		if tableName == "sqlite_master" {
 			return db.querySqliteMaster(stmt)
 		}
 
-		// Handle views by substituting the view SQL
+		// Handle views by substituting the view SQL (case-insensitive)
 		if viewSQL, isView := db.views[tableName]; isView {
 			return db.queryView(viewSQL, stmt, sql)
+		}
+		// Also try case-insensitive view lookup
+		lowerTbl := strings.ToLower(tableName)
+		for vn, vs := range db.views {
+			if strings.ToLower(vn) == lowerTbl {
+				return db.queryView(vs, stmt, sql)
+			}
 		}
 
 		// Handle information_schema virtual tables
@@ -1242,6 +1302,80 @@ db.views[stmt.Name] = selectSQL
 return Result{}, nil
 }
 
+// execDerivedTableQuery materializes a derived table (subquery in FROM) and executes the outer query.
+// SELECT ... FROM (SELECT ...) AS alias ...
+func (db *Database) execDerivedTableQuery(stmt *QP.SelectStmt) (*Rows, error) {
+	subq := stmt.From.Subquery
+	alias := stmt.From.Alias
+	if alias == "" {
+		alias = "__subq__"
+	}
+
+	// Execute the subquery to materialize its rows
+	subRows, err := db.execSelectStmt(subq)
+	if err != nil {
+		return nil, err
+	}
+	if subRows == nil {
+		subRows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
+	}
+
+	// Register temp table
+	tempName := alias
+	colTypes := make(map[string]string)
+	for _, col := range subRows.Columns {
+		colTypes[col] = "TEXT"
+	}
+	db.tables[tempName] = colTypes
+	db.columnOrder[tempName] = subRows.Columns
+	rowMaps := make([]map[string]interface{}, len(subRows.Data))
+	for i, row := range subRows.Data {
+		rm := make(map[string]interface{})
+		for j, col := range subRows.Columns {
+			if j < len(row) {
+				rm[col] = row[j]
+			}
+		}
+		rowMaps[i] = rm
+	}
+	db.data[tempName] = rowMaps
+
+	// Rewrite stmt.From to use temp table name instead of subquery
+	origFrom := stmt.From
+	stmt.From = &QP.TableRef{Name: tempName, Alias: alias}
+
+	// Execute outer query
+	rows, err := db.execVMQuery("", stmt)
+
+	// Restore and clean up
+	stmt.From = origFrom
+	delete(db.tables, tempName)
+	delete(db.columnOrder, tempName)
+	delete(db.data, tempName)
+
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	}
+
+	// Apply ORDER BY and LIMIT if present
+	if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
+		rows, err = db.sortResults(rows, stmt.OrderBy)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if stmt.Limit != nil {
+		rows, err = db.applyLimit(rows, stmt.Limit, stmt.Offset)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
+}
+
 // queryView executes a query against a view by executing the underlying SELECT
 func (db *Database) queryView(viewSQL string, outerStmt *QP.SelectStmt, origSQL string) (*Rows, error) {
 // Execute the underlying view SELECT
@@ -1599,4 +1733,63 @@ func substituteAliasExpr(expr QP.Expr, aliasMap map[string]QP.Expr) QP.Expr {
 	default:
 		return expr
 	}
+}
+
+// splitStatements splits SQL on top-level semicolons (not inside strings/parens).
+func splitStatements(sql string) []string {
+var stmts []string
+var cur strings.Builder
+depth := 0
+inSingle := false
+inDouble := false
+for i := 0; i < len(sql); i++ {
+c := sql[i]
+if inSingle {
+cur.WriteByte(c)
+if c == '\'' && i+1 < len(sql) && sql[i+1] == '\'' {
+cur.WriteByte(sql[i+1])
+i++
+} else if c == '\'' {
+inSingle = false
+}
+continue
+}
+if inDouble {
+cur.WriteByte(c)
+if c == '"' {
+inDouble = false
+}
+continue
+}
+switch c {
+case '\'':
+inSingle = true
+cur.WriteByte(c)
+case '"':
+inDouble = true
+cur.WriteByte(c)
+case '(':
+depth++
+cur.WriteByte(c)
+case ')':
+depth--
+cur.WriteByte(c)
+case ';':
+if depth == 0 {
+s := strings.TrimSpace(cur.String())
+if s != "" {
+stmts = append(stmts, s)
+}
+cur.Reset()
+} else {
+cur.WriteByte(c)
+}
+default:
+cur.WriteByte(c)
+}
+}
+if s := strings.TrimSpace(cur.String()); s != "" {
+stmts = append(stmts, s)
+}
+return stmts
 }

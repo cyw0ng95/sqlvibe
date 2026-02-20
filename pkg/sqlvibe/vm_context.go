@@ -64,6 +64,8 @@ func newDsVmContext(db *Database) *dsVmContext {
 }
 
 func (ctx *dsVmContext) GetTableData(tableName string) ([]map[string]interface{}, error) {
+	// Resolve case-insensitive table name
+	tableName = ctx.db.resolveTableName(tableName)
 	// First check if there's in-memory data (fallback from previous writes)
 	if ctx.db.data != nil && ctx.db.data[tableName] != nil && len(ctx.db.data[tableName]) > 0 {
 		return ctx.db.data[tableName], nil
@@ -130,10 +132,12 @@ func (ctx *dsVmContext) GetTableColumns(tableName string) ([]string, error) {
 	if ctx.db.columnOrder == nil {
 		return nil, nil
 	}
+	tableName = ctx.db.resolveTableName(tableName)
 	return ctx.db.columnOrder[tableName], nil
 }
 
 func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) error {
+	tableName = ctx.db.resolveTableName(tableName)
 	bt, ok := ctx.tableTrees[tableName]
 	if !ok || bt == nil || bt.RootPage() == 0 {
 		// Fall back to in-memory
@@ -251,6 +255,7 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 }
 
 func (ctx *dsVmContext) UpdateRow(tableName string, rowIndex int, row map[string]interface{}) error {
+	tableName = ctx.db.resolveTableName(tableName)
 	// Fall back to in-memory
 	if ctx.db.data[tableName] == nil {
 		return fmt.Errorf("table not found")
@@ -263,6 +268,7 @@ func (ctx *dsVmContext) UpdateRow(tableName string, rowIndex int, row map[string
 }
 
 func (ctx *dsVmContext) DeleteRow(tableName string, rowIndex int) error {
+	tableName = ctx.db.resolveTableName(tableName)
 	// Fall back to in-memory
 	if ctx.db.data[tableName] == nil {
 		return fmt.Errorf("table not found")

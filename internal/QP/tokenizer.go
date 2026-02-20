@@ -96,6 +96,8 @@ var keywords = map[string]TokenType{
 	"RIGHT":             TokenKeyword,
 	"OUTER":             TokenKeyword,
 	"CROSS":             TokenKeyword,
+	"NATURAL":           TokenKeyword,
+	"USING":             TokenKeyword,
 	"ON":                TokenKeyword,
 	"AS":                TokenKeyword,
 	"ORDER":             TokenKeyword,
@@ -258,7 +260,8 @@ func (t *Tokenizer) readIdentifier() error {
 	if tokenType, ok := keywords[upper]; ok {
 		t.addToken(tokenType, literal)
 	} else {
-		t.addToken(TokenIdentifier, literal)
+		// Unquoted identifiers are case-insensitive in SQLite (store as lowercase)
+		t.addToken(TokenIdentifier, strings.ToLower(literal))
 	}
 	return nil
 }

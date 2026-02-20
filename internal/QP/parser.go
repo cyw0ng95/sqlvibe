@@ -37,19 +37,22 @@ type OrderBy struct {
 }
 
 type TableRef struct {
-	Schema string
-	Name   string
-	Alias  string
-	Join   *Join
+	Schema   string
+	Name     string
+	Alias    string
+	Join     *Join
+	Subquery *SelectStmt // derived table: FROM (SELECT ...) AS alias
 }
 
 func (t *TableRef) NodeType() string { return "TableRef" }
 
 type Join struct {
-	Type  string
-	Left  *TableRef
-	Right *TableRef
-	Cond  Expr
+	Type         string
+	Left         *TableRef
+	Right        *TableRef
+	Cond         Expr
+	UsingColumns []string // for JOIN ... USING (col1, col2)
+	Natural      bool     // for NATURAL JOIN
 }
 
 type InsertStmt struct {
@@ -349,6 +352,47 @@ func (p *Parser) isEOF() bool {
 	return p.pos >= len(p.tokens) || p.current().Type == TokenEOF
 }
 
+// parseTableRef parses a table reference which may be:
+//   - a regular table: tablename [AS alias]
+//   - a subquery: (SELECT ...) [AS alias]
+func (p *Parser) parseTableRef() *TableRef {
+	ref := &TableRef{}
+
+	if p.current().Type == TokenLeftParen {
+		// Derived table: (SELECT ...)
+		p.advance() // consume (
+		subStmt, err := p.parseSelect()
+		if err == nil {
+			ref.Subquery = subStmt
+		}
+		if p.current().Type == TokenRightParen {
+			p.advance() // consume )
+		}
+	} else {
+		ref.Name = p.current().Literal
+		p.advance()
+
+		// Check for schema.table notation
+		if p.current().Type == TokenDot {
+			p.advance()
+			ref.Schema = ref.Name
+			ref.Name = p.current().Literal
+			p.advance()
+		}
+	}
+
+	// Check for alias (with or without AS keyword)
+	if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+		p.advance() // consume AS
+	}
+	if p.current().Type == TokenIdentifier || p.current().Type == TokenString {
+		ref.Alias = p.current().Literal
+		p.advance()
+	}
+
+	return ref
+}
+
 func (p *Parser) parseSelect() (*SelectStmt, error) {
 	stmt := &SelectStmt{}
 
@@ -417,33 +461,25 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 
 	if p.current().Literal == "FROM" {
 		p.advance()
-		ref := &TableRef{Name: p.current().Literal}
-		p.advance()
-
-		// Check for schema.table notation
-		if p.current().Type == TokenDot {
-			p.advance()
-			// Previous name was actually the schema
-			ref.Schema = ref.Name
-			ref.Name = p.current().Literal
-			p.advance()
-		}
-
-		// Check for table alias (with or without AS keyword)
-		if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
-			p.advance() // consume AS
-		}
-		if p.current().Type == TokenIdentifier || p.current().Type == TokenString {
-			ref.Alias = p.current().Literal
-			p.advance()
-		}
+		ref := p.parseTableRef()
 		stmt.From = ref
 
-		for p.current().Type == TokenKeyword && (p.current().Literal == "INNER" || p.current().Literal == "LEFT" || p.current().Literal == "CROSS" || p.current().Literal == "JOIN") {
+		for p.current().Type == TokenKeyword && (p.current().Literal == "NATURAL" || p.current().Literal == "INNER" || p.current().Literal == "LEFT" || p.current().Literal == "RIGHT" || p.current().Literal == "CROSS" || p.current().Literal == "JOIN") {
 			join := &Join{}
 
-			if p.current().Literal == "INNER" || p.current().Literal == "LEFT" || p.current().Literal == "CROSS" {
+			// Handle NATURAL JOIN
+			if p.current().Literal == "NATURAL" {
+				join.Natural = true
+				p.advance()
+			}
+
+			if p.current().Literal == "INNER" || p.current().Literal == "LEFT" || p.current().Literal == "RIGHT" || p.current().Literal == "CROSS" {
 				join.Type = p.current().Literal
+				p.advance()
+			}
+
+			// Consume OUTER if present (LEFT OUTER JOIN)
+			if p.current().Type == TokenKeyword && p.current().Literal == "OUTER" {
 				p.advance()
 			}
 
@@ -451,25 +487,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				p.advance()
 			}
 
-			rightTable := &TableRef{Name: p.current().Literal}
-			p.advance()
-
-			// Check for schema.table notation in JOIN
-			if p.current().Type == TokenDot {
-				p.advance()
-				rightTable.Schema = rightTable.Name
-				rightTable.Name = p.current().Literal
-				p.advance()
-			}
-
-			// Check for table alias in JOIN (with or without AS keyword)
-			if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
-				p.advance() // consume AS
-			}
-			if p.current().Type == TokenIdentifier || p.current().Type == TokenString {
-				rightTable.Alias = p.current().Literal
-				p.advance()
-			}
+			rightTable := p.parseTableRef()
 			join.Right = rightTable
 
 			if p.current().Literal == "ON" {
@@ -477,6 +495,21 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				cond, err := p.parseExpr()
 				if err == nil {
 					join.Cond = cond
+				}
+			} else if p.current().Type == TokenKeyword && p.current().Literal == "USING" {
+				p.advance() // consume USING
+				if p.current().Type == TokenLeftParen {
+					p.advance() // consume (
+					for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+						join.UsingColumns = append(join.UsingColumns, p.current().Literal)
+						p.advance()
+						if p.current().Type == TokenComma {
+							p.advance()
+						}
+					}
+					if p.current().Type == TokenRightParen {
+						p.advance() // consume )
+					}
 				}
 			}
 
@@ -495,16 +528,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 					break
 				}
 			}
-			rightTable := &TableRef{Name: p.current().Literal}
-			p.advance()
-			// Check for alias
-			if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
-				p.advance()
-			}
-			if p.current().Type == TokenIdentifier || p.current().Type == TokenString {
-				rightTable.Alias = p.current().Literal
-				p.advance()
-			}
+			rightTable := p.parseTableRef()
 			join := &Join{Type: "CROSS", Right: rightTable, Left: ref}
 			ref.Join = join
 			ref = rightTable

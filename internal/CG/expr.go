@@ -361,7 +361,7 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 
 	dst := c.ra.Alloc()
 
-	switch call.Name {
+	switch strings.ToUpper(call.Name) {
 	case "ABS":
 		c.program.EmitOpWithDst(VM.OpAbs, int32(argRegs[0]), 0, dst)
 	case "UPPER":
@@ -622,15 +622,21 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 		}
 
 		if c.TableSchemas != nil && len(c.TableSchemas) > 0 && c.TableColOrder != nil && len(c.TableColOrder) > 0 {
-			for _, colName := range c.TableColOrder {
+			for i, colName := range c.TableColOrder {
 				if colName == "" || strings.HasPrefix(colName, "__") {
 					continue
 				}
 				var tableName string
-				for tbl, schema := range c.TableSchemas {
-					if _, ok := schema[colName]; ok {
-						tableName = tbl
-						break
+				// Use positional source info if available (deterministic)
+				if c.TableColSources != nil && i < len(c.TableColSources) {
+					tableName = c.TableColSources[i]
+				} else {
+					// Fallback: iterate schemas (may be non-deterministic for shared cols)
+					for tbl, schema := range c.TableSchemas {
+						if _, ok := schema[colName]; ok {
+							tableName = tbl
+							break
+						}
 					}
 				}
 				expanded = append(expanded, &QP.ColumnRef{

@@ -656,7 +656,7 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		}
 		// Check if this is an aggregate function
 		if fc, ok := e.Select.Columns[0].(*QP.FuncCall); ok {
-			switch fc.Name {
+			switch strings.ToUpper(fc.Name) {
 			case "MAX":
 				var maxVal interface{}
 				for _, r := range result.rows {
@@ -1153,7 +1153,7 @@ func matchGlobRecursive(value, pattern string, vi, pi int) bool {
 // evalFuncCall evaluates function calls like COALESCE, IFNULL, MAX, MIN, etc.
 // It handles built-in SQL functions that operate on row data.
 func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall) interface{} {
-	switch fc.Name {
+	switch strings.ToUpper(fc.Name) {
 	case "COALESCE", "IFNULL":
 		// COALESCE returns the first non-NULL argument.
 		// Per SQL spec: COALESCE(a, b, ...) is equivalent to:

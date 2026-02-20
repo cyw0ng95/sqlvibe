@@ -114,6 +114,9 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 
 	if tableName != "" {
+		// Resolve case-insensitive table name
+		tableName = db.resolveTableName(tableName)
+		stmt.From.Name = tableName
 		// Check if table exists via table registry
 		if _, exists := db.tables[tableName]; !exists {
 			return nil, fmt.Errorf("no such table: %s", tableName)
@@ -289,6 +292,12 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	}
 
 	if tableName != "" {
+		// Resolve case-insensitive table name
+		resolved := db.resolveTableName(tableName)
+		if resolved != tableName {
+			tableName = resolved
+			stmt.From.Name = tableName
+		}
 		// Check if table exists via table registry
 		if _, exists := db.tables[tableName]; !exists {
 			return nil, fmt.Errorf("no such table: %s", tableName)
@@ -299,11 +308,52 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	// For JOINs, combine columns from both tables
 	var tableCols []string
 	var multiTableSchemas map[string]map[string]int
+	var isRightJoin bool
+	var origLeftCols, origRightCols []string
 	if stmt.From.Join != nil && stmt.From.Join.Right != nil {
+		// Resolve right table name too
+		rightName := db.resolveTableName(stmt.From.Join.Right.Name)
+		stmt.From.Join.Right.Name = rightName
+
+		// Convert RIGHT JOIN to LEFT JOIN by swapping tables
+		isRightJoin = stmt.From.Join.Type == "RIGHT"
+		var origLeftName, origRightName string
+		var origLeftAlias, origRightAlias string
+		if isRightJoin {
+			origLeftName = tableName
+			origRightName = rightName
+			origLeftAlias = stmt.From.Alias
+			origRightAlias = stmt.From.Join.Right.Alias
+			origLeftCols = db.columnOrder[origLeftName]
+			origRightCols = db.columnOrder[origRightName]
+			// Swap: right becomes left, left becomes right, change type to LEFT
+			tableName = rightName
+			stmt.From.Name = rightName
+			stmt.From.Alias = origRightAlias
+			stmt.From.Join.Right.Name = origLeftName
+			stmt.From.Join.Right.Alias = origLeftAlias
+			rightName = origLeftName
+			stmt.From.Join.Type = "LEFT"
+			// Swap join condition sides if exists
+			if stmt.From.Join.Cond != nil {
+				if bin, ok := stmt.From.Join.Cond.(*QP.BinaryExpr); ok && bin.Op == QP.TokenEq {
+					bin.Left, bin.Right = bin.Right, bin.Left
+				}
+			}
+		}
+
 		leftCols := db.columnOrder[tableName]
-		rightCols := db.columnOrder[stmt.From.Join.Right.Name]
+		rightCols := db.columnOrder[rightName]
 		if leftCols != nil && rightCols != nil {
-			tableCols = append(leftCols, rightCols...)
+			// For RIGHT JOIN (now swapped to LEFT), collect right-then-left cols for output order
+			if isRightJoin {
+				// tableCols order needs to match original left/right table order for output
+				origLeftCols := db.columnOrder[origLeftName]
+				origRightCols := db.columnOrder[origRightName]
+				tableCols = append(origRightCols, origLeftCols...)
+			} else {
+				tableCols = append(leftCols, rightCols...)
+			}
 
 			// Build multi-table schemas for JOIN
 			multiTableSchemas = make(map[string]map[string]int)
@@ -316,7 +366,7 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 				rightSchema[col] = i
 			}
 			multiTableSchemas[tableName] = leftSchema
-			multiTableSchemas[stmt.From.Join.Right.Name] = rightSchema
+			multiTableSchemas[rightName] = rightSchema
 			// Handle aliases
 			if stmt.From.Alias != "" {
 				multiTableSchemas[stmt.From.Alias] = leftSchema
@@ -324,6 +374,9 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 			if stmt.From.Join.Right.Alias != "" {
 				multiTableSchemas[stmt.From.Join.Right.Alias] = rightSchema
 			}
+
+			// Resolve NATURAL JOIN / USING JOIN conditions now that we have schemas
+			db.resolveNaturalUsing(stmt.From.Join, leftCols, rightCols, tableName, rightName)
 		} else if leftCols != nil {
 			tableCols = leftCols
 		} else if rightCols != nil {
@@ -340,6 +393,21 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	if multiTableSchemas != nil {
 		// Don't set TableColIndices for JOINs - use TableSchemas instead
 		cg.SetMultiTableSchema(multiTableSchemas, tableCols)
+		// Build TableColSources for deterministic column-to-table assignment
+		// tableCols = leftCols + rightCols (or reordered for RIGHT JOIN)
+		// Use current stmt.From.Name (which may have been swapped for RIGHT JOIN)
+		leftTableName := stmt.From.Name
+		rightTableName := stmt.From.Join.Right.Name
+		leftColsLen := len(db.columnOrder[leftTableName])
+		sources := make([]string, len(tableCols))
+		for i := range tableCols {
+			if i < leftColsLen {
+				sources[i] = leftTableName
+			} else {
+				sources[i] = rightTableName
+			}
+		}
+		cg.TableColSources = sources
 	} else {
 		// Single table query - set TableColIndices normally
 		cg.SetTableSchema(make(map[string]int), tableCols)
@@ -365,7 +433,106 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		results = deduplicateRows(results)
 	}
 
+	// For NATURAL/USING JOINs with SELECT *, deduplicate result columns
+	// The VM generates rows with all columns from both tables; remove duplicate shared columns
+	if stmt.From.Join != nil && (stmt.From.Join.Natural || len(stmt.From.Join.UsingColumns) > 0) {
+		isSelectStar := len(stmt.Columns) == 1
+		if cr, ok := stmt.Columns[0].(*QP.ColumnRef); ok && cr.Name == "*" && cr.Table == "" {
+			isSelectStar = true
+		}
+		if isSelectStar && tableCols != nil {
+			// Build keep indices: first occurrence of each column name
+			seen := make(map[string]bool)
+			keepIndices := make([]int, 0, len(tableCols))
+			for i, c := range tableCols {
+				if !seen[c] {
+					seen[c] = true
+					keepIndices = append(keepIndices, i)
+				}
+			}
+			if len(keepIndices) < len(tableCols) {
+				// Rebuild tableCols and filter result rows
+				newCols := make([]string, len(keepIndices))
+				for i, idx := range keepIndices {
+					newCols[i] = tableCols[idx]
+				}
+				tableCols = newCols
+				filteredResults := make([][]interface{}, len(results))
+				for ri, row := range results {
+					newRow := make([]interface{}, len(keepIndices))
+					for i, idx := range keepIndices {
+						if idx < len(row) {
+							newRow[i] = row[idx]
+						}
+					}
+					filteredResults[ri] = newRow
+				}
+				results = filteredResults
+			}
+		}
+	}
+
+	// For RIGHT JOIN: reorder columns to match original left/right table order
+	// After the swap+dedup, columns are in [origRight-cols, origLeft-unique-cols] order
+	// We need [origLeft-cols-deduped, origRight-unique-cols] order
+	if isRightJoin && tableCols != nil && origLeftCols != nil && origRightCols != nil {
+		isSelectStar := len(stmt.Columns) == 1
+		if cr, ok := stmt.Columns[0].(*QP.ColumnRef); ok && cr.Name == "*" && cr.Table == "" {
+			isSelectStar = true
+		}
+		if isSelectStar {
+			// Build target column order: [origLeft deduped, origRight unique]
+			targetCols := make([]string, 0, len(tableCols))
+			seenT := make(map[string]bool)
+			for _, c := range origLeftCols {
+				if !seenT[c] {
+					seenT[c] = true
+					targetCols = append(targetCols, c)
+				}
+			}
+			for _, c := range origRightCols {
+				if !seenT[c] {
+					seenT[c] = true
+					targetCols = append(targetCols, c)
+				}
+			}
+			// Build permutation from current tableCols to targetCols
+			if len(targetCols) == len(tableCols) {
+				curPos := make(map[string]int)
+				for i, c := range tableCols {
+					if _, already := curPos[c]; !already {
+						curPos[c] = i
+					}
+				}
+				perm := make([]int, len(targetCols))
+				for i, c := range targetCols {
+					perm[i] = curPos[c]
+				}
+				reorderedResults := make([][]interface{}, len(results))
+				for ri, row := range results {
+					newRow := make([]interface{}, len(perm))
+					for i, p := range perm {
+						if p < len(row) {
+							newRow[i] = row[p]
+						}
+					}
+					reorderedResults[ri] = newRow
+				}
+				tableCols = targetCols
+				results = reorderedResults
+			}
+		}
+	}
+
 	// Get column names from the SELECT statement
+	// For NATURAL/USING JOINs, build deduplicated column set (shared columns appear once)
+	sharedCols := make(map[string]bool)
+	if stmt.From.Join != nil && (stmt.From.Join.Natural || len(stmt.From.Join.UsingColumns) > 0) {
+		for _, c := range stmt.From.Join.UsingColumns {
+			sharedCols[c] = true
+		}
+	}
+
 	cols := make([]string, 0)
 	for i, col := range stmt.Columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
@@ -403,7 +570,22 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 					break
 				} else {
 					// Unqualified star - use all table columns
-					cols = append(cols, tableCols...)
+					// For NATURAL/USING JOIN: deduplicate shared columns (appear only once from left table)
+					if len(sharedCols) > 0 {
+						seenShared := make(map[string]bool)
+						for _, c := range tableCols {
+							if sharedCols[c] {
+								if !seenShared[c] {
+									seenShared[c] = true
+									cols = append(cols, c)
+								}
+							} else {
+								cols = append(cols, c)
+							}
+						}
+					} else {
+						cols = append(cols, tableCols...)
+					}
 					continue
 				}
 			}
@@ -574,6 +756,9 @@ func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
 	if idx := strings.Index(tableName, "."); idx >= 0 {
 		checkName = tableName[idx+1:]
 	}
+	// Resolve case-insensitive table name
+	checkName = db.resolveTableName(checkName)
+	tableName = checkName
 	if _, exists := db.tables[checkName]; !exists {
 		return Result{}, fmt.Errorf("no such table: %s", tableName)
 	}
@@ -634,4 +819,48 @@ func deduplicateRows(rows [][]interface{}) [][]interface{} {
 		}
 	}
 	return result
+}
+
+// resolveNaturalUsing synthesizes a JOIN ON condition for NATURAL JOIN and JOIN ... USING (cols).
+// This is called after schema info is available so we can find shared column names.
+func (db *Database) resolveNaturalUsing(join *QP.Join, leftCols, rightCols []string, leftName, rightName string) {
+if join == nil {
+return
+}
+// Determine which columns to join on
+usingCols := join.UsingColumns
+if join.Natural && len(usingCols) == 0 {
+// Find columns that appear in both tables
+rightSet := make(map[string]bool)
+for _, c := range rightCols {
+rightSet[c] = true
+}
+for _, c := range leftCols {
+if rightSet[c] {
+usingCols = append(usingCols, c)
+}
+}
+}
+if len(usingCols) == 0 || join.Cond != nil {
+return
+}
+// Store the using columns back so dedup code can use them
+if join.Natural && len(join.UsingColumns) == 0 {
+join.UsingColumns = usingCols
+}
+// Build left.col = right.col AND ... condition
+var cond QP.Expr
+for _, col := range usingCols {
+eq := &QP.BinaryExpr{
+Op:    QP.TokenEq,
+Left:  &QP.ColumnRef{Table: leftName, Name: col},
+Right: &QP.ColumnRef{Table: rightName, Name: col},
+}
+if cond == nil {
+cond = eq
+} else {
+cond = &QP.BinaryExpr{Op: QP.TokenAnd, Left: cond, Right: eq}
+}
+}
+join.Cond = cond
 }
