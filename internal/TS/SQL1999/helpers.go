@@ -3,6 +3,8 @@ package SQL1999
 import (
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,6 +134,25 @@ func CompareQueryResults(t *testing.T, sqlvibeDB *sqlvibe.Database, sqliteDB *sq
 	if len(sqlvibeResults) != len(sqliteResults) {
 		t.Errorf("%s: row count mismatch: sqlvibe=%d, sqlite=%d", testName, len(sqlvibeResults), len(sqliteResults))
 		return
+	}
+
+	// For ORDER BY RANDOM(), rows come in different random orders; sort both before comparing
+	if strings.Contains(strings.ToUpper(sql), "ORDER BY RANDOM()") {
+		rowKey := func(data []interface{}) string {
+			parts := make([]string, len(data))
+			for i, v := range data {
+				parts[i] = fmt.Sprintf("%v", v)
+			}
+			return strings.Join(parts, "\x00")
+		}
+		sort.Slice(sqlvibeRows.Data, func(a, b int) bool {
+			return rowKey(sqlvibeRows.Data[a]) < rowKey(sqlvibeRows.Data[b])
+		})
+		sort.Slice(sqliteResults, func(a, b int) bool {
+			va, _ := sqliteResults[a]["__ordered__"].([]interface{})
+			vb, _ := sqliteResults[b]["__ordered__"].([]interface{})
+			return rowKey(va) < rowKey(vb)
+		})
 	}
 
 	// Compare by index (SQLite 3 flavour) - column names differ between sqlvibe and sqlite

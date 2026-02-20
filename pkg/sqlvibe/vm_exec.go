@@ -385,6 +385,25 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 				multiTableSchemas[stmt.From.Join.Right.Alias] = rightSchema
 			}
 
+			// For chained 3-table JOINs, include 3rd table columns
+			if stmt.From.Join.Right.Join != nil {
+				thirdJoin := stmt.From.Join.Right.Join
+				thirdName := db.resolveTableName(thirdJoin.Right.Name)
+				thirdJoin.Right.Name = thirdName
+				thirdCols := db.columnOrder[thirdName]
+				if thirdCols != nil {
+					tableCols = append(tableCols, thirdCols...)
+					thirdSchema := make(map[string]int)
+					for i, col := range thirdCols {
+						thirdSchema[col] = i
+					}
+					multiTableSchemas[thirdName] = thirdSchema
+					if thirdJoin.Right.Alias != "" {
+						multiTableSchemas[thirdJoin.Right.Alias] = thirdSchema
+					}
+				}
+			}
+
 			// Resolve NATURAL JOIN / USING JOIN conditions now that we have schemas
 			db.resolveNaturalUsing(stmt.From.Join, leftCols, rightCols, tableName, rightName)
 		} else if leftCols != nil {
@@ -409,12 +428,15 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		leftTableName := stmt.From.Name
 		rightTableName := stmt.From.Join.Right.Name
 		leftColsLen := len(db.columnOrder[leftTableName])
+		rightColsLen := len(db.columnOrder[rightTableName])
 		sources := make([]string, len(tableCols))
 		for i := range tableCols {
 			if i < leftColsLen {
 				sources[i] = leftTableName
-			} else {
+			} else if i < leftColsLen+rightColsLen {
 				sources[i] = rightTableName
+			} else if stmt.From.Join.Right.Join != nil {
+				sources[i] = stmt.From.Join.Right.Join.Right.Name
 			}
 		}
 		cg.TableColSources = sources
