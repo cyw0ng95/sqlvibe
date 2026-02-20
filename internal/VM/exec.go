@@ -892,12 +892,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 			// Try to get TypeSpec from P4, fall back to string for backward compatibility
 			var typeName string
-			var precision, scale int
 
 			if typeSpec, ok := inst.P4.(QP.TypeSpec); ok {
 				typeName = typeSpec.Name
-				precision = typeSpec.Precision
-				scale = typeSpec.Scale
 			} else if typeStr, ok := inst.P4.(string); ok {
 				// Backward compatibility: P4 is a string
 				typeName = typeStr
@@ -946,12 +943,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 					}
 
 					// Apply precision and scale if specified
-					// Note: SQLite does NOT round for DECIMAL/NUMERIC - just returns float value
-					if precision > 0 && scale > 0 {
-						// SQLite compatibility: don't round, just pass through as float
-						_ = precision
-					}
-
+					// SQLite compatibility: DECIMAL/NUMERIC CAST does not round to scale, just returns float value
 					vm.registers[inst.P1] = floatVal
 				case "TEXT", "VARCHAR", "CHAR", "CHARACTER":
 					if s, ok := val.(string); ok {

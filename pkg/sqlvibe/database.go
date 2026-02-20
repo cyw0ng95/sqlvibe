@@ -835,6 +835,19 @@ func (s *Statement) Close() error {
 	return nil
 }
 
+func ordinalSuffix(n int) string {
+	switch n {
+	case 1:
+		return "1st"
+	case 2:
+		return "2nd"
+	case 3:
+		return "3rd"
+	default:
+		return fmt.Sprintf("%dth", n)
+	}
+}
+
 func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error) {
 	if len(orderBy) == 0 || rows == nil || len(rows.Data) == 0 {
 		return rows, nil
@@ -847,7 +860,7 @@ func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error)
 			if n, ok := lit.Value.(int64); ok {
 				// SQLite uses 1-based integer ORDER BY column references
 				if n < 1 || int(n) > numCols {
-					return nil, fmt.Errorf("%dst ORDER BY term out of range - should be between 1 and %d", i+1, numCols)
+					return nil, fmt.Errorf("%s ORDER BY term out of range - should be between 1 and %d", ordinalSuffix(i+1), numCols)
 				}
 				// Replace literal with column reference (1-based → 0-based)
 				orderBy[i].Expr = &QP.ColumnRef{Name: rows.Columns[n-1]}
