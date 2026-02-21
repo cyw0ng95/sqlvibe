@@ -39,14 +39,14 @@ This plan aims to discover performance issues across all database engine layers:
 |------|---------|-----------|--------|
 | 1 | DS Layer: B-Tree & Storage | 8 | ✅ Done |
 | 2 | VM Layer: Execution Engine | 6 | ✅ Done |
-| 3 | QP Layer: Query Processing | 4 | ⏳ Pending (requires internal API) |
+| 3 | QP Layer: Query Processing | 4 | ✅ Done |
 | 4 | TM Layer: Transactions & WAL | 5 | ✅ Done |
 | 5 | Edge Cases & Data Patterns | 8 | ✅ Done |
 | 6 | Complex Queries | 6 | ✅ Done |
 | 7 | Index & Query Optimization | 5 | ✅ Done |
 | 8 | Scale & Stress | 4 | ✅ Done |
 | 9 | Memory & Cache | 3 | ✅ Done |
-| 10 | Verification | - | ⏳ Pending |
+| 10 | Verification | - | ✅ Done |
 
 **Total**: 49 new tests → 70 total
 
@@ -150,7 +150,7 @@ func BenchmarkVMRegisterAlloc(b *testing.B) {
 
 ## Wave 3: QP Layer - Query Processing
 
-**Status**: Pending
+**Status**: Done
 
 Focus: Discover bottlenecks in tokenizer and parser
 
@@ -445,8 +445,8 @@ func BenchmarkQueryCTE(b *testing.B) {
 
 ## Success Criteria
 
-- [ ] 49 new benchmark tests added
-- [ ] All layers (DS, VM, QP, TM) benchmarked
+- [x] 49 new benchmark tests added
+- [x] All layers (DS, VM, QP, TM) benchmarked
 - [ ] Top 10 performance bottlenecks identified
 - [ ] Flame graph / profiling data captured
 - [ ] Optimization recommendations documented
