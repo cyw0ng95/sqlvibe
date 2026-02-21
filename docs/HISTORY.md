@@ -2,80 +2,37 @@
 
 ## **v0.7.0** (2026-02-21)
 
-### Summary
-Performance optimization release implementing CG optimizer, page cache, WAL mode, and expanded SQL1999 test coverage.
+### Bug Fixes
+- None
 
 ### Features
-- **CG Optimizer**:
-  - Constant folding: Pre-compute arithmetic/concat operations at compile time
-  - Dead code elimination: Remove unreachable instructions after OpHalt/OpGoto
+- **CG Optimizer**: Constant folding and dead code elimination passes implemented
+- **Page Cache (LRU)**: Full LRU cache with SQLite-compatible cache_size PRAGMA
+- **WAL Mode**: Write-ahead logging with WAL header, frame format, checkpoint support
+- **Remove QE Subsystem**: Architecture simplified, QE layer completely removed
+- **SQL1999 Tests**: Expanded from 56 to 64+ test suites (224 → 340+ test cases)
+- **Benchmark Suite**: Added 25+ benchmark tests
 
-- **Page Cache (LRU)**:
-  - Full LRU cache implementation with hit/miss tracking
-  - SQLite-compatible: Negative values = KiB, positive = page count
-  - Thread-safe with sync.Mutex
-
-- **WAL Mode**:
-  - WAL header and frame format (WALHeader, WALFrame)
-  - Write-ahead logging: WriteFrame(), Commit(), Checkpoint()
-  - Salt values for frame identification
-
-- **Remove QE Subsystem**:
-  - Completely removed redundant QE layer
-  - Architecture simplified to: QP → CG → VM → DS
-
-- **SQL1999 Test Suite Expansion**:
-  - Expanded from 56 to 64+ test suites
-  - 224 → 340+ test cases
-
-### Implementation Scores
-| Component | Score |
-|-----------|-------|
-| CG Optimizer | 85/100 |
-| Page Cache (LRU) | 80/100 |
-| WAL Mode | 65/100 |
-| EXPLAIN QUERY PLAN | 0/100 |
-| Benchmark Suite | 100/100 |
-| Remove QE Subsystem | 100/100 |
-| SQL1999 Tests | 95/100 |
-
-### Testing
-- All 64+ SQL1999 test suites passing
-- Benchmark suite added with 25+ benchmark tests
+### Breaking Changes
+- None
 
 ---
 
 ## **v0.6.0** (2026-02-20)
 
-### Summary
-Defensive programming release implementing aggressive assertion validation across the codebase to catch bugs early and prevent data corruption.
+### Bug Fixes
+- None
 
 ### Features
-- **DS Subsystem (90% complete)**:
-  - btree.go: Page type validation, cell bounds, cursor state (15+ assertions)
-  - page.go: Size bounds [512, 65536], power-of-2 validation
-  - cell.go: Rowid positivity, buffer validation
-  - encoding.go: Varint buffer sizing validation
-  - overflow.go: Page chain integrity, PageManager validation
-  - freelist.go: PageManager validation
+- **DS Subsystem (90% complete)**: Page type validation, cell bounds, cursor state assertions
+- **VM Subsystem (30% complete)**: Cursor ID bounds validation
+- **QP/QE Subsystems (20% complete)**: Token array and schema validation
+- **TM Subsystem (10% complete)**: Transaction manager PageManager validation
+- **PB Subsystem (60% complete)**: File offset and buffer validation
+- **Public API (10% complete)**: Row scanning bounds validation
 
-- **VM Subsystem (30% complete)**:
-  - cursor.go: Added MaxCursors = 256 constant
-  - exec.go: Cursor ID bounds [0, 256), OpOpenRead/OpRewind/OpNext
-  - compiler.go: SelectStmt validation
-
-- **QP/QE Subsystems (20% complete)**:
-  - parser.go: Token array validation
-  - engine.go: PageManager, schema, table registration
-
-- **TM Subsystem (10% complete)**:
-  - transaction.go: NewTransactionManager PageManager validation
-
-- **PB Subsystem (60% complete)**:
-  - file.go: Offset bounds, buffer validation, URI checks
-
-- **Public API (10% complete)**:
-  - database.go: Row scanning bounds
+### Breaking Changes
+- None
 
 ### Assertion Coverage
 - Overall: ~35% of critical code paths
