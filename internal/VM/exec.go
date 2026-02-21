@@ -107,11 +107,23 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpResultRow:
 			if regs, ok := inst.P4.([]int); ok {
-				row := make([]interface{}, len(regs))
-				for i, reg := range regs {
-					row[i] = vm.registers[reg]
+				n := len(regs)
+				start := len(vm.flatBuf)
+				needed := start + n
+				if needed > cap(vm.flatBuf) {
+					// Grow with 2× amortised doubling plus a minimum pad so that the
+					// first growth of a zero-capacity buffer allocates more than one row.
+					const flatBufMinGrowth = 64
+					newCap := needed*2 + flatBufMinGrowth
+					newBuf := make([]interface{}, start, newCap)
+					copy(newBuf, vm.flatBuf)
+					vm.flatBuf = newBuf
 				}
-				vm.results = append(vm.results, row)
+				vm.flatBuf = vm.flatBuf[:start+n]
+				for i, reg := range regs {
+					vm.flatBuf[start+i] = vm.registers[reg]
+				}
+				vm.results = append(vm.results, vm.flatBuf[start:start+n])
 			}
 			continue
 
@@ -1184,7 +1196,23 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 
 			if vm.ctx != nil {
-				// Try context-aware executor first (for correlated subqueries)
+				// Fast path: use EXISTS-optimised executor (LIMIT 1 short-circuit).
+				type ExistsSubqueryExecutor interface {
+					ExecuteExistsSubquery(subquery interface{}, outerRow map[string]interface{}) (bool, error)
+				}
+				if executor, ok := vm.ctx.(ExistsSubqueryExecutor); ok {
+					currentRow := vm.getCurrentRow(0)
+					if hasRows, err := executor.ExecuteExistsSubquery(inst.P4, currentRow); err == nil {
+						if hasRows {
+							vm.registers[dstReg] = int64(1)
+						} else {
+							vm.registers[dstReg] = int64(0)
+						}
+						continue
+					}
+				}
+
+				// Fallback: context-aware full row executor
 				type SubqueryRowsExecutorWithContext interface {
 					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
 				}
@@ -1258,7 +1286,23 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 
 			if vm.ctx != nil {
-				// Try context-aware executor first (for correlated subqueries)
+				// Fast path: use EXISTS-optimised executor (LIMIT 1 short-circuit).
+				type ExistsSubqueryExecutor interface {
+					ExecuteExistsSubquery(subquery interface{}, outerRow map[string]interface{}) (bool, error)
+				}
+				if executor, ok := vm.ctx.(ExistsSubqueryExecutor); ok {
+					currentRow := vm.getCurrentRow(0)
+					if hasRows, err := executor.ExecuteExistsSubquery(inst.P4, currentRow); err == nil {
+						if hasRows {
+							vm.registers[dstReg] = int64(0) // rows exist → NOT EXISTS = false
+						} else {
+							vm.registers[dstReg] = int64(1) // no rows → NOT EXISTS = true
+						}
+						continue
+					}
+				}
+
+				// Fallback: context-aware full row executor
 				type SubqueryRowsExecutorWithContext interface {
 					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
 				}

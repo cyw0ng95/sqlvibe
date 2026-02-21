@@ -1258,33 +1258,103 @@ func (db *Database) rebuildAllIndexes() {
 	}
 }
 
-// tryIndexLookup attempts to use a secondary hash index for a simple col=val WHERE clause.
+// compareIndexVals compares two index key values for ordering.
+// Returns -1, 0, or 1.  NULL (nil) sorts before all other values.
+func compareIndexVals(a, b interface{}) int {
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	switch av := a.(type) {
+	case int64:
+		switch bv := b.(type) {
+		case int64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		case float64:
+			af := float64(av)
+			if af < bv {
+				return -1
+			}
+			if af > bv {
+				return 1
+			}
+			return 0
+		}
+	case float64:
+		switch bv := b.(type) {
+		case float64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		case int64:
+			bf := float64(bv)
+			if av < bf {
+				return -1
+			}
+			if av > bf {
+				return 1
+			}
+			return 0
+		}
+	case string:
+		if bv, ok := b.(string); ok {
+			return strings.Compare(av, bv)
+		}
+	}
+	return strings.Compare(fmt.Sprintf("%v", a), fmt.Sprintf("%v", b))
+}
+
+// tryIndexLookup attempts to use a secondary hash index for WHERE clauses.
 // Returns nil if no index can be used, otherwise returns the pre-filtered rows.
+// Supported patterns:
+//   - col = val              (exact match)
+//   - col BETWEEN lo AND hi  (range scan over index keys)
+//   - col IN (a, b, c)       (union of per-value index lookups)
+//   - col LIKE 'prefix%'     (prefix range scan over index keys)
 func (db *Database) tryIndexLookup(tableName string, where QP.Expr) []map[string]interface{} {
 	if where == nil {
 		return nil
 	}
 	bin, ok := where.(*QP.BinaryExpr)
-	if !ok || bin.Op != QP.TokenEq {
+	if !ok {
 		return nil
 	}
-	var colName string
-	var val interface{}
-	if cr, ok := bin.Left.(*QP.ColumnRef); ok {
-		if lit, ok := bin.Right.(*QP.Literal); ok {
-			colName, val = cr.Name, lit.Value
+
+	switch bin.Op {
+	case QP.TokenEq:
+		var colName string
+		var val interface{}
+		if cr, ok := bin.Left.(*QP.ColumnRef); ok {
+			if lit, ok := bin.Right.(*QP.Literal); ok {
+				colName, val = cr.Name, lit.Value
+			}
+		} else if cr, ok := bin.Right.(*QP.ColumnRef); ok {
+			if lit, ok := bin.Left.(*QP.Literal); ok {
+				colName, val = cr.Name, lit.Value
+			}
 		}
-	} else if cr, ok := bin.Right.(*QP.ColumnRef); ok {
-		if lit, ok := bin.Left.(*QP.Literal); ok {
-			colName, val = cr.Name, lit.Value
+		if colName == "" {
+			return nil
 		}
-	}
-	if colName == "" {
-		return nil
-	}
-	// Look for a secondary index covering this column.
-	for idxName, idx := range db.indexes {
-		if idx.Table == tableName && len(idx.Columns) > 0 && idx.Columns[0] == colName {
+		for idxName, idx := range db.indexes {
+			if idx.Table != tableName || len(idx.Columns) == 0 || idx.Columns[0] != colName {
+				continue
+			}
 			hmap := db.indexData[idxName]
 			if hmap == nil {
 				return nil
@@ -1303,8 +1373,190 @@ func (db *Database) tryIndexLookup(tableName string, where QP.Expr) []map[string
 			}
 			return result
 		}
+
+	case QP.TokenBetween:
+		// col BETWEEN lo AND hi
+		cr, ok := bin.Left.(*QP.ColumnRef)
+		if !ok {
+			return nil
+		}
+		rangeExpr, ok := bin.Right.(*QP.BinaryExpr)
+		if !ok || rangeExpr.Op != QP.TokenAnd {
+			return nil
+		}
+		loLit, ok1 := rangeExpr.Left.(*QP.Literal)
+		hiLit, ok2 := rangeExpr.Right.(*QP.Literal)
+		if !ok1 || !ok2 {
+			return nil
+		}
+		return db.tryIndexRangeScan(tableName, cr.Name, loLit.Value, hiLit.Value)
+
+	case QP.TokenIn:
+		// col IN (a, b, c)
+		cr, ok := bin.Left.(*QP.ColumnRef)
+		if !ok {
+			return nil
+		}
+		lit, ok := bin.Right.(*QP.Literal)
+		if !ok {
+			return nil
+		}
+		vals, ok := lit.Value.([]interface{})
+		if !ok {
+			return nil
+		}
+		return db.tryIndexInLookup(tableName, cr.Name, vals)
+
+	case QP.TokenLike:
+		// col LIKE 'prefix%'
+		cr, ok := bin.Left.(*QP.ColumnRef)
+		if !ok {
+			return nil
+		}
+		lit, ok := bin.Right.(*QP.Literal)
+		if !ok {
+			return nil
+		}
+		pattern, ok := lit.Value.(string)
+		if !ok {
+			return nil
+		}
+		return db.tryIndexLikePrefix(tableName, cr.Name, pattern)
 	}
 	return nil
+}
+
+// tryIndexRangeScan uses a secondary index to answer col BETWEEN lo AND hi.
+// It iterates all keys in the index and collects rows whose key is in [lo, hi].
+func (db *Database) tryIndexRangeScan(tableName, colName string, lo, hi interface{}) []map[string]interface{} {
+	for idxName, idx := range db.indexes {
+		if idx.Table != tableName || len(idx.Columns) == 0 || idx.Columns[0] != colName {
+			continue
+		}
+		hmap := db.indexData[idxName]
+		if hmap == nil {
+			return nil
+		}
+		rows := db.data[tableName]
+		var rowIdxs []int
+		for k, idxs := range hmap {
+			if compareIndexVals(k, lo) >= 0 && compareIndexVals(k, hi) <= 0 {
+				rowIdxs = append(rowIdxs, idxs...)
+			}
+		}
+		if len(rowIdxs) == 0 {
+			return []map[string]interface{}{}
+		}
+		result := make([]map[string]interface{}, 0, len(rowIdxs))
+		for _, ri := range rowIdxs {
+			if ri >= 0 && ri < len(rows) {
+				result = append(result, rows[ri])
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// tryIndexInLookup uses a secondary index to answer col IN (a, b, c).
+// It performs a hash lookup for each value and unions the results.
+func (db *Database) tryIndexInLookup(tableName, colName string, vals []interface{}) []map[string]interface{} {
+	for idxName, idx := range db.indexes {
+		if idx.Table != tableName || len(idx.Columns) == 0 || idx.Columns[0] != colName {
+			continue
+		}
+		hmap := db.indexData[idxName]
+		if hmap == nil {
+			return nil
+		}
+		rows := db.data[tableName]
+		seen := make(map[int]struct{})
+		var result []map[string]interface{}
+		for _, val := range vals {
+			key := normalizeIndexKey(val)
+			for _, ri := range hmap[key] {
+				if _, ok := seen[ri]; ok {
+					continue
+				}
+				seen[ri] = struct{}{}
+				if ri >= 0 && ri < len(rows) {
+					result = append(result, rows[ri])
+				}
+			}
+		}
+		if result == nil {
+			return []map[string]interface{}{}
+		}
+		return result
+	}
+	return nil
+}
+
+// tryIndexLikePrefix uses a secondary index to answer col LIKE 'prefix%'.
+// The pattern must be a simple constant prefix followed by a single trailing '%'
+// with no wildcards in the prefix itself.
+func (db *Database) tryIndexLikePrefix(tableName, colName, pattern string) []map[string]interface{} {
+	pctIdx := strings.Index(pattern, "%")
+	if pctIdx < 0 {
+		return nil // no wildcard — no help from this function
+	}
+	for i := 0; i < pctIdx; i++ {
+		if pattern[i] == '_' {
+			return nil // wildcard before %, can't do prefix scan
+		}
+	}
+	if pattern[pctIdx+1:] != "" {
+		return nil // not a pure trailing %, e.g. 'pre%fix'
+	}
+	prefix := pattern[:pctIdx]
+	if prefix == "" {
+		return nil // LIKE '%' matches everything — no index benefit
+	}
+
+	for idxName, idx := range db.indexes {
+		if idx.Table != tableName || len(idx.Columns) == 0 || idx.Columns[0] != colName {
+			continue
+		}
+		hmap := db.indexData[idxName]
+		if hmap == nil {
+			return nil
+		}
+		rows := db.data[tableName]
+		var rowIdxs []int
+		for k, idxs := range hmap {
+			kStr, ok := k.(string)
+			if !ok {
+				continue
+			}
+			if strings.HasPrefix(kStr, prefix) {
+				rowIdxs = append(rowIdxs, idxs...)
+			}
+		}
+		if len(rowIdxs) == 0 {
+			return []map[string]interface{}{}
+		}
+		result := make([]map[string]interface{}, 0, len(rowIdxs))
+		for _, ri := range rowIdxs {
+			if ri >= 0 && ri < len(rows) {
+				result = append(result, rows[ri])
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// execExistsSubquery checks whether a subquery returns at least one row,
+// short-circuiting after the first match by applying LIMIT 1.
+func (db *Database) execExistsSubquery(stmt *QP.SelectStmt, outerRow map[string]interface{}) (bool, error) {
+	// Shallow-copy the stmt so we can override Limit without mutating the shared AST.
+	stmtCopy := *stmt
+	stmtCopy.Limit = &QP.Literal{Value: int64(1)}
+	rows, err := db.execSelectStmtWithContext(&stmtCopy, outerRow)
+	if err != nil {
+		return false, err
+	}
+	return len(rows.Data) > 0, nil
 }
 
 func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, cols []string) [][]interface{} {

@@ -358,6 +358,10 @@ func (ctx *dsVmContext) ExecuteSubqueryRowsWithContext(subquery interface{}, out
 	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRowsWithContext(subquery, outerRow)
 }
 
+func (ctx *dsVmContext) ExecuteExistsSubquery(subquery interface{}, outerRow map[string]interface{}) (bool, error) {
+	return (&dbVmContext{db: ctx.db}).ExecuteExistsSubquery(subquery, outerRow)
+}
+
 type dbVmContext struct {
 	db *Database
 }
@@ -749,6 +753,16 @@ func (ctx *dbVmContext) ExecuteSubqueryRowsWithContext(subquery interface{}, out
 	return rows.Data, nil
 }
 
+// ExecuteExistsSubquery checks whether the subquery returns any rows,
+// stopping after the first match (LIMIT 1 short-circuit).
+func (ctx *dbVmContext) ExecuteExistsSubquery(subquery interface{}, outerRow map[string]interface{}) (bool, error) {
+	selectStmt, ok := subquery.(*QP.SelectStmt)
+	if !ok {
+		return false, fmt.Errorf("subquery is not a SelectStmt")
+	}
+	return ctx.db.execExistsSubquery(selectStmt, outerRow)
+}
+
 type dbVmContextWithOuter struct {
 	db       *Database
 	outerRow map[string]interface{}
@@ -797,4 +811,8 @@ func (ctx *dbVmContextWithOuter) ExecuteSubqueryWithContext(subquery interface{}
 
 func (ctx *dbVmContextWithOuter) ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error) {
 	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRowsWithContext(subquery, outerRow)
+}
+
+func (ctx *dbVmContextWithOuter) ExecuteExistsSubquery(subquery interface{}, outerRow map[string]interface{}) (bool, error) {
+	return (&dbVmContext{db: ctx.db}).ExecuteExistsSubquery(subquery, outerRow)
 }

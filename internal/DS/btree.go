@@ -10,12 +10,13 @@ import (
 
 // BTree represents a B-Tree using the new encoding infrastructure
 type BTree struct {
-	pm       *PageManager
-	om       *OverflowManager
-	balancer *PageBalancer
-	freelist *FreelistManager
-	rootPage uint32
-	isTable  bool
+	pm              *PageManager
+	om              *OverflowManager
+	balancer        *PageBalancer
+	freelist        *FreelistManager
+	rootPage        uint32
+	isTable         bool
+	prefetchEnabled bool // enable async child-page prefetching during search
 }
 
 // BTreeCursor represents a position in the B-Tree
@@ -51,6 +52,47 @@ func (bt *BTree) RootPage() uint32 {
 // IsTable returns true if this is a table B-Tree
 func (bt *BTree) IsTable() bool {
 	return bt.isTable
+}
+
+// SetPrefetchEnabled enables or disables async child-page prefetching.
+// When enabled, interior-page traversal fires goroutines to read child pages
+// into the OS page cache before they are needed, reducing I/O wait on trees
+// with high fan-out.
+func (bt *BTree) SetPrefetchEnabled(enabled bool) {
+	bt.prefetchEnabled = enabled
+}
+
+// prefetchChildren asynchronously reads the first count child pages referenced
+// by the cell pointers of an interior page.  Errors are silently ignored since
+// the main search path re-reads the page if the prefetch races.
+func (bt *BTree) prefetchChildren(page *Page, count int) {
+	if !bt.prefetchEnabled || page == nil || len(page.Data) < 12 {
+		return
+	}
+	pageType := page.Data[0]
+	// Only interior pages have children to prefetch.
+	if pageType != 0x05 && pageType != 0x0a {
+		return
+	}
+	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
+	if count > numCells {
+		count = numCells
+	}
+	for i := 0; i < count; i++ {
+		cpOff := 8 + i*2
+		if cpOff+2 > len(page.Data) {
+			break
+		}
+		cellOff := int(binary.BigEndian.Uint16(page.Data[cpOff : cpOff+2]))
+		if cellOff < 0 || cellOff+4 > len(page.Data) {
+			break
+		}
+		childNum := binary.BigEndian.Uint32(page.Data[cellOff : cellOff+4])
+		if childNum == 0 {
+			continue
+		}
+		go bt.pm.ReadPage(childNum) //nolint:errcheck
+	}
 }
 
 // Search finds a value by key in the B-Tree
@@ -126,6 +168,9 @@ func (bt *BTree) searchPage(page *Page, key []byte) ([]byte, error) {
 
 	// Interior page - recurse
 	util.Assert(pageType == 0x05 || pageType == 0x0a, "unexpected page type for interior: 0x%02x", pageType)
+
+	// Prefetch sibling pages to warm the OS page cache.
+	bt.prefetchChildren(page, 4)
 
 	var childPage uint32
 	if cellIdx < numCells {
