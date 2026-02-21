@@ -192,7 +192,9 @@ func formatValue(v interface{}) string {
 		if math.IsNaN(val) {
 			return "nan"
 		}
-		// Use up to 3 decimal places, trimming trailing zeros.
+		// Format with 3 decimal places then strip trailing zeros and decimal
+		// point.  This matches the sqllogictest convention where 175 is
+		// represented as "175" and 233.333... as "233.333".
 		s := strconv.FormatFloat(val, 'f', 3, 64)
 		s = strings.TrimRight(s, "0")
 		s = strings.TrimRight(s, ".")
