@@ -1,5 +1,32 @@
 # sqlvibe Release History
 
+## **v0.7.4** (2026-02-21)
+
+### Performance Improvements
+- **Primary key O(1) uniqueness check** (`pkg/sqlvibe/database.go`, `vm_context.go`) — INSERT into a PRIMARY KEY table previously scanned all existing rows for uniqueness (O(N) per insert → O(N²) total for N inserts). Added `pkHashSet map[string]map[interface{}]struct{}` per table. The set is initialised on `CREATE TABLE`, maintained on INSERT/UPDATE/DELETE, and rebuilt on transaction rollback. INSERT uniqueness check is now O(1) amortised. **Batch insert of 1 000 PK rows is now constant-time (was O(N²)).**
+- **In-memory secondary hash index** (`pkg/sqlvibe/database.go`, `vm_exec.go`) — `WHERE indexed_col = val` queries on indexed columns still did a full O(N) table scan because the index metadata was never applied at query time. Added `indexData map[string]map[interface{}][]int` (index name → column value → []row indices). Built immediately on `CREATE INDEX`, maintained on INSERT/UPDATE/DELETE, rebuilt on rollback. New `tryIndexLookup` pre-filter in `execSelectStmtWithContext` passes only matching rows to the VM. **~10× reduction in rows processed for selective equality lookups on indexed columns.**
+- **`deduplicateRows` key** (`pkg/sqlvibe/vm_exec.go`) — `UNION`/`UNION ALL` used `fmt.Sprintf("%v", row)` per row for deduplication (1 allocation each). Replaced with a reusable `strings.Builder` + type switch (int64/float64/string/bool/nil fast paths). Eliminates per-row `fmt.Sprintf` allocation.
+
+### New Benchmarks
+- `BenchmarkInsertBatchPK` — batch insert into PK table (validates O(1) hash set)
+- `BenchmarkSecondaryIndexLookup` — equality WHERE on secondary index (100/1 000 rows)
+- `BenchmarkSecondaryIndexLookupUnique` — unique index equality lookup (1/1 000 rows)
+- `BenchmarkDeduplicateRows` — UNION deduplication throughput
+
+### Architecture Notes
+- `pkKey()` helper normalises single-col and composite PK values into a comparable map key (`interface{}` for single-col, `string` via `strings.Builder` for multi-col).
+- `normalizeIndexKey(v)` converts `[]byte` to `string` for hashability; used by both `pkKey` and the secondary index.
+- `indexShiftDown(fromIdx)` shifts entries `> fromIdx` down by 1 after DELETE, keeping row indices consistent without full rebuild.
+- All index maintenance (`addToIndexes`, `removeFromIndexes`, `updateIndexes`, `rebuildAllIndexes`) flows through a single set of helpers in `database.go`.
+
+### Bug Fixes
+- None
+
+### Breaking Changes
+- None
+
+---
+
 ## **v0.7.3** (2026-02-21)
 
 ### Performance Improvements

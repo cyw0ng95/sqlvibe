@@ -3,6 +3,7 @@ package sqlvibe
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/sqlvibe/sqlvibe/internal/CG"
@@ -208,6 +209,14 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 	// Get table data from DS context
 	tableData, _ := ctx.GetTableData(tableName)
+
+	// Secondary index pre-filter: if WHERE is a simple col=val on an indexed column,
+	// pass only matching rows to the VM instead of the full table.
+	if stmt.Where != nil {
+		if filtered := db.tryIndexLookup(tableName, stmt.Where); filtered != nil {
+			tableData = filtered
+		}
+	}
 
 	if tableData != nil {
 		vm.Cursors().OpenTableAtID(0, cursorName, tableData, tableCols)
@@ -1033,13 +1042,41 @@ func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
 }
 
 // deduplicateRows removes duplicate rows, preserving the first occurrence of each unique row.
+// Uses strings.Builder + type switch to avoid fmt.Sprintf overhead.
 func deduplicateRows(rows [][]interface{}) [][]interface{} {
-	seen := make(map[string]bool)
+	seen := make(map[string]struct{}, len(rows))
 	result := make([][]interface{}, 0, len(rows))
+	var b strings.Builder
 	for _, row := range rows {
-		key := fmt.Sprintf("%v", row)
-		if !seen[key] {
-			seen[key] = true
+		b.Reset()
+		for i, v := range row {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			switch val := v.(type) {
+			case int64:
+				b.WriteString(strconv.FormatInt(val, 10))
+			case float64:
+				b.WriteString(strconv.FormatFloat(val, 'f', -1, 64))
+			case string:
+				b.WriteString(val)
+			case bool:
+				if val {
+					b.WriteString("true")
+				} else {
+					b.WriteString("false")
+				}
+			case []byte:
+				b.WriteString(string(val))
+			case nil:
+				b.WriteString("<nil>")
+			default:
+				fmt.Fprintf(&b, "%v", val)
+			}
+		}
+		key := b.String()
+		if _, dup := seen[key]; !dup {
+			seen[key] = struct{}{}
 			result = append(result, row)
 		}
 	}

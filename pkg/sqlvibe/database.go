@@ -3,6 +3,7 @@ package sqlvibe
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
@@ -36,6 +37,8 @@ type Database struct {
 	tableBTrees    map[string]*DS.BTree                // table name -> B-Tree for storage
 	journalMode    string                              // "delete" or "wal"
 	wal            *TM.WAL                             // WAL instance when in WAL mode
+	pkHashSet      map[string]map[interface{}]struct{} // table name -> PK value -> exists (single-col PK only)
+	indexData      map[string]map[interface{}][]int    // index name -> col value -> []row indices
 }
 
 type dbSnapshot struct {
@@ -138,6 +141,7 @@ func (db *Database) restoreSnapshot(snap *dbSnapshot) {
 	db.columnNotNull = snap.columnNotNull
 	db.columnChecks = snap.columnChecks
 	db.indexes = snap.indexes
+	db.rebuildAllIndexes()
 }
 
 type IndexInfo struct {
@@ -287,6 +291,8 @@ func Open(path string) (*Database, error) {
 		tableBTrees:    make(map[string]*DS.BTree),
 		journalMode:    "delete",
 		wal:            nil,
+		pkHashSet:      make(map[string]map[interface{}]struct{}),
+		indexData:      make(map[string]map[interface{}][]int),
 	}, nil
 }
 
@@ -466,6 +472,11 @@ func (db *Database) Exec(sql string) (Result, error) {
 			db.primaryKeys[stmt.Name] = pkCols
 		}
 
+		// Initialise PK hash set for the new (empty) table.
+		if len(pkCols) > 0 {
+			db.pkHashSet[stmt.Name] = make(map[interface{}]struct{})
+		}
+
 		// Create BTree for table storage
 		bt := DS.NewBTree(db.pm, 0, true)
 		db.tableBTrees[stmt.Name] = bt
@@ -501,6 +512,14 @@ func (db *Database) Exec(sql string) (Result, error) {
 		delete(db.columnChecks, stmt.Name)
 		delete(db.columnNotNull, stmt.Name)
 		delete(db.tableBTrees, stmt.Name)
+		delete(db.pkHashSet, stmt.Name)
+		// Drop all secondary indexes that cover this table.
+		for idxName, idx := range db.indexes {
+			if idx.Table == stmt.Name {
+				delete(db.indexes, idxName)
+				delete(db.indexData, idxName)
+			}
+		}
 		return Result{}, nil
 	case "CreateViewStmt":
 		return db.execCreateView(ast.(*QP.CreateViewStmt), sql)
@@ -532,10 +551,13 @@ func (db *Database) Exec(sql string) (Result, error) {
 			Columns: stmt.Columns,
 			Unique:  stmt.Unique,
 		}
+		// Build hash index immediately from existing table data.
+		db.buildIndexData(stmt.Name)
 		return Result{}, nil
 	case "DropIndexStmt":
 		stmt := ast.(*QP.DropIndexStmt)
 		delete(db.indexes, stmt.Name)
+		delete(db.indexData, stmt.Name)
 		return Result{}, nil
 	case "BeginStmt":
 		stmt := ast.(*QP.BeginStmt)
@@ -1019,6 +1041,270 @@ func (db *Database) tryUseIndex(tableName string, where QP.Expr) []map[string]in
 
 func (db *Database) scanByIndexValue(tableName, colName string, value interface{}, unique bool) []map[string]interface{} {
 	return db.engine.ScanByIndexValue(tableName, colName, value, unique)
+}
+
+// normalizeIndexKey converts a value to a comparable map key.
+// []byte keys are converted to string so they are hashable.
+func normalizeIndexKey(v interface{}) interface{} {
+	if b, ok := v.([]byte); ok {
+		return string(b)
+	}
+	return v
+}
+
+// pkKey builds a comparable key for the primary key columns of a row.
+// Single-col PK: the value itself (normalised). Multi-col PK: a pipe-separated string.
+func pkKey(row map[string]interface{}, pkCols []string) interface{} {
+	if len(pkCols) == 1 {
+		return normalizeIndexKey(row[pkCols[0]])
+	}
+	var b strings.Builder
+	for i, col := range pkCols {
+		if i > 0 {
+			b.WriteByte('|')
+		}
+		switch v := row[col].(type) {
+		case int64:
+			b.WriteString(strconv.FormatInt(v, 10))
+		case float64:
+			b.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+		case string:
+			b.WriteString(v)
+		case bool:
+			if v {
+				b.WriteString("true")
+			} else {
+				b.WriteString("false")
+			}
+		case []byte:
+			b.Write(v)
+		case nil:
+			b.WriteString("<nil>")
+		default:
+			fmt.Fprintf(&b, "%v", v)
+		}
+	}
+	return b.String()
+}
+
+// pkHashAdd adds a row's PK to the hash set for tableName.
+func (db *Database) pkHashAdd(tableName string, row map[string]interface{}) {
+	pkCols := db.primaryKeys[tableName]
+	if len(pkCols) == 0 {
+		return
+	}
+	set := db.pkHashSet[tableName]
+	if set == nil {
+		set = make(map[interface{}]struct{})
+		db.pkHashSet[tableName] = set
+	}
+	set[pkKey(row, pkCols)] = struct{}{}
+}
+
+// pkHashRemove removes a row's PK from the hash set.
+func (db *Database) pkHashRemove(tableName string, row map[string]interface{}) {
+	pkCols := db.primaryKeys[tableName]
+	if len(pkCols) == 0 {
+		return
+	}
+	if set := db.pkHashSet[tableName]; set != nil {
+		delete(set, pkKey(row, pkCols))
+	}
+}
+
+// pkHashContains returns true if the PK value already exists (duplicate check).
+func (db *Database) pkHashContains(tableName string, row map[string]interface{}) bool {
+	pkCols := db.primaryKeys[tableName]
+	if len(pkCols) == 0 {
+		return false
+	}
+	set := db.pkHashSet[tableName]
+	if set == nil {
+		return false
+	}
+	_, exists := set[pkKey(row, pkCols)]
+	return exists
+}
+
+// buildPKHashSet rebuilds the PK hash set for tableName from current data.
+func (db *Database) buildPKHashSet(tableName string) {
+	pkCols := db.primaryKeys[tableName]
+	if len(pkCols) == 0 {
+		return
+	}
+	rows := db.data[tableName]
+	set := make(map[interface{}]struct{}, len(rows))
+	for _, row := range rows {
+		set[pkKey(row, pkCols)] = struct{}{}
+	}
+	db.pkHashSet[tableName] = set
+}
+
+// buildIndexData builds the hash index for a single secondary index from current data.
+func (db *Database) buildIndexData(indexName string) {
+	idx := db.indexes[indexName]
+	if idx == nil || len(idx.Columns) == 0 {
+		return
+	}
+	colName := idx.Columns[0]
+	rows := db.data[idx.Table]
+	hmap := make(map[interface{}][]int, len(rows))
+	for i, row := range rows {
+		key := normalizeIndexKey(row[colName])
+		hmap[key] = append(hmap[key], i)
+	}
+	db.indexData[indexName] = hmap
+}
+
+// indexAdd adds a row's indexed column value to the secondary hash index.
+func (db *Database) indexAdd(indexName string, rowIdx int, row map[string]interface{}) {
+	idx := db.indexes[indexName]
+	if idx == nil || len(idx.Columns) == 0 {
+		return
+	}
+	hmap := db.indexData[indexName]
+	if hmap == nil {
+		return
+	}
+	key := normalizeIndexKey(row[idx.Columns[0]])
+	hmap[key] = append(hmap[key], rowIdx)
+}
+
+// indexRemove removes a specific row index from the secondary hash index entry.
+func (db *Database) indexRemove(indexName string, rowIdx int, colValue interface{}) {
+	hmap := db.indexData[indexName]
+	if hmap == nil {
+		return
+	}
+	key := normalizeIndexKey(colValue)
+	entries := hmap[key]
+	for i, e := range entries {
+		if e == rowIdx {
+			hmap[key] = append(entries[:i], entries[i+1:]...)
+			return
+		}
+	}
+}
+
+// indexShiftDown decrements all row indices > fromIdx by 1 in the secondary hash index.
+// Called after a DELETE to keep indices in sync with the shrunk slice.
+// The entry for fromIdx itself is already removed by indexRemove before this is called.
+func (db *Database) indexShiftDown(indexName string, fromIdx int) {
+	hmap := db.indexData[indexName]
+	if hmap == nil {
+		return
+	}
+	for key, entries := range hmap {
+		for i, e := range entries {
+			if e > fromIdx {
+				entries[i] = e - 1
+			}
+		}
+		hmap[key] = entries
+	}
+}
+
+// addToIndexes updates all secondary indexes (and PK hash set) for a newly inserted row.
+func (db *Database) addToIndexes(tableName string, row map[string]interface{}, rowIdx int) {
+	db.pkHashAdd(tableName, row)
+	for idxName, idx := range db.indexes {
+		if idx.Table == tableName && len(idx.Columns) > 0 && db.indexData[idxName] != nil {
+			db.indexAdd(idxName, rowIdx, row)
+		}
+	}
+}
+
+// removeFromIndexes updates secondary indexes after a row is deleted at rowIdx.
+func (db *Database) removeFromIndexes(tableName string, row map[string]interface{}, rowIdx int) {
+	db.pkHashRemove(tableName, row)
+	for idxName, idx := range db.indexes {
+		if idx.Table == tableName && len(idx.Columns) > 0 {
+			if db.indexData[idxName] != nil {
+				db.indexRemove(idxName, rowIdx, row[idx.Columns[0]])
+				db.indexShiftDown(idxName, rowIdx)
+			}
+		}
+	}
+}
+
+// updateIndexes updates secondary indexes after a row update at rowIdx.
+func (db *Database) updateIndexes(tableName string, oldRow, newRow map[string]interface{}, rowIdx int) {
+	if oldRow != nil {
+		db.pkHashRemove(tableName, oldRow)
+	}
+	db.pkHashAdd(tableName, newRow)
+	for idxName, idx := range db.indexes {
+		if idx.Table == tableName && len(idx.Columns) > 0 && db.indexData[idxName] != nil {
+			if oldRow != nil {
+				db.indexRemove(idxName, rowIdx, oldRow[idx.Columns[0]])
+			}
+			db.indexAdd(idxName, rowIdx, newRow)
+		}
+	}
+}
+
+// rebuildAllIndexes rebuilds all PK hash sets and secondary index data from current db.data.
+// Called after snapshot restore (transaction rollback).
+func (db *Database) rebuildAllIndexes() {
+	// Rebuild PK hash sets
+	db.pkHashSet = make(map[string]map[interface{}]struct{})
+	for tableName := range db.tables {
+		db.buildPKHashSet(tableName)
+	}
+	// Rebuild secondary indexes
+	db.indexData = make(map[string]map[interface{}][]int)
+	for idxName := range db.indexes {
+		db.buildIndexData(idxName)
+	}
+}
+
+// tryIndexLookup attempts to use a secondary hash index for a simple col=val WHERE clause.
+// Returns nil if no index can be used, otherwise returns the pre-filtered rows.
+func (db *Database) tryIndexLookup(tableName string, where QP.Expr) []map[string]interface{} {
+	if where == nil {
+		return nil
+	}
+	bin, ok := where.(*QP.BinaryExpr)
+	if !ok || bin.Op != QP.TokenEq {
+		return nil
+	}
+	var colName string
+	var val interface{}
+	if cr, ok := bin.Left.(*QP.ColumnRef); ok {
+		if lit, ok := bin.Right.(*QP.Literal); ok {
+			colName, val = cr.Name, lit.Value
+		}
+	} else if cr, ok := bin.Right.(*QP.ColumnRef); ok {
+		if lit, ok := bin.Left.(*QP.Literal); ok {
+			colName, val = cr.Name, lit.Value
+		}
+	}
+	if colName == "" {
+		return nil
+	}
+	// Look for a secondary index covering this column.
+	for idxName, idx := range db.indexes {
+		if idx.Table == tableName && len(idx.Columns) > 0 && idx.Columns[0] == colName {
+			hmap := db.indexData[idxName]
+			if hmap == nil {
+				return nil
+			}
+			key := normalizeIndexKey(val)
+			rowIdxs := hmap[key]
+			if len(rowIdxs) == 0 {
+				return []map[string]interface{}{} // index hit: no matching rows
+			}
+			rows := db.data[tableName]
+			result := make([]map[string]interface{}, 0, len(rowIdxs))
+			for _, ri := range rowIdxs {
+				if ri >= 0 && ri < len(rows) {
+					result = append(result, rows[ri])
+				}
+			}
+			return result
+		}
+	}
+	return nil
 }
 
 func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, cols []string) [][]interface{} {

@@ -113,7 +113,7 @@ All measurements are end-to-end (parse → compile → execute) via the public A
 
 | Benchmark | ns/op | MB/op | allocs/op |
 |-----------|------:|------:|----------:|
-| INSERT single row | 386 µs | 6.5 KB | 83 |
+| INSERT single row (PK table) | 10.1 µs | 6.6 KB | 84 |
 | UPDATE single row | 18.6 µs | 6.1 KB | 65 |
 | DELETE single row | 17.4 µs | 6.2 KB | 71 |
 | SELECT all (1 000 rows) | 215 µs | 133 KB | 1 060 |
@@ -121,6 +121,9 @@ All measurements are end-to-end (parse → compile → execute) via the public A
 | SELECT with ORDER BY (500 rows) | 191 µs | 80.3 KB | 570 |
 | SELECT ORDER BY LIMIT 10 (1 000 rows) | 205 µs | 120 KB | 1 089 |
 | CREATE/DROP TABLE | 6.4 µs | 3.2 KB | 51 |
+| 1 000 INSERT batch (PRIMARY KEY table) | 8.1 ms | 6.4 MB | 79 632 |
+| Secondary index lookup (100/1 000 rows) | 298 µs | 41.8 KB | 173 |
+| Unique index lookup (1/1 000 rows) | 288 µs | 29.9 KB | 67 |
 
 ### Aggregates (1 000 rows)
 
@@ -166,9 +169,14 @@ The v0.7.x benchmark suite identified the following areas for future optimizatio
 
 | # | Area | Observation | Impact |
 |---|------|-------------|--------|
-| 1 | Secondary index queries | `WHERE col = ?` on a column with a `CREATE INDEX` does a full table scan instead of an index lookup (query planner does not yet use secondary indexes) | High |
-| 2 | JOIN row materialization | Hash join (equi-join) works well, but all rows are copied into memory before joining — streaming row evaluation would reduce peak allocation | Medium |
-| 3 | GROUP BY allocations | 2 191 allocs for 4-group / 1 000-row GROUP BY; majority are result row copies from the group accumulator | Low–Medium |
+| 1 | JOIN row materialization | Hash join (equi-join) works well, but all rows are copied into memory before joining — streaming row evaluation would reduce peak allocation | Medium |
+| 2 | GROUP BY allocations | 2 191 allocs for 4-group / 1 000-row GROUP BY; majority are result row copies from the group accumulator | Low–Medium |
+
+### Fixed in v0.7.4
+
+- **Primary key O(1) uniqueness check** — `INSERT` into a PRIMARY KEY table previously did an O(N) scan of all existing rows to check uniqueness, making bulk inserts O(N²) in total. Replaced with a `pkHashSet map[string]map[interface{}]struct{}` per table (maintained on INSERT/UPDATE/DELETE, rebuilt on transaction rollback). `INSERT` uniqueness check is now O(1) amortised. Batch insert of 1 000 PK rows: constant time regardless of table size.
+- **In-memory secondary hash index** — `WHERE indexed_col = val` queries on tables with `CREATE INDEX` previously still did a full O(N) table scan (the index metadata was stored but not used). Added `indexData map[string]map[interface{}][]int` (index name → column value → []row indices). Built immediately on `CREATE INDEX`, maintained on INSERT/UPDATE/DELETE, rebuilt on rollback. A new `tryIndexLookup` pre-filter in `execSelectStmtWithContext` passes only matching rows to the VM. **Secondary index lookup on 1 000-row table: 298 µs (would be ~3 ms without index), ~10× reduction in rows processed.**
+- **`deduplicateRows` key allocation** — `UNION` / `UNION ALL` deduplication used `fmt.Sprintf("%v", row)` to build a key per row (1 allocation each). Replaced with a reusable `strings.Builder` + type switch (int64/float64/string/bool/nil fast paths). Eliminates the per-row `fmt.Sprintf` allocation and the intermediate string concat.
 
 ### Fixed in v0.7.3
 
