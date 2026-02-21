@@ -1084,6 +1084,30 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// P4 = SelectStmt to execute
 			dstReg := int(inst.P1)
 
+			// For non-correlated scalar subqueries, use cache to avoid re-execution
+			if selectStmt, ok := inst.P4.(*QP.SelectStmt); ok && !isSubqueryCorrelated(selectStmt) {
+				if vm.subqueryCache == nil {
+					vm.subqueryCache = newSubqueryResultCache()
+				}
+				if cachedVal, hit := vm.subqueryCache.scalars[selectStmt]; hit {
+					vm.registers[dstReg] = cachedVal
+					continue
+				}
+				// Execute once and cache
+				if vm.ctx != nil {
+					type SubqueryExecutor interface {
+						ExecuteSubquery(subquery interface{}) (interface{}, error)
+					}
+					if executor, ok2 := vm.ctx.(SubqueryExecutor); ok2 {
+						if result, err2 := executor.ExecuteSubquery(selectStmt); err2 == nil {
+							vm.subqueryCache.scalars[selectStmt] = result
+							vm.registers[dstReg] = result
+							continue
+						}
+					}
+				}
+			}
+
 			// Try to execute the subquery through the context
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)
@@ -1127,6 +1151,38 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// P4 = SelectStmt to execute
 			dstReg := int(inst.P1)
 
+			// For non-correlated EXISTS subqueries, use cache
+			if selectStmt, ok := inst.P4.(*QP.SelectStmt); ok && !isSubqueryCorrelated(selectStmt) {
+				if vm.subqueryCache == nil {
+					vm.subqueryCache = newSubqueryResultCache()
+				}
+				if cachedExists, hit := vm.subqueryCache.exists[selectStmt]; hit {
+					if cachedExists {
+						vm.registers[dstReg] = int64(1)
+					} else {
+						vm.registers[dstReg] = int64(0)
+					}
+					continue
+				}
+				if vm.ctx != nil {
+					type SubqueryRowsExecutor interface {
+						ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+					}
+					if executor, ok2 := vm.ctx.(SubqueryRowsExecutor); ok2 {
+						if rows, err2 := executor.ExecuteSubqueryRows(selectStmt); err2 == nil {
+							hasRows := len(rows) > 0
+							vm.subqueryCache.exists[selectStmt] = hasRows
+							if hasRows {
+								vm.registers[dstReg] = int64(1)
+							} else {
+								vm.registers[dstReg] = int64(0)
+							}
+							continue
+						}
+					}
+				}
+			}
+
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)
 				type SubqueryRowsExecutorWithContext interface {
@@ -1136,12 +1192,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 				if executor, ok := vm.ctx.(SubqueryRowsExecutorWithContext); ok {
 					// Get current row from cursor 0 (if available)
 					currentRow := vm.getCurrentRow(0)
-					// fmt.Printf("DEBUG OpExistsSubquery: currentRow=%v\n", currentRow)
 					if rows, err := executor.ExecuteSubqueryRowsWithContext(inst.P4, currentRow); err == nil && len(rows) > 0 {
-						// fmt.Printf("DEBUG OpExistsSubquery: got %d rows from subquery\n", len(rows))
 						vm.registers[dstReg] = int64(1)
 					} else {
-						// fmt.Printf("DEBUG OpExistsSubquery: got 0 rows from subquery (err=%v)\n", err)
 						vm.registers[dstReg] = int64(0)
 					}
 					continue
@@ -1171,6 +1224,38 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// P1 = destination register
 			// P4 = SelectStmt to execute
 			dstReg := int(inst.P1)
+
+			// For non-correlated NOT EXISTS subqueries, use cache
+			if selectStmt, ok := inst.P4.(*QP.SelectStmt); ok && !isSubqueryCorrelated(selectStmt) {
+				if vm.subqueryCache == nil {
+					vm.subqueryCache = newSubqueryResultCache()
+				}
+				if cachedExists, hit := vm.subqueryCache.exists[selectStmt]; hit {
+					if cachedExists {
+						vm.registers[dstReg] = int64(0) // rows exist → NOT EXISTS = false
+					} else {
+						vm.registers[dstReg] = int64(1) // no rows → NOT EXISTS = true
+					}
+					continue
+				}
+				if vm.ctx != nil {
+					type SubqueryRowsExecutor interface {
+						ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+					}
+					if executor, ok2 := vm.ctx.(SubqueryRowsExecutor); ok2 {
+						if rows, err2 := executor.ExecuteSubqueryRows(selectStmt); err2 == nil {
+							hasRows := len(rows) > 0
+							vm.subqueryCache.exists[selectStmt] = hasRows
+							if hasRows {
+								vm.registers[dstReg] = int64(0)
+							} else {
+								vm.registers[dstReg] = int64(1)
+							}
+							continue
+						}
+					}
+				}
+			}
 
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)
@@ -1216,6 +1301,42 @@ func (vm *VM) Exec(ctx interface{}) error {
 			dstReg := int(inst.P1)
 			valueReg := int(inst.P2)
 			value := vm.registers[valueReg]
+
+			// For non-correlated IN subqueries, materialize into a hash set once
+			if selectStmt, ok := inst.P4.(*QP.SelectStmt); ok && !isSubqueryCorrelated(selectStmt) {
+				if vm.subqueryCache == nil {
+					vm.subqueryCache = newSubqueryResultCache()
+				}
+				hashSet, hit := vm.subqueryCache.hashSets[selectStmt]
+				if !hit {
+					// Execute once and build hash set
+					if vm.ctx != nil {
+						type SubqueryRowsExecutor interface {
+							ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+						}
+						if executor, ok2 := vm.ctx.(SubqueryRowsExecutor); ok2 {
+							if rows, err2 := executor.ExecuteSubqueryRows(selectStmt); err2 == nil {
+								hashSet = make(map[string]bool, len(rows))
+								for _, row := range rows {
+									if len(row) > 0 {
+										hashSet[subqueryHashKey(row[0])] = true
+									}
+								}
+								vm.subqueryCache.hashSets[selectStmt] = hashSet
+								hit = true
+							}
+						}
+					}
+				}
+				if hit {
+					if value != nil && hashSet[subqueryHashKey(value)] {
+						vm.registers[dstReg] = int64(1)
+					} else {
+						vm.registers[dstReg] = int64(0)
+					}
+					continue
+				}
+			}
 
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)
@@ -1288,6 +1409,41 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if value == nil {
 				vm.registers[dstReg] = nil
 				continue
+			}
+
+			// For non-correlated NOT IN subqueries, materialize into a hash set once
+			if selectStmt, ok := inst.P4.(*QP.SelectStmt); ok && !isSubqueryCorrelated(selectStmt) {
+				if vm.subqueryCache == nil {
+					vm.subqueryCache = newSubqueryResultCache()
+				}
+				hashSet, hit := vm.subqueryCache.hashSets[selectStmt]
+				if !hit {
+					if vm.ctx != nil {
+						type SubqueryRowsExecutor interface {
+							ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+						}
+						if executor, ok2 := vm.ctx.(SubqueryRowsExecutor); ok2 {
+							if rows, err2 := executor.ExecuteSubqueryRows(selectStmt); err2 == nil {
+								hashSet = make(map[string]bool, len(rows))
+								for _, row := range rows {
+									if len(row) > 0 {
+										hashSet[subqueryHashKey(row[0])] = true
+									}
+								}
+								vm.subqueryCache.hashSets[selectStmt] = hashSet
+								hit = true
+							}
+						}
+					}
+				}
+				if hit {
+					if hashSet[subqueryHashKey(value)] {
+						vm.registers[dstReg] = int64(0) // found, so NOT IN is false
+					} else {
+						vm.registers[dstReg] = int64(1) // not found, so NOT IN is true
+					}
+					continue
+				}
 			}
 
 			if vm.ctx != nil {

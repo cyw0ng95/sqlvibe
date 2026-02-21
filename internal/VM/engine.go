@@ -29,19 +29,20 @@ type VmContext interface {
 }
 
 type VM struct {
-	program       *Program
-	pc            int
-	registers     []interface{}
-	cursors       *CursorArray
-	subReturn     []int
-	affinity      int
-	undo          [][]interface{}
-	errorcnt      int
-	err           error
-	ctx           VmContext
-	results       [][]interface{}
-	rowsAffected  int64
-	ephemeralTbls map[int]map[string]bool // ephemeral tables for SetOps (table_id -> row_key -> exists)
+	program        *Program
+	pc             int
+	registers      []interface{}
+	cursors        *CursorArray
+	subReturn      []int
+	affinity       int
+	undo           [][]interface{}
+	errorcnt       int
+	err            error
+	ctx            VmContext
+	results        [][]interface{}
+	rowsAffected   int64
+	ephemeralTbls  map[int]map[string]bool // ephemeral tables for SetOps (table_id -> row_key -> exists)
+	subqueryCache  *subqueryResultCache    // caches non-correlated subquery results per execution
 }
 
 func NewVM(program *Program) *VM {
@@ -143,6 +144,14 @@ func (vm *VM) ErrorCode() int {
 
 func (vm *VM) Results() [][]interface{} {
 	return vm.results
+}
+
+// PreallocResults pre-allocates the results slice to avoid repeated reallocations
+// when the expected row count is known.
+func (vm *VM) PreallocResults(n int) {
+	if n > 0 && cap(vm.results) < n {
+		vm.results = make([][]interface{}, 0, n)
+	}
 }
 
 func (vm *VM) RowsAffected() int64 {
