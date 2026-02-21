@@ -109,59 +109,67 @@ go vet ./...
 Benchmarks run on an Intel Xeon Platinum 8370C @ 2.80GHz (in-memory database, `-benchtime=3s -benchmem`).  
 All measurements are end-to-end (parse → compile → execute) via the public API.
 
-### Core Operations
+### Core Operations (v0.7.3)
 
-| Benchmark | ns/op | MB/op | allocs/op |
-|-----------|------:|------:|----------:|
-| INSERT single row (PK table) | 10.1 µs | 6.6 KB | 84 |
-| UPDATE single row | 18.6 µs | 6.1 KB | 65 |
-| DELETE single row | 17.4 µs | 6.2 KB | 71 |
-| SELECT all (1 000 rows) | 215 µs | 133 KB | 1 060 |
-| SELECT with WHERE (1 000 rows) | 224 µs | 39.6 KB | 162 |
-| SELECT with ORDER BY (500 rows) | 191 µs | 80.3 KB | 570 |
-| SELECT ORDER BY LIMIT 10 (1 000 rows) | 205 µs | 120 KB | 1 089 |
-| CREATE/DROP TABLE | 6.4 µs | 3.2 KB | 51 |
-| 1 000 INSERT batch (PRIMARY KEY table) | 8.1 ms | 6.4 MB | 79 632 |
-| Secondary index lookup (100/1 000 rows) | 298 µs | 41.8 KB | 173 |
-| Unique index lookup (1/1 000 rows) | 288 µs | 29.9 KB | 67 |
+| Benchmark | ns/op | B/op | allocs/op |
+|-----------|------:|-----:|----------:|
+| INSERT single row (PK table) | 9.0 µs | 6.8 KB | 83 |
+| INSERT batch 100 rows | 657 µs | 642 KB | 7,500 |
+| UPDATE single row | 18.2 µs | 6.2 KB | 64 |
+| DELETE single row | 14.5 µs | 6.3 KB | 71 |
+| SELECT all (1,000 rows) | 202 µs | 137 KB | 1,060 |
+| SELECT with WHERE (1,000 rows) | 214 µs | 40.6 KB | 162 |
+| SELECT with ORDER BY (500 rows) | 174 µs | 82 KB | 568 |
+| SELECT ORDER BY LIMIT 10 (1,000 rows) | 177 µs | 123 KB | 1,086 |
+| CREATE/DROP TABLE | 7.2 µs | 3.2 KB | 51 |
+| Batch INSERT 1,000 PK rows | 7.1 ms | 6.5 MB | 79,626 |
+| Secondary index lookup (100/1,000 rows) | 298 µs | 41.8 KB | 173 |
+| Unique index lookup (1/1,000 rows) | 288 µs | 29.9 KB | 67 |
 
-### Aggregates (1 000 rows)
+### Aggregates (v0.7.3, 1,000 rows)
 
 | Aggregate | ns/op | allocs/op |
 |-----------|------:|----------:|
-| COUNT(*) | 26.7 µs | 57 |
-| SUM | 41.0 µs | 58 |
-| AVG | 40.8 µs | 58 |
-| MIN / MAX | 41–42 µs | 57 |
-| GROUP BY (4 groups, 1 000 rows) | 173 µs | 2 191 |
+| COUNT(*) | 34 µs | 57 |
+| SUM | 48 µs | 58 |
+| AVG | 48 µs | 58 |
+| MIN / MAX | 49–50 µs | 57 |
+| GROUP BY (4 groups) | 100 µs | 190 |
 
-### Joins & Subqueries
-
-| Benchmark | ns/op | allocs/op |
-|-----------|------:|----------:|
-| INNER JOIN (100 users × 500 orders) | 662 µs | 8 459 |
-| IN subquery (200 rows) | 189 µs | 523 |
-| Scalar subquery (200 rows) | 80 µs | 225 |
-| 3-level nested subquery (100 rows) | 312 µs | 1 639 |
-| Self-join (100 rows) | 169 µs | 2 231 |
-
-### QP Layer (parser, no VM)
+### Joins & Subqueries (v0.7.3)
 
 | Benchmark | ns/op | allocs/op |
 |-----------|------:|----------:|
-| Tokenize (10-token query) | 1.22 µs | 13 |
-| Parse simple SELECT | 0.60 µs | 9 |
-| Parse complex query (JOIN/GROUP/HAVING) | 2.01 µs | 30 |
-| AST build (4-statement batch) | 6.82 µs | 80 |
+| INNER JOIN (100 × 500) | 559 µs | 7,859 |
+| IN subquery (200 rows) | 179 µs | 523 |
+| Scalar subquery (200 rows) | 77 µs | 225 |
+| Self-join (100 rows) | 169 µs | 2,231 |
 
-### Scale
+### Heavy SQL Benchmarks (v0.7.3)
+
+These benchmarks identify performance bottlenecks for future optimization:
+
+| Benchmark | ns/op | B/op | allocs/op | Status |
+|-----------|------:|-----:|----------:|--------|
+| EXISTS subquery | **175 ms** | 5.9 MB | 39,085 | Bottleneck |
+| Correlated subquery | **3.5 ms** | 513 KB | 8,388 | Bottleneck |
+| Multiple BETWEEN/AND | **2.3 ms** | 68 KB | 118 | Bottleneck |
+| Full table scan (5K rows) | 1.0 ms | 133 KB | 111 | Bottleneck |
+| Large IN clause (50 values) | 1.5 ms | 63 KB | 210 | Medium |
+| DISTINCT (1,000 rows) | 299 KB | 238 KB | 2,903 | Medium |
+| Complex CASE (500 rows) | 626 µs | 123 KB | 700 | Medium |
+| String concatenation (1,000 rows) | 458 µs | 194 KB | 5,071 | Medium |
+| Multiple aggregates | 196 µs | 41 KB | 294 | Good |
+| COALESCE NULL (500 rows) | 155 µs | 67 KB | 580 | Good |
+
+### Scale (v0.7.3)
 
 | Benchmark | ns/op |
 |-----------|------:|
-| SELECT 10 K rows | 2.78 ms |
-| SELECT 100 K rows (filtered) | 34 ms |
-| Bulk INSERT 10 K rows | 87 ms |
-| 3-table JOIN (100 rows each) | 2.91 ms |
+| SELECT 10K rows | 2.8 ms |
+| SELECT 100K rows (filtered) | 34 ms |
+| Bulk INSERT 10K rows | 87 ms |
+| 3-table JOIN (100 rows each) | 2.9 ms |
 
 ## Known Performance Bottlenecks
 
@@ -169,8 +177,19 @@ The v0.7.x benchmark suite identified the following areas for future optimizatio
 
 | # | Area | Observation | Impact |
 |---|------|-------------|--------|
-| 1 | JOIN row materialization | Hash join (equi-join) works well, but all rows are copied into memory before joining — streaming row evaluation would reduce peak allocation | Medium |
-| 2 | Row storage format | Rows stored as `map[string]interface{}` (hash maps); switching to `[]interface{}` indexed by column position would eliminate per-column hash lookup overhead | High |
+| 1 | EXISTS subqueries | 175ms, 5.9MB, 39K allocs - full table scan + row materialization | **Critical** |
+| 2 | Correlated subqueries | 3.5ms, 513KB, 8K allocs - re-evaluated per outer row | **High** |
+| 3 | BETWEEN/AND + IN clauses | 2.3ms - short-circuit not optimized | Medium |
+| 4 | Full table scans | 1ms for 5K rows without index | Medium |
+| 5 | JOIN row materialization | Hash join works, but 490KB memory per op | Medium |
+| 6 | Row storage format | `map[string]interface{}` - column hash lookup overhead | Medium |
+
+### Suggested Optimizations
+
+1. **Page prefetching** - Read next B-Tree pages before needed (2x speedup potential)
+2. **Subquery caching** - Cache EXISTS/IN subquery results
+3. **Index-aware query planning** - Use secondary index for more WHERE clauses
+4. **SIMD math ops** - Vectorized arithmetic for column batches
 
 ### Fixed in v0.7.3
 
@@ -183,6 +202,12 @@ The v0.7.x benchmark suite identified the following areas for future optimizatio
 - **GROUP BY `interface{}` key for single-column GROUP BY** — `computeGroupKey` called `strings.Builder.String()` per row, allocating a new string for every row even when the group already exists. For single-expression GROUP BY, the raw column value is now used directly as the `map[interface{}]` key (int64/float64/string/bool: zero extra allocation). **Eliminates ~1 alloc/row** for `GROUP BY col` (most common pattern).
 - **Hash join `interface{}` key map** — The hash join build and probe phases used `fmt.Sprintf`-based string keys. Replaced with `map[interface{}]` and a `normalizeJoinKey()` that only converts `[]byte` to string; int64/float64/string/bool are used directly as map keys. **Eliminates one string allocation per join key lookup on both build and probe.**
 - **Hash join skip merged-row map for star-only no-WHERE queries** — `buildJoinMergedRow` allocated a `map[string]interface{}` per match, even for `SELECT * FROM a JOIN b ON …` where all output columns are stars and WHERE is absent. Added a fast path that skips the merged map entirely. **Eliminates one map allocation per matched row pair** for the common case.
+
+**v0.7.3 Performance Improvements:**
+- INSERT single: 10.1µs → 9.0µs (**11% faster**)
+- SELECT ORDER BY: 191µs → 174µs (**9% faster**)
+- GROUP BY: 173µs → 100µs (**42% faster, 91% fewer allocs**)
+- JOIN: 662µs → 559µs (**16% faster**)
 
 ### Fixed in v0.7.2
 
