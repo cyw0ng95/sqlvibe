@@ -245,6 +245,11 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 		vm.Cursors().OpenTableAtID(0, cursorName, tableData, tableCols)
 	}
 
+	// Pre-allocate flat result buffer to avoid per-row allocations.
+	if stmt.From.Join == nil && len(tableCols) > 0 && len(tableData) > 0 {
+		vm.PreallocResultsFlat(len(tableData), len(tableCols))
+	}
+
 	// Execute without calling Reset again (use Exec instead of Run)
 	err := vm.Exec(nil)
 	if err == VM.ErrHalt {
@@ -341,6 +346,16 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		stmt.GroupBy == nil && len(stmt.OrderBy) == 0 && !stmt.Distinct {
 		if hashRows, hashCols, ok := db.execHashJoin(stmt); ok {
 			return &Rows{Columns: hashCols, Data: hashRows}, nil
+		}
+	}
+
+	// Fast path: SELECT * FROM single_table (no filters, aggregates, or ordering).
+	// Bypasses tokenize+parse+compile+VM entirely; uses a flat backing array to
+	// materialise results in just 2 allocations regardless of row count.
+	if isSimpleSelectStar(stmt) && stmt.From.Join == nil {
+		starCols := db.columnOrder[tableName]
+		if len(starCols) > 0 {
+			return db.execSelectStarFast(db.data[tableName], starCols), nil
 		}
 	}
 
@@ -528,7 +543,13 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	// Pre-allocate result slice based on estimated table size to reduce reallocations.
 	if stmt.From.Join == nil && tableName != "" {
 		if tableData, ok := db.data[tableName]; ok {
-			vm.PreallocResults(len(tableData))
+			if len(tableCols) > 0 {
+				// Full flat-buffer pre-allocation: eliminates per-row allocations.
+				vm.PreallocResultsFlat(len(tableData), len(tableCols))
+			} else {
+				// Zero-column schema: pre-allocate result header only.
+				vm.PreallocResults(len(tableData))
+			}
 		}
 	}
 
@@ -775,6 +796,61 @@ func extractLimitInt(limitExpr, offsetExpr QP.Expr) int {
 		return 0
 	}
 	return off + lim
+}
+
+// isSimpleSelectStar reports whether stmt is a plain SELECT * FROM table with
+// no WHERE, GROUP BY, ORDER BY, DISTINCT, LIMIT, JOINs, or subqueries.
+// Such queries are eligible for execSelectStarFast.
+func isSimpleSelectStar(stmt *QP.SelectStmt) bool {
+	if stmt == nil || stmt.From == nil {
+		return false
+	}
+	if stmt.From.Join != nil || stmt.From.Subquery != nil {
+		return false
+	}
+	if stmt.Where != nil {
+		return false
+	}
+	if stmt.GroupBy != nil {
+		return false
+	}
+	if len(stmt.OrderBy) > 0 {
+		return false
+	}
+	if stmt.Distinct {
+		return false
+	}
+	if stmt.Limit != nil {
+		return false
+	}
+	if len(stmt.Columns) != 1 {
+		return false
+	}
+	cr, ok := stmt.Columns[0].(*QP.ColumnRef)
+	return ok && cr.Name == "*" && cr.Table == ""
+}
+
+// execSelectStarFast materialises all rows of a single table without running
+// the VM compiler or bytecode interpreter.  A single flat []interface{}
+// backing array is allocated for all row data; each row is a sub-slice of
+// that array, so the total allocation count is 2 regardless of row count.
+func (db *Database) execSelectStarFast(rows []map[string]interface{}, cols []string) *Rows {
+	n := len(rows)
+	ncols := len(cols)
+	if n == 0 {
+		return &Rows{Columns: cols, Data: [][]interface{}{}}
+	}
+	// One flat allocation for all values.
+	flat := make([]interface{}, n*ncols)
+	results := make([][]interface{}, n)
+	for i, row := range rows {
+		start := i * ncols
+		for j, col := range cols {
+			flat[start+j] = row[col]
+		}
+		results[i] = flat[start : start+ncols]
+	}
+	return &Rows{Columns: cols, Data: results}
 }
 
 // validateInsertColumnCount checks that INSERT column count matches value count.

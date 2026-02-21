@@ -40,6 +40,7 @@ type VM struct {
 	err            error
 	ctx            VmContext
 	results        [][]interface{}
+	flatBuf        []interface{} // flat backing array for zero-alloc result rows
 	rowsAffected   int64
 	ephemeralTbls  map[int]map[string]bool // ephemeral tables for SetOps (table_id -> row_key -> exists)
 	subqueryCache  *subqueryResultCache    // caches non-correlated subquery results per execution
@@ -87,7 +88,8 @@ func (vm *VM) Reset() {
 	vm.affinity = 0
 	vm.errorcnt = 0
 	vm.err = nil
-	vm.results = make([][]interface{}, 0)
+	vm.results = vm.results[:0]   // reuse pre-allocated capacity
+	vm.flatBuf = vm.flatBuf[:0]   // reuse flat backing buffer
 	vm.rowsAffected = 0
 	vm.ephemeralTbls = make(map[int]map[string]bool)
 }
@@ -151,6 +153,22 @@ func (vm *VM) Results() [][]interface{} {
 func (vm *VM) PreallocResults(n int) {
 	if n > 0 && cap(vm.results) < n {
 		vm.results = make([][]interface{}, 0, n)
+	}
+}
+
+// PreallocResultsFlat pre-allocates both the results header slice and the flat
+// backing buffer for zero-alloc per-row result storage.
+// rows × cols gives the total number of value slots in the flat buffer.
+func (vm *VM) PreallocResultsFlat(rows, cols int) {
+	if rows <= 0 || cols <= 0 {
+		return
+	}
+	if cap(vm.results) < rows {
+		vm.results = make([][]interface{}, 0, rows)
+	}
+	needed := rows * cols
+	if cap(vm.flatBuf) < needed {
+		vm.flatBuf = make([]interface{}, 0, needed)
 	}
 }
 

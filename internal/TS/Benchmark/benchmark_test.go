@@ -95,6 +95,25 @@ func BenchmarkSelectAll(b *testing.B) {
 }
 
 // -----------------------------------------------------------------
+// BenchmarkSelectAll5K measures SELECT * throughput on a 5000-row table.
+// Target: < 0.2 ms (5x faster than v0.7.3 baseline of ~1.4 ms).
+// -----------------------------------------------------------------
+func BenchmarkSelectAll5K(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE t5k (id INTEGER, name TEXT, score REAL)")
+	for i := 0; i < 5000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t5k VALUES (%d, 'name%d', %f)", i, i, float64(i)*1.1))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM t5k")
+	}
+}
+
+// -----------------------------------------------------------------
 // BenchmarkSelectWhere measures filtered SELECT with a WHERE clause.
 // -----------------------------------------------------------------
 func BenchmarkSelectWhere(b *testing.B) {
