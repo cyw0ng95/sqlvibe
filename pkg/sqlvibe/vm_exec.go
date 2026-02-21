@@ -116,7 +116,30 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 
 	// Delegate to execVMQuery which handles ORDER BY + LIMIT correctly
 	// (including ORDER BY columns not in SELECT via extraOrderByCols mechanism).
-	return db.execVMQuery("", stmt)
+	rows, err := db.execVMQuery("", stmt)
+	if err != nil {
+		return nil, err
+	}
+	// execVMQuery only consumes ORDER BY + LIMIT when extraOrderByCols is non-empty
+	// (i.e. ORDER BY references columns not in SELECT). When all ORDER BY cols are
+	// already in the SELECT list, execVMQuery leaves stmt.OrderBy/Limit intact and
+	// returns unsorted, unlimited rows — apply them here.
+	if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
+		// topK hint lets sortResultsTopK use an O(N log K) heap instead of a full sort.
+		// applyLimit below enforces the exact LIMIT+OFFSET after sorting.
+		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		rows, err = db.sortResultsTopK(rows, stmt.OrderBy, topK)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if stmt.Limit != nil {
+		rows, err = db.applyLimit(rows, stmt.Limit, stmt.Offset)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
 }
 
 // execSelectStmtWithContext executes a SelectStmt with outer row context for correlated subqueries

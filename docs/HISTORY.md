@@ -28,7 +28,10 @@
 - `normalizeJoinKey(v)` converts `[]byte` to `string`; other comparable types pass through for direct use as `map[interface{}]` keys in the hash join.
 
 ### Bug Fixes
-- None
+- **LIMIT in IN subqueries now correctly applied**: Two related bugs caused `LIMIT` inside an `IN (SELECT …)` subquery to be silently ignored, matching all rows instead of only the top-K.
+  - `compileBinaryExpr` (CG) called `compileExpr(Right)` eagerly for every binary operator, which caused a spurious `OpScalarSubquery` to be emitted for `TokenInSubquery`/`TokenNotIn`/`TokenExists`. When the VM executed `OpScalarSubquery`, it ran the inner query and mutated the shared `SelectStmt` (clearing `Limit` and `OrderBy`), so the subsequent `OpInSubquery` saw no LIMIT.
+  - `execSelectStmt` (called from `ExecuteSubqueryRows`) delegated to `execVMQuery` but never applied `ORDER BY + LIMIT` when all `ORDER BY` columns were already in the `SELECT` list (the `extraOrderByCols` path was not taken).
+  - Fixed by: (a) adding early-exit paths in `compileBinaryExpr` for `TokenInSubquery`, `TokenNotIn` (subquery), and `TokenExists` before the eager evaluation; (b) applying `ORDER BY + LIMIT` in `execSelectStmt` after `execVMQuery` returns, matching the same logic in `database.go`.
 
 ### Breaking Changes
 - None
