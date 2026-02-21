@@ -170,19 +170,19 @@ The v0.7.x benchmark suite identified the following areas for future optimizatio
 | # | Area | Observation | Impact |
 |---|------|-------------|--------|
 | 1 | JOIN row materialization | Hash join (equi-join) works well, but all rows are copied into memory before joining — streaming row evaluation would reduce peak allocation | Medium |
-| 2 | GROUP BY allocations | 2 191 allocs for 4-group / 1 000-row GROUP BY; majority are result row copies from the group accumulator | Low–Medium |
+| 2 | Row storage format | Rows stored as `map[string]interface{}` (hash maps); switching to `[]interface{}` indexed by column position would eliminate per-column hash lookup overhead | High |
 
-### Fixed in v0.7.4
+### Fixed in v0.7.3
 
 - **Primary key O(1) uniqueness check** — `INSERT` into a PRIMARY KEY table previously did an O(N) scan of all existing rows to check uniqueness, making bulk inserts O(N²) in total. Replaced with a `pkHashSet map[string]map[interface{}]struct{}` per table (maintained on INSERT/UPDATE/DELETE, rebuilt on transaction rollback). `INSERT` uniqueness check is now O(1) amortised. Batch insert of 1 000 PK rows: constant time regardless of table size.
 - **In-memory secondary hash index** — `WHERE indexed_col = val` queries on tables with `CREATE INDEX` previously still did a full O(N) table scan (the index metadata was stored but not used). Added `indexData map[string]map[interface{}][]int` (index name → column value → []row indices). Built immediately on `CREATE INDEX`, maintained on INSERT/UPDATE/DELETE, rebuilt on rollback. A new `tryIndexLookup` pre-filter in `execSelectStmtWithContext` passes only matching rows to the VM. **Secondary index lookup on 1 000-row table: 298 µs (would be ~3 ms without index), ~10× reduction in rows processed.**
 - **`deduplicateRows` key allocation** — `UNION` / `UNION ALL` deduplication used `fmt.Sprintf("%v", row)` to build a key per row (1 allocation each). Replaced with a reusable `strings.Builder` + type switch (int64/float64/string/bool/nil fast paths). Eliminates the per-row `fmt.Sprintf` allocation and the intermediate string concat.
-
-### Fixed in v0.7.3
-
-- **GROUP BY key: `strings.Builder` + type switch** — Replaced per-row `fmt.Sprintf` + `[]string` + `strings.Join` with a single `strings.Builder` write and a type switch for `int64`/`float64`/`string`/`bool`/`nil`. GROUP BY is ~11% faster; no change in alloc count since the dominating allocs are row copies.
+- **GROUP BY key: `strings.Builder` + type switch** — Replaced per-row `fmt.Sprintf` + `[]string` + `strings.Join` with a single `strings.Builder` write and a type switch for `int64`/`float64`/`string`/`bool`/`nil`. GROUP BY is ~11% faster.
 - **SortRows pre-resolved column indices** — Old code did a linear scan of all column names for each comparison pair in `ORDER BY col_name`. New code resolves column indices once before the sort loop, giving direct `data[row][ci]` access. For expression ORDER BY terms, per-row rowMap allocation is also skipped (evaluation is deferred). **ORDER BY is 10–12% faster, 9% less memory.**
 - **Top-K heap for `ORDER BY … LIMIT N`** — Added `SortRowsTopK` using `container/heap`. The bounded max-heap keeps only the K best rows; the O(N log K) scan replaces O(N log N) full sort. For ColumnRef ORDER BY (the common case), discarded rows incur zero allocation: keys are computed only when a row enters the heap. Stable sort semantics preserved via `origIdx` tiebreaker. Shared `cmpOrderByKey` helper eliminates comparison logic duplication. Updated all ORDER BY + LIMIT call sites. **ORDER BY + LIMIT 10 on 1 000 rows: 22% faster, 28% less memory.**
+- **GROUP BY `interface{}` key for single-column GROUP BY** — `computeGroupKey` called `strings.Builder.String()` per row, allocating a new string for every row even when the group already exists. For single-expression GROUP BY, the raw column value is now used directly as the `map[interface{}]` key (int64/float64/string/bool: zero extra allocation). **Eliminates ~1 alloc/row** for `GROUP BY col` (most common pattern).
+- **Hash join `interface{}` key map** — The hash join build and probe phases used `fmt.Sprintf`-based string keys. Replaced with `map[interface{}]` and a `normalizeJoinKey()` that only converts `[]byte` to string; int64/float64/string/bool are used directly as map keys. **Eliminates one string allocation per join key lookup on both build and probe.**
+- **Hash join skip merged-row map for star-only no-WHERE queries** — `buildJoinMergedRow` allocated a `map[string]interface{}` per match, even for `SELECT * FROM a JOIN b ON …` where all output columns are stars and WHERE is absent. Added a fast path that skips the merged map entirely. **Eliminates one map allocation per matched row pair** for the common case.
 
 ### Fixed in v0.7.2
 

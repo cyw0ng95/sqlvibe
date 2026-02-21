@@ -2561,8 +2561,11 @@ var ErrValueTooBig = errors.New("value too big")
 
 // executeAggregation performs GROUP BY and aggregate function execution
 func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
-	// Map from group key (string) to aggregate state
-	groups := make(map[string]*AggregateState)
+	// Map from group key to aggregate state.
+	// interface{} keys: for single-expr GROUP BY the raw value is used directly
+	// (no string allocation per row); for multi-expr GROUP BY a composite string
+	// produced by computeGroupKey is boxed.
+	groups := make(map[interface{}]*AggregateState)
 
 	// Scan all rows and accumulate aggregates per group
 	for rowIdx := 0; rowIdx < len(cursor.Data); rowIdx++ {
@@ -2575,8 +2578,10 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 			}
 		}
 
-		// Compute group key from GROUP BY expressions
-		groupKey := vm.computeGroupKey(row, cursor.Columns, aggInfo.GroupByExprs)
+		// Compute group key from GROUP BY expressions.
+		// For single-expression GROUP BY the raw value is used directly as the
+		// map key (avoids a strings.Builder.String() allocation per row).
+		groupKey := vm.computeGroupKeyIface(row, cursor.Columns, aggInfo.GroupByExprs)
 
 		// Get or create aggregate state for this group
 		state, exists := groups[groupKey]
@@ -2683,29 +2688,15 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 
 	// Emit result rows (one per group)
 	// Sort groups by key for deterministic output
-	groupKeys := make([]string, 0, len(groups))
+	groupKeys := make([]interface{}, 0, len(groups))
 	for key := range groups {
 		groupKeys = append(groupKeys, key)
 	}
-	// Sort the keys: NULL ("<nil>") groups sort first (matching SQLite behavior),
-	// then remaining keys in ascending order. Try numeric comparison when both
-	// keys are parseable as numbers (so "10" > "3" numerically).
-	// If only one key is numeric, fall through to lexicographic string comparison.
+	// Sort the keys: NULL groups sort first (matching SQLite behavior),
+	// then numeric (int64/float64) before string, with numeric string keys
+	// compared as numbers.
 	sort.SliceStable(groupKeys, func(i, j int) bool {
-		ki, kj := groupKeys[i], groupKeys[j]
-		if ki == "<nil>" {
-			return true
-		}
-		if kj == "<nil>" {
-			return false
-		}
-		// Numeric comparison when both keys are valid numbers; otherwise string comparison.
-		if fi, erri := strconv.ParseFloat(ki, 64); erri == nil {
-			if fj, errj := strconv.ParseFloat(kj, 64); errj == nil {
-				return fi < fj
-			}
-		}
-		return ki < kj
+		return compareGroupKeyIface(groupKeys[i], groupKeys[j])
 	})
 
 	// SQL standard: aggregate without GROUP BY on empty table must return 1 row
@@ -2820,7 +2811,7 @@ type AggregateDef struct {
 
 // AggregateState tracks aggregate values for a group
 type AggregateState struct {
-	GroupKey     string
+	GroupKey     interface{}
 	Count        int
 	Counts       []int // per-aggregate non-NULL counts (for COUNT(col) and AVG)
 	// Typed sum accumulators avoid per-row interface{} boxing.
@@ -2882,7 +2873,77 @@ func (vm *VM) computeGroupKey(row map[string]interface{}, columns []string, grou
 	return buf.String()
 }
 
-// evaluateAggregateArg evaluates the argument of an aggregate function
+// computeGroupKeyIface returns the GROUP BY key as an interface{}.
+// For a single GROUP BY expression the raw evaluated value is returned directly,
+// avoiding the strings.Builder.String() allocation that computeGroupKey does on
+// every row.  For multiple expressions it falls back to computeGroupKey and
+// boxes the resulting string.
+func (vm *VM) computeGroupKeyIface(row map[string]interface{}, columns []string, groupByExprs []QP.Expr) interface{} {
+	if len(groupByExprs) == 0 {
+		return "" // single group for aggregates without GROUP BY
+	}
+	if len(groupByExprs) == 1 {
+		v := vm.evaluateExprOnRow(row, columns, groupByExprs[0])
+		// Only directly-comparable types are safe as interface{} map keys.
+		switch v.(type) {
+		case int64, float64, string, bool, nil:
+			return v
+		case []byte:
+			return string(v.([]byte)) // []byte is not comparable; convert once
+		default:
+			return fmt.Sprintf("%v", v) // fallback: stringify
+		}
+	}
+	// Multi-column GROUP BY: composite string key (one allocation per unique group,
+	// not per row, because map lookup reuses the existing string for known groups).
+	return vm.computeGroupKey(row, columns, groupByExprs)
+}
+
+// compareGroupKeyIface returns true when ki should sort before kj.
+// NULL sorts first; numeric types compare numerically; strings compare with
+// numeric fallback (matching SQLite's behaviour for numeric-string GROUP BY keys).
+func compareGroupKeyIface(ki, kj interface{}) bool {
+	if ki == nil {
+		return kj != nil // nil < everything else
+	}
+	if kj == nil {
+		return false // nothing < nil (nil is already "smallest")
+	}
+	switch vi := ki.(type) {
+	case int64:
+		switch vj := kj.(type) {
+		case int64:
+			return vi < vj
+		case float64:
+			return float64(vi) < vj
+		}
+	case float64:
+		switch vj := kj.(type) {
+		case float64:
+			return vi < vj
+		case int64:
+			return vi < float64(vj)
+		}
+	case string:
+		if vj, ok := kj.(string); ok {
+			// Try numeric comparison first (matches SQLite for numeric-string keys)
+			if fi, erri := strconv.ParseFloat(vi, 64); erri == nil {
+				if fj, errj := strconv.ParseFloat(vj, 64); errj == nil {
+					return fi < fj
+				}
+			}
+			return vi < vj
+		}
+	case bool:
+		if vj, ok := kj.(bool); ok {
+			return !vi && vj // false < true
+		}
+	}
+	// Fallback for composite string keys (multi-column GROUP BY) and any other
+	// comparable type that reaches here.  fmt.Sprintf is acceptable because this
+	// path is only hit once per unique group pair during sorting, not once per row.
+	return fmt.Sprintf("%v", ki) < fmt.Sprintf("%v", kj)
+}
 func (vm *VM) evaluateAggregateArg(row map[string]interface{}, columns []string, args []QP.Expr) interface{} {
 	if len(args) == 0 {
 		return nil

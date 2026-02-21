@@ -1,5 +1,5 @@
 // Package Benchmark provides SQL-level performance benchmarks for sqlvibe.
-// This file contains v0.7.4 benchmarks for the hash index, PK set, and dedup fixes.
+// This file contains v0.7.3 benchmarks for the hash index, PK set, and dedup fixes.
 package Benchmark
 
 import (
@@ -8,7 +8,7 @@ import (
 )
 
 // -----------------------------------------------------------------
-// Wave 10 (v0.7.4): Hash Index & PK Hash Set
+// Wave 10 (v0.7.3): Hash Index & PK Hash Set
 // Focus: Validate O(1) primary-key uniqueness check and secondary
 //         index hash lookup.
 // -----------------------------------------------------------------

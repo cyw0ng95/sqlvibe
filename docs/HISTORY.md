@@ -1,11 +1,17 @@
 # sqlvibe Release History
 
-## **v0.7.4** (2026-02-21)
+## **v0.7.3** (2026-02-21)
 
 ### Performance Improvements
+- **GROUP BY key: `strings.Builder` + type switch** — Replaced per-row `fmt.Sprintf` + `[]string` + `strings.Join` in `computeGroupKey` with a single `strings.Builder` write and a type switch (`int64`, `float64`, `string`, `bool`, `nil` fast paths). GROUP BY is ~11% faster.
+- **SortRows pre-resolved column indices** — Pre-resolve `ORDER BY col_name` column indices once before sorting (was a linear scan per comparison pair). Skip per-row `rowMap` allocation for non-ColumnRef ORDER BY terms. **10–12% faster ORDER BY, 9% less memory.**
+- **Top-K heap for `ORDER BY … LIMIT N`** — New `SortRowsTopK(data, orderBy, cols, topK)` using `container/heap`. Maintains a bounded max-heap of topK=offset+limit candidates. For ColumnRef ORDER BY (the common case), rows that don't enter the heap incur zero allocation. Stable sort semantics preserved via `origIdx` tiebreaker. Shared `cmpOrderByKey` helper centralises NULL/DESC comparison logic. **ORDER BY + LIMIT 10 on 1 000 rows: 22% faster, 28% less memory.**
 - **Primary key O(1) uniqueness check** (`pkg/sqlvibe/database.go`, `vm_context.go`) — INSERT into a PRIMARY KEY table previously scanned all existing rows for uniqueness (O(N) per insert → O(N²) total for N inserts). Added `pkHashSet map[string]map[interface{}]struct{}` per table. The set is initialised on `CREATE TABLE`, maintained on INSERT/UPDATE/DELETE, and rebuilt on transaction rollback. INSERT uniqueness check is now O(1) amortised. **Batch insert of 1 000 PK rows is now constant-time (was O(N²)).**
 - **In-memory secondary hash index** (`pkg/sqlvibe/database.go`, `vm_exec.go`) — `WHERE indexed_col = val` queries on indexed columns still did a full O(N) table scan because the index metadata was never applied at query time. Added `indexData map[string]map[interface{}][]int` (index name → column value → []row indices). Built immediately on `CREATE INDEX`, maintained on INSERT/UPDATE/DELETE, rebuilt on rollback. New `tryIndexLookup` pre-filter in `execSelectStmtWithContext` passes only matching rows to the VM. **~10× reduction in rows processed for selective equality lookups on indexed columns.**
 - **`deduplicateRows` key** (`pkg/sqlvibe/vm_exec.go`) — `UNION`/`UNION ALL` used `fmt.Sprintf("%v", row)` per row for deduplication (1 allocation each). Replaced with a reusable `strings.Builder` + type switch (int64/float64/string/bool/nil fast paths). Eliminates per-row `fmt.Sprintf` allocation.
+- **GROUP BY `interface{}` key for single-column GROUP BY** (`internal/VM/exec.go`) — `computeGroupKey` called `strings.Builder.String()` per row, allocating a new string for every row even when the group already exists. For single-expression GROUP BY, the raw column value is now used directly as the `map[interface{}]` key (int64/float64/string/bool: zero extra allocation; []byte: one conversion to string). **Eliminates ~1 alloc/row** for the dominant `GROUP BY col` pattern.
+- **Hash join: `interface{}` key map** (`pkg/sqlvibe/hash_join.go`) — The hash join build and probe phases called `hashJoinKey()` (a `fmt.Sprintf`-based function) to produce a string key for every row. Replaced with a direct `interface{}` map (`map[interface{}][]...`) and `normalizeJoinKey()` that converts only `[]byte` to string; all other comparable types (int64, float64, string, bool) are used directly. **Eliminates one string allocation per join key lookup on both build and probe.**
+- **Hash join: skip merged-row map for star-only no-WHERE queries** (`pkg/sqlvibe/hash_join.go`) — `buildJoinMergedRow` allocated a `map[string]interface{}` per match, even for the common `SELECT * FROM a JOIN b ON …` case where all output columns are stars and WHERE is absent. Added a fast path that skips the merged map entirely; output rows are built directly from source rows. **Eliminates one map allocation per matched row pair.**
 
 ### New Benchmarks
 - `BenchmarkInsertBatchPK` — batch insert into PK table (validates O(1) hash set)
@@ -14,28 +20,12 @@
 - `BenchmarkDeduplicateRows` — UNION deduplication throughput
 
 ### Architecture Notes
+- Comparison logic extracted into `cmpOrderByKey(qe, keyA, keyB, ob)` — used by `SortRows`, `topKHeap.Less`, `topKHeap.lessEntry`, and `SortRowsTopK.compareRawToTop`. Single authoritative source for NULL handling and DESC order, eliminating four previous copies.
 - `pkKey()` helper normalises single-col and composite PK values into a comparable map key (`interface{}` for single-col, `string` via `strings.Builder` for multi-col).
 - `normalizeIndexKey(v)` converts `[]byte` to `string` for hashability; used by both `pkKey` and the secondary index.
 - `indexShiftDown(fromIdx)` shifts entries `> fromIdx` down by 1 after DELETE, keeping row indices consistent without full rebuild.
 - All index maintenance (`addToIndexes`, `removeFromIndexes`, `updateIndexes`, `rebuildAllIndexes`) flows through a single set of helpers in `database.go`.
-
-### Bug Fixes
-- None
-
-### Breaking Changes
-- None
-
----
-
-## **v0.7.3** (2026-02-21)
-
-### Performance Improvements
-- **GROUP BY key: `strings.Builder` + type switch** — Replaced per-row `fmt.Sprintf` + `[]string` + `strings.Join` in `computeGroupKey` with a single `strings.Builder` write and a type switch (`int64`, `float64`, `string`, `bool`, `nil` fast paths). GROUP BY is ~11% faster.
-- **SortRows pre-resolved column indices** — Pre-resolve `ORDER BY col_name` column indices once before sorting (was a linear scan per comparison pair). Skip per-row `rowMap` allocation for non-ColumnRef ORDER BY terms. **10–12% faster ORDER BY, 9% less memory.**
-- **Top-K heap for `ORDER BY … LIMIT N`** — New `SortRowsTopK(data, orderBy, cols, topK)` using `container/heap`. Maintains a bounded max-heap of topK=offset+limit candidates. For ColumnRef ORDER BY (the common case), rows that don't enter the heap incur zero allocation. Stable sort semantics preserved via `origIdx` tiebreaker. Shared `cmpOrderByKey` helper centralises NULL/DESC comparison logic. **ORDER BY + LIMIT 10 on 1 000 rows: 22% faster, 28% less memory.**
-
-### Architecture Notes
-- Comparison logic extracted into `cmpOrderByKey(qe, keyA, keyB, ob)` — used by `SortRows`, `topKHeap.Less`, `topKHeap.lessEntry`, and `SortRowsTopK.compareRawToTop`. Single authoritative source for NULL handling and DESC order, eliminating four previous copies.
+- `normalizeJoinKey(v)` converts `[]byte` to `string`; other comparable types pass through for direct use as `map[interface{}]` keys in the hash join.
 
 ### Bug Fixes
 - None
