@@ -575,3 +575,223 @@ func BenchmarkQueryGroupByMultiple(b *testing.B) {
 		mustQuery(b, db, "SELECT region, category, SUM(amount) FROM t GROUP BY region, category")
 	}
 }
+
+// -----------------------------------------------------------------
+// Wave 7: Index & Query Optimization
+// Focus: Measure index performance vs table scan
+// -----------------------------------------------------------------
+
+// BenchmarkIndexSelectPoint measures point query with index
+func BenchmarkIndexSelectPoint(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)")
+	mustExec(b, db, "CREATE INDEX idx_val ON t(val)")
+	for i := 0; i < 10000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d, %d)", i, i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM t WHERE val = 5000")
+	}
+}
+
+// BenchmarkIndexSelectRange measures range query with index
+func BenchmarkIndexSelectRange(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)")
+	mustExec(b, db, "CREATE INDEX idx_val ON t(val)")
+	for i := 0; i < 10000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d, %d)", i, i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM t WHERE val BETWEEN 1000 AND 5000")
+	}
+}
+
+// BenchmarkIndexSelectUnique measures unique index lookup
+func BenchmarkIndexSelectUnique(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE t (id INTEGER PRIMARY KEY, code TEXT UNIQUE)")
+	for i := 0; i < 1000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d, 'CODE%05d')", i, i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM t WHERE code = 'CODE00500'")
+	}
+}
+
+// BenchmarkIndexCovered measures covered index query
+func BenchmarkIndexCovered(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)")
+	mustExec(b, db, "CREATE INDEX idx_val ON t(val)")
+	for i := 0; i < 10000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d, %d)", i, i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT val FROM t WHERE val = 5000")
+	}
+}
+
+// BenchmarkIndexComposite measures multi-column index
+func BenchmarkIndexComposite(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE t (id INTEGER PRIMARY KEY, a INTEGER, b INTEGER)")
+	mustExec(b, db, "CREATE INDEX idx_ab ON t(a, b)")
+	for i := 0; i < 5000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d, %d, %d)", i, i%100, i%50))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM t WHERE a = 50 AND b = 25")
+	}
+}
+
+// -----------------------------------------------------------------
+// Wave 8: Scale & Stress
+// Focus: Performance with large datasets
+// -----------------------------------------------------------------
+
+// BenchmarkScale10KRows measures SELECT on 10K rows
+func BenchmarkScale10KRows(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE t (id INTEGER, val INTEGER, data TEXT)")
+	for i := 0; i < 10000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d, %d, 'data%d')", i, i, i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM t")
+	}
+}
+
+// BenchmarkScale100KRows measures SELECT on 100K rows
+func BenchmarkScale100KRows(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE t (id INTEGER, val INTEGER)")
+	for i := 0; i < 100000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d, %d)", i, i%1000))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM t WHERE val > 500")
+	}
+}
+
+// BenchmarkScaleBulkInsert10K measures bulk insert of 10K rows
+func BenchmarkScaleBulkInsert10K(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE t (id INTEGER, val INTEGER)")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		mustExec(b, db, "DELETE FROM t")
+		b.StartTimer()
+		for j := 0; j < 10000; j++ {
+			mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d, %d)", j, j))
+		}
+	}
+}
+
+// BenchmarkScaleMultiTableJoin measures 3+ table JOIN at scale (basic)
+func BenchmarkScaleMultiTableJoin(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE t1 (id INTEGER, v INTEGER)")
+	mustExec(b, db, "CREATE TABLE t2 (id INTEGER, v INTEGER)")
+	mustExec(b, db, "CREATE TABLE t3 (id INTEGER, v INTEGER)")
+
+	for i := 0; i < 100; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t1 VALUES (%d, %d)", i, i))
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t2 VALUES (%d, %d)", i, i))
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t3 VALUES (%d, %d)", i, i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id JOIN t3 ON t2.id = t3.id")
+	}
+}
+
+// -----------------------------------------------------------------
+// Wave 9: Memory & Cache
+// Focus: Memory usage and cache effectiveness
+// -----------------------------------------------------------------
+
+// BenchmarkMemoryCacheHit measures sequential read cache hit rate
+func BenchmarkMemoryCacheHit(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "PRAGMA cache_size = 1000")
+	mustExec(b, db, "CREATE TABLE t (id INTEGER, val INTEGER)")
+	for i := 0; i < 500; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d, %d)", i, i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM t ORDER BY id")
+	}
+}
+
+// BenchmarkMemoryCacheMiss measures random read cache miss
+func BenchmarkMemoryCacheMiss(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "PRAGMA cache_size = 10")
+	mustExec(b, db, "CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)")
+	for i := 0; i < 1000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d, %d)", i, i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, fmt.Sprintf("SELECT * FROM t WHERE id = %d", (i*17)%1000))
+	}
+}
+
+// BenchmarkMemoryPerQuery measures peak memory per query
+func BenchmarkMemoryPerQuery(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE t (id INTEGER, v1 INTEGER, v2 INTEGER, v3 INTEGER, v4 INTEGER, v5 INTEGER)")
+	for i := 0; i < 5000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d, %d, %d, %d, %d, %d)", i, i, i, i, i, i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT id, v1*2, v2+1, v3-1, v4*3, v5/2 FROM t WHERE id > 1000")
+	}
+}

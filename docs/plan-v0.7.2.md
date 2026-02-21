@@ -43,9 +43,9 @@ This plan aims to discover performance issues across all database engine layers:
 | 4 | TM Layer: Transactions & WAL | 5 | ✅ Done |
 | 5 | Edge Cases & Data Patterns | 8 | ✅ Done |
 | 6 | Complex Queries | 6 | ✅ Done |
-| 7 | Index & Query Optimization | 5 | ⏳ Pending |
-| 8 | Scale & Stress | 4 | ⏳ Pending |
-| 9 | Memory & Cache | 3 | ⏳ Pending |
+| 7 | Index & Query Optimization | 5 | ✅ Done |
+| 8 | Scale & Stress | 4 | ✅ Done |
+| 9 | Memory & Cache | 3 | ✅ Done |
 | 10 | Verification | - | ⏳ Pending |
 
 **Total**: 49 new tests → 70 total
