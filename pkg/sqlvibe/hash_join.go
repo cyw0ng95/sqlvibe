@@ -7,12 +7,32 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 )
 
-// hashJoinKey converts a value to a string suitable as a hash map key.
-func hashJoinKey(v interface{}) string {
-	if v == nil {
-		return "\x00nil"
+// normalizeJoinKey converts a value to a form that is safe as an interface{}
+// map key.  []byte is not comparable in Go so it is converted to string; all
+// other types that reach here (int64, float64, string, bool) are left as-is.
+func normalizeJoinKey(v interface{}) interface{} {
+	if b, ok := v.([]byte); ok {
+		return string(b)
 	}
-	return fmt.Sprintf("%T\x00%v", v, v)
+	return v
+}
+
+// allColumnsAreStar reports whether every SELECT column is an unqualified or
+// qualified star (i.e. no expressions, no function calls, no aliases with
+// non-star source).  When true and the query has no WHERE clause the hash join
+// can skip building the merged-row map entirely.
+func allColumnsAreStar(cols []QP.Expr) bool {
+	for _, col := range cols {
+		switch c := col.(type) {
+		case *QP.ColumnRef:
+			if c.Name != "*" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return len(cols) > 0
 }
 
 // hashJoinInfo holds the extracted parameters for a 2-table equi-join.
@@ -117,16 +137,13 @@ func extractHashJoinInfo(stmt *QP.SelectStmt) *hashJoinInfo {
 }
 
 // selectColNeedsVM reports whether a SELECT column expression requires the full VM
-// (e.g., aggregate functions or qualified star t.*), which the hash join does not handle.
+// (e.g., aggregate functions), which the hash join does not handle.
 func selectColNeedsVM(col QP.Expr) bool {
 	switch c := col.(type) {
 	case *QP.FuncCall:
 		return true // aggregate or scalar function
 	case *QP.ColumnRef:
-		// Qualified star like "t.*" — requires VM for proper column expansion
-		if c.Name == "*" && c.Table != "" {
-			return true
-		}
+		_ = c // plain column refs and qualified stars (t.*) are handled by hash join
 	case *QP.AliasExpr:
 		return selectColNeedsVM(c.Expr)
 	case *QP.WindowFuncExpr:
@@ -169,14 +186,17 @@ func (db *Database) execHashJoin(stmt *QP.SelectStmt) ([][]interface{}, []string
 	}
 
 	// Build hash table keyed by the right table's join column value.
+	// Use interface{} keys directly (no fmt.Sprintf string conversion) to
+	// avoid one heap allocation per key.  []byte is converted to string first
+	// because []byte is not comparable as a map key.
 	// NULL values are excluded since NULL ≠ NULL in SQL equi-joins.
-	hashTable := make(map[string][]map[string]interface{}, len(rightData))
+	hashTable := make(map[interface{}][]map[string]interface{}, len(rightData))
 	for _, row := range rightData {
 		joinVal := row[info.rightJoinKey]
 		if joinVal == nil {
 			continue // NULL does not match anything in an equi-join
 		}
-		key := hashJoinKey(joinVal)
+		key := normalizeJoinKey(joinVal)
 		hashTable[key] = append(hashTable[key], row)
 	}
 
@@ -186,8 +206,17 @@ func (db *Database) execHashJoin(stmt *QP.SelectStmt) ([][]interface{}, []string
 	for i, col := range stmt.Columns {
 		switch c := col.(type) {
 		case *QP.ColumnRef:
-			if c.Name == "*" {
+			if c.Name == "*" && c.Table == "" {
+				// Unqualified star: expand all columns from both tables.
 				cols = append(cols, allCols...)
+			} else if c.Name == "*" {
+				// Qualified star (e.g. a.*, b.*): expand columns of matching side.
+				tbl := strings.ToLower(c.Table)
+				if tbl == strings.ToLower(leftAlias) || tbl == strings.ToLower(leftTable) {
+					cols = append(cols, leftCols...)
+				} else {
+					cols = append(cols, rightCols...)
+				}
 			} else {
 				cols = append(cols, c.Name)
 			}
@@ -199,18 +228,53 @@ func (db *Database) execHashJoin(stmt *QP.SelectStmt) ([][]interface{}, []string
 	}
 
 	// Probe the hash table for each left row.
+	// Fast path: when WHERE is absent and every SELECT column is a star (unqualified
+	// or qualified), skip buildJoinMergedRow entirely — the output row is built
+	// directly from the source rows without going through a merged map.
+	starOnly := stmt.Where == nil && allColumnsAreStar(stmt.Columns)
+
 	var results [][]interface{}
 	for _, leftRow := range leftData {
 		joinVal := leftRow[info.leftJoinKey]
 		if joinVal == nil {
 			continue // NULL never matches in an equi-join
 		}
-		key := hashJoinKey(joinVal)
+		key := normalizeJoinKey(joinVal)
 		matches := hashTable[key]
 		if len(matches) == 0 {
 			continue
 		}
 		for _, rightRow := range matches {
+			if starOnly {
+				// Fast path: build output directly from source rows.
+				row := make([]interface{}, 0, len(allCols))
+				for _, col := range stmt.Columns {
+					c := col.(*QP.ColumnRef) // allColumnsAreStar guarantees this
+					if c.Table == "" {
+						// Unqualified *: left columns then right columns.
+						for _, colName := range leftCols {
+							row = append(row, leftRow[colName])
+						}
+						for _, colName := range rightCols {
+							row = append(row, rightRow[colName])
+						}
+					} else {
+						tbl := strings.ToLower(c.Table)
+						if tbl == strings.ToLower(leftAlias) || tbl == strings.ToLower(leftTable) {
+							for _, colName := range leftCols {
+								row = append(row, leftRow[colName])
+							}
+						} else {
+							for _, colName := range rightCols {
+								row = append(row, rightRow[colName])
+							}
+						}
+					}
+				}
+				results = append(results, row)
+				continue
+			}
+
 			merged := buildJoinMergedRow(leftRow, leftTable, leftAlias, leftCols,
 				rightRow, rightTable, rightAlias, rightCols)
 
@@ -218,24 +282,35 @@ func (db *Database) execHashJoin(stmt *QP.SelectStmt) ([][]interface{}, []string
 				continue
 			}
 
-			row := make([]interface{}, len(stmt.Columns))
-			for i, col := range stmt.Columns {
+			row := make([]interface{}, 0, len(stmt.Columns))
+			for _, col := range stmt.Columns {
 				switch c := col.(type) {
 				case *QP.ColumnRef:
-					if c.Name == "*" {
-						// Expand * into individual columns
-						row = make([]interface{}, len(allCols))
-						for j, colName := range leftCols {
-							row[j] = leftRow[colName]
+					if c.Name == "*" && c.Table == "" {
+						// Unqualified *: all left columns then all right columns.
+						for _, colName := range leftCols {
+							row = append(row, leftRow[colName])
 						}
-						for j, colName := range rightCols {
-							row[len(leftCols)+j] = rightRow[colName]
+						for _, colName := range rightCols {
+							row = append(row, rightRow[colName])
 						}
-						break
+					} else if c.Name == "*" {
+						// Qualified star (e.g. a.*, b.*): columns of matching side.
+						tbl := strings.ToLower(c.Table)
+						if tbl == strings.ToLower(leftAlias) || tbl == strings.ToLower(leftTable) {
+							for _, colName := range leftCols {
+								row = append(row, leftRow[colName])
+							}
+						} else {
+							for _, colName := range rightCols {
+								row = append(row, rightRow[colName])
+							}
+						}
+					} else {
+						row = append(row, db.engine.EvalExpr(merged, c))
 					}
-					row[i] = db.engine.EvalExpr(merged, c)
 				default:
-					row[i] = db.engine.EvalExpr(merged, col)
+					row = append(row, db.engine.EvalExpr(merged, col))
 				}
 			}
 			results = append(results, row)

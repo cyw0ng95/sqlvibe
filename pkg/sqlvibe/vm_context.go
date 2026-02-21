@@ -248,25 +248,17 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 			}
 		}
 
-		// Check primary key uniqueness
+		// Check primary key uniqueness — O(1) via hash set when available.
 		pkCols := ctx.db.primaryKeys[tableName]
 		if len(pkCols) > 0 {
-			for _, existingRow := range ctx.db.data[tableName] {
-				allMatch := true
-				for _, pkCol := range pkCols {
-					pkVal := row[pkCol]
-					if pkVal == nil || existingRow[pkCol] != pkVal {
-						allMatch = false
-						break
-					}
-				}
-				if allMatch {
-					return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
-				}
+			if ctx.db.pkHashContains(tableName, row) {
+				return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
 			}
 		}
 
 		ctx.db.data[tableName] = append(ctx.db.data[tableName], row)
+		newIdx := len(ctx.db.data[tableName]) - 1
+		ctx.db.addToIndexes(tableName, row, newIdx)
 		return nil
 	}
 
@@ -326,7 +318,9 @@ func (ctx *dsVmContext) UpdateRow(tableName string, rowIndex int, row map[string
 	if rowIndex < 0 || rowIndex >= len(ctx.db.data[tableName]) {
 		return fmt.Errorf("row index out of bounds")
 	}
+	oldRow := ctx.db.data[tableName][rowIndex]
 	ctx.db.data[tableName][rowIndex] = row
+	ctx.db.updateIndexes(tableName, oldRow, row, rowIndex)
 	return nil
 }
 
@@ -341,6 +335,8 @@ func (ctx *dsVmContext) DeleteRow(tableName string, rowIndex int) error {
 	if rowIndex < 0 || rowIndex >= len(ctx.db.data[tableName]) {
 		return fmt.Errorf("row index out of bounds")
 	}
+	row := ctx.db.data[tableName][rowIndex]
+	ctx.db.removeFromIndexes(tableName, row, rowIndex)
 	ctx.db.data[tableName] = append(ctx.db.data[tableName][:rowIndex], ctx.db.data[tableName][rowIndex+1:]...)
 	return nil
 }
@@ -452,25 +448,17 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		}
 	}
 
-	// Check primary key constraints
+	// Check primary key constraints — O(1) via hash set when available.
 	pkCols := ctx.db.primaryKeys[tableName]
 	if len(pkCols) > 0 {
-		for _, existingRow := range ctx.db.data[tableName] {
-			allMatch := true
-			for _, pkCol := range pkCols {
-				pkVal := row[pkCol]
-				if pkVal == nil || existingRow[pkCol] != pkVal {
-					allMatch = false
-					break
-				}
-			}
-			if allMatch {
-				return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
-			}
+		if ctx.db.pkHashContains(tableName, row) {
+			return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
 		}
 	}
 
 	ctx.db.data[tableName] = append(ctx.db.data[tableName], row)
+	newIdx := len(ctx.db.data[tableName]) - 1
+	ctx.db.addToIndexes(tableName, row, newIdx)
 
 	// Update storage engine
 	rowID := int64(len(ctx.db.data[tableName]))
@@ -662,7 +650,9 @@ func (ctx *dbVmContext) UpdateRow(tableName string, rowIndex int, row map[string
 	if ctx.db.data[tableName] == nil || rowIndex < 0 || rowIndex >= len(ctx.db.data[tableName]) {
 		return fmt.Errorf("invalid row index for table %s", tableName)
 	}
+	oldRow := ctx.db.data[tableName][rowIndex]
 	ctx.db.data[tableName][rowIndex] = row
+	ctx.db.updateIndexes(tableName, oldRow, row, rowIndex)
 	return nil
 }
 
@@ -670,6 +660,8 @@ func (ctx *dbVmContext) DeleteRow(tableName string, rowIndex int) error {
 	if ctx.db.data[tableName] == nil || rowIndex < 0 || rowIndex >= len(ctx.db.data[tableName]) {
 		return fmt.Errorf("invalid row index for table %s", tableName)
 	}
+	row := ctx.db.data[tableName][rowIndex]
+	ctx.db.removeFromIndexes(tableName, row, rowIndex)
 	// Remove the row at the given index
 	ctx.db.data[tableName] = append(ctx.db.data[tableName][:rowIndex], ctx.db.data[tableName][rowIndex+1:]...)
 	return nil

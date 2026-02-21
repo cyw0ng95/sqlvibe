@@ -3,6 +3,7 @@ package sqlvibe
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/sqlvibe/sqlvibe/internal/CG"
@@ -209,6 +210,14 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	// Get table data from DS context
 	tableData, _ := ctx.GetTableData(tableName)
 
+	// Secondary index pre-filter: if WHERE is a simple col=val on an indexed column,
+	// pass only matching rows to the VM instead of the full table.
+	if stmt.Where != nil {
+		if filtered := db.tryIndexLookup(tableName, stmt.Where); filtered != nil {
+			tableData = filtered
+		}
+	}
+
 	if tableData != nil {
 		vm.Cursors().OpenTableAtID(0, cursorName, tableData, tableCols)
 	}
@@ -242,7 +251,8 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 			}
 		}
 		allCols := append(projCols, extraOrderByCols...)
-		results = db.engine.SortRows(results, stmt.OrderBy, allCols)
+		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		results = db.engine.SortRowsTopK(results, stmt.OrderBy, allCols, topK)
 		if stmt.Limit != nil {
 			if limited, err2 := db.applyLimit(&Rows{Data: results}, stmt.Limit, stmt.Offset); err2 == nil {
 				results = limited.Data
@@ -688,8 +698,9 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	if len(extraOrderByCols) > 0 {
 		// Build full columns list (SELECT columns + extra ORDER BY cols)
 		fullCols := append(cols, extraOrderByCols...)
-		// Sort using full column set
-		results = db.engine.SortRows(results, stmt.OrderBy, fullCols)
+		// Sort using full column set (use top-K heap when limit is known)
+		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		results = db.engine.SortRowsTopK(results, stmt.OrderBy, fullCols, topK)
 		// Apply LIMIT/OFFSET if present (to avoid database.go re-applying with wrong cols)
 		if stmt.Limit != nil {
 			rows := &Rows{Columns: fullCols, Data: results}
@@ -716,6 +727,31 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	}
 
 	return &Rows{Columns: cols, Data: results}, nil
+}
+
+// extractLimitInt returns the integer value of a LIMIT expression, or 0 if not a constant integer.
+func extractLimitInt(limitExpr, offsetExpr QP.Expr) int {
+	if limitExpr == nil {
+		return 0
+	}
+	lim := 0
+	off := 0
+	if lit, ok := limitExpr.(*QP.Literal); ok {
+		if n, ok := lit.Value.(int64); ok {
+			lim = int(n)
+		}
+	}
+	if offsetExpr != nil {
+		if lit, ok := offsetExpr.(*QP.Literal); ok {
+			if n, ok := lit.Value.(int64); ok {
+				off = int(n)
+			}
+		}
+	}
+	if lim <= 0 {
+		return 0
+	}
+	return off + lim
 }
 
 // validateInsertColumnCount checks that INSERT column count matches value count.
@@ -1006,13 +1042,41 @@ func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
 }
 
 // deduplicateRows removes duplicate rows, preserving the first occurrence of each unique row.
+// Uses strings.Builder + type switch to avoid fmt.Sprintf overhead.
 func deduplicateRows(rows [][]interface{}) [][]interface{} {
-	seen := make(map[string]bool)
+	seen := make(map[string]struct{}, len(rows))
 	result := make([][]interface{}, 0, len(rows))
+	var b strings.Builder
 	for _, row := range rows {
-		key := fmt.Sprintf("%v", row)
-		if !seen[key] {
-			seen[key] = true
+		b.Reset()
+		for i, v := range row {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			switch val := v.(type) {
+			case int64:
+				b.WriteString(strconv.FormatInt(val, 10))
+			case float64:
+				b.WriteString(strconv.FormatFloat(val, 'f', -1, 64))
+			case string:
+				b.WriteString(val)
+			case bool:
+				if val {
+					b.WriteString("true")
+				} else {
+					b.WriteString("false")
+				}
+			case []byte:
+				b.WriteString(string(val))
+			case nil:
+				b.WriteString("<nil>")
+			default:
+				fmt.Fprintf(&b, "%v", val)
+			}
+		}
+		key := b.String()
+		if _, dup := seen[key]; !dup {
+			seen[key] = struct{}{}
 			result = append(result, row)
 		}
 	}
