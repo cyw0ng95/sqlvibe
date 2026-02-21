@@ -704,6 +704,10 @@ func (ctx *dbVmContext) ExecuteSubqueryRows(subquery interface{}) ([][]interface
 		return nil, err
 	}
 
+	fmt.Printf("DEBUG ExecuteSubqueryRows: rows=%p, len(rows.Data)=%d, cap(rows.Data)=%d, stmt.Limit=%v, stmt.OrderBy=%v\n", rows, len(rows.Data), cap(rows.Data), selectStmt.Limit, len(selectStmt.OrderBy))
+	for i, r := range rows.Data {
+		fmt.Printf("  row[%d]=%v\n", i, r)
+	}
 	// Return all rows
 	return rows.Data, nil
 }

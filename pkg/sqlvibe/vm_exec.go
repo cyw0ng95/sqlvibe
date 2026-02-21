@@ -116,7 +116,14 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 
 	// Delegate to execVMQuery which handles ORDER BY + LIMIT correctly
 	// (including ORDER BY columns not in SELECT via extraOrderByCols mechanism).
-	return db.execVMQuery("", stmt)
+	result, err := db.execVMQuery("", stmt)
+	fmt.Printf("DEBUG execSelectStmt: execVMQuery returned %d rows (err=%v)\n", func() int {
+		if result == nil {
+			return -1
+		}
+		return len(result.Data)
+	}(), err)
+	return result, err
 }
 
 // execSelectStmtWithContext executes a SelectStmt with outer row context for correlated subqueries
@@ -700,7 +707,12 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		fullCols := append(cols, extraOrderByCols...)
 		// Sort using full column set (use top-K heap when limit is known)
 		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		fmt.Printf("DEBUG execVMQuery: extraOrderByCols=%v, len(results)=%d, topK=%d, stmt.Limit=%v, fullCols=%v\n", extraOrderByCols, len(results), topK, stmt.Limit, fullCols)
+		if len(results) > 0 {
+			fmt.Printf("DEBUG execVMQuery: first row has %d values: %v\n", len(results[0]), results[0])
+		}
 		results = db.engine.SortRowsTopK(results, stmt.OrderBy, fullCols, topK)
+		fmt.Printf("DEBUG execVMQuery: after SortRowsTopK, len(results)=%d\n", len(results))
 		// Apply LIMIT/OFFSET if present (to avoid database.go re-applying with wrong cols)
 		if stmt.Limit != nil {
 			rows := &Rows{Columns: fullCols, Data: results}
@@ -722,10 +734,12 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 			}
 		}
 		results = stripped
+		fmt.Printf("DEBUG execVMQuery: after strip, len(results)=%d\n", len(results))
 		// Also mark ORDER BY as consumed so database.go doesn't re-sort
 		stmt.OrderBy = nil
 	}
 
+	fmt.Printf("DEBUG execVMQuery: returning &Rows with %d rows\n", len(results))
 	return &Rows{Columns: cols, Data: results}, nil
 }
 
