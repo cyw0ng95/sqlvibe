@@ -2847,18 +2847,39 @@ func isCountStar(aggDef AggregateDef) bool {
 	return false
 }
 
-// computeGroupKey generates a string key from GROUP BY expressions
+// computeGroupKey generates a string key from GROUP BY expressions.
+// Uses a strings.Builder + type switch to avoid per-value fmt.Sprintf allocations.
 func (vm *VM) computeGroupKey(row map[string]interface{}, columns []string, groupByExprs []QP.Expr) string {
 	if len(groupByExprs) == 0 {
 		return "" // Single group for aggregates without GROUP BY
 	}
 
-	keyParts := make([]string, 0)
-	for _, expr := range groupByExprs {
+	var buf strings.Builder
+	for i, expr := range groupByExprs {
+		if i > 0 {
+			buf.WriteByte('|')
+		}
 		value := vm.evaluateExprOnRow(row, columns, expr)
-		keyParts = append(keyParts, fmt.Sprintf("%v", value))
+		switch v := value.(type) {
+		case int64:
+			buf.WriteString(strconv.FormatInt(v, 10))
+		case float64:
+			buf.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+		case string:
+			buf.WriteString(v)
+		case bool:
+			if v {
+				buf.WriteString("true")
+			} else {
+				buf.WriteString("false")
+			}
+		case nil:
+			buf.WriteString("<nil>")
+		default:
+			fmt.Fprintf(&buf, "%v", value)
+		}
 	}
-	return strings.Join(keyParts, "|")
+	return buf.String()
 }
 
 // evaluateAggregateArg evaluates the argument of an aggregate function

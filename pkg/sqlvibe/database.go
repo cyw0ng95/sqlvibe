@@ -767,7 +767,8 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			// Apply ORDER BY and LIMIT if present
 			rows := &Rows{Columns: leftRows.Columns, Data: combinedData}
 			if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
-				rows, err = db.sortResults(rows, stmt.OrderBy)
+				topK := extractLimitInt(stmt.Limit, stmt.Offset)
+				rows, err = db.sortResultsTopK(rows, stmt.OrderBy, topK)
 				if err != nil {
 					return nil, err
 				}
@@ -803,7 +804,8 @@ func (db *Database) Query(sql string) (*Rows, error) {
 
 		// Handle ORDER BY - sort results
 		if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
-			rows, err = db.sortResults(rows, stmt.OrderBy)
+			topK := extractLimitInt(stmt.Limit, stmt.Offset)
+			rows, err = db.sortResultsTopK(rows, stmt.OrderBy, topK)
 			if err != nil {
 				return nil, err
 			}
@@ -903,6 +905,12 @@ func ordinalSuffix(n int) string {
 }
 
 func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error) {
+	return db.sortResultsTopK(rows, orderBy, 0)
+}
+
+// sortResultsTopK sorts rows using ORDER BY with an optional top-K hint.
+// topK > 0 enables the O(N log K) heap sort path when only the first K results are needed.
+func (db *Database) sortResultsTopK(rows *Rows, orderBy []QP.OrderBy, topK int) (*Rows, error) {
 	if len(orderBy) == 0 || rows == nil || len(rows.Data) == 0 {
 		return rows, nil
 	}
@@ -922,7 +930,7 @@ func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error)
 		}
 	}
 
-	sorted := db.engine.SortRows(rows.Data, orderBy, rows.Columns)
+	sorted := db.engine.SortRowsTopK(rows.Data, orderBy, rows.Columns, topK)
 	return &Rows{Columns: rows.Columns, Data: sorted}, nil
 }
 
@@ -1594,7 +1602,8 @@ func (db *Database) execDerivedTableQuery(stmt *QP.SelectStmt) (*Rows, error) {
 
 	// Apply ORDER BY and LIMIT if present
 	if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
-		rows, err = db.sortResults(rows, stmt.OrderBy)
+		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		rows, err = db.sortResultsTopK(rows, stmt.OrderBy, topK)
 		if err != nil {
 			return nil, err
 		}
@@ -1703,7 +1712,8 @@ func (db *Database) queryView(viewSQL string, outerStmt *QP.SelectStmt, origSQL 
 	// Apply outer ORDER BY
 	if len(outerStmt.OrderBy) > 0 {
 		var err error
-		rows, err = db.sortResults(rows, outerStmt.OrderBy)
+		topK := extractLimitInt(outerStmt.Limit, outerStmt.Offset)
+		rows, err = db.sortResultsTopK(rows, outerStmt.OrderBy, topK)
 		if err != nil {
 			return nil, err
 		}

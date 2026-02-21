@@ -242,7 +242,8 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 			}
 		}
 		allCols := append(projCols, extraOrderByCols...)
-		results = db.engine.SortRows(results, stmt.OrderBy, allCols)
+		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		results = db.engine.SortRowsTopK(results, stmt.OrderBy, allCols, topK)
 		if stmt.Limit != nil {
 			if limited, err2 := db.applyLimit(&Rows{Data: results}, stmt.Limit, stmt.Offset); err2 == nil {
 				results = limited.Data
@@ -688,8 +689,9 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	if len(extraOrderByCols) > 0 {
 		// Build full columns list (SELECT columns + extra ORDER BY cols)
 		fullCols := append(cols, extraOrderByCols...)
-		// Sort using full column set
-		results = db.engine.SortRows(results, stmt.OrderBy, fullCols)
+		// Sort using full column set (use top-K heap when limit is known)
+		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		results = db.engine.SortRowsTopK(results, stmt.OrderBy, fullCols, topK)
 		// Apply LIMIT/OFFSET if present (to avoid database.go re-applying with wrong cols)
 		if stmt.Limit != nil {
 			rows := &Rows{Columns: fullCols, Data: results}
@@ -716,6 +718,31 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	}
 
 	return &Rows{Columns: cols, Data: results}, nil
+}
+
+// extractLimitInt returns the integer value of a LIMIT expression, or 0 if not a constant integer.
+func extractLimitInt(limitExpr, offsetExpr QP.Expr) int {
+	if limitExpr == nil {
+		return 0
+	}
+	lim := 0
+	off := 0
+	if lit, ok := limitExpr.(*QP.Literal); ok {
+		if n, ok := lit.Value.(int64); ok {
+			lim = int(n)
+		}
+	}
+	if offsetExpr != nil {
+		if lit, ok := offsetExpr.(*QP.Literal); ok {
+			if n, ok := lit.Value.(int64); ok {
+				off = int(n)
+			}
+		}
+	}
+	if lim <= 0 {
+		return 0
+	}
+	return off + lim
 }
 
 // validateInsertColumnCount checks that INSERT column count matches value count.

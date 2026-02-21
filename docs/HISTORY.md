@@ -1,5 +1,23 @@
 # sqlvibe Release History
 
+## **v0.7.3** (2026-02-21)
+
+### Performance Improvements
+- **GROUP BY key: `strings.Builder` + type switch** — Replaced per-row `fmt.Sprintf` + `[]string` + `strings.Join` in `computeGroupKey` with a single `strings.Builder` write and a type switch (`int64`, `float64`, `string`, `bool`, `nil` fast paths). GROUP BY is ~11% faster.
+- **SortRows pre-resolved column indices** — Pre-resolve `ORDER BY col_name` column indices once before sorting (was a linear scan per comparison pair). Skip per-row `rowMap` allocation for non-ColumnRef ORDER BY terms. **10–12% faster ORDER BY, 9% less memory.**
+- **Top-K heap for `ORDER BY … LIMIT N`** — New `SortRowsTopK(data, orderBy, cols, topK)` using `container/heap`. Maintains a bounded max-heap of topK=offset+limit candidates. For ColumnRef ORDER BY (the common case), rows that don't enter the heap incur zero allocation. Stable sort semantics preserved via `origIdx` tiebreaker. Shared `cmpOrderByKey` helper centralises NULL/DESC comparison logic. **ORDER BY + LIMIT 10 on 1 000 rows: 22% faster, 28% less memory.**
+
+### Architecture Notes
+- Comparison logic extracted into `cmpOrderByKey(qe, keyA, keyB, ob)` — used by `SortRows`, `topKHeap.Less`, `topKHeap.lessEntry`, and `SortRowsTopK.compareRawToTop`. Single authoritative source for NULL handling and DESC order, eliminating four previous copies.
+
+### Bug Fixes
+- None
+
+### Breaking Changes
+- None
+
+---
+
 ## **v0.7.2** (2026-02-21)
 
 ### Performance Improvements

@@ -118,7 +118,8 @@ All measurements are end-to-end (parse → compile → execute) via the public A
 | DELETE single row | 17.4 µs | 6.2 KB | 71 |
 | SELECT all (1 000 rows) | 215 µs | 133 KB | 1 060 |
 | SELECT with WHERE (1 000 rows) | 224 µs | 39.6 KB | 162 |
-| SELECT with ORDER BY (500 rows) | 213 µs | 88.3 KB | 570 |
+| SELECT with ORDER BY (500 rows) | 191 µs | 80.3 KB | 570 |
+| SELECT ORDER BY LIMIT 10 (1 000 rows) | 205 µs | 120 KB | 1 089 |
 | CREATE/DROP TABLE | 6.4 µs | 3.2 KB | 51 |
 
 ### Aggregates (1 000 rows)
@@ -129,7 +130,7 @@ All measurements are end-to-end (parse → compile → execute) via the public A
 | SUM | 41.0 µs | 58 |
 | AVG | 40.8 µs | 58 |
 | MIN / MAX | 41–42 µs | 57 |
-| GROUP BY (4 groups, 1 000 rows) | 215 µs | 2 191 |
+| GROUP BY (4 groups, 1 000 rows) | 173 µs | 2 191 |
 
 ### Joins & Subqueries
 
@@ -161,18 +162,23 @@ All measurements are end-to-end (parse → compile → execute) via the public A
 
 ## Known Performance Bottlenecks
 
-The v0.7.2 benchmark suite identified the following areas for future optimization:
+The v0.7.x benchmark suite identified the following areas for future optimization:
 
 | # | Area | Observation | Impact |
 |---|------|-------------|--------|
 | 1 | Secondary index queries | `WHERE col = ?` on a column with a `CREATE INDEX` does a full table scan instead of an index lookup (query planner does not yet use secondary indexes) | High |
-| 2 | LIMIT without early-exit | `SELECT … ORDER BY … LIMIT N` materializes the full result set before applying the limit; a top-K heap would reduce memory for large tables | Medium |
-| 3 | JOIN row materialization | Hash join (equi-join) works well, but all rows are copied into memory before joining — streaming row evaluation would reduce peak allocation | Medium |
-| 4 | GROUP BY string key | Group keys are formatted with `fmt.Sprintf` per row; a binary key encoding would reduce CPU and allocation overhead | Low–Medium |
+| 2 | JOIN row materialization | Hash join (equi-join) works well, but all rows are copied into memory before joining — streaming row evaluation would reduce peak allocation | Medium |
+| 3 | GROUP BY allocations | 2 191 allocs for 4-group / 1 000-row GROUP BY; majority are result row copies from the group accumulator | Low–Medium |
+
+### Fixed in v0.7.3
+
+- **GROUP BY key: `strings.Builder` + type switch** — Replaced per-row `fmt.Sprintf` + `[]string` + `strings.Join` with a single `strings.Builder` write and a type switch for `int64`/`float64`/`string`/`bool`/`nil`. GROUP BY is ~11% faster; no change in alloc count since the dominating allocs are row copies.
+- **SortRows pre-resolved column indices** — Old code did a linear scan of all column names for each comparison pair in `ORDER BY col_name`. New code resolves column indices once before the sort loop, giving direct `data[row][ci]` access. For expression ORDER BY terms, per-row rowMap allocation is also skipped (evaluation is deferred). **ORDER BY is 10–12% faster, 9% less memory.**
+- **Top-K heap for `ORDER BY … LIMIT N`** — Added `SortRowsTopK` using `container/heap`. The bounded max-heap keeps only the K best rows; the O(N log K) scan replaces O(N log N) full sort. For ColumnRef ORDER BY (the common case), discarded rows incur zero allocation: keys are computed only when a row enters the heap. Stable sort semantics preserved via `origIdx` tiebreaker. Shared `cmpOrderByKey` helper eliminates comparison logic duplication. Updated all ORDER BY + LIMIT call sites. **ORDER BY + LIMIT 10 on 1 000 rows: 22% faster, 28% less memory.**
 
 ### Fixed in v0.7.2
 
-- **SUM / AVG per-row allocation** — The aggregate accumulator used `interface{}` boxing on every row, causing ~1 allocation per row for SUM and AVG. Replaced with typed `int64`/`float64` fields in `AggregateState`. Result: **94% reduction in allocations** (1 032 → 58 allocs/op for SUM/AVG on 1 000 rows) and ~25% faster aggregate queries.
+- **SUM / AVG per-row allocation** — The aggregate accumulator used `interface{}` boxing on every row. Replaced with typed `int64`/`float64` fields in `AggregateState`. Result: **94% reduction in allocations** (1 032 → 58 allocs/op for SUM/AVG on 1 000 rows) and ~25% faster aggregate queries.
 - **Self-join / qualified-star hash join** — `SELECT a.*, b.* FROM t a JOIN t b ON …` fell back to an O(N²) VM nested-loop join because the hash join incorrectly rejected qualified stars (`t.*`). Extended hash join to handle qualified stars, promoting self-joins to the O(N+M) hash join path. Result: **9× speedup** (1.57 ms → 169 µs for 100-row self-join).
 
 ## SQL:1999 Compatibility
