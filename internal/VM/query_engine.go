@@ -11,7 +11,7 @@ import (
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 var (

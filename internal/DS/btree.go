@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 // BTree represents a B-Tree using the new encoding infrastructure

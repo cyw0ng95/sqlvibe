@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 // MaxVMIterations is the maximum number of VM instructions that can be executed
@@ -2627,9 +2627,9 @@ type AggregateInfo struct {
 
 // ScalarCallInfo holds info for OpCallScalar: a function name, arg register indices, and a dst register.
 type ScalarCallInfo struct {
-	Name    string // function name (uppercase)
-	ArgRegs []int  // register indices for arguments
-	Dst     int    // destination register
+	Name    string       // function name (uppercase)
+	ArgRegs []int        // register indices for arguments
+	Dst     int          // destination register
 	Call    *QP.FuncCall // original call expression (nil args are evaluated at runtime)
 }
 
@@ -3168,7 +3168,6 @@ func matchLikePattern(value, pattern string, vi, pi int) bool {
 	}
 	return false
 }
-
 
 func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interface{} {
 	// Simple implementation for common operators

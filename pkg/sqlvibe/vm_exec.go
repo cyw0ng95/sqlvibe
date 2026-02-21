@@ -7,8 +7,8 @@ import (
 
 	"github.com/sqlvibe/sqlvibe/internal/CG"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 	"github.com/sqlvibe/sqlvibe/internal/VM"
-	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 func (db *Database) ExecVM(sql string) (*Rows, error) {
@@ -1039,43 +1039,43 @@ func collectColumnRefs(expr QP.Expr) []string {
 // resolveNaturalUsing synthesizes a JOIN ON condition for NATURAL JOIN and JOIN ... USING (cols).
 // This is called after schema info is available so we can find shared column names.
 func (db *Database) resolveNaturalUsing(join *QP.Join, leftCols, rightCols []string, leftName, rightName string) {
-if join == nil {
-return
-}
-// Determine which columns to join on
-usingCols := join.UsingColumns
-if join.Natural && len(usingCols) == 0 {
-// Find columns that appear in both tables
-rightSet := make(map[string]bool)
-for _, c := range rightCols {
-rightSet[c] = true
-}
-for _, c := range leftCols {
-if rightSet[c] {
-usingCols = append(usingCols, c)
-}
-}
-}
-if len(usingCols) == 0 || join.Cond != nil {
-return
-}
-// Store the using columns back so dedup code can use them
-if join.Natural && len(join.UsingColumns) == 0 {
-join.UsingColumns = usingCols
-}
-// Build left.col = right.col AND ... condition
-var cond QP.Expr
-for _, col := range usingCols {
-eq := &QP.BinaryExpr{
-Op:    QP.TokenEq,
-Left:  &QP.ColumnRef{Table: leftName, Name: col},
-Right: &QP.ColumnRef{Table: rightName, Name: col},
-}
-if cond == nil {
-cond = eq
-} else {
-cond = &QP.BinaryExpr{Op: QP.TokenAnd, Left: cond, Right: eq}
-}
-}
-join.Cond = cond
+	if join == nil {
+		return
+	}
+	// Determine which columns to join on
+	usingCols := join.UsingColumns
+	if join.Natural && len(usingCols) == 0 {
+		// Find columns that appear in both tables
+		rightSet := make(map[string]bool)
+		for _, c := range rightCols {
+			rightSet[c] = true
+		}
+		for _, c := range leftCols {
+			if rightSet[c] {
+				usingCols = append(usingCols, c)
+			}
+		}
+	}
+	if len(usingCols) == 0 || join.Cond != nil {
+		return
+	}
+	// Store the using columns back so dedup code can use them
+	if join.Natural && len(join.UsingColumns) == 0 {
+		join.UsingColumns = usingCols
+	}
+	// Build left.col = right.col AND ... condition
+	var cond QP.Expr
+	for _, col := range usingCols {
+		eq := &QP.BinaryExpr{
+			Op:    QP.TokenEq,
+			Left:  &QP.ColumnRef{Table: leftName, Name: col},
+			Right: &QP.ColumnRef{Table: rightName, Name: col},
+		}
+		if cond == nil {
+			cond = eq
+		} else {
+			cond = &QP.BinaryExpr{Op: QP.TokenAnd, Left: cond, Right: eq}
+		}
+	}
+	join.Cond = cond
 }

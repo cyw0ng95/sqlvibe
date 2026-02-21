@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 type ASTNode interface {
@@ -101,12 +101,12 @@ type DeleteStmt struct {
 func (d *DeleteStmt) NodeType() string { return "DeleteStmt" }
 
 type CreateTableStmt struct {
-	Name         string
-	Columns      []ColumnDef
-	IfNotExists  bool
-	Temporary    bool
-	AsSelect     *SelectStmt // CREATE TABLE ... AS SELECT
-	TableChecks  []Expr      // table-level CHECK constraints
+	Name        string
+	Columns     []ColumnDef
+	IfNotExists bool
+	Temporary   bool
+	AsSelect    *SelectStmt // CREATE TABLE ... AS SELECT
+	TableChecks []Expr      // table-level CHECK constraints
 }
 
 func (c *CreateTableStmt) NodeType() string { return "CreateTableStmt" }
@@ -139,9 +139,9 @@ func (d *DropViewStmt) NodeType() string { return "DropViewStmt" }
 
 // AlterTableStmt represents ALTER TABLE
 type AlterTableStmt struct {
-	Table  string
-	Action string // "ADD_COLUMN" or "RENAME_TO"
-	Column *ColumnDef
+	Table   string
+	Action  string // "ADD_COLUMN" or "RENAME_TO"
+	Column  *ColumnDef
 	NewName string
 }
 
@@ -2441,84 +2441,84 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []Expr, err error)
 // evalConstExpr evaluates a constant expression (one with no column references)
 // and returns the result as an interface{}. Used for IN list evaluation.
 func evalConstExpr(expr Expr) interface{} {
-switch e := expr.(type) {
-case *Literal:
-return e.Value
-case *UnaryExpr:
-val := evalConstExpr(e.Expr)
-if e.Op == TokenMinus {
-switch v := val.(type) {
-case int64:
-return -v
-case float64:
-return -v
-}
-}
-return val
-case *BinaryExpr:
-left := evalConstExpr(e.Left)
-right := evalConstExpr(e.Right)
-if left == nil || right == nil {
-return nil
-}
-lf, lok := toFloat64Const(left)
-rf, rok := toFloat64Const(right)
-if !lok || !rok {
-return nil
-}
-switch e.Op {
-case TokenPlus:
-r := lf + rf
-if isIntVal(left) && isIntVal(right) {
-return int64(r)
-}
-return r
-case TokenMinus:
-r := lf - rf
-if isIntVal(left) && isIntVal(right) {
-return int64(r)
-}
-return r
-case TokenAsterisk:
-r := lf * rf
-if isIntVal(left) && isIntVal(right) {
-return int64(r)
-}
-return r
-case TokenSlash:
-if rf == 0 {
-return nil
-}
-r := lf / rf
-if isIntVal(left) && isIntVal(right) {
-return int64(r)
-}
-return r
-}
-return nil
-default:
-return nil
-}
+	switch e := expr.(type) {
+	case *Literal:
+		return e.Value
+	case *UnaryExpr:
+		val := evalConstExpr(e.Expr)
+		if e.Op == TokenMinus {
+			switch v := val.(type) {
+			case int64:
+				return -v
+			case float64:
+				return -v
+			}
+		}
+		return val
+	case *BinaryExpr:
+		left := evalConstExpr(e.Left)
+		right := evalConstExpr(e.Right)
+		if left == nil || right == nil {
+			return nil
+		}
+		lf, lok := toFloat64Const(left)
+		rf, rok := toFloat64Const(right)
+		if !lok || !rok {
+			return nil
+		}
+		switch e.Op {
+		case TokenPlus:
+			r := lf + rf
+			if isIntVal(left) && isIntVal(right) {
+				return int64(r)
+			}
+			return r
+		case TokenMinus:
+			r := lf - rf
+			if isIntVal(left) && isIntVal(right) {
+				return int64(r)
+			}
+			return r
+		case TokenAsterisk:
+			r := lf * rf
+			if isIntVal(left) && isIntVal(right) {
+				return int64(r)
+			}
+			return r
+		case TokenSlash:
+			if rf == 0 {
+				return nil
+			}
+			r := lf / rf
+			if isIntVal(left) && isIntVal(right) {
+				return int64(r)
+			}
+			return r
+		}
+		return nil
+	default:
+		return nil
+	}
 }
 
 func toFloat64Const(v interface{}) (float64, bool) {
-switch n := v.(type) {
-case int64:
-return float64(n), true
-case float64:
-return n, true
-case int:
-return float64(n), true
-}
-return 0, false
+	switch n := v.(type) {
+	case int64:
+		return float64(n), true
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	}
+	return 0, false
 }
 
 func isIntVal(v interface{}) bool {
-switch v.(type) {
-case int64, int:
-return true
-}
-return false
+	switch v.(type) {
+	case int64, int:
+		return true
+	}
+	return false
 }
 
 // applyLikeEscape pre-processes a LIKE pattern by converting escape sequences.

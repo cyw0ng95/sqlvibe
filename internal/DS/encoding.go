@@ -5,7 +5,7 @@ import (
 	"errors"
 	"math"
 
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 // Varint encoding/decoding following SQLite format
@@ -23,7 +23,7 @@ func PutVarint(buf []byte, v int64) int {
 	util.AssertNotNil(buf, "buf")
 	requiredLen := VarintLen(v)
 	util.Assert(len(buf) >= requiredLen, "buf too small for varint: %d bytes, need at least %d", len(buf), requiredLen)
-	
+
 	uv := uint64(v)
 
 	// Handle single byte case (0-127)
@@ -48,7 +48,7 @@ func PutVarint(buf []byte, v int64) int {
 // GetVarint decodes a varint from buf and returns (value, bytes_read)
 func GetVarint(buf []byte) (int64, int) {
 	util.AssertNotNil(buf, "buf")
-	
+
 	if len(buf) == 0 {
 		return 0, 0
 	}

@@ -7,7 +7,7 @@ import (
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 // applyTypeAffinity coerces row values to match declared column type affinities.
@@ -361,7 +361,6 @@ func (ctx *dsVmContext) ExecuteSubqueryWithContext(subquery interface{}, outerRo
 func (ctx *dsVmContext) ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error) {
 	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRowsWithContext(subquery, outerRow)
 }
-
 
 type dbVmContext struct {
 	db *Database
