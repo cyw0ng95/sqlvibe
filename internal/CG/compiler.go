@@ -1144,6 +1144,11 @@ func (c *Compiler) SetMultiTableSchema(schemas map[string]map[string]int, colOrd
 	c.TableColOrder = colOrder
 }
 
+// HasAggregates reports whether stmt contains aggregate functions or a GROUP BY clause.
+func HasAggregates(stmt *QP.SelectStmt) bool {
+	return hasAggregates(stmt)
+}
+
 func Compile(sql string) (*VM.Program, error) {
 	return CompileWithSchema(sql, nil)
 }

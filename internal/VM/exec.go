@@ -3073,10 +3073,19 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 	case *QP.Literal:
 		return e.Value
 	case *QP.ColumnRef:
+		// When a table qualifier is present, try the qualified key first so that
+		// rows built from JOINs (which store values under "alias.col" keys) resolve
+		// to the correct table's value even when multiple tables share a column name.
+		if e.Table != "" {
+			qualKey := e.Table + "." + e.Name
+			if val, ok := row[qualKey]; ok {
+				return val
+			}
+		}
 		if val, ok := row[e.Name]; ok {
 			return val
 		}
-		// Try without table prefix
+		// Try without table prefix (handles "t.col" stored in Name field)
 		name := e.Name
 		if idx := strings.LastIndex(name, "."); idx >= 0 {
 			name = name[idx+1:]
@@ -3104,6 +3113,27 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 	case *QP.CastExpr:
 		val := vm.evaluateExprOnRow(row, columns, e.Expr)
 		return vm.applyTypeCast(val, e.TypeSpec.Name)
+	case *QP.SubqueryExpr:
+		// Scalar subquery: execute and return the single value.
+		if vm.ctx != nil {
+			type SubqueryExecutorCtx interface {
+				ExecuteSubqueryWithContext(subquery interface{}, outerRow map[string]interface{}) (interface{}, error)
+			}
+			if exec, ok := vm.ctx.(SubqueryExecutorCtx); ok {
+				if result, err := exec.ExecuteSubqueryWithContext(e.Select, row); err == nil {
+					return result
+				}
+			}
+			type SubqueryExec interface {
+				ExecuteSubquery(subquery interface{}) (interface{}, error)
+			}
+			if exec, ok := vm.ctx.(SubqueryExec); ok {
+				if result, err := exec.ExecuteSubquery(e.Select); err == nil {
+					return result
+				}
+			}
+		}
+		return nil
 	default:
 		return nil
 	}
