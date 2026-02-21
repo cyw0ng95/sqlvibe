@@ -37,16 +37,16 @@ This plan aims to discover performance issues across all database engine layers:
 
 | Wave | Feature | New Tests | Status |
 |------|---------|-----------|--------|
-| 1 | DS Layer: B-Tree & Storage | 8 | Pending |
-| 2 | VM Layer: Execution Engine | 6 | Pending |
-| 3 | QP Layer: Query Processing | 4 | Pending |
-| 4 | TM Layer: Transactions & WAL | 5 | Pending |
-| 5 | Edge Cases & Data Patterns | 8 | Pending |
-| 6 | Complex Queries | 6 | Pending |
-| 7 | Index & Query Optimization | 5 | Pending |
-| 8 | Scale & Stress | 4 | Pending |
-| 9 | Memory & Cache | 3 | Pending |
-| 10 | Verification | - | Pending |
+| 1 | DS Layer: B-Tree & Storage | 8 | ✅ Done |
+| 2 | VM Layer: Execution Engine | 6 | ✅ Done |
+| 3 | QP Layer: Query Processing | 4 | ⏳ Pending (requires internal API) |
+| 4 | TM Layer: Transactions & WAL | 5 | ✅ Done |
+| 5 | Edge Cases & Data Patterns | 8 | ✅ Done |
+| 6 | Complex Queries | 6 | ✅ Done |
+| 7 | Index & Query Optimization | 5 | ⏳ Pending |
+| 8 | Scale & Stress | 4 | ⏳ Pending |
+| 9 | Memory & Cache | 3 | ⏳ Pending |
+| 10 | Verification | - | ⏳ Pending |
 
 **Total**: 49 new tests → 70 total
 
