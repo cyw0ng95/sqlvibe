@@ -1,0 +1,2 @@
+# Allow .test files in this directory (normally excluded by root .gitignore)
+!*.test

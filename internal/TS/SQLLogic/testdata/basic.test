@@ -1,0 +1,250 @@
+# basic.test - DDL, DML, and basic SELECT tests
+
+# ----- CREATE TABLE -----
+
+statement ok
+CREATE TABLE t1 (id INTEGER PRIMARY KEY, name TEXT, value INTEGER)
+
+statement ok
+CREATE TABLE t2 (id INTEGER PRIMARY KEY, label TEXT, score REAL)
+
+# ----- INSERT -----
+
+statement ok
+INSERT INTO t1 VALUES (1, 'alpha', 100)
+
+statement ok
+INSERT INTO t1 VALUES (2, 'beta', 200)
+
+statement ok
+INSERT INTO t1 VALUES (3, 'gamma', 300)
+
+statement ok
+INSERT INTO t2 VALUES (1, 'x', 1.5)
+
+statement ok
+INSERT INTO t2 VALUES (2, 'y', 2.5)
+
+statement ok
+INSERT INTO t2 VALUES (3, 'z', 3.5)
+
+# ----- Basic SELECT -----
+
+query ITI rowsort
+SELECT id, name, value FROM t1
+----
+1  alpha  100
+2  beta   200
+3  gamma  300
+
+query I
+SELECT COUNT(*) FROM t1
+----
+3
+
+query I
+SELECT SUM(value) FROM t1
+----
+600
+
+query I
+SELECT MIN(value) FROM t1
+----
+100
+
+query I
+SELECT MAX(value) FROM t1
+----
+300
+
+# ----- WHERE clause -----
+
+query ITI rowsort
+SELECT id, name, value FROM t1 WHERE value > 100
+----
+2  beta   200
+3  gamma  300
+
+query ITI
+SELECT id, name, value FROM t1 WHERE id = 1
+----
+1  alpha  100
+
+# ----- ORDER BY -----
+
+query ITI
+SELECT id, name, value FROM t1 ORDER BY value ASC
+----
+1  alpha  100
+2  beta   200
+3  gamma  300
+
+query ITI
+SELECT id, name, value FROM t1 ORDER BY value DESC
+----
+3  gamma  300
+2  beta   200
+1  alpha  100
+
+# ----- LIMIT -----
+
+query I
+SELECT id FROM t1 ORDER BY id LIMIT 2
+----
+1
+2
+
+# ----- UPDATE -----
+
+statement ok
+UPDATE t1 SET value = 150 WHERE id = 1
+
+query I
+SELECT value FROM t1 WHERE id = 1
+----
+150
+
+# ----- DELETE -----
+
+statement ok
+DELETE FROM t1 WHERE id = 3
+
+query I
+SELECT COUNT(*) FROM t1
+----
+2
+
+# ----- NULL handling -----
+
+statement ok
+CREATE TABLE nulltest (a INTEGER, b TEXT)
+
+statement ok
+INSERT INTO nulltest VALUES (1, NULL)
+
+statement ok
+INSERT INTO nulltest VALUES (NULL, 'hello')
+
+statement ok
+INSERT INTO nulltest VALUES (NULL, NULL)
+
+query IT rowsort
+SELECT a, b FROM nulltest
+----
+1     NULL
+NULL  hello
+NULL  NULL
+
+query I
+SELECT COUNT(*) FROM nulltest WHERE a IS NULL
+----
+2
+
+query I
+SELECT COUNT(*) FROM nulltest WHERE b IS NOT NULL
+----
+1
+
+# ----- COALESCE -----
+
+query I rowsort
+SELECT COALESCE(a, 0) FROM nulltest
+----
+0
+0
+1
+
+# ----- DISTINCT -----
+
+statement ok
+CREATE TABLE dups (x INTEGER)
+
+statement ok
+INSERT INTO dups VALUES (1)
+
+statement ok
+INSERT INTO dups VALUES (1)
+
+statement ok
+INSERT INTO dups VALUES (2)
+
+statement ok
+INSERT INTO dups VALUES (3)
+
+statement ok
+INSERT INTO dups VALUES (3)
+
+query I rowsort
+SELECT DISTINCT x FROM dups
+----
+1
+2
+3
+
+query I
+SELECT COUNT(DISTINCT x) FROM dups
+----
+3
+
+# ----- LIKE -----
+
+query IT rowsort
+SELECT id, name FROM t1 WHERE name LIKE 'a%'
+----
+1  alpha
+
+query IT rowsort
+SELECT id, name FROM t1 WHERE name LIKE '%ta'
+----
+2  beta
+
+# ----- String functions -----
+
+query T rowsort
+SELECT UPPER(name) FROM t1
+----
+ALPHA
+BETA
+
+query T rowsort
+SELECT LOWER(name) FROM t1
+----
+alpha
+beta
+
+query I rowsort
+SELECT LENGTH(name) FROM t1
+----
+5
+4
+
+# ----- BETWEEN -----
+
+query I rowsort
+SELECT value FROM t1 WHERE value BETWEEN 100 AND 200
+----
+150
+200
+
+# ----- IN clause -----
+
+query ITI rowsort
+SELECT id, name, value FROM t1 WHERE id IN (1, 2)
+----
+1  alpha  150
+2  beta   200
+
+# ----- NOT IN clause -----
+
+query I rowsort
+SELECT id FROM t1 WHERE id NOT IN (1)
+----
+2
+
+# ----- DROP TABLE -----
+
+statement ok
+DROP TABLE dups
+
+statement ok
+DROP TABLE nulltest

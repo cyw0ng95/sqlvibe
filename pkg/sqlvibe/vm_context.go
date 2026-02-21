@@ -7,7 +7,7 @@ import (
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 // applyTypeAffinity coerces row values to match declared column type affinities.
@@ -248,25 +248,17 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 			}
 		}
 
-		// Check primary key uniqueness
+		// Check primary key uniqueness — O(1) via hash set when available.
 		pkCols := ctx.db.primaryKeys[tableName]
 		if len(pkCols) > 0 {
-			for _, existingRow := range ctx.db.data[tableName] {
-				allMatch := true
-				for _, pkCol := range pkCols {
-					pkVal := row[pkCol]
-					if pkVal == nil || existingRow[pkCol] != pkVal {
-						allMatch = false
-						break
-					}
-				}
-				if allMatch {
-					return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
-				}
+			if ctx.db.pkHashContains(tableName, row) {
+				return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
 			}
 		}
 
 		ctx.db.data[tableName] = append(ctx.db.data[tableName], row)
+		newIdx := len(ctx.db.data[tableName]) - 1
+		ctx.db.addToIndexes(tableName, row, newIdx)
 		return nil
 	}
 
@@ -326,7 +318,9 @@ func (ctx *dsVmContext) UpdateRow(tableName string, rowIndex int, row map[string
 	if rowIndex < 0 || rowIndex >= len(ctx.db.data[tableName]) {
 		return fmt.Errorf("row index out of bounds")
 	}
+	oldRow := ctx.db.data[tableName][rowIndex]
 	ctx.db.data[tableName][rowIndex] = row
+	ctx.db.updateIndexes(tableName, oldRow, row, rowIndex)
 	return nil
 }
 
@@ -341,6 +335,8 @@ func (ctx *dsVmContext) DeleteRow(tableName string, rowIndex int) error {
 	if rowIndex < 0 || rowIndex >= len(ctx.db.data[tableName]) {
 		return fmt.Errorf("row index out of bounds")
 	}
+	row := ctx.db.data[tableName][rowIndex]
+	ctx.db.removeFromIndexes(tableName, row, rowIndex)
 	ctx.db.data[tableName] = append(ctx.db.data[tableName][:rowIndex], ctx.db.data[tableName][rowIndex+1:]...)
 	return nil
 }
@@ -362,6 +358,9 @@ func (ctx *dsVmContext) ExecuteSubqueryRowsWithContext(subquery interface{}, out
 	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRowsWithContext(subquery, outerRow)
 }
 
+func (ctx *dsVmContext) ExecuteExistsSubquery(subquery interface{}, outerRow map[string]interface{}) (bool, error) {
+	return (&dbVmContext{db: ctx.db}).ExecuteExistsSubquery(subquery, outerRow)
+}
 
 type dbVmContext struct {
 	db *Database
@@ -453,25 +452,17 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		}
 	}
 
-	// Check primary key constraints
+	// Check primary key constraints — O(1) via hash set when available.
 	pkCols := ctx.db.primaryKeys[tableName]
 	if len(pkCols) > 0 {
-		for _, existingRow := range ctx.db.data[tableName] {
-			allMatch := true
-			for _, pkCol := range pkCols {
-				pkVal := row[pkCol]
-				if pkVal == nil || existingRow[pkCol] != pkVal {
-					allMatch = false
-					break
-				}
-			}
-			if allMatch {
-				return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
-			}
+		if ctx.db.pkHashContains(tableName, row) {
+			return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
 		}
 	}
 
 	ctx.db.data[tableName] = append(ctx.db.data[tableName], row)
+	newIdx := len(ctx.db.data[tableName]) - 1
+	ctx.db.addToIndexes(tableName, row, newIdx)
 
 	// Update storage engine
 	rowID := int64(len(ctx.db.data[tableName]))
@@ -663,7 +654,9 @@ func (ctx *dbVmContext) UpdateRow(tableName string, rowIndex int, row map[string
 	if ctx.db.data[tableName] == nil || rowIndex < 0 || rowIndex >= len(ctx.db.data[tableName]) {
 		return fmt.Errorf("invalid row index for table %s", tableName)
 	}
+	oldRow := ctx.db.data[tableName][rowIndex]
 	ctx.db.data[tableName][rowIndex] = row
+	ctx.db.updateIndexes(tableName, oldRow, row, rowIndex)
 	return nil
 }
 
@@ -671,6 +664,8 @@ func (ctx *dbVmContext) DeleteRow(tableName string, rowIndex int) error {
 	if ctx.db.data[tableName] == nil || rowIndex < 0 || rowIndex >= len(ctx.db.data[tableName]) {
 		return fmt.Errorf("invalid row index for table %s", tableName)
 	}
+	row := ctx.db.data[tableName][rowIndex]
+	ctx.db.removeFromIndexes(tableName, row, rowIndex)
 	// Remove the row at the given index
 	ctx.db.data[tableName] = append(ctx.db.data[tableName][:rowIndex], ctx.db.data[tableName][rowIndex+1:]...)
 	return nil
@@ -758,6 +753,16 @@ func (ctx *dbVmContext) ExecuteSubqueryRowsWithContext(subquery interface{}, out
 	return rows.Data, nil
 }
 
+// ExecuteExistsSubquery checks whether the subquery returns any rows,
+// stopping after the first match (LIMIT 1 short-circuit).
+func (ctx *dbVmContext) ExecuteExistsSubquery(subquery interface{}, outerRow map[string]interface{}) (bool, error) {
+	selectStmt, ok := subquery.(*QP.SelectStmt)
+	if !ok {
+		return false, fmt.Errorf("subquery is not a SelectStmt")
+	}
+	return ctx.db.execExistsSubquery(selectStmt, outerRow)
+}
+
 type dbVmContextWithOuter struct {
 	db       *Database
 	outerRow map[string]interface{}
@@ -806,4 +811,8 @@ func (ctx *dbVmContextWithOuter) ExecuteSubqueryWithContext(subquery interface{}
 
 func (ctx *dbVmContextWithOuter) ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error) {
 	return (&dbVmContext{db: ctx.db}).ExecuteSubqueryRowsWithContext(subquery, outerRow)
+}
+
+func (ctx *dbVmContextWithOuter) ExecuteExistsSubquery(subquery interface{}, outerRow map[string]interface{}) (bool, error) {
+	return (&dbVmContext{db: ctx.db}).ExecuteExistsSubquery(subquery, outerRow)
 }

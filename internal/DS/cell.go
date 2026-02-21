@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 // Cell format encoding/decoding for all 4 BTree page types
@@ -28,12 +28,12 @@ const (
 // CellData represents a decoded BTree cell
 type CellData struct {
 	Type         CellType
-	LeftChild    uint32   // For interior cells only
-	Rowid        int64    // For table cells only
-	Key          []byte   // For index cells only
-	Payload      []byte   // Cell payload
-	OverflowPage uint32   // Overflow page number (0 if no overflow)
-	LocalSize    int      // Size of local payload
+	LeftChild    uint32 // For interior cells only
+	Rowid        int64  // For table cells only
+	Key          []byte // For index cells only
+	Payload      []byte // Cell payload
+	OverflowPage uint32 // Overflow page number (0 if no overflow)
+	LocalSize    int    // Size of local payload
 }
 
 // EncodeTableLeafCell encodes a table leaf cell
@@ -41,54 +41,54 @@ type CellData struct {
 func EncodeTableLeafCell(rowid int64, payload []byte, overflowPage uint32) []byte {
 	util.AssertNotNil(payload, "payload")
 	util.Assert(rowid > 0, "rowid must be positive: %d", rowid)
-	
+
 	payloadSize := len(payload)
-	
+
 	// Calculate size
 	size := VarintLen(int64(payloadSize)) + VarintLen(rowid) + payloadSize
 	if overflowPage > 0 {
 		size += 4
 	}
-	
+
 	buf := make([]byte, size)
 	pos := 0
-	
+
 	// Write payload size
 	pos += PutVarint(buf[pos:], int64(payloadSize))
-	
+
 	// Write rowid
 	pos += PutVarint(buf[pos:], rowid)
-	
+
 	// Write payload
 	copy(buf[pos:], payload)
 	pos += payloadSize
-	
+
 	// Write overflow page if needed
 	if overflowPage > 0 {
 		binary.BigEndian.PutUint32(buf[pos:], overflowPage)
 	}
-	
+
 	return buf
 }
 
 // DecodeTableLeafCell decodes a table leaf cell
 func DecodeTableLeafCell(buf []byte) (*CellData, error) {
 	util.AssertNotNil(buf, "buf")
-	
+
 	if len(buf) < 2 {
 		return nil, ErrInvalidCellFormat
 	}
-	
+
 	cell := &CellData{Type: CellTypeTableLeaf}
 	pos := 0
-	
+
 	// Read payload size
 	payloadSize, n := GetVarint(buf[pos:])
 	if n == 0 {
 		return nil, ErrInvalidCellFormat
 	}
 	pos += n
-	
+
 	// Read rowid
 	rowid, n := GetVarint(buf[pos:])
 	if n == 0 {
@@ -96,13 +96,13 @@ func DecodeTableLeafCell(buf []byte) (*CellData, error) {
 	}
 	cell.Rowid = rowid
 	pos += n
-	
+
 	// Determine if there's an overflow page
 	// If buffer has exactly 4 more bytes after payload, it's overflow page
 	remainingBytes := len(buf) - pos
 	hasOverflow := false
 	localSize := int(payloadSize)
-	
+
 	// Check if we have overflow page indicator (4 bytes after payload)
 	if remainingBytes >= localSize+4 {
 		// Could have overflow page - check if we have exactly payload + 4 bytes
@@ -112,18 +112,18 @@ func DecodeTableLeafCell(buf []byte) (*CellData, error) {
 		// Buffer too small - invalid
 		return nil, ErrInvalidCellFormat
 	}
-	
+
 	// Read only the payload bytes indicated by payloadSize
 	cell.Payload = make([]byte, localSize)
 	copy(cell.Payload, buf[pos:pos+localSize])
 	cell.LocalSize = localSize
 	pos += localSize
-	
+
 	// Read overflow page if present
 	if hasOverflow && pos+4 <= len(buf) {
 		cell.OverflowPage = binary.BigEndian.Uint32(buf[pos:])
 	}
-	
+
 	return cell, nil
 }
 
@@ -132,13 +132,13 @@ func DecodeTableLeafCell(buf []byte) (*CellData, error) {
 func EncodeTableInteriorCell(leftChild uint32, rowid int64) []byte {
 	size := 4 + VarintLen(rowid)
 	buf := make([]byte, size)
-	
+
 	// Write left child page number
 	binary.BigEndian.PutUint32(buf[0:4], leftChild)
-	
+
 	// Write rowid
 	PutVarint(buf[4:], rowid)
-	
+
 	return buf
 }
 
@@ -147,19 +147,19 @@ func DecodeTableInteriorCell(buf []byte) (*CellData, error) {
 	if len(buf) < 5 {
 		return nil, ErrInvalidCellFormat
 	}
-	
+
 	cell := &CellData{Type: CellTypeTableInterior}
-	
+
 	// Read left child page number
 	cell.LeftChild = binary.BigEndian.Uint32(buf[0:4])
-	
+
 	// Read rowid
 	rowid, n := GetVarint(buf[4:])
 	if n == 0 {
 		return nil, ErrInvalidCellFormat
 	}
 	cell.Rowid = rowid
-	
+
 	return cell, nil
 }
 
@@ -167,27 +167,27 @@ func DecodeTableInteriorCell(buf []byte) (*CellData, error) {
 // Format: payload_size (varint) + payload + [overflow_page (4 bytes)]
 func EncodeIndexLeafCell(key []byte, overflowPage uint32) []byte {
 	payloadSize := len(key)
-	
+
 	size := VarintLen(int64(payloadSize)) + payloadSize
 	if overflowPage > 0 {
 		size += 4
 	}
-	
+
 	buf := make([]byte, size)
 	pos := 0
-	
+
 	// Write payload size
 	pos += PutVarint(buf[pos:], int64(payloadSize))
-	
+
 	// Write payload (key)
 	copy(buf[pos:], key)
 	pos += payloadSize
-	
+
 	// Write overflow page if needed
 	if overflowPage > 0 {
 		binary.BigEndian.PutUint32(buf[pos:], overflowPage)
 	}
-	
+
 	return buf
 }
 
@@ -196,22 +196,22 @@ func DecodeIndexLeafCell(buf []byte) (*CellData, error) {
 	if len(buf) < 1 {
 		return nil, ErrInvalidCellFormat
 	}
-	
+
 	cell := &CellData{Type: CellTypeIndexLeaf}
 	pos := 0
-	
+
 	// Read payload size
 	payloadSize, n := GetVarint(buf[pos:])
 	if n == 0 {
 		return nil, ErrInvalidCellFormat
 	}
 	pos += n
-	
+
 	// Determine if there's an overflow page
 	remainingBytes := len(buf) - pos
 	hasOverflow := false
 	localSize := int(payloadSize)
-	
+
 	if remainingBytes == localSize+4 {
 		hasOverflow = true
 	} else if remainingBytes < localSize {
@@ -219,17 +219,17 @@ func DecodeIndexLeafCell(buf []byte) (*CellData, error) {
 	} else {
 		// localSize already set to payloadSize
 	}
-	
+
 	cell.Key = make([]byte, localSize)
 	copy(cell.Key, buf[pos:pos+localSize])
 	cell.LocalSize = localSize
 	pos += localSize
-	
+
 	// Read overflow page if present
 	if hasOverflow && pos+4 <= len(buf) {
 		cell.OverflowPage = binary.BigEndian.Uint32(buf[pos:])
 	}
-	
+
 	return cell, nil
 }
 
@@ -237,31 +237,31 @@ func DecodeIndexLeafCell(buf []byte) (*CellData, error) {
 // Format: left_child (4 bytes) + payload_size (varint) + payload + [overflow_page (4 bytes)]
 func EncodeIndexInteriorCell(leftChild uint32, key []byte, overflowPage uint32) []byte {
 	payloadSize := len(key)
-	
+
 	size := 4 + VarintLen(int64(payloadSize)) + payloadSize
 	if overflowPage > 0 {
 		size += 4
 	}
-	
+
 	buf := make([]byte, size)
 	pos := 0
-	
+
 	// Write left child page number
 	binary.BigEndian.PutUint32(buf[pos:pos+4], leftChild)
 	pos += 4
-	
+
 	// Write payload size
 	pos += PutVarint(buf[pos:], int64(payloadSize))
-	
+
 	// Write payload (key)
 	copy(buf[pos:], key)
 	pos += payloadSize
-	
+
 	// Write overflow page if needed
 	if overflowPage > 0 {
 		binary.BigEndian.PutUint32(buf[pos:], overflowPage)
 	}
-	
+
 	return buf
 }
 
@@ -270,26 +270,26 @@ func DecodeIndexInteriorCell(buf []byte) (*CellData, error) {
 	if len(buf) < 5 {
 		return nil, ErrInvalidCellFormat
 	}
-	
+
 	cell := &CellData{Type: CellTypeIndexInterior}
 	pos := 0
-	
+
 	// Read left child page number
 	cell.LeftChild = binary.BigEndian.Uint32(buf[pos : pos+4])
 	pos += 4
-	
+
 	// Read payload size
 	payloadSize, n := GetVarint(buf[pos:])
 	if n == 0 {
 		return nil, ErrInvalidCellFormat
 	}
 	pos += n
-	
+
 	// Determine if there's an overflow page
 	remainingBytes := len(buf) - pos
 	hasOverflow := false
 	localSize := int(payloadSize)
-	
+
 	if remainingBytes == localSize+4 {
 		hasOverflow = true
 	} else if remainingBytes < localSize {
@@ -297,17 +297,17 @@ func DecodeIndexInteriorCell(buf []byte) (*CellData, error) {
 	} else {
 		// localSize already set to payloadSize
 	}
-	
+
 	cell.Key = make([]byte, localSize)
 	copy(cell.Key, buf[pos:pos+localSize])
 	cell.LocalSize = localSize
 	pos += localSize
-	
+
 	// Read overflow page if present
 	if hasOverflow && pos+4 <= len(buf) {
 		cell.OverflowPage = binary.BigEndian.Uint32(buf[pos:])
 	}
-	
+
 	return cell, nil
 }
 
@@ -316,31 +316,31 @@ func DecodeIndexInteriorCell(buf []byte) (*CellData, error) {
 func CalculateLocalPayloadSize(usableSize int, payloadSize int, isLeaf bool) int {
 	U := usableSize
 	P := payloadSize
-	
+
 	// M = ((U-12)*32/255)-23 (min local)
 	M := ((U - 12) * 32 / 255) - 23
-	
+
 	if isLeaf {
 		// X = U-35 (max local for leaf)
 		X := U - 35
-		
+
 		if P <= X {
 			return P
 		}
-		
+
 		// K = M+((P-M)%(U-4))
 		K := M + ((P - M) % (U - 4))
 		return K
 	}
-	
+
 	// Interior page
 	// X = ((U-12)*64/255)-23 (max local for interior)
 	X := ((U - 12) * 64 / 255) - 23
-	
+
 	if P <= X {
 		return P
 	}
-	
+
 	K := M + ((P - M) % (U - 4))
 	return K
 }
@@ -354,17 +354,17 @@ func CellSize(cell *CellData) int {
 			size += 4
 		}
 		return size
-		
+
 	case CellTypeTableInterior:
 		return 4 + VarintLen(cell.Rowid)
-		
+
 	case CellTypeIndexLeaf:
 		size := VarintLen(int64(len(cell.Key))) + len(cell.Key)
 		if cell.OverflowPage > 0 {
 			size += 4
 		}
 		return size
-		
+
 	case CellTypeIndexInterior:
 		size := 4 + VarintLen(int64(len(cell.Key))) + len(cell.Key)
 		if cell.OverflowPage > 0 {
@@ -372,6 +372,6 @@ func CellSize(cell *CellData) int {
 		}
 		return size
 	}
-	
+
 	return 0
 }

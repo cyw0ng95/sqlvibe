@@ -1,0 +1,120 @@
+# joins.test - JOIN tests
+
+# ----- Setup -----
+
+statement ok
+CREATE TABLE employees (id INTEGER PRIMARY KEY, name TEXT, dept_id INTEGER)
+
+statement ok
+CREATE TABLE departments (id INTEGER PRIMARY KEY, name TEXT)
+
+statement ok
+INSERT INTO departments VALUES (1, 'Engineering')
+
+statement ok
+INSERT INTO departments VALUES (2, 'Marketing')
+
+statement ok
+INSERT INTO departments VALUES (3, 'HR')
+
+statement ok
+INSERT INTO employees VALUES (1, 'Alice', 1)
+
+statement ok
+INSERT INTO employees VALUES (2, 'Bob', 1)
+
+statement ok
+INSERT INTO employees VALUES (3, 'Carol', 2)
+
+statement ok
+INSERT INTO employees VALUES (4, 'Dave', NULL)
+
+# ----- INNER JOIN -----
+
+query TT rowsort
+SELECT e.name, d.name FROM employees e JOIN departments d ON e.dept_id = d.id
+----
+Alice  Engineering
+Bob    Engineering
+Carol  Marketing
+
+# ----- LEFT JOIN -----
+
+query TT rowsort
+SELECT e.name, d.name FROM employees e LEFT JOIN departments d ON e.dept_id = d.id
+----
+Alice  Engineering
+Bob    Engineering
+Carol  Marketing
+Dave   NULL
+
+# ----- Self-join -----
+
+statement ok
+CREATE TABLE pairs (a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO pairs VALUES (1, 2)
+
+statement ok
+INSERT INTO pairs VALUES (2, 3)
+
+statement ok
+INSERT INTO pairs VALUES (3, 4)
+
+query II rowsort
+SELECT p1.a, p2.b FROM pairs p1 JOIN pairs p2 ON p1.b = p2.a
+----
+1  3
+2  4
+
+# ----- Three-table JOIN -----
+
+statement ok
+CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT, dept_id INTEGER)
+
+statement ok
+INSERT INTO projects VALUES (1, 'ProjectA', 1)
+
+statement ok
+INSERT INTO projects VALUES (2, 'ProjectB', 2)
+
+statement ok
+INSERT INTO projects VALUES (3, 'ProjectC', 3)
+
+query TTT rowsort
+SELECT e.name, d.name, p.name FROM employees e JOIN departments d ON e.dept_id = d.id JOIN projects p ON p.dept_id = d.id
+----
+Alice  Engineering  ProjectA
+Bob    Engineering  ProjectA
+Carol  Marketing    ProjectB
+
+# ----- JOIN with WHERE -----
+
+query TT rowsort
+SELECT e.name, d.name FROM employees e JOIN departments d ON e.dept_id = d.id WHERE d.name = 'Engineering'
+----
+Alice  Engineering
+Bob    Engineering
+
+# ----- JOIN with aggregate -----
+
+query TI rowsort
+SELECT d.name, COUNT(e.id) FROM departments d JOIN employees e ON e.dept_id = d.id GROUP BY d.name
+----
+Engineering  2
+Marketing    1
+
+# ----- Cleanup -----
+
+statement ok
+DROP TABLE projects
+
+statement ok
+DROP TABLE pairs
+
+statement ok
+DROP TABLE employees
+
+statement ok
+DROP TABLE departments

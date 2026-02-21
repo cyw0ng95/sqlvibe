@@ -5,7 +5,7 @@ import (
 	"errors"
 	"math"
 
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 // Varint encoding/decoding following SQLite format
@@ -23,7 +23,7 @@ func PutVarint(buf []byte, v int64) int {
 	util.AssertNotNil(buf, "buf")
 	requiredLen := VarintLen(v)
 	util.Assert(len(buf) >= requiredLen, "buf too small for varint: %d bytes, need at least %d", len(buf), requiredLen)
-	
+
 	uv := uint64(v)
 
 	// Handle single byte case (0-127)
@@ -48,7 +48,7 @@ func PutVarint(buf []byte, v int64) int {
 // GetVarint decodes a varint from buf and returns (value, bytes_read)
 func GetVarint(buf []byte) (int64, int) {
 	util.AssertNotNil(buf, "buf")
-	
+
 	if len(buf) == 0 {
 		return 0, 0
 	}
@@ -91,12 +91,33 @@ func VarintLen(v int64) int {
 		return 1
 	}
 
-	n := 0
-	for n < 8 && uv >= 0x80 {
-		uv >>= 7
-		n++
+	// Use bit manipulation for faster computation
+	// Check how many bits are needed (each byte provides 7 bits)
+	// 0x80 = 128 = 2^7, so values < 128 need 1 byte
+	// 0x4000 = 16384 = 2^14, so values < 16384 need 2 bytes
+	// etc.
+	if uv < 0x4000 { // 14 bits (2 bytes max)
+		return 2
 	}
-	return n + 1
+	if uv < 0x200000 { // 21 bits (3 bytes max)
+		return 3
+	}
+	if uv < 0x10000000 { // 28 bits (4 bytes max)
+		return 4
+	}
+	if uv < 0x800000000 { // 35 bits (5 bytes max)
+		return 5
+	}
+	if uv < 0x40000000000 { // 42 bits (6 bytes max)
+		return 6
+	}
+	if uv < 0x2000000000000 { // 49 bits (7 bytes max)
+		return 7
+	}
+	if uv < 0x100000000000000 { // 56 bits (8 bytes max)
+		return 8
+	}
+	return 9 // 63 bits (9 bytes max)
 }
 
 // Serial type codes for record format

@@ -17,18 +17,18 @@ func TestTableLeafCell(t *testing.T) {
 		{"empty_payload", 999, []byte{}, 0},
 		{"large_rowid", 9223372036854775807, []byte("test"), 0},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Encode
 			encoded := EncodeTableLeafCell(tt.rowid, tt.payload, tt.overflowPage)
-			
+
 			// Decode
 			decoded, err := DecodeTableLeafCell(encoded)
 			if err != nil {
 				t.Fatalf("DecodeTableLeafCell() error = %v", err)
 			}
-			
+
 			// Verify
 			if decoded.Type != CellTypeTableLeaf {
 				t.Errorf("Type = %v, want %v", decoded.Type, CellTypeTableLeaf)
@@ -56,18 +56,18 @@ func TestTableInteriorCell(t *testing.T) {
 		{"large", 12345, 9876543210},
 		{"zero_child", 0, 42},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Encode
 			encoded := EncodeTableInteriorCell(tt.leftChild, tt.rowid)
-			
+
 			// Decode
 			decoded, err := DecodeTableInteriorCell(encoded)
 			if err != nil {
 				t.Fatalf("DecodeTableInteriorCell() error = %v", err)
 			}
-			
+
 			// Verify
 			if decoded.Type != CellTypeTableInterior {
 				t.Errorf("Type = %v, want %v", decoded.Type, CellTypeTableInterior)
@@ -92,18 +92,18 @@ func TestIndexLeafCell(t *testing.T) {
 		{"with_overflow", []byte("very_long_index_key_data"), 200},
 		{"empty", []byte{}, 0},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Encode
 			encoded := EncodeIndexLeafCell(tt.key, tt.overflowPage)
-			
+
 			// Decode
 			decoded, err := DecodeIndexLeafCell(encoded)
 			if err != nil {
 				t.Fatalf("DecodeIndexLeafCell() error = %v", err)
 			}
-			
+
 			// Verify
 			if decoded.Type != CellTypeIndexLeaf {
 				t.Errorf("Type = %v, want %v", decoded.Type, CellTypeIndexLeaf)
@@ -129,18 +129,18 @@ func TestIndexInteriorCell(t *testing.T) {
 		{"with_overflow", 100, []byte("long_key_data"), 300},
 		{"zero_child", 0, []byte("test"), 0},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Encode
 			encoded := EncodeIndexInteriorCell(tt.leftChild, tt.key, tt.overflowPage)
-			
+
 			// Decode
 			decoded, err := DecodeIndexInteriorCell(encoded)
 			if err != nil {
 				t.Fatalf("DecodeIndexInteriorCell() error = %v", err)
 			}
-			
+
 			// Verify
 			if decoded.Type != CellTypeIndexInterior {
 				t.Errorf("Type = %v, want %v", decoded.Type, CellTypeIndexInterior)
@@ -172,16 +172,16 @@ func TestCalculateLocalPayloadSize(t *testing.T) {
 		{"small_interior", 4096, 100, false, 100, 100},
 		{"large_interior", 4096, 5000, false, 100, 4092},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := CalculateLocalPayloadSize(tt.usableSize, tt.payloadSize, tt.isLeaf)
-			
+
 			if got < tt.wantMin || got > tt.wantMax {
 				t.Errorf("CalculateLocalPayloadSize() = %d, want between %d and %d",
 					got, tt.wantMin, tt.wantMax)
 			}
-			
+
 			// Local size should never exceed payload size
 			if got > tt.payloadSize {
 				t.Errorf("Local size %d exceeds payload size %d", got, tt.payloadSize)
@@ -232,7 +232,7 @@ func TestCellSize(t *testing.T) {
 			want: 4 + VarintLen(3) + 3,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := CellSize(tt.cell)
@@ -245,17 +245,17 @@ func TestCellSize(t *testing.T) {
 
 func BenchmarkEncodeTableLeafCell(b *testing.B) {
 	payload := []byte("benchmark payload data for testing")
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		EncodeTableLeafCell(int64(i), payload, 0)
+		EncodeTableLeafCell(int64(i+1), payload, 0)
 	}
 }
 
 func BenchmarkDecodeTableLeafCell(b *testing.B) {
 	payload := []byte("benchmark payload data for testing")
 	encoded := EncodeTableLeafCell(12345, payload, 0)
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		DecodeTableLeafCell(encoded)
@@ -264,7 +264,7 @@ func BenchmarkDecodeTableLeafCell(b *testing.B) {
 
 func BenchmarkEncodeIndexInteriorCell(b *testing.B) {
 	key := []byte("benchmark_index_key")
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		EncodeIndexInteriorCell(uint32(i), key, 0)
@@ -274,7 +274,7 @@ func BenchmarkEncodeIndexInteriorCell(b *testing.B) {
 func BenchmarkDecodeIndexInteriorCell(b *testing.B) {
 	key := []byte("benchmark_index_key")
 	encoded := EncodeIndexInteriorCell(100, key, 0)
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		DecodeIndexInteriorCell(encoded)
