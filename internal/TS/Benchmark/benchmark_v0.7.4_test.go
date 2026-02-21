@@ -1,5 +1,5 @@
 // Package Benchmark provides SQL-level performance benchmarks for sqlvibe.
-// This file contains v0.7.3 benchmarks for the hash index, PK set, and dedup fixes.
+// This file contains v0.7.3 and v0.7.4 benchmarks.
 package Benchmark
 
 import (
@@ -91,5 +91,120 @@ func BenchmarkDeduplicateRows(b *testing.B) {
 	// UNION ALL causes deduplicateRows to be called on the combined result set.
 	for i := 0; i < b.N; i++ {
 		mustQuery(b, db, "SELECT id, val FROM t UNION SELECT id, val FROM t")
+	}
+}
+
+// -----------------------------------------------------------------
+// Wave 11 (v0.7.4): Index Usage Expansion
+// Focus: BETWEEN, IN-list, and LIKE-prefix index scans on secondary
+//         indexes instead of full table scan.
+// -----------------------------------------------------------------
+
+// BenchmarkIndexBetween measures SELECT throughput with a BETWEEN WHERE on
+// a secondary-indexed column.  The range scan replaces an O(N) table scan
+// with an O(K) scan over index keys (K = distinct index values).
+func BenchmarkIndexBetween(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE orders (id INTEGER PRIMARY KEY, amount INTEGER, region TEXT)")
+	mustExec(b, db, "CREATE INDEX idx_amount ON orders(amount)")
+
+	for i := 0; i < 1000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO orders VALUES (%d, %d, 'r%d')", i, i, i%10))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM orders WHERE amount BETWEEN 100 AND 200")
+	}
+}
+
+// BenchmarkIndexInList measures SELECT throughput with an IN-list WHERE on
+// a secondary-indexed column.
+func BenchmarkIndexInList(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE items (id INTEGER PRIMARY KEY, category TEXT, price INTEGER)")
+	mustExec(b, db, "CREATE INDEX idx_cat ON items(category)")
+
+	cats := []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J"}
+	for i := 0; i < 1000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO items VALUES (%d, '%s', %d)", i, cats[i%10], i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM items WHERE category IN ('A', 'B', 'C')")
+	}
+}
+
+// BenchmarkIndexLikePrefix measures SELECT throughput with a LIKE 'prefix%'
+// WHERE on a secondary-indexed text column.
+func BenchmarkIndexLikePrefix(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, score INTEGER)")
+	mustExec(b, db, "CREATE INDEX idx_uname ON users(username)")
+
+	prefixes := []string{"alice", "bob", "carol", "dave", "eve"}
+	for i := 0; i < 1000; i++ {
+		name := fmt.Sprintf("%s_%d", prefixes[i%5], i)
+		mustExec(b, db, fmt.Sprintf("INSERT INTO users VALUES (%d, '%s', %d)", i, name, i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM users WHERE username LIKE 'alice%'")
+	}
+}
+
+// -----------------------------------------------------------------
+// Wave 12 (v0.7.4): EXISTS Early Exit & Hash Join Pool
+// -----------------------------------------------------------------
+
+// BenchmarkExistsSubquery measures EXISTS subquery throughput.
+// The LIMIT-1 short-circuit stops after the first matching row.
+func BenchmarkExistsSubquery(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT)")
+	mustExec(b, db, "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER, val TEXT)")
+
+	for i := 0; i < 100; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO parent VALUES (%d, 'p%d')", i, i))
+	}
+	for i := 0; i < 1000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO child VALUES (%d, %d, 'v%d')", i, i%100, i))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT * FROM parent WHERE EXISTS (SELECT 1 FROM child WHERE child.parent_id = parent.id)")
+	}
+}
+
+// BenchmarkHashJoinWithWhere measures hash join throughput when a WHERE clause
+// requires building a merged-row map.  The sync.Pool reuse reduces allocations.
+func BenchmarkHashJoinWithWhere(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE dept (id INTEGER PRIMARY KEY, name TEXT, budget INTEGER)")
+	mustExec(b, db, "CREATE TABLE emp (id INTEGER PRIMARY KEY, dept_id INTEGER, salary INTEGER)")
+
+	for i := 0; i < 20; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO dept VALUES (%d, 'd%d', %d)", i, i, (i+1)*10000))
+	}
+	for i := 0; i < 500; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO emp VALUES (%d, %d, %d)", i, i%20, 30000+i*100))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mustQuery(b, db, "SELECT emp.id, dept.name FROM emp JOIN dept ON emp.dept_id = dept.id WHERE emp.salary > 40000")
 	}
 }

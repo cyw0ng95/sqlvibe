@@ -3,9 +3,33 @@ package sqlvibe
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 )
+
+// mergedRowPool is a pool of map[string]interface{} objects used as scratch
+// space in buildJoinMergedRow.  Each map is cleared before re-use.
+var mergedRowPool = sync.Pool{
+	New: func() interface{} {
+		return make(map[string]interface{}, 32)
+	},
+}
+
+// getMergedRow obtains a merged-row map from the pool, clearing any
+// leftover entries from the previous use.
+func getMergedRow() map[string]interface{} {
+	m := mergedRowPool.Get().(map[string]interface{})
+	for k := range m {
+		delete(m, k)
+	}
+	return m
+}
+
+// putMergedRow returns a merged-row map to the pool.
+func putMergedRow(m map[string]interface{}) {
+	mergedRowPool.Put(m)
+}
 
 // normalizeJoinKey converts a value to a form that is safe as an interface{}
 // map key.  []byte is not comparable in Go so it is converted to string; all
@@ -279,6 +303,7 @@ func (db *Database) execHashJoin(stmt *QP.SelectStmt) ([][]interface{}, []string
 				rightRow, rightTable, rightAlias, rightCols)
 
 			if stmt.Where != nil && !db.engine.EvalBool(merged, stmt.Where) {
+				putMergedRow(merged)
 				continue
 			}
 
@@ -313,6 +338,7 @@ func (db *Database) execHashJoin(stmt *QP.SelectStmt) ([][]interface{}, []string
 					row = append(row, db.engine.EvalExpr(merged, col))
 				}
 			}
+			putMergedRow(merged)
 			results = append(results, row)
 		}
 	}
@@ -323,11 +349,13 @@ func (db *Database) execHashJoin(stmt *QP.SelectStmt) ([][]interface{}, []string
 // buildJoinMergedRow creates a merged row map for hash join result evaluation.
 // Keys are stored in "alias.col", "tableName.col", and unqualified "col" forms.
 // Left table columns take priority for unqualified names.
+// The returned map is obtained from mergedRowPool; callers must call putMergedRow
+// when they are done with it to return it to the pool.
 func buildJoinMergedRow(
 	leftRow map[string]interface{}, leftTable, leftAlias string, leftCols []string,
 	rightRow map[string]interface{}, rightTable, rightAlias string, rightCols []string,
 ) map[string]interface{} {
-	merged := make(map[string]interface{}, len(leftRow)+len(rightRow)+4)
+	merged := getMergedRow()
 
 	for _, col := range leftCols {
 		val := leftRow[col]

@@ -1184,7 +1184,23 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 
 			if vm.ctx != nil {
-				// Try context-aware executor first (for correlated subqueries)
+				// Fast path: use EXISTS-optimised executor (LIMIT 1 short-circuit).
+				type ExistsSubqueryExecutor interface {
+					ExecuteExistsSubquery(subquery interface{}, outerRow map[string]interface{}) (bool, error)
+				}
+				if executor, ok := vm.ctx.(ExistsSubqueryExecutor); ok {
+					currentRow := vm.getCurrentRow(0)
+					if hasRows, err := executor.ExecuteExistsSubquery(inst.P4, currentRow); err == nil {
+						if hasRows {
+							vm.registers[dstReg] = int64(1)
+						} else {
+							vm.registers[dstReg] = int64(0)
+						}
+						continue
+					}
+				}
+
+				// Fallback: context-aware full row executor
 				type SubqueryRowsExecutorWithContext interface {
 					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
 				}
@@ -1258,7 +1274,23 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 
 			if vm.ctx != nil {
-				// Try context-aware executor first (for correlated subqueries)
+				// Fast path: use EXISTS-optimised executor (LIMIT 1 short-circuit).
+				type ExistsSubqueryExecutor interface {
+					ExecuteExistsSubquery(subquery interface{}, outerRow map[string]interface{}) (bool, error)
+				}
+				if executor, ok := vm.ctx.(ExistsSubqueryExecutor); ok {
+					currentRow := vm.getCurrentRow(0)
+					if hasRows, err := executor.ExecuteExistsSubquery(inst.P4, currentRow); err == nil {
+						if hasRows {
+							vm.registers[dstReg] = int64(0) // rows exist → NOT EXISTS = false
+						} else {
+							vm.registers[dstReg] = int64(1) // no rows → NOT EXISTS = true
+						}
+						continue
+					}
+				}
+
+				// Fallback: context-aware full row executor
 				type SubqueryRowsExecutorWithContext interface {
 					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
 				}
