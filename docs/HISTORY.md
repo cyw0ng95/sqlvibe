@@ -1,5 +1,22 @@
 # sqlvibe Release History
 
+## **v0.7.1** (2026-02-21)
+
+### Performance Improvements
+- **Subquery Materialization (Wave 1)**: Non-correlated IN/NOT IN subqueries are now materialized into a hash set once per outer query execution, eliminating redundant full-table scans. InSubquery benchmark: ~101x faster (19.5ms → 0.19ms). ScalarSubquery benchmark: ~31x faster (2.6ms → 0.08ms).
+- **Hash Join (Wave 2)**: Two-table INNER equi-joins now use a Go-level hash join (O(N+M)) instead of the previous O(N×M) nested-loop VM bytecode. Join benchmark: ~11x faster (7.9ms → 0.7ms). Correctly handles NULL join keys per SQL standard (NULLs never match).
+- **Result Set Pre-allocation (Wave 3)**: VM result slices are pre-allocated based on estimated table size, reducing reallocations for large SELECT queries.
+- **Object Pool Utility**: Added `internal/SF/util/pool.go` with reusable byte buffer and interface slice pools for frequently allocated objects.
+
+### Bug Fixes
+- Fixed correlated subquery detection when inner table has an alias (e.g., `SELECT 1 FROM t c WHERE c.id = t.id - 1`). Previously such queries were incorrectly treated as non-correlated.
+- Fixed NULL key handling in hash join: NULL values in equi-join columns are now correctly excluded from matches.
+
+### Breaking Changes
+- None
+
+---
+
 ## **v0.7.0** (2026-02-21)
 
 ### Bug Fixes

@@ -302,6 +302,15 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		}
 	}
 
+	// Fast path: use Go-level hash join for simple 2-table equi-joins.
+	// This avoids the O(N×M) nested-loop VM bytecode for INNER JOINs.
+	if stmt.From.Join != nil && stmt.From.Subquery == nil &&
+		stmt.GroupBy == nil && len(stmt.OrderBy) == 0 && !stmt.Distinct {
+		if hashRows, hashCols, ok := db.execHashJoin(stmt); ok {
+			return &Rows{Columns: hashCols, Data: hashRows}, nil
+		}
+	}
+
 	// Get table column order for proper column mapping
 	// For JOINs, combine columns from both tables
 	var tableCols []string
@@ -482,6 +491,13 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 
 	ctx := newDsVmContext(db)
 	vm := VM.NewVMWithContext(program, ctx)
+
+	// Pre-allocate result slice based on estimated table size to reduce reallocations.
+	if stmt.From.Join == nil && tableName != "" {
+		if tableData, ok := db.data[tableName]; ok {
+			vm.PreallocResults(len(tableData))
+		}
+	}
 
 	err := vm.Run(nil)
 	if err != nil {
