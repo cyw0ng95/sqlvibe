@@ -126,6 +126,48 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 }
 
 func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
+	// Handle operators whose right (or left) side is a SubqueryExpr before computing
+	// leftReg/rightReg eagerly — compileSubqueryExpr emits OpScalarSubquery which
+	// would execute the inner query and mutate its SelectStmt (clearing Limit/OrderBy),
+	// breaking the subsequent OpInSubquery / OpNotInSubquery / OpExistsSubquery.
+	if expr.Op == QP.TokenInSubquery {
+		if subqExpr, ok := expr.Right.(*QP.SubqueryExpr); ok {
+			leftReg := c.compileExpr(expr.Left)
+			dst := c.ra.Alloc()
+			c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+				Op: VM.OpInSubquery,
+				P1: int32(dst),
+				P2: int32(leftReg),
+				P4: subqExpr.Select,
+			})
+			return dst
+		}
+	}
+	if expr.Op == QP.TokenNotIn {
+		if subqExpr, ok := expr.Right.(*QP.SubqueryExpr); ok {
+			leftReg := c.compileExpr(expr.Left)
+			dst := c.ra.Alloc()
+			c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+				Op: VM.OpNotInSubquery,
+				P1: int32(dst),
+				P2: int32(leftReg),
+				P4: subqExpr.Select,
+			})
+			return dst
+		}
+	}
+	if expr.Op == QP.TokenExists {
+		if subqExpr, ok := expr.Left.(*QP.SubqueryExpr); ok {
+			dst := c.ra.Alloc()
+			c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+				Op: VM.OpExistsSubquery,
+				P1: int32(dst),
+				P4: subqExpr.Select,
+			})
+			return dst
+		}
+	}
+
 	leftReg := c.compileExpr(expr.Left)
 	rightReg := c.compileExpr(expr.Right)
 
