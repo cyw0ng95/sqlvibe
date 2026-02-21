@@ -117,16 +117,13 @@ func extractHashJoinInfo(stmt *QP.SelectStmt) *hashJoinInfo {
 }
 
 // selectColNeedsVM reports whether a SELECT column expression requires the full VM
-// (e.g., aggregate functions or qualified star t.*), which the hash join does not handle.
+// (e.g., aggregate functions), which the hash join does not handle.
 func selectColNeedsVM(col QP.Expr) bool {
 	switch c := col.(type) {
 	case *QP.FuncCall:
 		return true // aggregate or scalar function
 	case *QP.ColumnRef:
-		// Qualified star like "t.*" — requires VM for proper column expansion
-		if c.Name == "*" && c.Table != "" {
-			return true
-		}
+		_ = c // plain column refs and qualified stars (t.*) are handled by hash join
 	case *QP.AliasExpr:
 		return selectColNeedsVM(c.Expr)
 	case *QP.WindowFuncExpr:
@@ -186,8 +183,17 @@ func (db *Database) execHashJoin(stmt *QP.SelectStmt) ([][]interface{}, []string
 	for i, col := range stmt.Columns {
 		switch c := col.(type) {
 		case *QP.ColumnRef:
-			if c.Name == "*" {
+			if c.Name == "*" && c.Table == "" {
+				// Unqualified star: expand all columns from both tables.
 				cols = append(cols, allCols...)
+			} else if c.Name == "*" {
+				// Qualified star (e.g. a.*, b.*): expand columns of matching side.
+				tbl := strings.ToLower(c.Table)
+				if tbl == strings.ToLower(leftAlias) || tbl == strings.ToLower(leftTable) {
+					cols = append(cols, leftCols...)
+				} else {
+					cols = append(cols, rightCols...)
+				}
 			} else {
 				cols = append(cols, c.Name)
 			}
@@ -218,24 +224,35 @@ func (db *Database) execHashJoin(stmt *QP.SelectStmt) ([][]interface{}, []string
 				continue
 			}
 
-			row := make([]interface{}, len(stmt.Columns))
-			for i, col := range stmt.Columns {
+			row := make([]interface{}, 0, len(stmt.Columns))
+			for _, col := range stmt.Columns {
 				switch c := col.(type) {
 				case *QP.ColumnRef:
-					if c.Name == "*" {
-						// Expand * into individual columns
-						row = make([]interface{}, len(allCols))
-						for j, colName := range leftCols {
-							row[j] = leftRow[colName]
+					if c.Name == "*" && c.Table == "" {
+						// Unqualified *: all left columns then all right columns.
+						for _, colName := range leftCols {
+							row = append(row, leftRow[colName])
 						}
-						for j, colName := range rightCols {
-							row[len(leftCols)+j] = rightRow[colName]
+						for _, colName := range rightCols {
+							row = append(row, rightRow[colName])
 						}
-						break
+					} else if c.Name == "*" {
+						// Qualified star (e.g. a.*, b.*): columns of matching side.
+						tbl := strings.ToLower(c.Table)
+						if tbl == strings.ToLower(leftAlias) || tbl == strings.ToLower(leftTable) {
+							for _, colName := range leftCols {
+								row = append(row, leftRow[colName])
+							}
+						} else {
+							for _, colName := range rightCols {
+								row = append(row, rightRow[colName])
+							}
+						}
+					} else {
+						row = append(row, db.engine.EvalExpr(merged, c))
 					}
-					row[i] = db.engine.EvalExpr(merged, c)
 				default:
-					row[i] = db.engine.EvalExpr(merged, col)
+					row = append(row, db.engine.EvalExpr(merged, col))
 				}
 			}
 			results = append(results, row)

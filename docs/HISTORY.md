@@ -1,5 +1,26 @@
 # sqlvibe Release History
 
+## **v0.7.2** (2026-02-21)
+
+### Performance Improvements
+- **SUM / AVG typed accumulators**: Replaced per-row `interface{}` boxing in the aggregate engine with typed `int64`/`float64` fields in `AggregateState`. Eliminates ~1 heap allocation per row for SUM and AVG: **94% fewer allocations** (1 032 → 58 allocs/op on 1 000-row table), and queries run ~25% faster.
+- **Self-join / qualified-star hash join**: Queries of the form `SELECT a.*, b.* FROM t a JOIN t b ON …` were incorrectly falling back to an O(N²) VM nested-loop join because the hash join rejected qualified stars (`t.*`). Extended hash join column expansion to support qualified-star syntax, routing self-joins through the O(N+M) hash join path. **9× speedup** (1.57 ms → 169 µs for a 100-row self-join).
+- **Benchmark suite expansion (v0.7.2)**: Added 49 new benchmark tests covering all DB engine layers (DS, VM, QP, TM), bringing total benchmark count to 70.
+
+### Bottlenecks Identified (for future work)
+- Secondary index queries do not yet use secondary indexes (full table scan always used).
+- `SELECT … ORDER BY … LIMIT N` materializes the full result set before limiting.
+- JOIN row materialization copies all rows into memory before joining.
+- `GROUP BY` uses `fmt.Sprintf` string keys per row.
+
+### Bug Fixes
+- None
+
+### Breaking Changes
+- None
+
+---
+
 ## **v0.7.1** (2026-02-21)
 
 ### Performance Improvements

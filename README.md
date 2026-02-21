@@ -94,12 +94,86 @@ go test ./internal/TS/SQL1999/...
 # Run a specific test
 go test -run TestSQL1999_E011 ./internal/TS/SQL1999/...
 
+# Run benchmarks
+go test ./internal/TS/Benchmark/... -bench . -benchmem
+
 # Format code
 go fmt ./...
 
 # Vet code
 go vet ./...
 ```
+
+## Performance
+
+Benchmarks run on an Intel Xeon Platinum 8370C @ 2.80GHz (in-memory database, `-benchtime=3s -benchmem`).  
+All measurements are end-to-end (parse → compile → execute) via the public API.
+
+### Core Operations
+
+| Benchmark | ns/op | MB/op | allocs/op |
+|-----------|------:|------:|----------:|
+| INSERT single row | 386 µs | 6.5 KB | 83 |
+| UPDATE single row | 18.6 µs | 6.1 KB | 65 |
+| DELETE single row | 17.4 µs | 6.2 KB | 71 |
+| SELECT all (1 000 rows) | 215 µs | 133 KB | 1 060 |
+| SELECT with WHERE (1 000 rows) | 224 µs | 39.6 KB | 162 |
+| SELECT with ORDER BY (500 rows) | 213 µs | 88.3 KB | 570 |
+| CREATE/DROP TABLE | 6.4 µs | 3.2 KB | 51 |
+
+### Aggregates (1 000 rows)
+
+| Aggregate | ns/op | allocs/op |
+|-----------|------:|----------:|
+| COUNT(*) | 26.7 µs | 57 |
+| SUM | 41.0 µs | 58 |
+| AVG | 40.8 µs | 58 |
+| MIN / MAX | 41–42 µs | 57 |
+| GROUP BY (4 groups, 1 000 rows) | 215 µs | 2 191 |
+
+### Joins & Subqueries
+
+| Benchmark | ns/op | allocs/op |
+|-----------|------:|----------:|
+| INNER JOIN (100 users × 500 orders) | 662 µs | 8 459 |
+| IN subquery (200 rows) | 189 µs | 523 |
+| Scalar subquery (200 rows) | 80 µs | 225 |
+| 3-level nested subquery (100 rows) | 312 µs | 1 639 |
+| Self-join (100 rows) | 169 µs | 2 231 |
+
+### QP Layer (parser, no VM)
+
+| Benchmark | ns/op | allocs/op |
+|-----------|------:|----------:|
+| Tokenize (10-token query) | 1.22 µs | 13 |
+| Parse simple SELECT | 0.60 µs | 9 |
+| Parse complex query (JOIN/GROUP/HAVING) | 2.01 µs | 30 |
+| AST build (4-statement batch) | 6.82 µs | 80 |
+
+### Scale
+
+| Benchmark | ns/op |
+|-----------|------:|
+| SELECT 10 K rows | 2.78 ms |
+| SELECT 100 K rows (filtered) | 34 ms |
+| Bulk INSERT 10 K rows | 87 ms |
+| 3-table JOIN (100 rows each) | 2.91 ms |
+
+## Known Performance Bottlenecks
+
+The v0.7.2 benchmark suite identified the following areas for future optimization:
+
+| # | Area | Observation | Impact |
+|---|------|-------------|--------|
+| 1 | Secondary index queries | `WHERE col = ?` on a column with a `CREATE INDEX` does a full table scan instead of an index lookup (query planner does not yet use secondary indexes) | High |
+| 2 | LIMIT without early-exit | `SELECT … ORDER BY … LIMIT N` materializes the full result set before applying the limit; a top-K heap would reduce memory for large tables | Medium |
+| 3 | JOIN row materialization | Hash join (equi-join) works well, but all rows are copied into memory before joining — streaming row evaluation would reduce peak allocation | Medium |
+| 4 | GROUP BY string key | Group keys are formatted with `fmt.Sprintf` per row; a binary key encoding would reduce CPU and allocation overhead | Low–Medium |
+
+### Fixed in v0.7.2
+
+- **SUM / AVG per-row allocation** — The aggregate accumulator used `interface{}` boxing on every row, causing ~1 allocation per row for SUM and AVG. Replaced with typed `int64`/`float64` fields in `AggregateState`. Result: **94% reduction in allocations** (1 032 → 58 allocs/op for SUM/AVG on 1 000 rows) and ~25% faster aggregate queries.
+- **Self-join / qualified-star hash join** — `SELECT a.*, b.* FROM t a JOIN t b ON …` fell back to an O(N²) VM nested-loop join because the hash join incorrectly rejected qualified stars (`t.*`). Extended hash join to handle qualified stars, promoting self-joins to the O(N+M) hash join path. Result: **9× speedup** (1.57 ms → 169 µs for 100-row self-join).
 
 ## SQL:1999 Compatibility
 

@@ -2591,7 +2591,10 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 				GroupKey:     groupKey,
 				Count:        0,
 				Counts:       make([]int, len(aggInfo.Aggregates)),
-				Sums:         make([]interface{}, len(aggInfo.Aggregates)),
+				SumsInt:      make([]int64, len(aggInfo.Aggregates)),
+				SumsFloat:    make([]float64, len(aggInfo.Aggregates)),
+				SumsIsFloat:  make([]bool, len(aggInfo.Aggregates)),
+				SumsHasVal:   make([]bool, len(aggInfo.Aggregates)),
 				Mins:         make([]interface{}, len(aggInfo.Aggregates)),
 				Maxs:         make([]interface{}, len(aggInfo.Aggregates)),
 				NonAggValues: make([]interface{}, len(aggInfo.NonAggCols)),
@@ -2623,8 +2626,25 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 					state.Counts[aggIdx]++
 				}
 			case "SUM":
+				// Use typed accumulators to avoid per-row interface{} boxing.
 				if value != nil {
-					state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
+					state.SumsHasVal[aggIdx] = true
+					switch v := value.(type) {
+					case int64:
+						if state.SumsIsFloat[aggIdx] {
+							state.SumsFloat[aggIdx] += float64(v)
+						} else {
+							state.SumsInt[aggIdx] += v
+						}
+					case float64:
+						if !state.SumsIsFloat[aggIdx] {
+							// Promote integer accumulator to float64.
+							state.SumsFloat[aggIdx] = float64(state.SumsInt[aggIdx]) + v
+							state.SumsIsFloat[aggIdx] = true
+						} else {
+							state.SumsFloat[aggIdx] += v
+						}
+					}
 				}
 			case "AVG":
 				// AVG = SUM / COUNT of non-NULL values; accumulate in float64 to match SQLite precision
@@ -2638,13 +2658,8 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 					default:
 						continue
 					}
-					if state.Sums[aggIdx] == nil {
-						state.Sums[aggIdx] = fv
-					} else if s, ok := state.Sums[aggIdx].(float64); ok {
-						state.Sums[aggIdx] = s + fv
-					} else {
-						state.Sums[aggIdx] = fv
-					}
+					state.SumsFloat[aggIdx] += fv
+					state.SumsHasVal[aggIdx] = true
 					state.Counts[aggIdx]++
 				}
 			case "MIN":
@@ -2753,10 +2768,16 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 					aggValue = int64(state.Counts[aggIdx])
 				}
 			case "SUM":
-				aggValue = state.Sums[aggIdx]
+				if state.SumsHasVal[aggIdx] {
+					if state.SumsIsFloat[aggIdx] {
+						aggValue = state.SumsFloat[aggIdx]
+					} else {
+						aggValue = state.SumsInt[aggIdx]
+					}
+				}
 			case "AVG":
-				if state.Counts[aggIdx] > 0 && state.Sums[aggIdx] != nil {
-					aggValue = vm.divideValues(state.Sums[aggIdx], int64(state.Counts[aggIdx]))
+				if state.Counts[aggIdx] > 0 && state.SumsHasVal[aggIdx] {
+					aggValue = state.SumsFloat[aggIdx] / float64(state.Counts[aggIdx])
 				}
 			case "MIN":
 				aggValue = state.Mins[aggIdx]
@@ -2802,7 +2823,11 @@ type AggregateState struct {
 	GroupKey     string
 	Count        int
 	Counts       []int // per-aggregate non-NULL counts (for COUNT(col) and AVG)
-	Sums         []interface{}
+	// Typed sum accumulators avoid per-row interface{} boxing.
+	SumsInt     []int64  // integer partial sums (SUM of integer values)
+	SumsFloat   []float64 // float64 partial sums (SUM promoted to float, or AVG)
+	SumsIsFloat []bool    // true when the aggregate has been promoted to float64
+	SumsHasVal  []bool    // true when at least one non-NULL value was accumulated
 	Mins         []interface{}
 	Maxs         []interface{}
 	NonAggValues []interface{}
@@ -3502,10 +3527,10 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				}
 				return int64(state.Counts[i])
 			case "SUM":
-				return state.Sums[i]
+				return state.sumResult(i)
 			case "AVG":
-				if state.Counts[i] > 0 && state.Sums[i] != nil {
-					return vm.divideValues(state.Sums[i], int64(state.Counts[i]))
+				if state.Counts[i] > 0 && state.SumsHasVal[i] {
+					return state.SumsFloat[i] / float64(state.Counts[i])
 				}
 				return nil
 			case "MIN":
@@ -3529,10 +3554,10 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				}
 				return int64(state.Counts[i])
 			case "SUM":
-				return state.Sums[i]
+				return state.sumResult(i)
 			case "AVG":
-				if state.Counts[i] > 0 && state.Sums[i] != nil {
-					return vm.divideValues(state.Sums[i], int64(state.Counts[i]))
+				if state.Counts[i] > 0 && state.SumsHasVal[i] {
+					return state.SumsFloat[i] / float64(state.Counts[i])
 				}
 				return nil
 			case "MIN":
@@ -3560,6 +3585,18 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 	default:
 		return vm.evaluateExprOnRow(nil, nil, expr)
 	}
+}
+
+// sumResult returns the accumulated sum as an interface{} (nil if no values were seen).
+// Boxing occurs once at read time rather than once per accumulated row.
+func (s *AggregateState) sumResult(idx int) interface{} {
+	if !s.SumsHasVal[idx] {
+		return nil
+	}
+	if s.SumsIsFloat[idx] {
+		return s.SumsFloat[idx]
+	}
+	return s.SumsInt[idx]
 }
 
 // addValues adds two values (handles nil and type conversion)
