@@ -66,10 +66,11 @@ SELECT * FROM t WHERE a = 1
 | Goal | Description | Status |
 |------|-------------|--------|
 | 1 | Performance optimizations (VarintLen, LIKE) | Completed |
-| 2 | Integrate sqllogictest runner | Pending |
-| 3 | Run existing SQLite test cases | Pending |
-| 4 | Fix compatibility issues | Pending |
-| 5 | Add custom test cases | Pending |
+| 2 | Update Go version to 1.25.6 | Completed |
+| 3 | Integrate sqllogictest runner | Pending |
+| 4 | Run existing SQLite test cases | Pending |
+| 5 | Fix compatibility issues | Pending |
+| 6 | Add custom test cases | Pending |
 
 ---
 

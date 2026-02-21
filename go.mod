@@ -1,6 +1,6 @@
 module github.com/sqlvibe/sqlvibe
 
-go 1.21
+go 1.25.6
 
 require github.com/glebarez/go-sqlite v1.21.2
 
