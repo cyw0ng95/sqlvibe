@@ -1,6 +1,19 @@
 # sqlvibe Release History
 
-## **v0.7.4** (2026-02-21)
+## **v0.7.5** (2026-02-21)
+
+### New Features
+- **SQLLogicTest runner** (`internal/TS/SQLLogic/`) — Custom black-box test runner that parses the standard sqllogictest `.test` format used by SQLite, PostgreSQL, TiDB and CockroachDB. Implemented using only the Go standard library (no external dependencies). Supports `statement ok`, `statement error`, and `query TYPE [rowsort|valuesort|nosort]` records. Test files are loaded from `testdata/*.test`. Runner entry point: `TestSQLLogic` in `sql_logic_test.go`.
+- **Test data files** — Three coverage areas added:
+  - `basic.test` — DDL (CREATE/DROP), DML (INSERT/UPDATE/DELETE), basic SELECT, NULL handling, DISTINCT, LIKE, BETWEEN, IN, string functions (48 records, 100% pass)
+  - `joins.test` — INNER JOIN, LEFT JOIN, self-join, 3-table JOIN, JOIN with WHERE and aggregate (27 records, 100% pass)
+  - `aggregates.test` — COUNT/SUM/AVG/MIN/MAX, GROUP BY, HAVING, COUNT DISTINCT, NULL aggregation, scalar subquery in WHERE (35 records, 100% pass)
+
+### Bug Fixes
+- **Scalar subquery in WHERE/aggregate context** (`internal/VM/exec.go`) — `evaluateExprOnRow` now handles `*QP.SubqueryExpr`: when `vm.ctx` provides `ExecuteSubqueryWithContext` or `ExecuteSubquery`, the subquery is executed and the scalar value returned. Previously the default case returned `nil`, causing `column > (SELECT ...)` to always pass the filter.
+- **JOIN + GROUP BY / aggregate** (`pkg/sqlvibe/vm_exec.go`, `internal/CG/compiler.go`) — Added `execJoinAggregate` path for SELECT queries that combine a 2-table equi-JOIN with aggregate functions or GROUP BY. `CompileAggregate` only scanned a single table cursor, silently ignoring the JOIN. The new path materialises the full join result via `execHashJoin` (with a temporary `SELECT *`) then pre-opens cursor 0 with the joined rows before running the aggregate VM; `OpOpenRead` detects the pre-opened cursor and skips the single-table reload. Also added `CG.HasAggregates()` as a new exported function.
+- **Table-qualified column reference in aggregate evaluation** (`internal/VM/exec.go`) — `evaluateExprOnRow` for `*QP.ColumnRef` now tries the table-qualified key (`alias.column`) in the row map first when `e.Table` is set. This fixes GROUP BY and aggregate expressions like `d.name` when rows are stored with qualified keys (as built by `execJoinAggregate`).
+
 
 ### Performance Improvements
 - **Page prefetching** (`internal/DS/btree.go`) — Added `prefetchEnabled bool` field and `prefetchChildren(page, count)` to `BTree`. When enabled, interior-page traversal fires goroutines to warm the OS page cache for sibling child pages, reducing sequential I/O wait. Enabled via `SetPrefetchEnabled(true)`.

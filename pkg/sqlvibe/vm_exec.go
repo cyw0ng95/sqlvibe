@@ -349,6 +349,16 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		}
 	}
 
+	// For JOIN + aggregate queries (GROUP BY / aggregate functions), first
+	// materialise the join into a flat cursor, then run the aggregate over it.
+	// The aggregate compiler only opens one cursor (the left table), so without
+	// this path the join is silently ignored.
+	if stmt.From.Join != nil && stmt.From.Subquery == nil && CG.HasAggregates(stmt) {
+		if rows, err := db.execJoinAggregate(stmt); rows != nil || err != nil {
+			return rows, err
+		}
+	}
+
 	// Fast path: SELECT * FROM single_table (no filters, aggregates, or ordering).
 	// Bypasses tokenize+parse+compile+VM entirely; uses a flat backing array to
 	// materialise results in just 2 allocations regardless of row count.
@@ -1257,4 +1267,159 @@ func (db *Database) resolveNaturalUsing(join *QP.Join, leftCols, rightCols []str
 		}
 	}
 	join.Cond = cond
+}
+
+// execJoinAggregate handles SELECT queries that combine a JOIN with aggregate
+// functions or GROUP BY.  The aggregate compiler only scans a single table
+// cursor, so without this path the JOIN is silently ignored.
+//
+// Strategy:
+//  1. Materialise the full JOIN result as a flat row slice (using execHashJoin
+//     with a temporary SELECT * expansion so no aggregate evaluation is needed
+//     at join time).
+//  2. Build a []map[string]interface{} that stores each row's values under
+//     both the unqualified column name and the table-alias-qualified name
+//     (e.g., "name", "d.name", "departments.name") so that GROUP BY and
+//     aggregate expressions that reference either form resolve correctly.
+//  3. Pre-open cursor 0 with the joined rows.  The OpOpenRead instruction
+//     emitted by CompileAggregate detects a pre-opened cursor and skips the
+//     regular single-table load, so the aggregate runs over the joined data.
+func (db *Database) execJoinAggregate(stmt *QP.SelectStmt) (*Rows, error) {
+	// Temporarily replace SELECT columns with * so that extractHashJoinInfo
+	// (called inside execHashJoin) does not reject the query due to aggregate
+	// functions in the SELECT list.
+	origCols := stmt.Columns
+	origGroupBy := stmt.GroupBy
+	origHaving := stmt.Having
+	origOrderBy := stmt.OrderBy
+	origLimit := stmt.Limit
+	origOffset := stmt.Offset
+	stmt.Columns = []QP.Expr{&QP.ColumnRef{Name: "*"}}
+	stmt.GroupBy = nil
+	stmt.Having = nil
+	stmt.OrderBy = nil
+	stmt.Limit = nil
+	stmt.Offset = nil
+
+	info := extractHashJoinInfo(stmt)
+	if info == nil {
+		// Restore before returning
+		stmt.Columns = origCols
+		stmt.GroupBy = origGroupBy
+		stmt.Having = origHaving
+		stmt.OrderBy = origOrderBy
+		stmt.Limit = origLimit
+		stmt.Offset = origOffset
+		return nil, nil
+	}
+
+	hashRows, hashCols, ok := db.execHashJoin(stmt)
+
+	stmt.Columns = origCols
+	stmt.GroupBy = origGroupBy
+	stmt.Having = origHaving
+	stmt.OrderBy = origOrderBy
+	stmt.Limit = origLimit
+	stmt.Offset = origOffset
+
+	if !ok {
+		return nil, nil
+	}
+
+	leftName := db.resolveTableName(info.leftTable)
+	leftAlias := info.leftAlias
+	if leftAlias == "" {
+		leftAlias = leftName
+	}
+	rightName := db.resolveTableName(info.rightTable)
+	rightAlias := info.rightAlias
+	if rightAlias == "" {
+		rightAlias = rightName
+	}
+
+	leftCols := db.columnOrder[leftName]
+	rightCols := db.columnOrder[rightName]
+	nLeft := len(leftCols)
+
+	// Build rows keyed by both unqualified and table-qualified column names so
+	// that expressions like "d.name" and "e.id" resolve to the correct table's value.
+	joinedRows := make([]map[string]interface{}, len(hashRows))
+	for i, row := range hashRows {
+		m := make(map[string]interface{}, len(hashCols)+nLeft+len(rightCols))
+		for j, col := range hashCols {
+			if j >= len(row) {
+				break
+			}
+			val := row[j]
+			m[col] = val // unqualified (last write wins for shared names)
+			if j < nLeft {
+				m[leftAlias+"."+leftCols[j]] = val
+				if leftAlias != leftName {
+					m[leftName+"."+leftCols[j]] = val
+				}
+			} else {
+				rj := j - nLeft
+				if rj < len(rightCols) {
+					m[rightAlias+"."+rightCols[rj]] = val
+					if rightAlias != rightName {
+						m[rightName+"."+rightCols[rj]] = val
+					}
+				}
+			}
+		}
+		joinedRows[i] = m
+	}
+
+	// Compile the aggregate query.
+	cg := CG.NewCompiler()
+	combinedCols := append(append([]string{}, leftCols...), rightCols...)
+	leftSchema := make(map[string]int, len(leftCols))
+	for i, c := range leftCols {
+		leftSchema[c] = i
+	}
+	rightSchema := make(map[string]int, len(rightCols))
+	for i, c := range rightCols {
+		rightSchema[c] = nLeft + i
+	}
+	multiSchemas := map[string]map[string]int{
+		leftName:  leftSchema,
+		leftAlias: leftSchema,
+		rightName: rightSchema,
+		rightAlias: rightSchema,
+	}
+	cg.SetMultiTableSchema(multiSchemas, combinedCols)
+	program := cg.CompileSelect(stmt)
+
+	ctx := newDsVmContext(db)
+	vm := VM.NewVMWithContext(program, ctx)
+
+	// Reset the VM to initialise internal state, then immediately pre-open
+	// cursor 0 with the joined rows before Exec runs.  vm.Run() would call
+	// Reset() again and wipe the cursor, so we use vm.Exec() directly here.
+	vm.Reset()
+	vm.SetPC(0)
+	vm.Cursors().OpenTableAtID(0, leftName, joinedRows, hashCols)
+
+	if err := vm.Exec(nil); err != nil && err != VM.ErrHalt {
+		return nil, err
+	}
+
+	results := vm.Results()
+
+	// Build output column names from the original SELECT list.
+	cols := make([]string, 0, len(stmt.Columns))
+	for i, col := range stmt.Columns {
+		switch e := col.(type) {
+		case *QP.ColumnRef:
+			cols = append(cols, e.Name)
+		case *QP.AliasExpr:
+			cols = append(cols, e.Alias)
+		case *QP.FuncCall:
+			cols = append(cols, fmt.Sprintf("col%d", i))
+		default:
+			cols = append(cols, fmt.Sprintf("col%d", i))
+		}
+	}
+
+	return &Rows{Columns: cols, Data: results}, nil
 }
