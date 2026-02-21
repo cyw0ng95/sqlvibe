@@ -456,7 +456,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpAdd:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			if dst, ok := inst.P4.(int); ok {
+			if inst.HasDst {
+				vm.registers[inst.DstReg] = numericAdd(lhs, rhs)
+			} else if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = numericAdd(lhs, rhs)
 			}
 			continue
@@ -464,7 +466,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpSubtract:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			if dst, ok := inst.P4.(int); ok {
+			if inst.HasDst {
+				vm.registers[inst.DstReg] = numericSubtract(lhs, rhs)
+			} else if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = numericSubtract(lhs, rhs)
 			}
 			continue
@@ -472,7 +476,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpMultiply:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			if dst, ok := inst.P4.(int); ok {
+			if inst.HasDst {
+				vm.registers[inst.DstReg] = numericMultiply(lhs, rhs)
+			} else if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = numericMultiply(lhs, rhs)
 			}
 			continue
@@ -480,7 +486,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpDivide:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			if dst, ok := inst.P4.(int); ok {
+			if inst.HasDst {
+				vm.registers[inst.DstReg] = numericDivide(lhs, rhs)
+			} else if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = numericDivide(lhs, rhs)
 			}
 			continue
@@ -488,7 +496,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpRemainder:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			if dst, ok := inst.P4.(int); ok {
+			if inst.HasDst {
+				vm.registers[inst.DstReg] = numericRemainder(lhs, rhs)
+			} else if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = numericRemainder(lhs, rhs)
 			}
 			continue
@@ -540,7 +550,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpConcat:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			if dst, ok := inst.P4.(int); ok {
+			if inst.HasDst {
+				vm.registers[inst.DstReg] = stringConcat(lhs, rhs)
+			} else if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = stringConcat(lhs, rhs)
 			}
 			continue

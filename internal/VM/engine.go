@@ -84,14 +84,16 @@ func (vm *VM) Reset() {
 		vm.registers[i] = nil
 	}
 	vm.cursors.Reset()
-	vm.subReturn = make([]int, 0)
+	vm.subReturn = vm.subReturn[:0]
 	vm.affinity = 0
 	vm.errorcnt = 0
 	vm.err = nil
 	vm.results = vm.results[:0]   // reuse pre-allocated capacity
 	vm.flatBuf = vm.flatBuf[:0]   // reuse flat backing buffer
 	vm.rowsAffected = 0
-	vm.ephemeralTbls = make(map[int]map[string]bool)
+	for k := range vm.ephemeralTbls {
+		delete(vm.ephemeralTbls, k)
+	}
 }
 
 func (vm *VM) PC() int {

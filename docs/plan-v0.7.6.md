@@ -329,28 +329,29 @@ internal/VM/
 ## Tasks
 
 ### Phase 1: Infrastructure
-- [ ] Create `internal/VM/bench_cg_test.go` with CG benchmarks
-- [ ] Create `internal/VM/bench_vm_test.go` with VM benchmarks  
-- [ ] Create `internal/VM/benchdata/testdata.go` for test data generation
-- [ ] Run baseline benchmarks and record results
+- [x] Create `internal/VM/bench_cg_test.go` with CG benchmarks
+- [x] Create `internal/VM/bench_vm_test.go` with VM benchmarks  
+- [x] Create `internal/VM/benchdata/testdata.go` for test data generation
+- [x] Run baseline benchmarks and record results
 
 ### Phase 2: CG Optimizations
-- [ ] Implement CSE in optimizer.go
-- [ ] Implement strength reduction in optimizer.go
-- [ ] Implement peephole optimizations in optimizer.go
-- [ ] Run CG benchmarks and verify improvement
+- [x] Implement CSE in optimizer.go
+- [x] Implement strength reduction in optimizer.go
+- [x] Implement peephole optimizations in optimizer.go
+- [x] Run CG benchmarks and verify improvement
 
 ### Phase 3: VM Optimizations
-- [ ] Implement jump table dispatch in exec.go
-- [ ] Add cached dstReg field to Instruction
-- [ ] Implement opcode fusion (optional)
-- [ ] Optimize register pre-allocation
-- [ ] Run VM benchmarks and verify improvement
+- [x] Implement type assertion reduction (DstReg/HasDst fields on Instruction)
+- [x] Update all EmitAdd/EmitSubtract/EmitMultiply/EmitDivide/EmitConcat/EmitOpWithDst to set DstReg/HasDst
+- [x] Update exec.go hot-path arithmetic/concat ops to use DstReg
+- [x] Optimize VM Reset() register pre-allocation (reuse subReturn/ephemeralTbls)
+- [ ] Implement opcode fusion (deferred - too risky, requires new opcodes)
+- [ ] Implement jump table dispatch (deferred - Go compiler already does this)
 
 ### Phase 4: Validation
-- [ ] Run full benchmark suite
-- [ ] Document improvements
-- [ ] Ensure no regression in existing tests
+- [x] Run full benchmark suite
+- [x] Ensure no regression in existing tests (64/64 SQL1999 suites passing)
+- [x] Document improvements
 
 ---
 
