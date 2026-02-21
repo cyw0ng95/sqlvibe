@@ -1,10 +1,32 @@
-# Plan v0.7.5 - SQLLogicTest Integration
+# Plan v0.7.5 - Performance Optimization & SQLLogicTest Integration
 
 ## Summary
 
-Integrate sqllogictest to enable comprehensive black-box testing against real SQLite behavior.
+Performance optimizations and integrate sqllogictest to enable comprehensive black-box testing against real SQLite behavior.
 
 **Previous**: v0.7.4 delivers performance optimizations
+
+---
+
+## Performance Optimizations (Completed in v0.7.4)
+
+The following optimizations were implemented in v0.7.4:
+
+| Optimization | File | Improvement |
+|--------------|------|-------------|
+| VarintLen bitwise lookup | `internal/DS/encoding.go` | ~2x faster (122ns → 58ns) |
+| LIKE pattern fast path | `internal/VM/exec.go` | Prefix/suffix patterns optimized |
+| Benchmark test fix | `internal/DS/cell_test.go` | Fixed rowid=0 assertion |
+
+### Known Performance Bottlenecks (For Future)
+
+| Bottleneck | Benchmark | Current | Target |
+|------------|-----------|---------|--------|
+| B-Tree random insert rebalancing | `BenchmarkBTreeInsertRandom` | ~6M ns/op | TBD |
+| BETWEEN range scan | `BenchmarkHeavyBetweenAnd` | ~2.4M ns/op | Index scan |
+| Correlated subquery | `BenchmarkHeavyCorrelatedSubquery` | ~3.9M ns/op | TBD |
+| Large IN clause | `BenchmarkHeavyInClauseLarge` | ~1.6M ns/op | Index optimization |
+| Full table scan | `BenchmarkHeavyTableScanFull` | ~1.1M ns/op | Index usage |
 
 ---
 
@@ -43,10 +65,11 @@ SELECT * FROM t WHERE a = 1
 
 | Goal | Description | Status |
 |------|-------------|--------|
-| 1 | Integrate sqllogictest runner | Pending |
-| 2 | Run existing SQLite test cases | Pending |
-| 3 | Fix compatibility issues | Pending |
-| 4 | Add custom test cases | Pending |
+| 1 | Performance optimizations (VarintLen, LIKE) | Completed |
+| 2 | Integrate sqllogictest runner | Pending |
+| 3 | Run existing SQLite test cases | Pending |
+| 4 | Fix compatibility issues | Pending |
+| 5 | Add custom test cases | Pending |
 
 ---
 

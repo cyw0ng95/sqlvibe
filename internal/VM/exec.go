@@ -2855,14 +2855,14 @@ type AggregateDef struct {
 
 // AggregateState tracks aggregate values for a group
 type AggregateState struct {
-	GroupKey     interface{}
-	Count        int
-	Counts       []int // per-aggregate non-NULL counts (for COUNT(col) and AVG)
+	GroupKey interface{}
+	Count    int
+	Counts   []int // per-aggregate non-NULL counts (for COUNT(col) and AVG)
 	// Typed sum accumulators avoid per-row interface{} boxing.
-	SumsInt     []int64  // integer partial sums (SUM of integer values)
-	SumsFloat   []float64 // float64 partial sums (SUM promoted to float, or AVG)
-	SumsIsFloat []bool    // true when the aggregate has been promoted to float64
-	SumsHasVal  []bool    // true when at least one non-NULL value was accumulated
+	SumsInt      []int64   // integer partial sums (SUM of integer values)
+	SumsFloat    []float64 // float64 partial sums (SUM promoted to float, or AVG)
+	SumsIsFloat  []bool    // true when the aggregate has been promoted to float64
+	SumsHasVal   []bool    // true when at least one non-NULL value was accumulated
 	Mins         []interface{}
 	Maxs         []interface{}
 	NonAggValues []interface{}
@@ -3343,6 +3343,41 @@ func (vm *VM) evaluateBoolExprOnRow(row map[string]interface{}, columns []string
 
 // vmMatchLike matches a string against a LIKE pattern
 func vmMatchLike(value, pattern string) bool {
+	if pattern == "" {
+		return value == ""
+	}
+	if pattern == "%" {
+		return true
+	}
+
+	// Fast path: check if pattern is a simple prefix (e.g., "Alice%")
+	// This avoids expensive recursive matching
+	hasWildcard := false
+	for _, c := range pattern {
+		if c == '%' || c == '_' {
+			hasWildcard = true
+			break
+		}
+	}
+	if !hasWildcard {
+		// Exact match (no wildcards)
+		return strings.EqualFold(value, pattern)
+	}
+
+	// Check for prefix-only pattern like "Alice%"
+	// This is very common and can be optimized
+	if strings.HasSuffix(pattern, "%") && !strings.Contains(pattern[:len(pattern)-1], "%") && !strings.Contains(pattern[:len(pattern)-1], "_") {
+		prefix := pattern[:len(pattern)-1]
+		return strings.HasPrefix(strings.ToLower(value), strings.ToLower(prefix))
+	}
+
+	// Check for suffix-only pattern like "%abc"
+	if strings.HasPrefix(pattern, "%") && !strings.Contains(pattern[1:], "%") && !strings.Contains(pattern[1:], "_") {
+		suffix := pattern[1:]
+		return strings.HasSuffix(strings.ToLower(value), strings.ToLower(suffix))
+	}
+
+	// Fall back to full recursive matching
 	return matchLikePattern(value, pattern, 0, 0)
 }
 
