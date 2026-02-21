@@ -12,6 +12,7 @@ import (
 type Compiler struct {
 	program         *VM.Program
 	ra              *VM.RegisterAllocator
+	optimizer       *Optimizer
 	stmtWhere       []QP.Expr
 	stmtColumns     []QP.Expr
 	columnIndices   map[string]int
@@ -24,9 +25,15 @@ type Compiler struct {
 
 func NewCompiler() *Compiler {
 	return &Compiler{
-		program: VM.NewProgram(),
-		ra:      VM.NewRegisterAllocator(16),
+		program:   VM.NewProgram(),
+		ra:        VM.NewRegisterAllocator(16),
+		optimizer: NewOptimizer(),
 	}
+}
+
+// finalize runs optimization passes and returns the compiled program.
+func (c *Compiler) finalize() *VM.Program {
+	return c.optimizer.Optimize(c.program)
 }
 
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program {
@@ -72,7 +79,7 @@ func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program {
 
 	c.program.Emit(VM.OpHalt)
 
-	return c.program
+	return c.finalize()
 }
 
 func (c *Compiler) compileFrom(from *QP.TableRef, where QP.Expr, columns []QP.Expr) {
@@ -704,7 +711,7 @@ func (c *Compiler) CompileInsert(stmt *QP.InsertStmt) *VM.Program {
 	}
 
 	c.program.Emit(VM.OpHalt)
-	return c.program
+	return c.finalize()
 }
 
 func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *VM.Program {
@@ -767,7 +774,7 @@ func (c *Compiler) CompileUpdate(stmt *QP.UpdateStmt) *VM.Program {
 	c.program.Instructions[nextIdx].P2 = int32(afterLoopIdx)
 
 	c.program.Emit(VM.OpHalt)
-	return c.program
+	return c.finalize()
 }
 
 func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *VM.Program {
@@ -812,7 +819,7 @@ func (c *Compiler) CompileDelete(stmt *QP.DeleteStmt) *VM.Program {
 	c.program.Instructions[nextIdx].P2 = int32(afterLoopIdx)
 
 	c.program.Emit(VM.OpHalt)
-	return c.program
+	return c.finalize()
 }
 
 func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
@@ -872,7 +879,7 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
 	})
 
 	c.program.Emit(VM.OpHalt)
-	return c.program
+	return c.finalize()
 }
 
 func (c *Compiler) resolveColumnCount(columns []QP.Expr) int {
@@ -919,7 +926,7 @@ func (c *Compiler) compileSetOp(stmt *QP.SelectStmt) *VM.Program {
 	}
 
 	c.program.Emit(VM.OpHalt)
-	return c.program
+	return c.finalize()
 }
 
 func (c *Compiler) compileSetOpUnionAll(stmt *QP.SelectStmt) {
