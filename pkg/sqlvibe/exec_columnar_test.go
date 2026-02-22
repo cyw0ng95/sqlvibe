@@ -4,42 +4,42 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe/storage"
+	"github.com/sqlvibe/sqlvibe/internal/DS"
 )
 
 // buildIntCol builds a TypeInt ColumnVector from a slice of int64 values.
 // A value of math.MinInt64 is treated as NULL for test convenience.
-func buildIntCol(vals []int64, nulls []bool) *storage.ColumnVector {
-	cv := storage.NewColumnVector("v", storage.TypeInt)
+func buildIntCol(vals []int64, nulls []bool) *DS.ColumnVector {
+	cv := DS.NewColumnVector("v", DS.TypeInt)
 	for i, v := range vals {
 		if nulls != nil && i < len(nulls) && nulls[i] {
 			cv.AppendNull()
 		} else {
-			cv.Append(storage.IntValue(v))
+			cv.Append(DS.IntValue(v))
 		}
 	}
 	return cv
 }
 
-func buildFloatCol(vals []float64, nulls []bool) *storage.ColumnVector {
-	cv := storage.NewColumnVector("v", storage.TypeFloat)
+func buildFloatCol(vals []float64, nulls []bool) *DS.ColumnVector {
+	cv := DS.NewColumnVector("v", DS.TypeFloat)
 	for i, v := range vals {
 		if nulls != nil && i < len(nulls) && nulls[i] {
 			cv.AppendNull()
 		} else {
-			cv.Append(storage.FloatValue(v))
+			cv.Append(DS.FloatValue(v))
 		}
 	}
 	return cv
 }
 
-func buildStringCol(vals []string, nulls []bool) *storage.ColumnVector {
-	cv := storage.NewColumnVector("v", storage.TypeString)
+func buildStringCol(vals []string, nulls []bool) *DS.ColumnVector {
+	cv := DS.NewColumnVector("v", DS.TypeString)
 	for i, v := range vals {
 		if nulls != nil && i < len(nulls) && nulls[i] {
 			cv.AppendNull()
 		} else {
-			cv.Append(storage.StringValue(v))
+			cv.Append(DS.StringValue(v))
 		}
 	}
 	return cv
@@ -49,7 +49,7 @@ func buildStringCol(vals []string, nulls []bool) *storage.ColumnVector {
 
 func TestVectorizedFilter_EqualInt(t *testing.T) {
 	col := buildIntCol([]int64{1, 2, 3, 2, 5}, nil)
-	rb := VectorizedFilter(col, "=", storage.IntValue(2))
+	rb := VectorizedFilter(col, "=", DS.IntValue(2))
 	got := rb.ToSlice()
 	if len(got) != 2 || got[0] != 1 || got[1] != 3 {
 		t.Fatalf("expected [1 3], got %v", got)
@@ -58,7 +58,7 @@ func TestVectorizedFilter_EqualInt(t *testing.T) {
 
 func TestVectorizedFilter_NotEqual(t *testing.T) {
 	col := buildIntCol([]int64{1, 2, 3}, nil)
-	rb := VectorizedFilter(col, "!=", storage.IntValue(2))
+	rb := VectorizedFilter(col, "!=", DS.IntValue(2))
 	got := rb.ToSlice()
 	if len(got) != 2 || got[0] != 0 || got[1] != 2 {
 		t.Fatalf("expected [0 2], got %v", got)
@@ -67,7 +67,7 @@ func TestVectorizedFilter_NotEqual(t *testing.T) {
 
 func TestVectorizedFilter_LessThan(t *testing.T) {
 	col := buildIntCol([]int64{10, 5, 20, 3}, nil)
-	rb := VectorizedFilter(col, "<", storage.IntValue(10))
+	rb := VectorizedFilter(col, "<", DS.IntValue(10))
 	got := rb.ToSlice()
 	if len(got) != 2 || got[0] != 1 || got[1] != 3 {
 		t.Fatalf("expected [1 3], got %v", got)
@@ -76,7 +76,7 @@ func TestVectorizedFilter_LessThan(t *testing.T) {
 
 func TestVectorizedFilter_LessEqual(t *testing.T) {
 	col := buildIntCol([]int64{10, 5, 20, 10}, nil)
-	rb := VectorizedFilter(col, "<=", storage.IntValue(10))
+	rb := VectorizedFilter(col, "<=", DS.IntValue(10))
 	got := rb.ToSlice()
 	if len(got) != 3 {
 		t.Fatalf("expected 3 results, got %v", got)
@@ -85,7 +85,7 @@ func TestVectorizedFilter_LessEqual(t *testing.T) {
 
 func TestVectorizedFilter_GreaterThan(t *testing.T) {
 	col := buildIntCol([]int64{1, 5, 3, 7}, nil)
-	rb := VectorizedFilter(col, ">", storage.IntValue(4))
+	rb := VectorizedFilter(col, ">", DS.IntValue(4))
 	got := rb.ToSlice()
 	if len(got) != 2 || got[0] != 1 || got[1] != 3 {
 		t.Fatalf("expected [1 3], got %v", got)
@@ -94,7 +94,7 @@ func TestVectorizedFilter_GreaterThan(t *testing.T) {
 
 func TestVectorizedFilter_GreaterEqual(t *testing.T) {
 	col := buildIntCol([]int64{1, 5, 3, 5}, nil)
-	rb := VectorizedFilter(col, ">=", storage.IntValue(5))
+	rb := VectorizedFilter(col, ">=", DS.IntValue(5))
 	got := rb.ToSlice()
 	if len(got) != 2 || got[0] != 1 || got[1] != 3 {
 		t.Fatalf("expected [1 3], got %v", got)
@@ -103,7 +103,7 @@ func TestVectorizedFilter_GreaterEqual(t *testing.T) {
 
 func TestVectorizedFilter_SkipsNulls(t *testing.T) {
 	col := buildIntCol([]int64{1, 0, 3}, []bool{false, true, false})
-	rb := VectorizedFilter(col, ">", storage.IntValue(0))
+	rb := VectorizedFilter(col, ">", DS.IntValue(0))
 	got := rb.ToSlice()
 	// index 1 is null, should be skipped
 	if len(got) != 2 || got[0] != 0 || got[1] != 2 {
@@ -113,7 +113,7 @@ func TestVectorizedFilter_SkipsNulls(t *testing.T) {
 
 func TestVectorizedFilter_String(t *testing.T) {
 	col := buildStringCol([]string{"apple", "banana", "cherry"}, nil)
-	rb := VectorizedFilter(col, "=", storage.StringValue("banana"))
+	rb := VectorizedFilter(col, "=", DS.StringValue("banana"))
 	got := rb.ToSlice()
 	if len(got) != 1 || got[0] != 1 {
 		t.Fatalf("expected [1], got %v", got)
@@ -122,7 +122,7 @@ func TestVectorizedFilter_String(t *testing.T) {
 
 func TestVectorizedFilter_Float(t *testing.T) {
 	col := buildFloatCol([]float64{1.1, 2.2, 3.3}, nil)
-	rb := VectorizedFilter(col, ">", storage.FloatValue(2.0))
+	rb := VectorizedFilter(col, ">", DS.FloatValue(2.0))
 	got := rb.ToSlice()
 	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
 		t.Fatalf("expected [1 2], got %v", got)
@@ -307,14 +307,14 @@ func TestColumnarGroupBy_SkipsNullKeys(t *testing.T) {
 // ----- ColumnarHashJoin -----
 
 func TestColumnarHashJoin_Basic(t *testing.T) {
-left := storage.NewHybridStore([]string{"id", "name"}, []storage.ValueType{storage.TypeInt, storage.TypeString})
-left.Insert([]storage.Value{storage.IntValue(1), storage.StringValue("alice")})
-left.Insert([]storage.Value{storage.IntValue(2), storage.StringValue("bob")})
-left.Insert([]storage.Value{storage.IntValue(3), storage.StringValue("carol")})
+left := DS.NewHybridStore([]string{"id", "name"}, []DS.ValueType{DS.TypeInt, DS.TypeString})
+left.Insert([]DS.Value{DS.IntValue(1), DS.StringValue("alice")})
+left.Insert([]DS.Value{DS.IntValue(2), DS.StringValue("bob")})
+left.Insert([]DS.Value{DS.IntValue(3), DS.StringValue("carol")})
 
-right := storage.NewHybridStore([]string{"uid", "score"}, []storage.ValueType{storage.TypeInt, storage.TypeInt})
-right.Insert([]storage.Value{storage.IntValue(1), storage.IntValue(90)})
-right.Insert([]storage.Value{storage.IntValue(3), storage.IntValue(85)})
+right := DS.NewHybridStore([]string{"uid", "score"}, []DS.ValueType{DS.TypeInt, DS.TypeInt})
+right.Insert([]DS.Value{DS.IntValue(1), DS.IntValue(90)})
+right.Insert([]DS.Value{DS.IntValue(3), DS.IntValue(85)})
 
 rows := ColumnarHashJoin(left, right, "id", "uid")
 if len(rows) != 2 {
@@ -329,10 +329,10 @@ t.Fatalf("expected 4 columns per row, got %d", len(row))
 }
 
 func TestColumnarHashJoin_NoMatches(t *testing.T) {
-left := storage.NewHybridStore([]string{"id"}, []storage.ValueType{storage.TypeInt})
-left.Insert([]storage.Value{storage.IntValue(1)})
-right := storage.NewHybridStore([]string{"id"}, []storage.ValueType{storage.TypeInt})
-right.Insert([]storage.Value{storage.IntValue(99)})
+left := DS.NewHybridStore([]string{"id"}, []DS.ValueType{DS.TypeInt})
+left.Insert([]DS.Value{DS.IntValue(1)})
+right := DS.NewHybridStore([]string{"id"}, []DS.ValueType{DS.TypeInt})
+right.Insert([]DS.Value{DS.IntValue(99)})
 
 rows := ColumnarHashJoin(left, right, "id", "id")
 if len(rows) != 0 {
@@ -343,13 +343,13 @@ t.Fatalf("expected 0 rows, got %d", len(rows))
 // ----- VectorizedGroupBy -----
 
 func TestVectorizedGroupBy_Sum(t *testing.T) {
-hs := storage.NewHybridStore(
+hs := DS.NewHybridStore(
 []string{"cat", "val"},
-[]storage.ValueType{storage.TypeString, storage.TypeInt},
+[]DS.ValueType{DS.TypeString, DS.TypeInt},
 )
-hs.Insert([]storage.Value{storage.StringValue("A"), storage.IntValue(10)})
-hs.Insert([]storage.Value{storage.StringValue("B"), storage.IntValue(20)})
-hs.Insert([]storage.Value{storage.StringValue("A"), storage.IntValue(5)})
+hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(10)})
+hs.Insert([]DS.Value{DS.StringValue("B"), DS.IntValue(20)})
+hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(5)})
 
 rows := VectorizedGroupBy(hs, []string{"cat"}, "val", "sum")
 if len(rows) != 2 {

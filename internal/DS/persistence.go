@@ -1,4 +1,4 @@
-package storage
+package DS
 
 import (
 	"bytes"
@@ -201,13 +201,13 @@ func encodeColumnData(rows [][]Value, ci int, typ ValueType, rowCount int) []byt
 		if i < len(rows) && ci < len(rows[i]) {
 			v = rows[i][ci]
 		}
-		buf.Write(encodeValue(v, typ))
+		buf.Write(encodeStorageValue(v, typ))
 	}
 	return buf.Bytes()
 }
 
 // encodeValue encodes a single value according to its storage type.
-func encodeValue(v Value, typ ValueType) []byte {
+func encodeStorageValue(v Value, typ ValueType) []byte {
 	switch typ {
 	case TypeInt, TypeBool:
 		b := make([]byte, 8)
@@ -265,7 +265,7 @@ func decodeColumnData(data []byte, name string, typ ValueType, rowCount int) (*C
 			cv.AppendNull()
 			continue
 		}
-		v, n, err := decodeValue(data[pos:], typ)
+		v, n, err := decodeStorageValue(data[pos:], typ)
 		if err != nil {
 			return nil, fmt.Errorf("column %s row %d: %w", name, i, err)
 		}
@@ -291,7 +291,7 @@ func valueSize(data []byte, typ ValueType) (int, error) {
 }
 
 // decodeValue decodes one value from data and returns (value, bytesConsumed, error).
-func decodeValue(data []byte, typ ValueType) (Value, int, error) {
+func decodeStorageValue(data []byte, typ ValueType) (Value, int, error) {
 	switch typ {
 	case TypeInt:
 		if len(data) < 8 {
@@ -477,7 +477,7 @@ func SerializeIndexes(ie *IndexEngine) []byte {
 		binary.Write(&buf, binary.LittleEndian, uint32(len(pairs)))
 		for _, p := range pairs {
 			binary.Write(&buf, binary.LittleEndian, uint8(p.Key.Type))
-			buf.Write(encodeValue(p.Key, p.Key.Type))
+			buf.Write(encodeStorageValue(p.Key, p.Key.Type))
 			binary.Write(&buf, binary.LittleEndian, p.RowIdx)
 		}
 	}
@@ -589,7 +589,7 @@ func readValueFromReader(r *bytes.Reader, vt ValueType) (Value, error) {
 		if _, err := io.ReadFull(r, b); err != nil {
 			return NullValue(), err
 		}
-		v, _, err := decodeValue(b, vt)
+		v, _, err := decodeStorageValue(b, vt)
 		return v, err
 	case TypeString, TypeBytes:
 		var l uint32

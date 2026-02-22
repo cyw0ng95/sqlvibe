@@ -6,17 +6,17 @@ package Benchmark
 import (
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe/storage"
+	"github.com/sqlvibe/sqlvibe/internal/DS"
 )
 
 // -----------------------------------------------------------------
 // helpers
 // -----------------------------------------------------------------
 
-func makeStore1K() *storage.HybridStore {
-	hs := storage.NewHybridStore(
+func makeStore1K() *DS.HybridStore {
+	hs := DS.NewHybridStore(
 		[]string{"id", "val"},
-		[]storage.ValueType{storage.TypeInt, storage.TypeInt},
+		[]DS.ValueType{DS.TypeInt, DS.TypeInt},
 	)
 	for j := 0; j < 1000; j++ {
 		hs.Insert(intRow(j, j))
@@ -24,10 +24,10 @@ func makeStore1K() *storage.HybridStore {
 	return hs
 }
 
-func makeStore100K() *storage.HybridStore {
-	hs := storage.NewHybridStore(
+func makeStore100K() *DS.HybridStore {
+	hs := DS.NewHybridStore(
 		[]string{"id", "val"},
-		[]storage.ValueType{storage.TypeInt, storage.TypeInt},
+		[]DS.ValueType{DS.TypeInt, DS.TypeInt},
 	)
 	for j := 0; j < 100000; j++ {
 		hs.Insert(intRow(j, j))
@@ -51,7 +51,7 @@ func BenchmarkColumnarScan_1K(b *testing.B) {
 // BenchmarkColumnarFilter_1K benchmarks a range filter scan of 1K rows.
 func BenchmarkColumnarFilter_1K(b *testing.B) {
 	hs := makeStore1K()
-	filterVal := storage.IntValue(500)
+	filterVal := DS.IntValue(500)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = hs.ScanWithFilter("val", ">=", filterVal)

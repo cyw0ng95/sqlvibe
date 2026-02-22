@@ -16,7 +16,7 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 	"github.com/sqlvibe/sqlvibe/internal/TM"
 	"github.com/sqlvibe/sqlvibe/internal/VM"
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe/storage"
+
 )
 
 // queryResultCache is a thread-safe in-process cache for full SELECT query results.
@@ -91,7 +91,7 @@ type Database struct {
 	indexData      map[string]map[interface{}][]int    // index name -> col value -> []row indices
 	planCache          *CG.PlanCache                       // compiled query plan cache
 	queryCache         *queryResultCache                   // full query result cache (columns + rows)
-	hybridStores       map[string]*storage.HybridStore     // table name -> columnar hybrid store (analytical fast path)
+	hybridStores       map[string]*DS.HybridStore     // table name -> columnar hybrid store (analytical fast path)
 	hybridStoresDirty  map[string]bool                     // table name -> needs rebuild on next access
 }
 
@@ -349,7 +349,7 @@ func Open(path string) (*Database, error) {
 		indexData:      make(map[string]map[interface{}][]int),
 		planCache:          CG.NewPlanCache(256),
 		queryCache:         newQueryResultCache(512),
-		hybridStores:       make(map[string]*storage.HybridStore),
+		hybridStores:       make(map[string]*DS.HybridStore),
 		hybridStoresDirty:  make(map[string]bool),
 	}, nil
 }
@@ -1379,88 +1379,88 @@ func (db *Database) rebuildAllIndexes() {
 	}
 }
 
-// sqlTypeToStorageType converts a SQL column type declaration to a storage.ValueType.
-func sqlTypeToStorageType(typStr string) storage.ValueType {
+// sqlTypeToStorageType converts a SQL column type declaration to a DS.ValueType.
+func sqlTypeToStorageType(typStr string) DS.ValueType {
 	upper := strings.ToUpper(strings.TrimSpace(typStr))
 	switch {
 	case strings.Contains(upper, "INT"):
-		return storage.TypeInt
+		return DS.TypeInt
 	case strings.Contains(upper, "REAL"), strings.Contains(upper, "FLOAT"),
 		strings.Contains(upper, "DOUBLE"), strings.Contains(upper, "NUMERIC"),
 		strings.Contains(upper, "DECIMAL"):
-		return storage.TypeFloat
+		return DS.TypeFloat
 	case strings.Contains(upper, "BOOL"):
-		return storage.TypeBool
+		return DS.TypeBool
 	case strings.Contains(upper, "BLOB"), strings.Contains(upper, "BYTES"):
-		return storage.TypeBytes
+		return DS.TypeBytes
 	default:
-		return storage.TypeString
+		return DS.TypeString
 	}
 }
 
-// interfaceToStorageValue converts a Go interface{} row value to a storage.Value.
-func interfaceToStorageValue(v interface{}, vt storage.ValueType) storage.Value {
+// interfaceToStorageValue converts a Go interface{} row value to a DS.Value.
+func interfaceToStorageValue(v interface{}, vt DS.ValueType) DS.Value {
 	if v == nil {
-		return storage.NullValue()
+		return DS.NullValue()
 	}
 	switch vt {
-	case storage.TypeInt:
+	case DS.TypeInt:
 		switch n := v.(type) {
 		case int64:
-			return storage.IntValue(n)
+			return DS.IntValue(n)
 		case int:
-			return storage.IntValue(int64(n))
+			return DS.IntValue(int64(n))
 		case float64:
-			return storage.IntValue(int64(n))
+			return DS.IntValue(int64(n))
 		case bool:
 			if n {
-				return storage.IntValue(1)
+				return DS.IntValue(1)
 			}
-			return storage.IntValue(0)
+			return DS.IntValue(0)
 		case string:
 			if i, err := strconv.ParseInt(n, 10, 64); err == nil {
-				return storage.IntValue(i)
+				return DS.IntValue(i)
 			}
 		}
-	case storage.TypeFloat:
+	case DS.TypeFloat:
 		switch n := v.(type) {
 		case float64:
-			return storage.FloatValue(n)
+			return DS.FloatValue(n)
 		case int64:
-			return storage.FloatValue(float64(n))
+			return DS.FloatValue(float64(n))
 		case int:
-			return storage.FloatValue(float64(n))
+			return DS.FloatValue(float64(n))
 		case string:
 			if f, err := strconv.ParseFloat(n, 64); err == nil {
-				return storage.FloatValue(f)
+				return DS.FloatValue(f)
 			}
 		}
-	case storage.TypeBool:
+	case DS.TypeBool:
 		switch n := v.(type) {
 		case bool:
-			return storage.BoolValue(n)
+			return DS.BoolValue(n)
 		case int64:
-			return storage.BoolValue(n != 0)
+			return DS.BoolValue(n != 0)
 		case float64:
-			return storage.BoolValue(n != 0)
+			return DS.BoolValue(n != 0)
 		}
-	case storage.TypeBytes:
+	case DS.TypeBytes:
 		if b, ok := v.([]byte); ok {
-			return storage.BytesValue(b)
+			return DS.BytesValue(b)
 		}
 	}
 	// Default: string representation.
-	return storage.StringValue(fmt.Sprintf("%v", v))
+	return DS.StringValue(fmt.Sprintf("%v", v))
 }
 
-// rowToStorageValues converts a row map to an ordered []storage.Value for tableName.
-func (db *Database) rowToStorageValues(tableName string, row map[string]interface{}) []storage.Value {
+// rowToStorageValues converts a row map to an ordered []DS.Value for tableName.
+func (db *Database) rowToStorageValues(tableName string, row map[string]interface{}) []DS.Value {
 	cols := db.columnOrder[tableName]
 	if len(cols) == 0 {
 		return nil
 	}
 	colTypes := db.tables[tableName]
-	vals := make([]storage.Value, len(cols))
+	vals := make([]DS.Value, len(cols))
 	for i, col := range cols {
 		vt := sqlTypeToStorageType(colTypes[col])
 		vals[i] = interfaceToStorageValue(row[col], vt)
@@ -1469,22 +1469,22 @@ func (db *Database) rowToStorageValues(tableName string, row map[string]interfac
 }
 
 // buildHybridStore constructs a fresh HybridStore for tableName from db.data.
-func (db *Database) buildHybridStore(tableName string) *storage.HybridStore {
+func (db *Database) buildHybridStore(tableName string) *DS.HybridStore {
 	cols := db.columnOrder[tableName]
 	if len(cols) == 0 {
 		return nil
 	}
 	colTypeStrs := db.tables[tableName]
-	stTypes := make([]storage.ValueType, len(cols))
+	stTypes := make([]DS.ValueType, len(cols))
 	for i, col := range cols {
 		stTypes[i] = sqlTypeToStorageType(colTypeStrs[col])
 	}
-	hs := storage.NewHybridStore(cols, stTypes)
+	hs := DS.NewHybridStore(cols, stTypes)
 	for _, row := range db.data[tableName] {
 		if row == nil {
 			continue
 		}
-		vals := make([]storage.Value, len(cols))
+		vals := make([]DS.Value, len(cols))
 		for i, col := range cols {
 			vals[i] = interfaceToStorageValue(row[col], stTypes[i])
 		}
@@ -1502,7 +1502,7 @@ func (db *Database) markHybridDirty(tableName string) {
 
 // GetHybridStore returns the HybridStore for tableName, rebuilding it when necessary.
 // Returns nil if the table does not exist.
-func (db *Database) GetHybridStore(tableName string) *storage.HybridStore {
+func (db *Database) GetHybridStore(tableName string) *DS.HybridStore {
 	tbl := db.resolveTableName(tableName)
 	if _, ok := db.tables[tbl]; !ok {
 		return nil

@@ -8,22 +8,22 @@ import (
 	"testing"
 
 	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe/storage"
+	"github.com/sqlvibe/sqlvibe/internal/DS"
 )
 
 // -----------------------------------------------------------------
 // helpers
 // -----------------------------------------------------------------
 
-func newHybridStore() *storage.HybridStore {
-	return storage.NewHybridStore(
+func newHybridStore() *DS.HybridStore {
+	return DS.NewHybridStore(
 		[]string{"id", "val"},
-		[]storage.ValueType{storage.TypeInt, storage.TypeInt},
+		[]DS.ValueType{DS.TypeInt, DS.TypeInt},
 	)
 }
 
-func intRow(id, val int) []storage.Value {
-	return []storage.Value{storage.IntValue(int64(id)), storage.IntValue(int64(val))}
+func intRow(id, val int) []DS.Value {
+	return []DS.Value{DS.IntValue(int64(id)), DS.IntValue(int64(val))}
 }
 
 // -----------------------------------------------------------------
@@ -92,7 +92,7 @@ func BenchmarkStorage_FilterEqual_1K_HybridStore(b *testing.B) {
 	for j := 0; j < 1000; j++ {
 		hs.Insert(intRow(j, j%10))
 	}
-	target := storage.IntValue(5)
+	target := DS.IntValue(5)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = hs.ScanWhere("val", target)
@@ -105,7 +105,7 @@ func BenchmarkStorage_FilterEqual_1K_VectorizedFilter(b *testing.B) {
 		hs.Insert(intRow(j, j%10))
 	}
 	col := hs.ColStore().GetColumn("val")
-	target := storage.IntValue(5)
+	target := DS.IntValue(5)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = sqlvibe.VectorizedFilter(col, "=", target)
@@ -188,8 +188,8 @@ func BenchmarkStorage_ColumnarCount_1K_SqlvibeSQLDB(b *testing.B) {
 // -----------------------------------------------------------------
 
 func BenchmarkStorage_RoaringBitmap_AndFilter(b *testing.B) {
-	rb1 := storage.NewRoaringBitmap()
-	rb2 := storage.NewRoaringBitmap()
+	rb1 := DS.NewRoaringBitmap()
+	rb2 := DS.NewRoaringBitmap()
 	for i := uint32(0); i < 10000; i++ {
 		if i%2 == 0 {
 			rb1.Add(i)
@@ -228,7 +228,7 @@ for j := 0; j < 1000; j++ {
 hs.Insert(intRow(j, j%100))
 }
 col := hs.ColStore().GetColumn("val")
-target := storage.IntValue(42)
+target := DS.IntValue(42)
 b.ReportAllocs()
 b.ResetTimer()
 for i := 0; i < b.N; i++ {
@@ -252,15 +252,15 @@ _ = sqlvibe.ColumnarSum(col)
 
 // BenchmarkStorage_MemoryProfile_ColumnarGroupBy measures allocations for columnar GROUP BY.
 func BenchmarkStorage_MemoryProfile_ColumnarGroupBy(b *testing.B) {
-hs := storage.NewHybridStore(
+hs := DS.NewHybridStore(
 []string{"cat", "val"},
-[]storage.ValueType{storage.TypeString, storage.TypeInt},
+[]DS.ValueType{DS.TypeString, DS.TypeInt},
 )
 cats := []string{"A", "B", "C", "D"}
 for j := 0; j < 1000; j++ {
-hs.Insert([]storage.Value{
-storage.StringValue(cats[j%len(cats)]),
-storage.IntValue(int64(j)),
+hs.Insert([]DS.Value{
+DS.StringValue(cats[j%len(cats)]),
+DS.IntValue(int64(j)),
 })
 }
 keyCol := hs.ColStore().GetColumn("cat")
@@ -297,6 +297,6 @@ data[i] = byte(i / 100) // 11 distinct values, long runs
 b.ReportAllocs()
 b.ResetTimer()
 for i := 0; i < b.N; i++ {
-_ = storage.BenchEncodeRLE(data)
+_ = DS.BenchEncodeRLE(data)
 }
 }

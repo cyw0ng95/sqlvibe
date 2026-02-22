@@ -3,19 +3,19 @@ package sqlvibe
 import (
 	"strings"
 
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe/storage"
+	"github.com/sqlvibe/sqlvibe/internal/DS"
 )
 
 // VectorizedFilter applies op against val across all non-null rows of col and
 // returns a RoaringBitmap of matching row indices.
 // Supported ops: "=", "!=", "<", "<=", ">", ">="
-func VectorizedFilter(col *storage.ColumnVector, op string, val storage.Value) *storage.RoaringBitmap {
-	rb := storage.NewRoaringBitmap()
+func VectorizedFilter(col *DS.ColumnVector, op string, val DS.Value) *DS.RoaringBitmap {
+	rb := DS.NewRoaringBitmap()
 	for i := 0; i < col.Len(); i++ {
 		if col.IsNull(i) {
 			continue
 		}
-		cmp := storage.Compare(col.Get(i), val)
+		cmp := DS.Compare(col.Get(i), val)
 		var match bool
 		switch op {
 		case "=":
@@ -39,7 +39,7 @@ func VectorizedFilter(col *storage.ColumnVector, op string, val storage.Value) *
 }
 
 // ColumnarSum returns the sum of all non-null TypeInt and TypeFloat values in col.
-func ColumnarSum(col *storage.ColumnVector) float64 {
+func ColumnarSum(col *DS.ColumnVector) float64 {
 	var sum float64
 	for i := 0; i < col.Len(); i++ {
 		if col.IsNull(i) {
@@ -47,9 +47,9 @@ func ColumnarSum(col *storage.ColumnVector) float64 {
 		}
 		v := col.Get(i)
 		switch v.Type {
-		case storage.TypeInt:
+		case DS.TypeInt:
 			sum += float64(v.Int)
-		case storage.TypeFloat:
+		case DS.TypeFloat:
 			sum += v.Float
 		}
 	}
@@ -57,7 +57,7 @@ func ColumnarSum(col *storage.ColumnVector) float64 {
 }
 
 // ColumnarCount returns the number of non-null values in col.
-func ColumnarCount(col *storage.ColumnVector) int64 {
+func ColumnarCount(col *DS.ColumnVector) int64 {
 	var n int64
 	for i := 0; i < col.Len(); i++ {
 		if !col.IsNull(i) {
@@ -68,14 +68,14 @@ func ColumnarCount(col *storage.ColumnVector) int64 {
 }
 
 // ColumnarMin returns the minimum non-null value, or NullValue if the column is empty/all-null.
-func ColumnarMin(col *storage.ColumnVector) storage.Value {
-	min := storage.NullValue()
+func ColumnarMin(col *DS.ColumnVector) DS.Value {
+	min := DS.NullValue()
 	for i := 0; i < col.Len(); i++ {
 		if col.IsNull(i) {
 			continue
 		}
 		v := col.Get(i)
-		if min.IsNull() || storage.Compare(v, min) < 0 {
+		if min.IsNull() || DS.Compare(v, min) < 0 {
 			min = v
 		}
 	}
@@ -83,14 +83,14 @@ func ColumnarMin(col *storage.ColumnVector) storage.Value {
 }
 
 // ColumnarMax returns the maximum non-null value, or NullValue if the column is empty/all-null.
-func ColumnarMax(col *storage.ColumnVector) storage.Value {
-	max := storage.NullValue()
+func ColumnarMax(col *DS.ColumnVector) DS.Value {
+	max := DS.NullValue()
 	for i := 0; i < col.Len(); i++ {
 		if col.IsNull(i) {
 			continue
 		}
 		v := col.Get(i)
-		if max.IsNull() || storage.Compare(v, max) > 0 {
+		if max.IsNull() || DS.Compare(v, max) > 0 {
 			max = v
 		}
 	}
@@ -99,7 +99,7 @@ func ColumnarMax(col *storage.ColumnVector) storage.Value {
 
 // ColumnarAvg returns the average of all non-null TypeInt and TypeFloat values,
 // and whether any qualifying values existed (false means no data / all NULL).
-func ColumnarAvg(col *storage.ColumnVector) (float64, bool) {
+func ColumnarAvg(col *DS.ColumnVector) (float64, bool) {
 	var sum float64
 	var count int64
 	for i := 0; i < col.Len(); i++ {
@@ -108,10 +108,10 @@ func ColumnarAvg(col *storage.ColumnVector) (float64, bool) {
 		}
 		v := col.Get(i)
 		switch v.Type {
-		case storage.TypeInt:
+		case DS.TypeInt:
 			sum += float64(v.Int)
 			count++
-		case storage.TypeFloat:
+		case DS.TypeFloat:
 			sum += v.Float
 			count++
 		}
@@ -126,8 +126,8 @@ func ColumnarAvg(col *storage.ColumnVector) (float64, bool) {
 type groupState struct {
 	sum    float64
 	count  int64
-	min    storage.Value
-	max    storage.Value
+	min    DS.Value
+	max    DS.Value
 	hasVal bool
 }
 
@@ -135,7 +135,7 @@ type groupState struct {
 // agg may be "sum", "count", "min", "max", or "avg".
 // The returned map key is the string representation of each group key value.
 // Rows where keyCol is null are skipped.
-func ColumnarGroupBy(keyCol, valCol *storage.ColumnVector, agg string) map[string]storage.Value {
+func ColumnarGroupBy(keyCol, valCol *DS.ColumnVector, agg string) map[string]DS.Value {
 	groups := make(map[string]*groupState)
 	keyOrder := make([]string, 0)
 
@@ -162,9 +162,9 @@ func ColumnarGroupBy(keyCol, valCol *storage.ColumnVector, agg string) map[strin
 		v := valCol.Get(i)
 		gs.count++
 		switch v.Type {
-		case storage.TypeInt:
+		case DS.TypeInt:
 			gs.sum += float64(v.Int)
-		case storage.TypeFloat:
+		case DS.TypeFloat:
 			gs.sum += v.Float
 		}
 		if !gs.hasVal {
@@ -172,43 +172,43 @@ func ColumnarGroupBy(keyCol, valCol *storage.ColumnVector, agg string) map[strin
 			gs.max = v
 			gs.hasVal = true
 		} else {
-			if storage.Compare(v, gs.min) < 0 {
+			if DS.Compare(v, gs.min) < 0 {
 				gs.min = v
 			}
-			if storage.Compare(v, gs.max) > 0 {
+			if DS.Compare(v, gs.max) > 0 {
 				gs.max = v
 			}
 		}
 	}
 
-	result := make(map[string]storage.Value, len(groups))
+	result := make(map[string]DS.Value, len(groups))
 	for _, key := range keyOrder {
 		gs := groups[key]
 		switch agg {
 		case "sum":
-			result[key] = storage.FloatValue(gs.sum)
+			result[key] = DS.FloatValue(gs.sum)
 		case "count":
-			result[key] = storage.IntValue(gs.count)
+			result[key] = DS.IntValue(gs.count)
 		case "min":
 			if gs.hasVal {
 				result[key] = gs.min
 			} else {
-				result[key] = storage.NullValue()
+				result[key] = DS.NullValue()
 			}
 		case "max":
 			if gs.hasVal {
 				result[key] = gs.max
 			} else {
-				result[key] = storage.NullValue()
+				result[key] = DS.NullValue()
 			}
 		case "avg":
 			if gs.count == 0 {
-				result[key] = storage.NullValue()
+				result[key] = DS.NullValue()
 			} else {
-				result[key] = storage.FloatValue(gs.sum / float64(gs.count))
+				result[key] = DS.FloatValue(gs.sum / float64(gs.count))
 			}
 		default:
-			result[key] = storage.NullValue()
+			result[key] = DS.NullValue()
 		}
 	}
 	return result
@@ -218,7 +218,7 @@ func ColumnarGroupBy(keyCol, valCol *storage.ColumnVector, agg string) map[strin
 // column pair (leftCol = rightCol).  The result is a slice of merged value rows
 // where the first len(left.Columns()) values are from the left row and the
 // remaining values are from the right row.
-func ColumnarHashJoin(left, right *storage.HybridStore, leftCol, rightCol string) [][]storage.Value {
+func ColumnarHashJoin(left, right *DS.HybridStore, leftCol, rightCol string) [][]DS.Value {
 	lci := left.ColIndex(leftCol)
 	rci := right.ColIndex(rightCol)
 	if lci < 0 || rci < 0 {
@@ -226,14 +226,14 @@ func ColumnarHashJoin(left, right *storage.HybridStore, leftCol, rightCol string
 	}
 
 	// Build hash table from the smaller side (right).
-	hash := make(map[string][][]storage.Value)
+	hash := make(map[string][][]DS.Value)
 	for _, rRow := range right.Scan() {
 		key := rRow[rci].String()
 		hash[key] = append(hash[key], rRow)
 	}
 
 	// Probe with left side.
-	var out [][]storage.Value
+	var out [][]DS.Value
 	lCols := len(left.Columns())
 	rCols := len(right.Columns())
 	for _, lRow := range left.Scan() {
@@ -243,7 +243,7 @@ func ColumnarHashJoin(left, right *storage.HybridStore, leftCol, rightCol string
 			continue
 		}
 		for _, rRow := range matches {
-			merged := make([]storage.Value, lCols+rCols)
+			merged := make([]DS.Value, lCols+rCols)
 			copy(merged[:lCols], lRow)
 			copy(merged[lCols:], rRow)
 			out = append(out, merged)
@@ -256,7 +256,7 @@ func ColumnarHashJoin(left, right *storage.HybridStore, leftCol, rightCol string
 // aggregate functions on aggCol.  agg may be "sum", "count", "min", "max", or "avg".
 // Each returned row contains the group-key values (in the order of groupCols)
 // followed by the aggregate result.
-func VectorizedGroupBy(hs *storage.HybridStore, groupCols []string, aggCol, agg string) [][]storage.Value {
+func VectorizedGroupBy(hs *DS.HybridStore, groupCols []string, aggCol, agg string) [][]DS.Value {
 	colIdx := make([]int, len(groupCols))
 	for i, c := range groupCols {
 		colIdx[i] = hs.ColIndex(c)
@@ -264,11 +264,11 @@ func VectorizedGroupBy(hs *storage.HybridStore, groupCols []string, aggCol, agg 
 	aggCI := hs.ColIndex(aggCol)
 
 	type aggState struct {
-		keyVals []storage.Value // representative key values for this group
+		keyVals []DS.Value // representative key values for this group
 		sum     float64
 		count   int64
-		min     storage.Value
-		max     storage.Value
+		min     DS.Value
+		max     DS.Value
 		hasVal  bool
 	}
 
@@ -291,7 +291,7 @@ func VectorizedGroupBy(hs *storage.HybridStore, groupCols []string, aggCol, agg 
 		gs, ok := groups[key]
 		if !ok {
 			// Store representative key values from the first row in this group.
-			keyVals := make([]storage.Value, len(groupCols))
+			keyVals := make([]DS.Value, len(groupCols))
 			for i, ci := range colIdx {
 				if ci >= 0 && ci < len(row) {
 					keyVals[i] = row[ci]
@@ -307,7 +307,7 @@ func VectorizedGroupBy(hs *storage.HybridStore, groupCols []string, aggCol, agg 
 			continue
 		}
 
-		var v storage.Value
+		var v DS.Value
 		if aggCI >= 0 && aggCI < len(row) {
 			v = row[aggCI]
 		}
@@ -316,9 +316,9 @@ func VectorizedGroupBy(hs *storage.HybridStore, groupCols []string, aggCol, agg 
 		}
 		gs.count++
 		switch v.Type {
-		case storage.TypeInt:
+		case DS.TypeInt:
 			gs.sum += float64(v.Int)
-		case storage.TypeFloat:
+		case DS.TypeFloat:
 			gs.sum += v.Float
 		}
 		if !gs.hasVal {
@@ -326,45 +326,45 @@ func VectorizedGroupBy(hs *storage.HybridStore, groupCols []string, aggCol, agg 
 			gs.max = v
 			gs.hasVal = true
 		} else {
-			if storage.Compare(v, gs.min) < 0 {
+			if DS.Compare(v, gs.min) < 0 {
 				gs.min = v
 			}
-			if storage.Compare(v, gs.max) > 0 {
+			if DS.Compare(v, gs.max) > 0 {
 				gs.max = v
 			}
 		}
 	}
 
-	out := make([][]storage.Value, 0, len(keyOrder))
+	out := make([][]DS.Value, 0, len(keyOrder))
 	for _, key := range keyOrder {
 		gs := groups[key]
 
-		var aggVal storage.Value
+		var aggVal DS.Value
 		switch agg {
 		case "sum":
-			aggVal = storage.FloatValue(gs.sum)
+			aggVal = DS.FloatValue(gs.sum)
 		case "count":
-			aggVal = storage.IntValue(gs.count)
+			aggVal = DS.IntValue(gs.count)
 		case "min":
 			if gs.hasVal {
 				aggVal = gs.min
 			} else {
-				aggVal = storage.NullValue()
+				aggVal = DS.NullValue()
 			}
 		case "max":
 			if gs.hasVal {
 				aggVal = gs.max
 			} else {
-				aggVal = storage.NullValue()
+				aggVal = DS.NullValue()
 			}
 		case "avg":
 			if gs.count == 0 {
-				aggVal = storage.NullValue()
+				aggVal = DS.NullValue()
 			} else {
-				aggVal = storage.FloatValue(gs.sum / float64(gs.count))
+				aggVal = DS.FloatValue(gs.sum / float64(gs.count))
 			}
 		default:
-			aggVal = storage.NullValue()
+			aggVal = DS.NullValue()
 		}
 
 		row := append(gs.keyVals, aggVal)

@@ -1,4 +1,4 @@
-package storage
+package DS
 
 // Mode represents the recommended storage mode for a workload.
 type Mode int

@@ -1,4 +1,4 @@
-package storage
+package DS
 
 // IndexEngine manages bitmap and skip-list indexes for fast lookups.
 type IndexEngine struct {

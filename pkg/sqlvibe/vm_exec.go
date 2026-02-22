@@ -7,10 +7,11 @@ import (
 	"strings"
 
 	"github.com/sqlvibe/sqlvibe/internal/CG"
+	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 	"github.com/sqlvibe/sqlvibe/internal/VM"
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe/storage"
+
 )
 
 func (db *Database) ExecVM(sql string) (*Rows, error) {
@@ -947,14 +948,14 @@ func (db *Database) tryAggregateFastPath(stmt *QP.SelectStmt) *Rows {
 		colType := hs.ColType(colName)
 		// Only fast-path known numeric types; TEXT columns may hold numbers but
 		// their registered type is TEXT (e.g. materialised derived tables).
-		if colType == storage.TypeFloat {
+		if colType == DS.TypeFloat {
 			sum, hasV := hs.ParallelSumFloat64(colName)
 			if !hasV {
 				return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
 			}
 			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{sum}}}
 		}
-		if colType != storage.TypeInt {
+		if colType != DS.TypeInt {
 			return nil // Fall through to VM for TEXT/NULL columns.
 		}
 		sum, hasV := hs.ParallelSumInt(colName)
@@ -964,14 +965,14 @@ func (db *Database) tryAggregateFastPath(stmt *QP.SelectStmt) *Rows {
 		return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{sum}}}
 	case "MIN":
 		colType := hs.ColType(colName)
-		if colType == storage.TypeFloat {
+		if colType == DS.TypeFloat {
 			v, hasV := hs.ParallelMinFloat64(colName)
 			if !hasV {
 				return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
 			}
 			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
 		}
-		if colType != storage.TypeInt {
+		if colType != DS.TypeInt {
 			return nil
 		}
 		v, hasV := hs.ParallelMinInt(colName)
@@ -981,14 +982,14 @@ func (db *Database) tryAggregateFastPath(stmt *QP.SelectStmt) *Rows {
 		return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
 	case "MAX":
 		colType := hs.ColType(colName)
-		if colType == storage.TypeFloat {
+		if colType == DS.TypeFloat {
 			v, hasV := hs.ParallelMaxFloat64(colName)
 			if !hasV {
 				return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
 			}
 			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
 		}
-		if colType != storage.TypeInt {
+		if colType != DS.TypeInt {
 			return nil
 		}
 		v, hasV := hs.ParallelMaxInt(colName)
