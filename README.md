@@ -56,38 +56,37 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 ## Performance (v0.8.9)
 
-Benchmarks on AMD EPYC 7763 @ 2.45GHz, in-memory database, `-benchtime=1s -benchmem`.
+Benchmarks on Intel Xeon Processor @ 2.50GHz, in-memory database, `-benchtime=1s -benchmem`.
 
-### Complex Queries - sqlvibe WINS
+### Query Performance
 
-| Operation | sqlvibe | SQLite Go | Winner |
-|-----------|--------:|----------:|--------|
-| Predicate pushdown | 864 ns | 2,417,676 ns | **sqlvibe 2,797x faster** |
-| ORDER BY LIMIT 10 | 941 ns | 1,342,239 ns | **sqlvibe 1,426x faster** |
-| SELECT all (100K) | 611 ns | ~10 ms | **sqlvibe 16,000x faster** |
-| WHERE filtering | 706 ns | 329,724 ns | **sqlvibe 467x faster** |
-| GROUP BY | 1.23 µs | 491 µs | **sqlvibe 399x faster** |
-| Result cache hit | 931 ns | 284,210 ns | **sqlvibe 305x faster** |
-| INNER JOIN | 1.06 µs | 116 µs | **sqlvibe 110x faster** |
-| COUNT(*) | 570 ns | 6,135 ns | **sqlvibe 10x faster** |
+| Operation | sqlvibe | Notes |
+|-----------|--------:|-------|
+| SELECT all (100K rows) | 617 ns | Full table scan |
+| SELECT with WHERE | 537 ns | Filtered query |
+| COUNT(*) | 710 ns | Aggregate |
+| SUM/AVG | 757 ns | Aggregate |
+| GROUP BY | 1.21 µs | Multi-column |
+| WHERE (MultiAnd) | 903 ns | Complex filter |
+| WHERE (IN clause) | 1.00 µs | IN filter |
+| WHERE (BETWEEN) | 886 ns | Range filter |
 
 ### DML Operations
 
-| Operation | sqlvibe | SQLite Go | Winner |
-|-----------|--------:|----------:|--------|
-| INSERT single | 4.0 µs | 25.3 µs | **sqlvibe 6.3x faster** |
-| INSERT 100 rows (batch) | 207 µs | ~2.5 ms | **sqlvibe 12x faster** |
-| UPDATE single | 21.6 µs | 25.5 µs | **sqlvibe 18% faster** |
-| DELETE single | 22.7 µs | 41.0 µs | **sqlvibe 1.8x faster** |
+| Operation | sqlvibe | Notes |
+|-----------|--------:|-------|
+| INSERT single | 20.3 µs | Single row |
+| UPDATE single | 191 µs | Single row |
+| DELETE single | 142 µs | Single row |
 
 ### Key Optimizations
 
-- **Columnar storage**: 16,000x faster full table scans
+- **Columnar storage**: Fast full table scans
 - **Hybrid row/column**: Adaptive switching for best performance
-- **Result cache**: 305x faster for repeated queries
-- **Predicate pushdown**: 2,797x faster for filtered queries
+- **Result cache**: Fast for repeated queries
+- **Predicate pushdown**: Fast filtered queries
 - **Plan cache**: Skip parse/codegen for cached queries
-- **Batch INSERT fast path**: Bypasses VM for multi-row literal inserts (6x speedup)
+- **Batch INSERT fast path**: Bypasses VM for multi-row literal inserts
 - **sync.Pool allocation reduction**: Pooled schema maps reduce per-query allocations
 
 ## SQL:1999 Compatibility
