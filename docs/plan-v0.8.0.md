@@ -309,26 +309,28 @@ func ColumnarSum(col *ColumnVector) float64 {
 │  ├──────────────────────────────────────────────────────────────────┤   │
 │  │ Offset │ Size │ Field                                           │   │
 │  │--------|------|-------------------------------------------------│   │
-│  │ 0      | 8    │ Magic: "SQLVIBE\x01" (7 chars + \x01)          │   │
-│  │ 8      | 4    │ Format Version: uint32 (e.g., 0x00000001)     │   │
-│  │ 12     | 4    │ Flags: uint32                                  │   │
-│  │        |      │   - Bit 0: Compression enabled                  │   │
-│  │        |      │   - Bit 1: Indexes embedded                    │   │
-│  │        |      │   - Bit 2: Encryption enabled                  │   │
-│  │        |      │   - Bit 3: Columnar storage                    │   │
-│  │ 16     | 4    │ Schema offset: uint32                         │   │
-│  │ 20     | 4    │ Schema length: uint32                         │   │
-│  │ 24     | 4    │ Column count: uint32                           │   │
-│  │ 28     | 4    │ Row count: uint32 (total rows)                │   │
-│  │ 32     | 4    │ Index count: uint32                            │   │
-│  │ 36     | 4    │ Created timestamp: uint32 (Unix)              │   │
-│  │ 40     | 4    │ Modified timestamp: uint32 (Unix)              │   │
-│  │ 44     | 4    │ Compression type: uint32                       │   │
-│  │        |      │   0 = none, 1 = lz4, 2 = zstd                  │   │
-│  │ 48     | 4    │ Page size: uint32 (default 4096)              │   │
-│  │ 52     | 4    │ Reserved for future use                       │   │
-│  │ ...    | ...  │ ...                                           │   │
-│  │ 248    | 8    │ Header CRC32: uint64                          │   │
+│  │ 0      │ 8    │ Magic: "SQLVIBE\x01" (7 chars + \x01)          │   │
+│  │ 8      │ 4    │ Format Version Major: uint32 (e.g., 1)          │   │
+│  │ 12     │ 4    │ Format Version Minor: uint32 (e.g., 0)          │   │
+│  │ 16     │ 4    │ Format Version Patch: uint32 (e.g., 0)          │   │
+│  │ 20     │ 4    │ Flags: uint32                                  │   │
+│  │        │      │   - Bit 0: Compression enabled                  │   │
+│  │        │      │   - Bit 1: Indexes embedded                    │   │
+│  │        │      │   - Bit 2: Encryption enabled                  │   │
+│  │        │      │   - Bit 3: Columnar storage                    │   │
+│  │ 24     │ 4    │ Schema offset: uint32                         │   │
+│  │ 28     │ 4    │ Schema length: uint32                         │   │
+│  │ 32     │ 4    │ Column count: uint32                           │   │
+│  │ 36     │ 4    │ Row count: uint32 (total rows)                │   │
+│  │ 40     │ 4    │ Index count: uint32                            │   │
+│  │ 44     │ 4    │ Created timestamp: uint32 (Unix)              │   │
+│  │ 48     │ 4    │ Modified timestamp: uint32 (Unix)              │   │
+│  │ 52     │ 4    │ Compression type: uint32                       │   │
+│  │        │      │   0 = none, 1 = lz4, 2 = zstd                  │   │
+│  │ 56     │ 4    │ Page size: uint32 (default 4096)              │   │
+│  │ 60     │ 4    │ Reserved for future use                       │   │
+│  │ ...    │ ...  │ ...                                           │   │
+│  │ 248    │ 8    │ Header CRC64: uint64                          │   │
 │  └──────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────────┐   │
@@ -541,6 +543,52 @@ For 1 million rows with 10 columns:
 
 ---
 
+## Format Versioning
+
+### Version Scheme
+
+The SQLVIBE database format uses **Semantic Versioning** for the file format:
+
+```
+Format Version: MAJOR.MINOR.PATCH
+
+- MAJOR: Breaking changes (incompatible structure)
+- MINOR: New features (backward compatible)
+- PATCH: Bug fixes (backward compatible)
+```
+
+### Current Format Version
+
+| Version | Status | Description |
+|---------|--------|-------------|
+| **1.0.0** | **Current** | Initial columnar format |
+
+### Version Encoding in File
+
+The format version is stored in the header:
+
+```
+Offset 8-11 (4 bytes): Format Version Major (uint32)
+Offset 12-15 (4 bytes): Format Version Minor (uint32)
+Offset 16-19 (4 bytes): Format Version Patch (uint32)
+```
+
+### Compatibility Rules
+
+1. **Reader compatibility**: A reader can read files with version ≤ reader's max supported version
+2. **Writer compatibility**: A writer should write in the highest version supported by target readers
+3. **Migration**: When opening an older format, automatically migrate to current version
+
+### Future Version Planning
+
+| Version | Planned Features |
+|---------|-----------------|
+| 1.1.0 | Vector indexes, spatial data types |
+| 1.2.0 | Encryption support |
+| 2.0.0 | Sharding/distributed support (breaking) |
+
+---
+
 ## Performance Targets
 
 ### Benchmark Comparison (v0.8.0 vs v0.7.x)
@@ -637,6 +685,13 @@ internal/
 - [ ] Benchmark and tune
 
 ### Phase 4: Persistence (New v0.8.0 Format)
+- [ ] **Create formal spec: `docs/DB-FORMAT.md`**
+  - Version: **1.0.0** (see Format Versioning below)
+  - Document complete binary format specification
+  - Include wire format diagrams, field descriptions
+  - Document compression algorithms
+  - Document index structures
+  - Add change log for format versions
 - [ ] Design new binary format (columnar-first, see spec above)
 - [ ] Implement file header read/write (256 bytes)
 - [ ] Implement schema JSON serialization/deserialization
