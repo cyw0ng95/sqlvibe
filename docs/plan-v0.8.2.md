@@ -97,7 +97,79 @@ Add missing test suites for full SQL:1999 compliance:
 
 ---
 
-## Phase 2: Move pkg/sqlvibe/storage to internal/DS
+## Phase 2: Wire Up HybridStore Aggregates
+
+### Problem
+
+HybridStore has optimized aggregate functions but they're NOT being used by SQL queries:
+
+```go
+// In pkg/sqlvibe/storage/parallel.go - OPTIMIZED but UNUSED
+func (hs *HybridStore) ParallelCount() int64  // O(1)
+func (hs *HybridStore) ParallelSum(colName string) int64  // O(n) vectorized
+```
+
+Current flow (SLOW):
+```
+SELECT COUNT(*) FROM t → execVMQuery() → VM → OpAggregate → row-by-row scan
+```
+
+Expected flow (FAST):
+```
+SELECT COUNT(*) FROM t → HybridStore.ParallelCount() → O(1)
+```
+
+### Solution
+
+Add aggregate fast path in database.go:
+
+```go
+// Add to execVMQuery() or new function
+func (db *Database) tryAggregateFastPath(stmt *SelectStmt) (*Rows, error) {
+    // Only for simple aggregates without JOIN
+    if hasJoin(stmt) {
+        return nil, nil  // Fall through to VM
+    }
+    
+    hs := db.GetHybridStore(tableName)
+    
+    // COUNT(*) - O(1)
+    if stmt.IsCountStar() && stmt.GroupBy == nil {
+        count := hs.ParallelCount()
+        return &Rows{Columns: []string{"COUNT(*)"}, Data: [][]interface{}{{count}}}, nil
+    }
+    
+    // SUM(col) - O(n) vectorized
+    if stmt.IsSimpleSum() && stmt.GroupBy == nil {
+        sum := hs.ParallelSum(colName)
+        return &Rows{Columns: []string{fmt.Sprintf("SUM(%s)", colName)}}, nil
+    }
+    
+    return nil, nil  // Fall through to VM
+}
+```
+
+### Tasks
+
+- [ ] Implement isSimpleAggregate() detector
+- [ ] Add tryAggregateFastPath() in database.go
+- [ ] Wire up COUNT(*) fast path
+- [ ] Wire up SUM(col) fast path
+- [ ] Wire up MIN/MAX fast paths
+- [ ] Benchmark COUNT(*) - target < 50 ns (from 663 ns)
+- [ ] Benchmark SUM - target < 100 ns (from 673 ns)
+
+### Benchmark Requirements
+
+| Benchmark | Current | Target | Speedup |
+|-----------|---------|--------|---------|
+| COUNT(*) | 663 ns | < 50 ns | 13x |
+| SUM(col) | 673 ns | < 100 ns | 6.7x |
+| MIN/MAX | 675 ns | < 100 ns | 6.7x |
+
+---
+
+## Phase 3: Move pkg/sqlvibe/storage to internal/DS
 
 Refactor storage layer to internal/DS subsystem:
 
@@ -398,6 +470,8 @@ func (si *SchemaIndex) FindColumn(table, col string) *ColumnSchema {
 |----------|--------|
 | SQL:1999 test suites | 65+ suites (was 56) |
 | New test coverage | E071, F221, F471, F812, F032, F033, F034, F111, F121 |
+| **COUNT(*) wired to HybridStore** | < 50 ns (13x faster) |
+| **SUM(col) wired to HybridStore** | < 100 ns (6.7x faster) |
 | **HybridStorage default** | **100% of queries use HybridStore** |
 | pkg/sqlvibe/*.go moved | All to internal/ subsystems |
 | Storage layer moved | All files to internal/DS |
@@ -412,11 +486,12 @@ func (si *SchemaIndex) FindColumn(table, col string) *ColumnSchema {
 | Phase | Tasks | Hours |
 |-------|-------|-------|
 | 1 | SQL:1999 Test Suites | 20 |
-| 2 | Storage Refactor + HybridStore | 15 |
-| 3 | Move pkg/sqlvibe to internal/ | 10 |
-| 4 | IS Optimizations | 10 |
+| 2 | Wire Up HybridStore Aggregates | 10 |
+| 3 | Storage Refactor + HybridStore | 15 |
+| 4 | Move pkg/sqlvibe to internal/ | 10 |
+| 5 | IS Optimizations | 10 |
 
-**Total**: ~55 hours
+**Total**: ~65 hours
 
 ---
 
