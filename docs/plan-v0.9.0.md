@@ -11,6 +11,11 @@ Design and implement an extension framework for sqlvibe. Extensions add function
 - Virtual table `sqlvibe_extensions` shows loaded extensions
 - CLI command `.ext` shows extensions in sv-cli
 - **JSON extension aligns with SQLite JSON1**: https://sqlite.org/json1.html
+- **Math extension** for advanced math functions (currently in core)
+
+**Core vs Extension**:
+- **Core (always available)**: Basic `+`, `-`, `*`, `/` operators
+- **Math Extension (SVDB_EXT_MATH)**: ABS, CEIL, FLOOR, ROUND, etc.
 
 **Directory Structure**:
 ```
@@ -19,8 +24,10 @@ sqlvibe/
 │   ├── ext.go               # Entry (build tags controlled)
 │   ├── extension.go         # Extension interface + Opcode struct
 │   ├── registry.go         # Unified registry
-│   └── json/               # JSON extension
-│       └── json.go         # Extension with Opcodes + Functions
+│   ├── json/               # JSON extension
+│   │   └── json.go         # Extension with Opcodes + Functions
+│   └── math/               # Math extension (SVDB_EXT_MATH)
+│       └── math.go         # Math functions (ABS, CEIL, FLOOR, ROUND, etc.)
 ├── pkg/sqlvibe/            # Core library (auto-registers extensions)
 └── cmd/                   # CLI tools
 ```
@@ -437,7 +444,80 @@ func compileJSONExtract(expr *Expr, prog *Program) error {
 
 ---
 
-## Phase 3: Testing (4h)
+## Phase 3: Math Extension (6h)
+
+### Overview
+
+Move complex math operations from core to math extension. Only basic `+`, `-`, `*`, `/` remain in core.
+
+### Functions to Move
+
+| Function | Description |
+|----------|-------------|
+| `ABS(n)` | Absolute value |
+| `CEIL(n)` | Ceiling |
+| `CEILING(n)` | Ceiling (alias) |
+| `FLOOR(n)` | Floor |
+| `ROUND(n, d)` | Round to d decimals |
+| `POWER(n, e)` | Power (n^e) |
+| `SQRT(n)` | Square root |
+| `MOD(n, d)` | Modulo |
+| `RANDOM()` | Random number |
+| `RANDOMBLOB(n)` | Random blob |
+
+### Implementation
+
+```go
+// ext/math/math.go
+
+package math
+
+import (
+    "math"
+    "github.com/cyw0ng95/sqlvibe/ext"
+    "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
+)
+
+type MathExtension struct{}
+
+func (e *MathExtension) Name() string    { return "math" }
+func (e *MathExtension) Description() string { return "Math extension" }
+
+func (e *MathExtension) Functions() []string {
+    return []string{
+        "ABS", "CEIL", "CEILING", "FLOOR", "ROUND",
+        "POWER", "SQRT", "MOD", "RANDOM", "RANDOMBLOB",
+    }
+}
+
+func (e *MathExtension) Opcodes() []ext.Opcode {
+    return []ext.Opcode{
+        {Name: "Abs", Code: 512, Handler: evalAbs},
+        {Name: "Ceil", Code: 513, Handler: evalCeil},
+        // ...
+    }
+}
+
+func (e *MathExtension) Register(db *sqlvibe.Database) error { return nil }
+func (e *MathExtension) Close() error { return nil }
+
+func init() {
+    ext.Register("math", &MathExtension{})
+}
+```
+
+### Tasks
+
+- [ ] Create `ext/math/math.go`
+- [ ] Move ABS, CEIL, FLOOR, ROUND from VM/query_engine.go
+- [ ] Add new math functions (POWER, SQRT, MOD)
+- [ ] Add build tag support for math extension
+
+**Workload:** ~6 hours
+
+---
+
+## Phase 4: Testing (4h)
 
 ### Overview
 
@@ -475,11 +555,12 @@ ext/
 |-------|---------|-------|
 | 1 | Extension Framework | 8 |
 | 2 | JSON Extension | 10 |
-| 3 | sqlvibe_extensions Table | 4 |
-| 4 | CLI .ext Command | 2 |
-| 5 | Testing | 4 |
+| 3 | Math Extension | 6 |
+| 4 | sqlvibe_extensions Table | 4 |
+| 5 | CLI .ext Command | 2 |
+| 6 | Testing | 4 |
 
-**Total:** ~28 hours
+**Total:** ~34 hours
 
 ---
 
@@ -500,9 +581,9 @@ go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
 
 | Tag | Extensions |
 |-----|-----------|
-| (none) | No extensions |
+| (none) | No extensions (basic +,-,*,/ only) |
 | `SVDB_EXT_JSON` | JSON extension |
-| `SVDB_EXT_MATH` | Math extension (future) |
+| `SVDB_EXT_MATH` | Math extension (ABS, CEIL, FLOOR, ROUND, etc.) |
 
 ---
 
@@ -537,7 +618,21 @@ go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
 | json_update | Works | [ ] |
 | SQLite JSON1 compatibility | Works | [ ] |
 
-### Phase 3: sqlvibe_extensions Table
+### Phase 3: Math Extension
+
+| Criteria | Target | Status |
+|----------|--------|--------|
+| ABS function | Works | [ ] |
+| CEIL/CEILING | Works | [ ] |
+| FLOOR function | Works | [ ] |
+| ROUND function | Works | [ ] |
+| POWER function | Works | [ ] |
+| SQRT function | Works | [ ] |
+| MOD function | Works | [ ] |
+| RANDOM function | Works | [ ] |
+| Build tag SVDB_EXT_MATH | Works | [ ] |
+
+### Phase 4: sqlvibe_extensions Table
 
 | Criteria | Target | Status |
 |----------|--------|--------|
