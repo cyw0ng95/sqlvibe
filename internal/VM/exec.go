@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 
 	QP "github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 // MaxVMIterations is the maximum number of VM instructions that can be executed
@@ -107,11 +107,23 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpResultRow:
 			if regs, ok := inst.P4.([]int); ok {
-				row := make([]interface{}, len(regs))
-				for i, reg := range regs {
-					row[i] = vm.registers[reg]
+				n := len(regs)
+				start := len(vm.flatBuf)
+				needed := start + n
+				if needed > cap(vm.flatBuf) {
+					// Grow with 2× amortised doubling plus a minimum pad so that the
+					// first growth of a zero-capacity buffer allocates more than one row.
+					const flatBufMinGrowth = 64
+					newCap := needed*2 + flatBufMinGrowth
+					newBuf := make([]interface{}, start, newCap)
+					copy(newBuf, vm.flatBuf)
+					vm.flatBuf = newBuf
 				}
-				vm.results = append(vm.results, row)
+				vm.flatBuf = vm.flatBuf[:start+n]
+				for i, reg := range regs {
+					vm.flatBuf[start+i] = vm.registers[reg]
+				}
+				vm.results = append(vm.results, vm.flatBuf[start:start+n])
 			}
 			continue
 
@@ -444,7 +456,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpAdd:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			if dst, ok := inst.P4.(int); ok {
+			if inst.HasDst {
+				vm.registers[inst.DstReg] = numericAdd(lhs, rhs)
+			} else if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = numericAdd(lhs, rhs)
 			}
 			continue
@@ -452,7 +466,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpSubtract:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			if dst, ok := inst.P4.(int); ok {
+			if inst.HasDst {
+				vm.registers[inst.DstReg] = numericSubtract(lhs, rhs)
+			} else if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = numericSubtract(lhs, rhs)
 			}
 			continue
@@ -460,7 +476,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpMultiply:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			if dst, ok := inst.P4.(int); ok {
+			if inst.HasDst {
+				vm.registers[inst.DstReg] = numericMultiply(lhs, rhs)
+			} else if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = numericMultiply(lhs, rhs)
 			}
 			continue
@@ -468,7 +486,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpDivide:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			if dst, ok := inst.P4.(int); ok {
+			if inst.HasDst {
+				vm.registers[inst.DstReg] = numericDivide(lhs, rhs)
+			} else if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = numericDivide(lhs, rhs)
 			}
 			continue
@@ -476,7 +496,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpRemainder:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			if dst, ok := inst.P4.(int); ok {
+			if inst.HasDst {
+				vm.registers[inst.DstReg] = numericRemainder(lhs, rhs)
+			} else if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = numericRemainder(lhs, rhs)
 			}
 			continue
@@ -528,7 +550,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpConcat:
 			lhs := vm.registers[inst.P1]
 			rhs := vm.registers[inst.P2]
-			if dst, ok := inst.P4.(int); ok {
+			if inst.HasDst {
+				vm.registers[inst.DstReg] = stringConcat(lhs, rhs)
+			} else if dst, ok := inst.P4.(int); ok {
 				vm.registers[dst] = stringConcat(lhs, rhs)
 			}
 			continue
@@ -1084,6 +1108,30 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// P4 = SelectStmt to execute
 			dstReg := int(inst.P1)
 
+			// For non-correlated scalar subqueries, use cache to avoid re-execution
+			if selectStmt, ok := inst.P4.(*QP.SelectStmt); ok && !isSubqueryCorrelated(selectStmt) {
+				if vm.subqueryCache == nil {
+					vm.subqueryCache = newSubqueryResultCache()
+				}
+				if cachedVal, hit := vm.subqueryCache.scalars[selectStmt]; hit {
+					vm.registers[dstReg] = cachedVal
+					continue
+				}
+				// Execute once and cache
+				if vm.ctx != nil {
+					type SubqueryExecutor interface {
+						ExecuteSubquery(subquery interface{}) (interface{}, error)
+					}
+					if executor, ok2 := vm.ctx.(SubqueryExecutor); ok2 {
+						if result, err2 := executor.ExecuteSubquery(selectStmt); err2 == nil {
+							vm.subqueryCache.scalars[selectStmt] = result
+							vm.registers[dstReg] = result
+							continue
+						}
+					}
+				}
+			}
+
 			// Try to execute the subquery through the context
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)
@@ -1127,8 +1175,56 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// P4 = SelectStmt to execute
 			dstReg := int(inst.P1)
 
+			// For non-correlated EXISTS subqueries, use cache
+			if selectStmt, ok := inst.P4.(*QP.SelectStmt); ok && !isSubqueryCorrelated(selectStmt) {
+				if vm.subqueryCache == nil {
+					vm.subqueryCache = newSubqueryResultCache()
+				}
+				if cachedExists, hit := vm.subqueryCache.exists[selectStmt]; hit {
+					if cachedExists {
+						vm.registers[dstReg] = int64(1)
+					} else {
+						vm.registers[dstReg] = int64(0)
+					}
+					continue
+				}
+				if vm.ctx != nil {
+					type SubqueryRowsExecutor interface {
+						ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+					}
+					if executor, ok2 := vm.ctx.(SubqueryRowsExecutor); ok2 {
+						if rows, err2 := executor.ExecuteSubqueryRows(selectStmt); err2 == nil {
+							hasRows := len(rows) > 0
+							vm.subqueryCache.exists[selectStmt] = hasRows
+							if hasRows {
+								vm.registers[dstReg] = int64(1)
+							} else {
+								vm.registers[dstReg] = int64(0)
+							}
+							continue
+						}
+					}
+				}
+			}
+
 			if vm.ctx != nil {
-				// Try context-aware executor first (for correlated subqueries)
+				// Fast path: use EXISTS-optimised executor (LIMIT 1 short-circuit).
+				type ExistsSubqueryExecutor interface {
+					ExecuteExistsSubquery(subquery interface{}, outerRow map[string]interface{}) (bool, error)
+				}
+				if executor, ok := vm.ctx.(ExistsSubqueryExecutor); ok {
+					currentRow := vm.getCurrentRow(0)
+					if hasRows, err := executor.ExecuteExistsSubquery(inst.P4, currentRow); err == nil {
+						if hasRows {
+							vm.registers[dstReg] = int64(1)
+						} else {
+							vm.registers[dstReg] = int64(0)
+						}
+						continue
+					}
+				}
+
+				// Fallback: context-aware full row executor
 				type SubqueryRowsExecutorWithContext interface {
 					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
 				}
@@ -1136,12 +1232,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 				if executor, ok := vm.ctx.(SubqueryRowsExecutorWithContext); ok {
 					// Get current row from cursor 0 (if available)
 					currentRow := vm.getCurrentRow(0)
-					// fmt.Printf("DEBUG OpExistsSubquery: currentRow=%v\n", currentRow)
 					if rows, err := executor.ExecuteSubqueryRowsWithContext(inst.P4, currentRow); err == nil && len(rows) > 0 {
-						// fmt.Printf("DEBUG OpExistsSubquery: got %d rows from subquery\n", len(rows))
 						vm.registers[dstReg] = int64(1)
 					} else {
-						// fmt.Printf("DEBUG OpExistsSubquery: got 0 rows from subquery (err=%v)\n", err)
 						vm.registers[dstReg] = int64(0)
 					}
 					continue
@@ -1172,8 +1265,56 @@ func (vm *VM) Exec(ctx interface{}) error {
 			// P4 = SelectStmt to execute
 			dstReg := int(inst.P1)
 
+			// For non-correlated NOT EXISTS subqueries, use cache
+			if selectStmt, ok := inst.P4.(*QP.SelectStmt); ok && !isSubqueryCorrelated(selectStmt) {
+				if vm.subqueryCache == nil {
+					vm.subqueryCache = newSubqueryResultCache()
+				}
+				if cachedExists, hit := vm.subqueryCache.exists[selectStmt]; hit {
+					if cachedExists {
+						vm.registers[dstReg] = int64(0) // rows exist → NOT EXISTS = false
+					} else {
+						vm.registers[dstReg] = int64(1) // no rows → NOT EXISTS = true
+					}
+					continue
+				}
+				if vm.ctx != nil {
+					type SubqueryRowsExecutor interface {
+						ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+					}
+					if executor, ok2 := vm.ctx.(SubqueryRowsExecutor); ok2 {
+						if rows, err2 := executor.ExecuteSubqueryRows(selectStmt); err2 == nil {
+							hasRows := len(rows) > 0
+							vm.subqueryCache.exists[selectStmt] = hasRows
+							if hasRows {
+								vm.registers[dstReg] = int64(0)
+							} else {
+								vm.registers[dstReg] = int64(1)
+							}
+							continue
+						}
+					}
+				}
+			}
+
 			if vm.ctx != nil {
-				// Try context-aware executor first (for correlated subqueries)
+				// Fast path: use EXISTS-optimised executor (LIMIT 1 short-circuit).
+				type ExistsSubqueryExecutor interface {
+					ExecuteExistsSubquery(subquery interface{}, outerRow map[string]interface{}) (bool, error)
+				}
+				if executor, ok := vm.ctx.(ExistsSubqueryExecutor); ok {
+					currentRow := vm.getCurrentRow(0)
+					if hasRows, err := executor.ExecuteExistsSubquery(inst.P4, currentRow); err == nil {
+						if hasRows {
+							vm.registers[dstReg] = int64(0) // rows exist → NOT EXISTS = false
+						} else {
+							vm.registers[dstReg] = int64(1) // no rows → NOT EXISTS = true
+						}
+						continue
+					}
+				}
+
+				// Fallback: context-aware full row executor
 				type SubqueryRowsExecutorWithContext interface {
 					ExecuteSubqueryRowsWithContext(subquery interface{}, outerRow map[string]interface{}) ([][]interface{}, error)
 				}
@@ -1216,6 +1357,42 @@ func (vm *VM) Exec(ctx interface{}) error {
 			dstReg := int(inst.P1)
 			valueReg := int(inst.P2)
 			value := vm.registers[valueReg]
+
+			// For non-correlated IN subqueries, materialize into a hash set once
+			if selectStmt, ok := inst.P4.(*QP.SelectStmt); ok && !isSubqueryCorrelated(selectStmt) {
+				if vm.subqueryCache == nil {
+					vm.subqueryCache = newSubqueryResultCache()
+				}
+				hashSet, hit := vm.subqueryCache.hashSets[selectStmt]
+				if !hit {
+					// Execute once and build hash set
+					if vm.ctx != nil {
+						type SubqueryRowsExecutor interface {
+							ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+						}
+						if executor, ok2 := vm.ctx.(SubqueryRowsExecutor); ok2 {
+							if rows, err2 := executor.ExecuteSubqueryRows(selectStmt); err2 == nil {
+								hashSet = make(map[string]bool, len(rows))
+								for _, row := range rows {
+									if len(row) > 0 {
+										hashSet[subqueryHashKey(row[0])] = true
+									}
+								}
+								vm.subqueryCache.hashSets[selectStmt] = hashSet
+								hit = true
+							}
+						}
+					}
+				}
+				if hit {
+					if value != nil && hashSet[subqueryHashKey(value)] {
+						vm.registers[dstReg] = int64(1)
+					} else {
+						vm.registers[dstReg] = int64(0)
+					}
+					continue
+				}
+			}
 
 			if vm.ctx != nil {
 				// Try context-aware executor first (for correlated subqueries)
@@ -1288,6 +1465,41 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if value == nil {
 				vm.registers[dstReg] = nil
 				continue
+			}
+
+			// For non-correlated NOT IN subqueries, materialize into a hash set once
+			if selectStmt, ok := inst.P4.(*QP.SelectStmt); ok && !isSubqueryCorrelated(selectStmt) {
+				if vm.subqueryCache == nil {
+					vm.subqueryCache = newSubqueryResultCache()
+				}
+				hashSet, hit := vm.subqueryCache.hashSets[selectStmt]
+				if !hit {
+					if vm.ctx != nil {
+						type SubqueryRowsExecutor interface {
+							ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+						}
+						if executor, ok2 := vm.ctx.(SubqueryRowsExecutor); ok2 {
+							if rows, err2 := executor.ExecuteSubqueryRows(selectStmt); err2 == nil {
+								hashSet = make(map[string]bool, len(rows))
+								for _, row := range rows {
+									if len(row) > 0 {
+										hashSet[subqueryHashKey(row[0])] = true
+									}
+								}
+								vm.subqueryCache.hashSets[selectStmt] = hashSet
+								hit = true
+							}
+						}
+					}
+				}
+				if hit {
+					if hashSet[subqueryHashKey(value)] {
+						vm.registers[dstReg] = int64(0) // found, so NOT IN is false
+					} else {
+						vm.registers[dstReg] = int64(1) // not found, so NOT IN is true
+					}
+					continue
+				}
 			}
 
 			if vm.ctx != nil {
@@ -1417,11 +1629,32 @@ func (vm *VM) Exec(ctx interface{}) error {
 			target := int(inst.P2)
 			cursor := vm.cursors.Get(cursorID)
 			if cursor != nil {
-				cursor.Index++
-				if cursor.Index >= len(cursor.Data) {
+				instPC := vm.pc - 1 // PC of the OpNext instruction
+				// Fast path: predictor says loop will continue.
+				if vm.bp.Predict(instPC) {
+					cursor.Index++
+					if cursor.Index < len(cursor.Data) {
+						// Prediction correct: loop continues.
+						vm.bp.Update(instPC, true)
+						continue
+					}
+					// Prediction wrong: cursor exhausted.
 					cursor.EOF = true
 					if target > 0 {
 						vm.pc = target
+					}
+					vm.bp.Update(instPC, false)
+				} else {
+					// Predictor says loop will NOT continue (or cold start).
+					cursor.Index++
+					if cursor.Index >= len(cursor.Data) {
+						cursor.EOF = true
+						if target > 0 {
+							vm.pc = target
+						}
+						vm.bp.Update(instPC, false)
+					} else {
+						vm.bp.Update(instPC, true)
 					}
 				}
 			}
@@ -2405,8 +2638,11 @@ var ErrValueTooBig = errors.New("value too big")
 
 // executeAggregation performs GROUP BY and aggregate function execution
 func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
-	// Map from group key (string) to aggregate state
-	groups := make(map[string]*AggregateState)
+	// Map from group key to aggregate state.
+	// interface{} keys: for single-expr GROUP BY the raw value is used directly
+	// (no string allocation per row); for multi-expr GROUP BY a composite string
+	// produced by computeGroupKey is boxed.
+	groups := make(map[interface{}]*AggregateState)
 
 	// Scan all rows and accumulate aggregates per group
 	for rowIdx := 0; rowIdx < len(cursor.Data); rowIdx++ {
@@ -2419,8 +2655,10 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 			}
 		}
 
-		// Compute group key from GROUP BY expressions
-		groupKey := vm.computeGroupKey(row, cursor.Columns, aggInfo.GroupByExprs)
+		// Compute group key from GROUP BY expressions.
+		// For single-expression GROUP BY the raw value is used directly as the
+		// map key (avoids a strings.Builder.String() allocation per row).
+		groupKey := vm.computeGroupKeyIface(row, cursor.Columns, aggInfo.GroupByExprs)
 
 		// Get or create aggregate state for this group
 		state, exists := groups[groupKey]
@@ -2435,7 +2673,10 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 				GroupKey:     groupKey,
 				Count:        0,
 				Counts:       make([]int, len(aggInfo.Aggregates)),
-				Sums:         make([]interface{}, len(aggInfo.Aggregates)),
+				SumsInt:      make([]int64, len(aggInfo.Aggregates)),
+				SumsFloat:    make([]float64, len(aggInfo.Aggregates)),
+				SumsIsFloat:  make([]bool, len(aggInfo.Aggregates)),
+				SumsHasVal:   make([]bool, len(aggInfo.Aggregates)),
 				Mins:         make([]interface{}, len(aggInfo.Aggregates)),
 				Maxs:         make([]interface{}, len(aggInfo.Aggregates)),
 				NonAggValues: make([]interface{}, len(aggInfo.NonAggCols)),
@@ -2467,8 +2708,25 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 					state.Counts[aggIdx]++
 				}
 			case "SUM":
+				// Use typed accumulators to avoid per-row interface{} boxing.
 				if value != nil {
-					state.Sums[aggIdx] = vm.addValues(state.Sums[aggIdx], value)
+					state.SumsHasVal[aggIdx] = true
+					switch v := value.(type) {
+					case int64:
+						if state.SumsIsFloat[aggIdx] {
+							state.SumsFloat[aggIdx] += float64(v)
+						} else {
+							state.SumsInt[aggIdx] += v
+						}
+					case float64:
+						if !state.SumsIsFloat[aggIdx] {
+							// Promote integer accumulator to float64.
+							state.SumsFloat[aggIdx] = float64(state.SumsInt[aggIdx]) + v
+							state.SumsIsFloat[aggIdx] = true
+						} else {
+							state.SumsFloat[aggIdx] += v
+						}
+					}
 				}
 			case "AVG":
 				// AVG = SUM / COUNT of non-NULL values; accumulate in float64 to match SQLite precision
@@ -2482,13 +2740,8 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 					default:
 						continue
 					}
-					if state.Sums[aggIdx] == nil {
-						state.Sums[aggIdx] = fv
-					} else if s, ok := state.Sums[aggIdx].(float64); ok {
-						state.Sums[aggIdx] = s + fv
-					} else {
-						state.Sums[aggIdx] = fv
-					}
+					state.SumsFloat[aggIdx] += fv
+					state.SumsHasVal[aggIdx] = true
 					state.Counts[aggIdx]++
 				}
 			case "MIN":
@@ -2512,29 +2765,15 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 
 	// Emit result rows (one per group)
 	// Sort groups by key for deterministic output
-	groupKeys := make([]string, 0, len(groups))
+	groupKeys := make([]interface{}, 0, len(groups))
 	for key := range groups {
 		groupKeys = append(groupKeys, key)
 	}
-	// Sort the keys: NULL ("<nil>") groups sort first (matching SQLite behavior),
-	// then remaining keys in ascending order. Try numeric comparison when both
-	// keys are parseable as numbers (so "10" > "3" numerically).
-	// If only one key is numeric, fall through to lexicographic string comparison.
+	// Sort the keys: NULL groups sort first (matching SQLite behavior),
+	// then numeric (int64/float64) before string, with numeric string keys
+	// compared as numbers.
 	sort.SliceStable(groupKeys, func(i, j int) bool {
-		ki, kj := groupKeys[i], groupKeys[j]
-		if ki == "<nil>" {
-			return true
-		}
-		if kj == "<nil>" {
-			return false
-		}
-		// Numeric comparison when both keys are valid numbers; otherwise string comparison.
-		if fi, erri := strconv.ParseFloat(ki, 64); erri == nil {
-			if fj, errj := strconv.ParseFloat(kj, 64); errj == nil {
-				return fi < fj
-			}
-		}
-		return ki < kj
+		return compareGroupKeyIface(groupKeys[i], groupKeys[j])
 	})
 
 	// SQL standard: aggregate without GROUP BY on empty table must return 1 row
@@ -2597,10 +2836,16 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 					aggValue = int64(state.Counts[aggIdx])
 				}
 			case "SUM":
-				aggValue = state.Sums[aggIdx]
+				if state.SumsHasVal[aggIdx] {
+					if state.SumsIsFloat[aggIdx] {
+						aggValue = state.SumsFloat[aggIdx]
+					} else {
+						aggValue = state.SumsInt[aggIdx]
+					}
+				}
 			case "AVG":
-				if state.Counts[aggIdx] > 0 && state.Sums[aggIdx] != nil {
-					aggValue = vm.divideValues(state.Sums[aggIdx], int64(state.Counts[aggIdx]))
+				if state.Counts[aggIdx] > 0 && state.SumsHasVal[aggIdx] {
+					aggValue = state.SumsFloat[aggIdx] / float64(state.Counts[aggIdx])
 				}
 			case "MIN":
 				aggValue = state.Mins[aggIdx]
@@ -2627,9 +2872,9 @@ type AggregateInfo struct {
 
 // ScalarCallInfo holds info for OpCallScalar: a function name, arg register indices, and a dst register.
 type ScalarCallInfo struct {
-	Name    string // function name (uppercase)
-	ArgRegs []int  // register indices for arguments
-	Dst     int    // destination register
+	Name    string       // function name (uppercase)
+	ArgRegs []int        // register indices for arguments
+	Dst     int          // destination register
 	Call    *QP.FuncCall // original call expression (nil args are evaluated at runtime)
 }
 
@@ -2643,10 +2888,14 @@ type AggregateDef struct {
 
 // AggregateState tracks aggregate values for a group
 type AggregateState struct {
-	GroupKey     string
-	Count        int
-	Counts       []int // per-aggregate non-NULL counts (for COUNT(col) and AVG)
-	Sums         []interface{}
+	GroupKey interface{}
+	Count    int
+	Counts   []int // per-aggregate non-NULL counts (for COUNT(col) and AVG)
+	// Typed sum accumulators avoid per-row interface{} boxing.
+	SumsInt      []int64   // integer partial sums (SUM of integer values)
+	SumsFloat    []float64 // float64 partial sums (SUM promoted to float, or AVG)
+	SumsIsFloat  []bool    // true when the aggregate has been promoted to float64
+	SumsHasVal   []bool    // true when at least one non-NULL value was accumulated
 	Mins         []interface{}
 	Maxs         []interface{}
 	NonAggValues []interface{}
@@ -2666,21 +2915,112 @@ func isCountStar(aggDef AggregateDef) bool {
 	return false
 }
 
-// computeGroupKey generates a string key from GROUP BY expressions
+// computeGroupKey generates a string key from GROUP BY expressions.
+// Uses a strings.Builder + type switch to avoid per-value fmt.Sprintf allocations.
 func (vm *VM) computeGroupKey(row map[string]interface{}, columns []string, groupByExprs []QP.Expr) string {
 	if len(groupByExprs) == 0 {
 		return "" // Single group for aggregates without GROUP BY
 	}
 
-	keyParts := make([]string, 0)
-	for _, expr := range groupByExprs {
+	var buf strings.Builder
+	for i, expr := range groupByExprs {
+		if i > 0 {
+			buf.WriteByte('|')
+		}
 		value := vm.evaluateExprOnRow(row, columns, expr)
-		keyParts = append(keyParts, fmt.Sprintf("%v", value))
+		switch v := value.(type) {
+		case int64:
+			buf.WriteString(strconv.FormatInt(v, 10))
+		case float64:
+			buf.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+		case string:
+			buf.WriteString(v)
+		case bool:
+			if v {
+				buf.WriteString("true")
+			} else {
+				buf.WriteString("false")
+			}
+		case nil:
+			buf.WriteString("<nil>")
+		default:
+			fmt.Fprintf(&buf, "%v", value)
+		}
 	}
-	return strings.Join(keyParts, "|")
+	return buf.String()
 }
 
-// evaluateAggregateArg evaluates the argument of an aggregate function
+// computeGroupKeyIface returns the GROUP BY key as an interface{}.
+// For a single GROUP BY expression the raw evaluated value is returned directly,
+// avoiding the strings.Builder.String() allocation that computeGroupKey does on
+// every row.  For multiple expressions it falls back to computeGroupKey and
+// boxes the resulting string.
+func (vm *VM) computeGroupKeyIface(row map[string]interface{}, columns []string, groupByExprs []QP.Expr) interface{} {
+	if len(groupByExprs) == 0 {
+		return "" // single group for aggregates without GROUP BY
+	}
+	if len(groupByExprs) == 1 {
+		v := vm.evaluateExprOnRow(row, columns, groupByExprs[0])
+		// Only directly-comparable types are safe as interface{} map keys.
+		switch v.(type) {
+		case int64, float64, string, bool, nil:
+			return v
+		case []byte:
+			return string(v.([]byte)) // []byte is not comparable; convert once
+		default:
+			return fmt.Sprintf("%v", v) // fallback: stringify
+		}
+	}
+	// Multi-column GROUP BY: composite string key (one allocation per unique group,
+	// not per row, because map lookup reuses the existing string for known groups).
+	return vm.computeGroupKey(row, columns, groupByExprs)
+}
+
+// compareGroupKeyIface returns true when ki should sort before kj.
+// NULL sorts first; numeric types compare numerically; strings compare with
+// numeric fallback (matching SQLite's behaviour for numeric-string GROUP BY keys).
+func compareGroupKeyIface(ki, kj interface{}) bool {
+	if ki == nil {
+		return kj != nil // nil < everything else
+	}
+	if kj == nil {
+		return false // nothing < nil (nil is already "smallest")
+	}
+	switch vi := ki.(type) {
+	case int64:
+		switch vj := kj.(type) {
+		case int64:
+			return vi < vj
+		case float64:
+			return float64(vi) < vj
+		}
+	case float64:
+		switch vj := kj.(type) {
+		case float64:
+			return vi < vj
+		case int64:
+			return vi < float64(vj)
+		}
+	case string:
+		if vj, ok := kj.(string); ok {
+			// Try numeric comparison first (matches SQLite for numeric-string keys)
+			if fi, erri := strconv.ParseFloat(vi, 64); erri == nil {
+				if fj, errj := strconv.ParseFloat(vj, 64); errj == nil {
+					return fi < fj
+				}
+			}
+			return vi < vj
+		}
+	case bool:
+		if vj, ok := kj.(bool); ok {
+			return !vi && vj // false < true
+		}
+	}
+	// Fallback for composite string keys (multi-column GROUP BY) and any other
+	// comparable type that reaches here.  fmt.Sprintf is acceptable because this
+	// path is only hit once per unique group pair during sorting, not once per row.
+	return fmt.Sprintf("%v", ki) < fmt.Sprintf("%v", kj)
+}
 func (vm *VM) evaluateAggregateArg(row map[string]interface{}, columns []string, args []QP.Expr) interface{} {
 	if len(args) == 0 {
 		return nil
@@ -2766,10 +3106,19 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 	case *QP.Literal:
 		return e.Value
 	case *QP.ColumnRef:
+		// When a table qualifier is present, try the qualified key first so that
+		// rows built from JOINs (which store values under "alias.col" keys) resolve
+		// to the correct table's value even when multiple tables share a column name.
+		if e.Table != "" {
+			qualKey := e.Table + "." + e.Name
+			if val, ok := row[qualKey]; ok {
+				return val
+			}
+		}
 		if val, ok := row[e.Name]; ok {
 			return val
 		}
-		// Try without table prefix
+		// Try without table prefix (handles "t.col" stored in Name field)
 		name := e.Name
 		if idx := strings.LastIndex(name, "."); idx >= 0 {
 			name = name[idx+1:]
@@ -2797,6 +3146,27 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 	case *QP.CastExpr:
 		val := vm.evaluateExprOnRow(row, columns, e.Expr)
 		return vm.applyTypeCast(val, e.TypeSpec.Name)
+	case *QP.SubqueryExpr:
+		// Scalar subquery: execute and return the single value.
+		if vm.ctx != nil {
+			type SubqueryExecutorCtx interface {
+				ExecuteSubqueryWithContext(subquery interface{}, outerRow map[string]interface{}) (interface{}, error)
+			}
+			if exec, ok := vm.ctx.(SubqueryExecutorCtx); ok {
+				if result, err := exec.ExecuteSubqueryWithContext(e.Select, row); err == nil {
+					return result
+				}
+			}
+			type SubqueryExec interface {
+				ExecuteSubquery(subquery interface{}) (interface{}, error)
+			}
+			if exec, ok := vm.ctx.(SubqueryExec); ok {
+				if result, err := exec.ExecuteSubquery(e.Select); err == nil {
+					return result
+				}
+			}
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -3036,6 +3406,41 @@ func (vm *VM) evaluateBoolExprOnRow(row map[string]interface{}, columns []string
 
 // vmMatchLike matches a string against a LIKE pattern
 func vmMatchLike(value, pattern string) bool {
+	if pattern == "" {
+		return value == ""
+	}
+	if pattern == "%" {
+		return true
+	}
+
+	// Fast path: check if pattern is a simple prefix (e.g., "Alice%")
+	// This avoids expensive recursive matching
+	hasWildcard := false
+	for _, c := range pattern {
+		if c == '%' || c == '_' {
+			hasWildcard = true
+			break
+		}
+	}
+	if !hasWildcard {
+		// Exact match (no wildcards)
+		return strings.EqualFold(value, pattern)
+	}
+
+	// Check for prefix-only pattern like "Alice%"
+	// This is very common and can be optimized
+	if strings.HasSuffix(pattern, "%") && !strings.Contains(pattern[:len(pattern)-1], "%") && !strings.Contains(pattern[:len(pattern)-1], "_") {
+		prefix := pattern[:len(pattern)-1]
+		return strings.HasPrefix(strings.ToLower(value), strings.ToLower(prefix))
+	}
+
+	// Check for suffix-only pattern like "%abc"
+	if strings.HasPrefix(pattern, "%") && !strings.Contains(pattern[1:], "%") && !strings.Contains(pattern[1:], "_") {
+		suffix := pattern[1:]
+		return strings.HasSuffix(strings.ToLower(value), strings.ToLower(suffix))
+	}
+
+	// Fall back to full recursive matching
 	return matchLikePattern(value, pattern, 0, 0)
 }
 
@@ -3168,7 +3573,6 @@ func matchLikePattern(value, pattern string, vi, pi int) bool {
 	}
 	return false
 }
-
 
 func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interface{} {
 	// Simple implementation for common operators
@@ -3347,10 +3751,10 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				}
 				return int64(state.Counts[i])
 			case "SUM":
-				return state.Sums[i]
+				return state.sumResult(i)
 			case "AVG":
-				if state.Counts[i] > 0 && state.Sums[i] != nil {
-					return vm.divideValues(state.Sums[i], int64(state.Counts[i]))
+				if state.Counts[i] > 0 && state.SumsHasVal[i] {
+					return state.SumsFloat[i] / float64(state.Counts[i])
 				}
 				return nil
 			case "MIN":
@@ -3374,10 +3778,10 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				}
 				return int64(state.Counts[i])
 			case "SUM":
-				return state.Sums[i]
+				return state.sumResult(i)
 			case "AVG":
-				if state.Counts[i] > 0 && state.Sums[i] != nil {
-					return vm.divideValues(state.Sums[i], int64(state.Counts[i]))
+				if state.Counts[i] > 0 && state.SumsHasVal[i] {
+					return state.SumsFloat[i] / float64(state.Counts[i])
 				}
 				return nil
 			case "MIN":
@@ -3405,6 +3809,18 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 	default:
 		return vm.evaluateExprOnRow(nil, nil, expr)
 	}
+}
+
+// sumResult returns the accumulated sum as an interface{} (nil if no values were seen).
+// Boxing occurs once at read time rather than once per accumulated row.
+func (s *AggregateState) sumResult(idx int) interface{} {
+	if !s.SumsHasVal[idx] {
+		return nil
+	}
+	if s.SumsIsFloat[idx] {
+		return s.SumsFloat[idx]
+	}
+	return s.SumsInt[idx]
 }
 
 // addValues adds two values (handles nil and type conversion)

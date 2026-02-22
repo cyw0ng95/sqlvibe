@@ -11,7 +11,7 @@ import (
 
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 var (
@@ -745,6 +745,12 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 
 func (qe *QueryEngine) EvalExpr(row map[string]interface{}, expr QP.Expr) interface{} {
 	return qe.evalValue(row, expr)
+}
+
+// EvalBool evaluates a boolean expression on a row.
+// Returns true if the expression evaluates to a truthy value.
+func (qe *QueryEngine) EvalBool(row map[string]interface{}, expr QP.Expr) bool {
+	return qe.evalExpr(row, expr)
 }
 
 func (qe *QueryEngine) evalCaseExpr(row map[string]interface{}, ce *QP.CaseExpr) interface{} {

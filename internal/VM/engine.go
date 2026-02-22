@@ -28,20 +28,53 @@ type VmContext interface {
 	DeleteRow(tableName string, rowIndex int) error
 }
 
+// BranchPredictor implements a 2-bit saturating counter branch prediction table.
+// Each table entry counts from 0 (strongly not-taken) to 3 (strongly taken).
+// Entries with value >= 2 are predicted "taken".  The table has 1024 slots;
+// instruction PCs are mapped modulo 1024.
+type BranchPredictor struct {
+	table [1024]uint8
+}
+
+// Predict returns true when the branch at pc is predicted taken (counter >= 2).
+func (bp *BranchPredictor) Predict(pc int) bool {
+	return bp.table[pc%1024] >= 2
+}
+
+// Update adjusts the saturating counter at pc based on whether the branch was
+// actually taken.
+func (bp *BranchPredictor) Update(pc int, taken bool) {
+	idx := pc % 1024
+	c := bp.table[idx]
+	if taken {
+		if c < 3 {
+			c++
+		}
+	} else {
+		if c > 0 {
+			c--
+		}
+	}
+	bp.table[idx] = c
+}
+
 type VM struct {
-	program       *Program
-	pc            int
-	registers     []interface{}
-	cursors       *CursorArray
-	subReturn     []int
-	affinity      int
-	undo          [][]interface{}
-	errorcnt      int
-	err           error
-	ctx           VmContext
-	results       [][]interface{}
-	rowsAffected  int64
-	ephemeralTbls map[int]map[string]bool // ephemeral tables for SetOps (table_id -> row_key -> exists)
+	program        *Program
+	pc             int
+	registers      []interface{}
+	cursors        *CursorArray
+	subReturn      []int
+	affinity       int
+	undo           [][]interface{}
+	errorcnt       int
+	err            error
+	ctx            VmContext
+	results        [][]interface{}
+	flatBuf        []interface{} // flat backing array for zero-alloc result rows
+	rowsAffected   int64
+	ephemeralTbls  map[int]map[string]bool // ephemeral tables for SetOps (table_id -> row_key -> exists)
+	subqueryCache  *subqueryResultCache    // caches non-correlated subquery results per execution
+	bp             BranchPredictor         // 2-bit saturating branch predictor for loop opcodes
 }
 
 func NewVM(program *Program) *VM {
@@ -82,13 +115,16 @@ func (vm *VM) Reset() {
 		vm.registers[i] = nil
 	}
 	vm.cursors.Reset()
-	vm.subReturn = make([]int, 0)
+	vm.subReturn = vm.subReturn[:0]
 	vm.affinity = 0
 	vm.errorcnt = 0
 	vm.err = nil
-	vm.results = make([][]interface{}, 0)
+	vm.results = vm.results[:0]   // reuse pre-allocated capacity
+	vm.flatBuf = vm.flatBuf[:0]   // reuse flat backing buffer
 	vm.rowsAffected = 0
-	vm.ephemeralTbls = make(map[int]map[string]bool)
+	for k := range vm.ephemeralTbls {
+		delete(vm.ephemeralTbls, k)
+	}
 }
 
 func (vm *VM) PC() int {
@@ -143,6 +179,30 @@ func (vm *VM) ErrorCode() int {
 
 func (vm *VM) Results() [][]interface{} {
 	return vm.results
+}
+
+// PreallocResults pre-allocates the results slice to avoid repeated reallocations
+// when the expected row count is known.
+func (vm *VM) PreallocResults(n int) {
+	if n > 0 && cap(vm.results) < n {
+		vm.results = make([][]interface{}, 0, n)
+	}
+}
+
+// PreallocResultsFlat pre-allocates both the results header slice and the flat
+// backing buffer for zero-alloc per-row result storage.
+// rows × cols gives the total number of value slots in the flat buffer.
+func (vm *VM) PreallocResultsFlat(rows, cols int) {
+	if rows <= 0 || cols <= 0 {
+		return
+	}
+	if cap(vm.results) < rows {
+		vm.results = make([][]interface{}, 0, rows)
+	}
+	needed := rows * cols
+	if cap(vm.flatBuf) < needed {
+		vm.flatBuf = make([]interface{}, 0, needed)
+	}
 }
 
 func (vm *VM) RowsAffected() int64 {

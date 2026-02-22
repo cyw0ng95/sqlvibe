@@ -58,7 +58,7 @@ When fixing bugs, the commit message MUST include:
 
 ### 2.4 Defensive Programming with Assertions
 
-The codebase uses aggressive defensive programming through assertion statements to catch bugs early. All assertions are located in `internal/util/assert.go`.
+The codebase uses aggressive defensive programming through assertion statements to catch bugs early. All assertions are located in `internal/SF/util/assert.go`.
 
 **Available Assertion Functions**:
 - `util.Assert(condition, format, args...)` - Panics if condition is false

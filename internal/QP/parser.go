@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 type ASTNode interface {
@@ -62,12 +62,20 @@ type Join struct {
 	Natural      bool     // for NATURAL JOIN
 }
 
+// OnConflict represents the ON CONFLICT clause of an INSERT statement.
+type OnConflict struct {
+	Columns   []string    // conflict target columns, e.g. ON CONFLICT (id)
+	DoNothing bool        // ON CONFLICT DO NOTHING
+	Updates   []SetClause // ON CONFLICT DO UPDATE SET col = expr, ...
+}
+
 type InsertStmt struct {
 	Table       string
 	Columns     []string
 	Values      [][]Expr
-	UseDefaults bool      // True when using DEFAULT VALUES
+	UseDefaults bool        // True when using DEFAULT VALUES
 	SelectQuery *SelectStmt // Non-nil for INSERT ... SELECT
+	OnConflict  *OnConflict // nil if no ON CONFLICT clause
 }
 
 func (i *InsertStmt) NodeType() string { return "InsertStmt" }
@@ -93,12 +101,12 @@ type DeleteStmt struct {
 func (d *DeleteStmt) NodeType() string { return "DeleteStmt" }
 
 type CreateTableStmt struct {
-	Name         string
-	Columns      []ColumnDef
-	IfNotExists  bool
-	Temporary    bool
-	AsSelect     *SelectStmt // CREATE TABLE ... AS SELECT
-	TableChecks  []Expr      // table-level CHECK constraints
+	Name        string
+	Columns     []ColumnDef
+	IfNotExists bool
+	Temporary   bool
+	AsSelect    *SelectStmt // CREATE TABLE ... AS SELECT
+	TableChecks []Expr      // table-level CHECK constraints
 }
 
 func (c *CreateTableStmt) NodeType() string { return "CreateTableStmt" }
@@ -131,9 +139,9 @@ func (d *DropViewStmt) NodeType() string { return "DropViewStmt" }
 
 // AlterTableStmt represents ALTER TABLE
 type AlterTableStmt struct {
-	Table  string
-	Action string // "ADD_COLUMN" or "RENAME_TO"
-	Column *ColumnDef
+	Table   string
+	Action  string // "ADD_COLUMN" or "RENAME_TO"
+	Column  *ColumnDef
 	NewName string
 }
 
@@ -170,7 +178,8 @@ type PragmaStmt struct {
 func (p *PragmaStmt) NodeType() string { return "PragmaStmt" }
 
 type ExplainStmt struct {
-	Query ASTNode
+	QueryPlan bool
+	Query     ASTNode
 }
 
 func (e *ExplainStmt) NodeType() string { return "ExplainStmt" }
@@ -837,6 +846,66 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 			return nil, err
 		}
 		stmt.SelectQuery = sel
+	}
+
+	// Parse ON CONFLICT clause
+	if p.current().Type == TokenKeyword && p.current().Literal == "ON" {
+		p.advance()
+		if p.current().Type != TokenKeyword || p.current().Literal != "CONFLICT" {
+			return nil, fmt.Errorf("expected CONFLICT after ON")
+		}
+		p.advance()
+
+		oc := &OnConflict{}
+
+		// Optional conflict target: (column_list)
+		if p.current().Type == TokenLeftParen {
+			p.advance()
+			for {
+				oc.Columns = append(oc.Columns, p.current().Literal)
+				p.advance()
+				if p.current().Type != TokenComma {
+					break
+				}
+				p.advance()
+			}
+			p.expect(TokenRightParen)
+		}
+
+		// DO NOTHING | DO UPDATE SET ...
+		if p.current().Type != TokenKeyword || p.current().Literal != "DO" {
+			return nil, fmt.Errorf("expected DO after ON CONFLICT target")
+		}
+		p.advance()
+
+		if p.current().Literal == "NOTHING" {
+			p.advance()
+			oc.DoNothing = true
+		} else if p.current().Literal == "UPDATE" {
+			p.advance()
+			if p.current().Literal != "SET" {
+				return nil, fmt.Errorf("expected SET after ON CONFLICT DO UPDATE")
+			}
+			p.advance()
+			for {
+				col := &ColumnRef{Name: p.current().Literal}
+				p.advance()
+				p.expect(TokenEq)
+				val, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				oc.Updates = append(oc.Updates, SetClause{Column: col, Value: val})
+				if p.current().Type != TokenComma {
+					break
+				}
+				p.advance()
+			}
+		} else {
+			return nil, fmt.Errorf("expected NOTHING or UPDATE after ON CONFLICT DO")
+		}
+
+		stmt.OnConflict = oc
 	}
 
 	return stmt, nil
@@ -2148,9 +2217,9 @@ func (p *Parser) parseExplain() (ASTNode, error) {
 	explain := &ExplainStmt{}
 
 	isQueryPlan := false
-	if p.current().Type == TokenKeyword && p.current().Literal == "QUERY" {
+	if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) && strings.EqualFold(p.current().Literal, "QUERY") {
 		p.advance()
-		if p.current().Type == TokenKeyword && p.current().Literal == "PLAN" {
+		if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) && strings.EqualFold(p.current().Literal, "PLAN") {
 			p.advance()
 			isQueryPlan = true
 		}
@@ -2184,7 +2253,7 @@ func (p *Parser) parseExplain() (ASTNode, error) {
 		return nil, fmt.Errorf("EXPLAIN not supported for this statement type: %v", p.current())
 	}
 
-	_ = isQueryPlan
+	explain.QueryPlan = isQueryPlan
 	return explain, nil
 }
 
@@ -2372,84 +2441,84 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []Expr, err error)
 // evalConstExpr evaluates a constant expression (one with no column references)
 // and returns the result as an interface{}. Used for IN list evaluation.
 func evalConstExpr(expr Expr) interface{} {
-switch e := expr.(type) {
-case *Literal:
-return e.Value
-case *UnaryExpr:
-val := evalConstExpr(e.Expr)
-if e.Op == TokenMinus {
-switch v := val.(type) {
-case int64:
-return -v
-case float64:
-return -v
-}
-}
-return val
-case *BinaryExpr:
-left := evalConstExpr(e.Left)
-right := evalConstExpr(e.Right)
-if left == nil || right == nil {
-return nil
-}
-lf, lok := toFloat64Const(left)
-rf, rok := toFloat64Const(right)
-if !lok || !rok {
-return nil
-}
-switch e.Op {
-case TokenPlus:
-r := lf + rf
-if isIntVal(left) && isIntVal(right) {
-return int64(r)
-}
-return r
-case TokenMinus:
-r := lf - rf
-if isIntVal(left) && isIntVal(right) {
-return int64(r)
-}
-return r
-case TokenAsterisk:
-r := lf * rf
-if isIntVal(left) && isIntVal(right) {
-return int64(r)
-}
-return r
-case TokenSlash:
-if rf == 0 {
-return nil
-}
-r := lf / rf
-if isIntVal(left) && isIntVal(right) {
-return int64(r)
-}
-return r
-}
-return nil
-default:
-return nil
-}
+	switch e := expr.(type) {
+	case *Literal:
+		return e.Value
+	case *UnaryExpr:
+		val := evalConstExpr(e.Expr)
+		if e.Op == TokenMinus {
+			switch v := val.(type) {
+			case int64:
+				return -v
+			case float64:
+				return -v
+			}
+		}
+		return val
+	case *BinaryExpr:
+		left := evalConstExpr(e.Left)
+		right := evalConstExpr(e.Right)
+		if left == nil || right == nil {
+			return nil
+		}
+		lf, lok := toFloat64Const(left)
+		rf, rok := toFloat64Const(right)
+		if !lok || !rok {
+			return nil
+		}
+		switch e.Op {
+		case TokenPlus:
+			r := lf + rf
+			if isIntVal(left) && isIntVal(right) {
+				return int64(r)
+			}
+			return r
+		case TokenMinus:
+			r := lf - rf
+			if isIntVal(left) && isIntVal(right) {
+				return int64(r)
+			}
+			return r
+		case TokenAsterisk:
+			r := lf * rf
+			if isIntVal(left) && isIntVal(right) {
+				return int64(r)
+			}
+			return r
+		case TokenSlash:
+			if rf == 0 {
+				return nil
+			}
+			r := lf / rf
+			if isIntVal(left) && isIntVal(right) {
+				return int64(r)
+			}
+			return r
+		}
+		return nil
+	default:
+		return nil
+	}
 }
 
 func toFloat64Const(v interface{}) (float64, bool) {
-switch n := v.(type) {
-case int64:
-return float64(n), true
-case float64:
-return n, true
-case int:
-return float64(n), true
-}
-return 0, false
+	switch n := v.(type) {
+	case int64:
+		return float64(n), true
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	}
+	return 0, false
 }
 
 func isIntVal(v interface{}) bool {
-switch v.(type) {
-case int64, int:
-return true
-}
-return false
+	switch v.(type) {
+	case int64, int:
+		return true
+	}
+	return false
 }
 
 // applyLikeEscape pre-processes a LIKE pattern by converting escape sequences.

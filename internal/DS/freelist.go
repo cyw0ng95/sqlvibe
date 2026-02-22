@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
 
 // Freelist management for SQLite-style page allocation
@@ -54,7 +54,7 @@ func (fm *FreelistManager) AllocatePage() (uint32, error) {
 		// Trunk page has no leaves, use the trunk itself
 		pageNum := fm.firstTrunk
 		fm.firstTrunk = nextTrunk
-		
+
 		// Zero out the page before returning
 		for i := range trunkPage.Data {
 			trunkPage.Data[i] = 0
@@ -62,7 +62,7 @@ func (fm *FreelistManager) AllocatePage() (uint32, error) {
 		if err := fm.pm.WritePage(trunkPage); err != nil {
 			return 0, fmt.Errorf("failed to clear trunk page: %w", err)
 		}
-		
+
 		return pageNum, nil
 	}
 

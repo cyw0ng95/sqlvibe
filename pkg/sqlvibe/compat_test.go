@@ -1904,7 +1904,63 @@ func TestRegression_OrderByExpression_L1(t *testing.T) {
 	}
 }
 
-// TestRegression_CoalesceNULL_L1 regression test for F481 COALESCE
+// TestRegression_LimitInSubquery_L1 regression test for LIMIT in IN subqueries
+// Bug: LIMIT inside an IN subquery was ignored, causing all rows to match instead of only the top-K.
+// Two root causes were fixed:
+//  1. compileBinaryExpr emitted a spurious OpScalarSubquery (from eager compileExpr(Right))
+//     that executed the inner query and cleared its Limit/OrderBy before OpInSubquery ran.
+//  2. execSelectStmt (called from ExecuteSubqueryRows) did not apply ORDER BY + LIMIT
+//     when all ORDER BY columns were already in the SELECT list (extraOrderByCols path skipped).
+func TestRegression_LimitInSubquery_L1(t *testing.T) {
+	sqlvibePath := ":memory:"
+	sqlitePath := ":memory:"
+
+	sqlvibeDB, _ := Open(sqlvibePath)
+	sqliteDB, _ := sql.Open("sqlite", sqlitePath)
+	defer sqlvibeDB.Close()
+	defer sqliteDB.Close()
+
+	setupSQL := []string{
+		"CREATE TABLE employees (id INTEGER, name TEXT, salary INTEGER)",
+		"INSERT INTO employees VALUES (1, 'Alice', 85000)",
+		"INSERT INTO employees VALUES (2, 'Bob', 85000)",
+		"INSERT INTO employees VALUES (3, 'Charlie', 78000)",
+		"INSERT INTO employees VALUES (4, 'Diana', 62000)",
+		"INSERT INTO employees VALUES (5, 'Eve', 50000)",
+	}
+	for _, s := range setupSQL {
+		sqlvibeDB.Exec(s)
+		sqliteDB.Exec(s)
+	}
+
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			"InSubqueryLimitSameCol",
+			"SELECT id FROM employees WHERE id IN (SELECT id FROM employees ORDER BY id LIMIT 2)",
+		},
+		{
+			"InSubqueryLimitDifferentCol",
+			"SELECT id FROM employees WHERE id IN (SELECT id FROM employees ORDER BY salary DESC LIMIT 2)",
+		},
+		{
+			"UpdateLimitSameCol",
+			"UPDATE employees SET salary = salary + 100 WHERE id IN (SELECT id FROM employees ORDER BY id LIMIT 3)",
+		},
+		{
+			"SelectAfterUpdate",
+			"SELECT id, salary FROM employees ORDER BY id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
+		})
+	}
+}
 // Bug: COALESCE was returning wrong values when first arg is non-NULL
 // Fixed in commit that improved test comparison logic
 func TestRegression_CoalesceNULL_L1(t *testing.T) {

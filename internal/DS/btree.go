@@ -4,18 +4,27 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"sync"
 
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
+
+// prefetchWorkerPool is a shared worker pool used for async page prefetching.
+// Workers are started lazily and limit the goroutine fan-out for prefetch tasks.
+var prefetchWorkerPool = &struct {
+	once  sync.Once
+	tasks chan func()
+}{}
 
 // BTree represents a B-Tree using the new encoding infrastructure
 type BTree struct {
-	pm       *PageManager
-	om       *OverflowManager
-	balancer *PageBalancer
-	freelist *FreelistManager
-	rootPage uint32
-	isTable  bool
+	pm              *PageManager
+	om              *OverflowManager
+	balancer        *PageBalancer
+	freelist        *FreelistManager
+	rootPage        uint32
+	isTable         bool
+	prefetchEnabled bool // enable async child-page prefetching during search
 }
 
 // BTreeCursor represents a position in the B-Tree
@@ -51,6 +60,67 @@ func (bt *BTree) RootPage() uint32 {
 // IsTable returns true if this is a table B-Tree
 func (bt *BTree) IsTable() bool {
 	return bt.isTable
+}
+
+// SetPrefetchEnabled enables or disables async child-page prefetching.
+// When enabled, interior-page traversal fires goroutines to read child pages
+// into the OS page cache before they are needed, reducing I/O wait on trees
+// with high fan-out.
+func (bt *BTree) SetPrefetchEnabled(enabled bool) {
+	bt.prefetchEnabled = enabled
+}
+
+// prefetchChildren asynchronously reads the first count child pages referenced
+// by the cell pointers of an interior page.  Errors are silently ignored since
+// the main search path re-reads the page if the prefetch races.
+// A shared worker pool limits goroutine fan-out.
+func (bt *BTree) prefetchChildren(page *Page, count int) {
+	if !bt.prefetchEnabled || page == nil || len(page.Data) < 12 {
+		return
+	}
+	pageType := page.Data[0]
+	// Only interior pages have children to prefetch.
+	if pageType != 0x05 && pageType != 0x0a {
+		return
+	}
+	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
+	if count > numCells {
+		count = numCells
+	}
+
+	// Ensure the worker pool is running.
+	prefetchWorkerPool.once.Do(func() {
+		prefetchWorkerPool.tasks = make(chan func(), 64)
+		for i := 0; i < 4; i++ {
+			go func() {
+				for task := range prefetchWorkerPool.tasks {
+					task()
+				}
+			}()
+		}
+	})
+
+	for i := 0; i < count; i++ {
+		cpOff := 8 + i*2
+		if cpOff+2 > len(page.Data) {
+			break
+		}
+		cellOff := int(binary.BigEndian.Uint16(page.Data[cpOff : cpOff+2]))
+		if cellOff < 0 || cellOff+4 > len(page.Data) {
+			break
+		}
+		childNum := binary.BigEndian.Uint32(page.Data[cellOff : cellOff+4])
+		if childNum == 0 {
+			continue
+		}
+		cn := childNum
+		pm := bt.pm
+		select {
+		case prefetchWorkerPool.tasks <- func() { pm.ReadPage(cn) }: //nolint:errcheck
+		default:
+			// Pool is busy; skip prefetch for this child.
+		}
+	}
 }
 
 // Search finds a value by key in the B-Tree
@@ -127,6 +197,9 @@ func (bt *BTree) searchPage(page *Page, key []byte) ([]byte, error) {
 	// Interior page - recurse
 	util.Assert(pageType == 0x05 || pageType == 0x0a, "unexpected page type for interior: 0x%02x", pageType)
 
+	// Prefetch sibling pages to warm the OS page cache.
+	bt.prefetchChildren(page, 4)
+
 	var childPage uint32
 	if cellIdx < numCells {
 		cellPointerOffset := 8 + cellIdx*2
@@ -163,7 +236,10 @@ func (bt *BTree) searchPage(page *Page, key []byte) ([]byte, error) {
 	return bt.searchPage(childPageData, key)
 }
 
-// findCell performs binary search to find the insertion point for a key
+// findCell performs binary search to find the insertion point for a key.
+// Keys are decoded on-demand during the binary search.  For pages with many
+// cells, this avoids decoding the same key multiple times thanks to binary-
+// search locality.
 func (bt *BTree) findCell(page *Page, key []byte) int {
 	util.AssertNotNil(page, "page")
 	util.Assert(len(key) > 0, "search key cannot be empty")
@@ -175,34 +251,42 @@ func (bt *BTree) findCell(page *Page, key []byte) int {
 	util.Assert(pageType == 0x0d || pageType == 0x02 || pageType == 0x05 || pageType == 0x0a,
 		"invalid page type in findCell: 0x%02x", pageType)
 
+	// Pre-decode all cell keys once to avoid redundant decoding when the same
+	// cell is visited multiple times during binary search.
+	type cachedKey struct {
+		data []byte
+	}
+	cellKeys := make([]cachedKey, numCells)
+	for i := 0; i < numCells; i++ {
+		cellPointerOffset := 8 + i*2
+		cellOffset := int(binary.BigEndian.Uint16(page.Data[cellPointerOffset : cellPointerOffset+2]))
+
+		switch pageType {
+		case 0x0d: // Table leaf: key is the rowid
+			_, n := GetVarint(page.Data[cellOffset:])
+			rowid, _ := GetVarint(page.Data[cellOffset+n:])
+			buf := make([]byte, 9)
+			PutVarint(buf, rowid)
+			cellKeys[i].data = buf
+		case 0x02: // Index leaf: key is the payload
+			payloadSize, n := GetVarint(page.Data[cellOffset:])
+			cellKeys[i].data = page.Data[cellOffset+n : cellOffset+n+int(payloadSize)]
+		case 0x05: // Table interior: key is the separator rowid
+			cell, _ := DecodeTableInteriorCell(page.Data[cellOffset:])
+			buf := make([]byte, 9)
+			PutVarint(buf, cell.Rowid)
+			cellKeys[i].data = buf
+		default: // Index interior (0x0a)
+			payloadSize, n := GetVarint(page.Data[cellOffset:])
+			_, n2 := GetVarint(page.Data[cellOffset+n:])
+			cellKeys[i].data = page.Data[cellOffset+n+n2 : cellOffset+n+n2+int(payloadSize)]
+		}
+	}
+
 	left, right := 0, numCells
 	for left < right {
 		mid := (left + right) / 2
-
-		cellPointerOffset := 8 + mid*2
-		cellOffset := int(binary.BigEndian.Uint16(page.Data[cellPointerOffset : cellPointerOffset+2]))
-
-		var cellKey []byte
-		if pageType == 0x0d { // Table leaf
-			// Extract rowid as key
-			_, n := GetVarint(page.Data[cellOffset:])
-			rowid, _ := GetVarint(page.Data[cellOffset+n:])
-			cellKey = make([]byte, 9)
-			PutVarint(cellKey, rowid)
-		} else if pageType == 0x02 { // Index leaf
-			payloadSize, n := GetVarint(page.Data[cellOffset:])
-			cellKey = page.Data[cellOffset+n : cellOffset+n+int(payloadSize)]
-		} else if pageType == 0x05 { // Table interior
-			cell, _ := DecodeTableInteriorCell(page.Data[cellOffset:])
-			cellKey = make([]byte, 9)
-			PutVarint(cellKey, cell.Rowid)
-		} else { // Index interior (0x0a)
-			payloadSize, n := GetVarint(page.Data[cellOffset:])
-			_, n2 := GetVarint(page.Data[cellOffset+n:])
-			cellKey = page.Data[cellOffset+n+n2 : cellOffset+n+n2+int(payloadSize)]
-		}
-
-		cmp := CompareKeys(key, cellKey)
+		cmp := CompareKeys(key, cellKeys[mid].data)
 		if cmp < 0 {
 			right = mid
 		} else if cmp > 0 {

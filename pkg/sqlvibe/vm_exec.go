@@ -3,12 +3,13 @@ package sqlvibe
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/sqlvibe/sqlvibe/internal/CG"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 	"github.com/sqlvibe/sqlvibe/internal/VM"
-	"github.com/sqlvibe/sqlvibe/internal/util"
 )
 
 func (db *Database) ExecVM(sql string) (*Rows, error) {
@@ -44,10 +45,24 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 		tableName = stmt.Table
 	}
 
-	program, err := CG.Compile(sql)
-	if err != nil {
-		return nil, fmt.Errorf("VM compile error: %v", err)
+	// Check plan cache before compiling.
+	var compiledProgram *VM.Program
+	if db.planCache != nil {
+		if cached, ok := db.planCache.Get(sql); ok {
+			compiledProgram = cached
+		}
 	}
+	if compiledProgram == nil {
+		compiledProgram, err = CG.Compile(sql)
+		if err != nil {
+			return nil, fmt.Errorf("VM compile error: %v", err)
+		}
+		// Cache compiled plan for future reuse.
+		if db.planCache != nil {
+			db.planCache.Put(sql, compiledProgram)
+		}
+	}
+	program := compiledProgram
 
 	ctx := newDsVmContext(db)
 	vm := VM.NewVMWithContext(program, ctx)
@@ -115,7 +130,30 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 
 	// Delegate to execVMQuery which handles ORDER BY + LIMIT correctly
 	// (including ORDER BY columns not in SELECT via extraOrderByCols mechanism).
-	return db.execVMQuery("", stmt)
+	rows, err := db.execVMQuery("", stmt)
+	if err != nil {
+		return nil, err
+	}
+	// execVMQuery only consumes ORDER BY + LIMIT when extraOrderByCols is non-empty
+	// (i.e. ORDER BY references columns not in SELECT). When all ORDER BY cols are
+	// already in the SELECT list, execVMQuery leaves stmt.OrderBy/Limit intact and
+	// returns unsorted, unlimited rows — apply them here.
+	if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
+		// topK hint lets sortResultsTopK use an O(N log K) heap instead of a full sort.
+		// applyLimit below enforces the exact LIMIT+OFFSET after sorting.
+		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		rows, err = db.sortResultsTopK(rows, stmt.OrderBy, topK)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if stmt.Limit != nil {
+		rows, err = db.applyLimit(rows, stmt.Limit, stmt.Offset)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
 }
 
 // execSelectStmtWithContext executes a SelectStmt with outer row context for correlated subqueries
@@ -209,12 +247,38 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	// Get table data from DS context
 	tableData, _ := ctx.GetTableData(tableName)
 
+	// Secondary index pre-filter: if WHERE is a simple col=val on an indexed column,
+	// pass only matching rows to the VM instead of the full table.
+	origWhere := stmt.Where // save to restore after execution
+	if stmt.Where != nil {
+		if filtered := db.tryIndexLookup(tableName, stmt.Where); filtered != nil {
+			tableData = filtered
+		} else if stmt.From.Join == nil {
+			// Predicate pushdown: evaluate simple col OP constant conditions at the
+			// Go layer before handing rows to the VM.  This avoids VM opcode execution
+			// overhead for rows that are definitely filtered out.
+			// The remaining (non-pushable) conditions are left in stmt.Where for the VM.
+			pushable, remaining := QP.SplitPushdownPredicates(stmt.Where)
+			if len(pushable) > 0 {
+				tableData = QP.ApplyPushdownFilter(tableData, pushable)
+				stmt.Where = remaining
+			}
+		}
+	}
+
 	if tableData != nil {
 		vm.Cursors().OpenTableAtID(0, cursorName, tableData, tableCols)
 	}
 
+	// Pre-allocate flat result buffer to avoid per-row allocations.
+	if stmt.From.Join == nil && len(tableCols) > 0 && len(tableData) > 0 {
+		vm.PreallocResultsFlat(len(tableData), len(tableCols))
+	}
+
 	// Execute without calling Reset again (use Exec instead of Run)
 	err := vm.Exec(nil)
+	// Restore WHERE clause in case predicate pushdown temporarily modified it.
+	stmt.Where = origWhere
 	if err == VM.ErrHalt {
 		err = nil
 	}
@@ -242,7 +306,8 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 			}
 		}
 		allCols := append(projCols, extraOrderByCols...)
-		results = db.engine.SortRows(results, stmt.OrderBy, allCols)
+		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		results = db.engine.SortRowsTopK(results, stmt.OrderBy, allCols, topK)
 		if stmt.Limit != nil {
 			if limited, err2 := db.applyLimit(&Rows{Data: results}, stmt.Limit, stmt.Offset); err2 == nil {
 				results = limited.Data
@@ -299,6 +364,35 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		// Check if table exists via table registry
 		if _, exists := db.tables[tableName]; !exists {
 			return nil, fmt.Errorf("no such table: %s", tableName)
+		}
+	}
+
+	// Fast path: use Go-level hash join for simple 2-table equi-joins.
+	// This avoids the O(N×M) nested-loop VM bytecode for INNER JOINs.
+	if stmt.From.Join != nil && stmt.From.Subquery == nil &&
+		stmt.GroupBy == nil && len(stmt.OrderBy) == 0 && !stmt.Distinct {
+		if hashRows, hashCols, ok := db.execHashJoin(stmt); ok {
+			return &Rows{Columns: hashCols, Data: hashRows}, nil
+		}
+	}
+
+	// For JOIN + aggregate queries (GROUP BY / aggregate functions), first
+	// materialise the join into a flat cursor, then run the aggregate over it.
+	// The aggregate compiler only opens one cursor (the left table), so without
+	// this path the join is silently ignored.
+	if stmt.From.Join != nil && stmt.From.Subquery == nil && CG.HasAggregates(stmt) {
+		if rows, err := db.execJoinAggregate(stmt); rows != nil || err != nil {
+			return rows, err
+		}
+	}
+
+	// Fast path: SELECT * FROM single_table (no filters, aggregates, or ordering).
+	// Bypasses tokenize+parse+compile+VM entirely; uses a flat backing array to
+	// materialise results in just 2 allocations regardless of row count.
+	if isSimpleSelectStar(stmt) && stmt.From.Join == nil {
+		starCols := db.columnOrder[tableName]
+		if len(starCols) > 0 {
+			return db.execSelectStarFast(db.data[tableName], starCols), nil
 		}
 	}
 
@@ -482,6 +576,19 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 
 	ctx := newDsVmContext(db)
 	vm := VM.NewVMWithContext(program, ctx)
+
+	// Pre-allocate result slice based on estimated table size to reduce reallocations.
+	if stmt.From.Join == nil && tableName != "" {
+		if tableData, ok := db.data[tableName]; ok {
+			if len(tableCols) > 0 {
+				// Full flat-buffer pre-allocation: eliminates per-row allocations.
+				vm.PreallocResultsFlat(len(tableData), len(tableCols))
+			} else {
+				// Zero-column schema: pre-allocate result header only.
+				vm.PreallocResults(len(tableData))
+			}
+		}
+	}
 
 	err := vm.Run(nil)
 	if err != nil {
@@ -672,8 +779,9 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	if len(extraOrderByCols) > 0 {
 		// Build full columns list (SELECT columns + extra ORDER BY cols)
 		fullCols := append(cols, extraOrderByCols...)
-		// Sort using full column set
-		results = db.engine.SortRows(results, stmt.OrderBy, fullCols)
+		// Sort using full column set (use top-K heap when limit is known)
+		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		results = db.engine.SortRowsTopK(results, stmt.OrderBy, fullCols, topK)
 		// Apply LIMIT/OFFSET if present (to avoid database.go re-applying with wrong cols)
 		if stmt.Limit != nil {
 			rows := &Rows{Columns: fullCols, Data: results}
@@ -700,6 +808,86 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	}
 
 	return &Rows{Columns: cols, Data: results}, nil
+}
+
+// extractLimitInt returns the integer value of a LIMIT expression, or 0 if not a constant integer.
+func extractLimitInt(limitExpr, offsetExpr QP.Expr) int {
+	if limitExpr == nil {
+		return 0
+	}
+	lim := 0
+	off := 0
+	if lit, ok := limitExpr.(*QP.Literal); ok {
+		if n, ok := lit.Value.(int64); ok {
+			lim = int(n)
+		}
+	}
+	if offsetExpr != nil {
+		if lit, ok := offsetExpr.(*QP.Literal); ok {
+			if n, ok := lit.Value.(int64); ok {
+				off = int(n)
+			}
+		}
+	}
+	if lim <= 0 {
+		return 0
+	}
+	return off + lim
+}
+
+// isSimpleSelectStar reports whether stmt is a plain SELECT * FROM table with
+// no WHERE, GROUP BY, ORDER BY, DISTINCT, LIMIT, JOINs, or subqueries.
+// Such queries are eligible for execSelectStarFast.
+func isSimpleSelectStar(stmt *QP.SelectStmt) bool {
+	if stmt == nil || stmt.From == nil {
+		return false
+	}
+	if stmt.From.Join != nil || stmt.From.Subquery != nil {
+		return false
+	}
+	if stmt.Where != nil {
+		return false
+	}
+	if stmt.GroupBy != nil {
+		return false
+	}
+	if len(stmt.OrderBy) > 0 {
+		return false
+	}
+	if stmt.Distinct {
+		return false
+	}
+	if stmt.Limit != nil {
+		return false
+	}
+	if len(stmt.Columns) != 1 {
+		return false
+	}
+	cr, ok := stmt.Columns[0].(*QP.ColumnRef)
+	return ok && cr.Name == "*" && cr.Table == ""
+}
+
+// execSelectStarFast materialises all rows of a single table without running
+// the VM compiler or bytecode interpreter.  A single flat []interface{}
+// backing array is allocated for all row data; each row is a sub-slice of
+// that array, so the total allocation count is 2 regardless of row count.
+func (db *Database) execSelectStarFast(rows []map[string]interface{}, cols []string) *Rows {
+	n := len(rows)
+	ncols := len(cols)
+	if n == 0 {
+		return &Rows{Columns: cols, Data: [][]interface{}{}}
+	}
+	// One flat allocation for all values.
+	flat := make([]interface{}, n*ncols)
+	results := make([][]interface{}, n)
+	for i, row := range rows {
+		start := i * ncols
+		for j, col := range cols {
+			flat[start+j] = row[col]
+		}
+		results[i] = flat[start : start+ncols]
+	}
+	return &Rows{Columns: cols, Data: results}
 }
 
 // validateInsertColumnCount checks that INSERT column count matches value count.
@@ -990,13 +1178,41 @@ func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
 }
 
 // deduplicateRows removes duplicate rows, preserving the first occurrence of each unique row.
+// Uses strings.Builder + type switch to avoid fmt.Sprintf overhead.
 func deduplicateRows(rows [][]interface{}) [][]interface{} {
-	seen := make(map[string]bool)
+	seen := make(map[string]struct{}, len(rows))
 	result := make([][]interface{}, 0, len(rows))
+	var b strings.Builder
 	for _, row := range rows {
-		key := fmt.Sprintf("%v", row)
-		if !seen[key] {
-			seen[key] = true
+		b.Reset()
+		for i, v := range row {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			switch val := v.(type) {
+			case int64:
+				b.WriteString(strconv.FormatInt(val, 10))
+			case float64:
+				b.WriteString(strconv.FormatFloat(val, 'f', -1, 64))
+			case string:
+				b.WriteString(val)
+			case bool:
+				if val {
+					b.WriteString("true")
+				} else {
+					b.WriteString("false")
+				}
+			case []byte:
+				b.WriteString(string(val))
+			case nil:
+				b.WriteString("<nil>")
+			default:
+				fmt.Fprintf(&b, "%v", val)
+			}
+		}
+		key := b.String()
+		if _, dup := seen[key]; !dup {
+			seen[key] = struct{}{}
 			result = append(result, row)
 		}
 	}
@@ -1039,43 +1255,198 @@ func collectColumnRefs(expr QP.Expr) []string {
 // resolveNaturalUsing synthesizes a JOIN ON condition for NATURAL JOIN and JOIN ... USING (cols).
 // This is called after schema info is available so we can find shared column names.
 func (db *Database) resolveNaturalUsing(join *QP.Join, leftCols, rightCols []string, leftName, rightName string) {
-if join == nil {
-return
+	if join == nil {
+		return
+	}
+	// Determine which columns to join on
+	usingCols := join.UsingColumns
+	if join.Natural && len(usingCols) == 0 {
+		// Find columns that appear in both tables
+		rightSet := make(map[string]bool)
+		for _, c := range rightCols {
+			rightSet[c] = true
+		}
+		for _, c := range leftCols {
+			if rightSet[c] {
+				usingCols = append(usingCols, c)
+			}
+		}
+	}
+	if len(usingCols) == 0 || join.Cond != nil {
+		return
+	}
+	// Store the using columns back so dedup code can use them
+	if join.Natural && len(join.UsingColumns) == 0 {
+		join.UsingColumns = usingCols
+	}
+	// Build left.col = right.col AND ... condition
+	var cond QP.Expr
+	for _, col := range usingCols {
+		eq := &QP.BinaryExpr{
+			Op:    QP.TokenEq,
+			Left:  &QP.ColumnRef{Table: leftName, Name: col},
+			Right: &QP.ColumnRef{Table: rightName, Name: col},
+		}
+		if cond == nil {
+			cond = eq
+		} else {
+			cond = &QP.BinaryExpr{Op: QP.TokenAnd, Left: cond, Right: eq}
+		}
+	}
+	join.Cond = cond
 }
-// Determine which columns to join on
-usingCols := join.UsingColumns
-if join.Natural && len(usingCols) == 0 {
-// Find columns that appear in both tables
-rightSet := make(map[string]bool)
-for _, c := range rightCols {
-rightSet[c] = true
-}
-for _, c := range leftCols {
-if rightSet[c] {
-usingCols = append(usingCols, c)
-}
-}
-}
-if len(usingCols) == 0 || join.Cond != nil {
-return
-}
-// Store the using columns back so dedup code can use them
-if join.Natural && len(join.UsingColumns) == 0 {
-join.UsingColumns = usingCols
-}
-// Build left.col = right.col AND ... condition
-var cond QP.Expr
-for _, col := range usingCols {
-eq := &QP.BinaryExpr{
-Op:    QP.TokenEq,
-Left:  &QP.ColumnRef{Table: leftName, Name: col},
-Right: &QP.ColumnRef{Table: rightName, Name: col},
-}
-if cond == nil {
-cond = eq
-} else {
-cond = &QP.BinaryExpr{Op: QP.TokenAnd, Left: cond, Right: eq}
-}
-}
-join.Cond = cond
+
+// execJoinAggregate handles SELECT queries that combine a JOIN with aggregate
+// functions or GROUP BY.  The aggregate compiler only scans a single table
+// cursor, so without this path the JOIN is silently ignored.
+//
+// Strategy:
+//  1. Materialise the full JOIN result as a flat row slice (using execHashJoin
+//     with a temporary SELECT * expansion so no aggregate evaluation is needed
+//     at join time).
+//  2. Build a []map[string]interface{} that stores each row's values under
+//     both the unqualified column name and the table-alias-qualified name
+//     (e.g., "name", "d.name", "departments.name") so that GROUP BY and
+//     aggregate expressions that reference either form resolve correctly.
+//  3. Pre-open cursor 0 with the joined rows.  The OpOpenRead instruction
+//     emitted by CompileAggregate detects a pre-opened cursor and skips the
+//     regular single-table load, so the aggregate runs over the joined data.
+func (db *Database) execJoinAggregate(stmt *QP.SelectStmt) (*Rows, error) {
+	// Temporarily replace SELECT columns with * so that extractHashJoinInfo
+	// (called inside execHashJoin) does not reject the query due to aggregate
+	// functions in the SELECT list.
+	origCols := stmt.Columns
+	origGroupBy := stmt.GroupBy
+	origHaving := stmt.Having
+	origOrderBy := stmt.OrderBy
+	origLimit := stmt.Limit
+	origOffset := stmt.Offset
+	stmt.Columns = []QP.Expr{&QP.ColumnRef{Name: "*"}}
+	stmt.GroupBy = nil
+	stmt.Having = nil
+	stmt.OrderBy = nil
+	stmt.Limit = nil
+	stmt.Offset = nil
+
+	info := extractHashJoinInfo(stmt)
+	if info == nil {
+		// Restore before returning
+		stmt.Columns = origCols
+		stmt.GroupBy = origGroupBy
+		stmt.Having = origHaving
+		stmt.OrderBy = origOrderBy
+		stmt.Limit = origLimit
+		stmt.Offset = origOffset
+		return nil, nil
+	}
+
+	hashRows, hashCols, ok := db.execHashJoin(stmt)
+
+	stmt.Columns = origCols
+	stmt.GroupBy = origGroupBy
+	stmt.Having = origHaving
+	stmt.OrderBy = origOrderBy
+	stmt.Limit = origLimit
+	stmt.Offset = origOffset
+
+	if !ok {
+		return nil, nil
+	}
+
+	leftName := db.resolveTableName(info.leftTable)
+	leftAlias := info.leftAlias
+	if leftAlias == "" {
+		leftAlias = leftName
+	}
+	rightName := db.resolveTableName(info.rightTable)
+	rightAlias := info.rightAlias
+	if rightAlias == "" {
+		rightAlias = rightName
+	}
+
+	leftCols := db.columnOrder[leftName]
+	rightCols := db.columnOrder[rightName]
+	nLeft := len(leftCols)
+
+	// Build rows keyed by both unqualified and table-qualified column names so
+	// that expressions like "d.name" and "e.id" resolve to the correct table's value.
+	joinedRows := make([]map[string]interface{}, len(hashRows))
+	for i, row := range hashRows {
+		m := make(map[string]interface{}, len(hashCols)+nLeft+len(rightCols))
+		for j, col := range hashCols {
+			if j >= len(row) {
+				break
+			}
+			val := row[j]
+			m[col] = val // unqualified (last write wins for shared names)
+			if j < nLeft {
+				m[leftAlias+"."+leftCols[j]] = val
+				if leftAlias != leftName {
+					m[leftName+"."+leftCols[j]] = val
+				}
+			} else {
+				rj := j - nLeft
+				if rj < len(rightCols) {
+					m[rightAlias+"."+rightCols[rj]] = val
+					if rightAlias != rightName {
+						m[rightName+"."+rightCols[rj]] = val
+					}
+				}
+			}
+		}
+		joinedRows[i] = m
+	}
+
+	// Compile the aggregate query.
+	cg := CG.NewCompiler()
+	combinedCols := append(append([]string{}, leftCols...), rightCols...)
+	leftSchema := make(map[string]int, len(leftCols))
+	for i, c := range leftCols {
+		leftSchema[c] = i
+	}
+	rightSchema := make(map[string]int, len(rightCols))
+	for i, c := range rightCols {
+		rightSchema[c] = nLeft + i
+	}
+	multiSchemas := map[string]map[string]int{
+		leftName:  leftSchema,
+		leftAlias: leftSchema,
+		rightName: rightSchema,
+		rightAlias: rightSchema,
+	}
+	cg.SetMultiTableSchema(multiSchemas, combinedCols)
+	program := cg.CompileSelect(stmt)
+
+	ctx := newDsVmContext(db)
+	vm := VM.NewVMWithContext(program, ctx)
+
+	// Reset the VM to initialise internal state, then immediately pre-open
+	// cursor 0 with the joined rows before Exec runs.  vm.Run() would call
+	// Reset() again and wipe the cursor, so we use vm.Exec() directly here.
+	vm.Reset()
+	vm.SetPC(0)
+	vm.Cursors().OpenTableAtID(0, leftName, joinedRows, hashCols)
+
+	if err := vm.Exec(nil); err != nil && err != VM.ErrHalt {
+		return nil, err
+	}
+
+	results := vm.Results()
+
+	// Build output column names from the original SELECT list.
+	cols := make([]string, 0, len(stmt.Columns))
+	for i, col := range stmt.Columns {
+		switch e := col.(type) {
+		case *QP.ColumnRef:
+			cols = append(cols, e.Name)
+		case *QP.AliasExpr:
+			cols = append(cols, e.Alias)
+		case *QP.FuncCall:
+			cols = append(cols, fmt.Sprintf("col%d", i))
+		default:
+			cols = append(cols, fmt.Sprintf("col%d", i))
+		}
+	}
+
+	return &Rows{Columns: cols, Data: results}, nil
 }

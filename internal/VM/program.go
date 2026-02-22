@@ -52,10 +52,12 @@ func (p *Program) EmitOp(op OpCode, p1, p2 int32) int {
 func (p *Program) EmitOpWithDst(op OpCode, p1, p2 int32, dst int) int {
 	idx := len(p.Instructions)
 	p.Instructions = append(p.Instructions, Instruction{
-		Op: op,
-		P1: p1,
-		P2: p2,
-		P4: dst,
+		Op:     op,
+		P1:     p1,
+		P2:     p2,
+		P4:     dst,
+		DstReg: dst,
+		HasDst: true,
 	})
 	if dst >= p.NumRegs {
 		p.NumRegs = dst + 1
@@ -280,10 +282,12 @@ func (p *Program) EmitNotNull(reg, target int) int {
 func (p *Program) EmitAdd(dst, p1, p2 int) int {
 	idx := len(p.Instructions)
 	p.Instructions = append(p.Instructions, Instruction{
-		Op: OpAdd,
-		P1: int32(p1),
-		P2: int32(p2),
-		P4: dst,
+		Op:     OpAdd,
+		P1:     int32(p1),
+		P2:     int32(p2),
+		P4:     dst,
+		DstReg: dst,
+		HasDst: true,
 	})
 	if dst >= p.NumRegs || p1 >= p.NumRegs || p2 >= p.NumRegs {
 		if dst >= p.NumRegs {
@@ -302,10 +306,12 @@ func (p *Program) EmitAdd(dst, p1, p2 int) int {
 func (p *Program) EmitSubtract(dst, p1, p2 int) int {
 	idx := len(p.Instructions)
 	p.Instructions = append(p.Instructions, Instruction{
-		Op: OpSubtract,
-		P1: int32(p1),
-		P2: int32(p2),
-		P4: dst,
+		Op:     OpSubtract,
+		P1:     int32(p1),
+		P2:     int32(p2),
+		P4:     dst,
+		DstReg: dst,
+		HasDst: true,
 	})
 	if dst >= p.NumRegs || p1 >= p.NumRegs || p2 >= p.NumRegs {
 		if dst >= p.NumRegs {
@@ -324,10 +330,12 @@ func (p *Program) EmitSubtract(dst, p1, p2 int) int {
 func (p *Program) EmitMultiply(dst, p1, p2 int) int {
 	idx := len(p.Instructions)
 	p.Instructions = append(p.Instructions, Instruction{
-		Op: OpMultiply,
-		P1: int32(p1),
-		P2: int32(p2),
-		P4: dst,
+		Op:     OpMultiply,
+		P1:     int32(p1),
+		P2:     int32(p2),
+		P4:     dst,
+		DstReg: dst,
+		HasDst: true,
 	})
 	if dst >= p.NumRegs || p1 >= p.NumRegs || p2 >= p.NumRegs {
 		if dst >= p.NumRegs {
@@ -346,10 +354,12 @@ func (p *Program) EmitMultiply(dst, p1, p2 int) int {
 func (p *Program) EmitDivide(dst, p1, p2 int) int {
 	idx := len(p.Instructions)
 	p.Instructions = append(p.Instructions, Instruction{
-		Op: OpDivide,
-		P1: int32(p1),
-		P2: int32(p2),
-		P4: dst,
+		Op:     OpDivide,
+		P1:     int32(p1),
+		P2:     int32(p2),
+		P4:     dst,
+		DstReg: dst,
+		HasDst: true,
 	})
 	if dst >= p.NumRegs || p1 >= p.NumRegs || p2 >= p.NumRegs {
 		if dst >= p.NumRegs {
@@ -368,10 +378,12 @@ func (p *Program) EmitDivide(dst, p1, p2 int) int {
 func (p *Program) EmitConcat(dst, p1, p2 int) int {
 	idx := len(p.Instructions)
 	p.Instructions = append(p.Instructions, Instruction{
-		Op: OpConcat,
-		P1: int32(p1),
-		P2: int32(p2),
-		P4: dst,
+		Op:     OpConcat,
+		P1:     int32(p1),
+		P2:     int32(p2),
+		P4:     dst,
+		DstReg: dst,
+		HasDst: true,
 	})
 	if dst >= p.NumRegs || p1 >= p.NumRegs || p2 >= p.NumRegs {
 		if dst >= p.NumRegs {

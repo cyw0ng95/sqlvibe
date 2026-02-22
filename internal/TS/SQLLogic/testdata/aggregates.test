@@ -1,0 +1,178 @@
+# aggregates.test - Aggregate function tests
+
+# ----- Setup -----
+
+statement ok
+CREATE TABLE sales (id INTEGER PRIMARY KEY, product TEXT, region TEXT, amount REAL, qty INTEGER)
+
+statement ok
+INSERT INTO sales VALUES (1, 'Widget', 'North', 100.0, 5)
+
+statement ok
+INSERT INTO sales VALUES (2, 'Widget', 'South', 200.0, 10)
+
+statement ok
+INSERT INTO sales VALUES (3, 'Gadget', 'North', 150.0, 3)
+
+statement ok
+INSERT INTO sales VALUES (4, 'Gadget', 'South', 300.0, 6)
+
+statement ok
+INSERT INTO sales VALUES (5, 'Widget', 'North', 50.0, 2)
+
+statement ok
+INSERT INTO sales VALUES (6, 'Gadget', 'East',  250.0, 4)
+
+# ----- Basic aggregates -----
+
+query I
+SELECT COUNT(*) FROM sales
+----
+6
+
+query R
+SELECT SUM(amount) FROM sales
+----
+1050
+
+query R
+SELECT AVG(amount) FROM sales
+----
+175
+
+query R
+SELECT MIN(amount) FROM sales
+----
+50
+
+query R
+SELECT MAX(amount) FROM sales
+----
+300
+
+# ----- GROUP BY -----
+
+query TI rowsort
+SELECT product, COUNT(*) FROM sales GROUP BY product
+----
+Gadget  3
+Widget  3
+
+query TR rowsort
+SELECT product, SUM(amount) FROM sales GROUP BY product
+----
+Gadget  700
+Widget  350
+
+query TR rowsort
+SELECT region, SUM(amount) FROM sales GROUP BY region
+----
+East   250
+North  300
+South  500
+
+# ----- GROUP BY with HAVING -----
+
+query TR rowsort
+SELECT product, SUM(amount) FROM sales GROUP BY product HAVING SUM(amount) > 500
+----
+Gadget  700
+
+query TI rowsort
+SELECT region, COUNT(*) FROM sales GROUP BY region HAVING COUNT(*) >= 2
+----
+North  3
+South  2
+
+# ----- Multiple aggregates -----
+
+query TIRI rowsort
+SELECT product, SUM(amount), AVG(amount), COUNT(*) FROM sales GROUP BY product
+----
+Gadget  700  233.333  3
+Widget  350  116.667  3
+
+# ----- ORDER BY with aggregate -----
+
+query TI
+SELECT product, COUNT(*) FROM sales GROUP BY product ORDER BY product ASC
+----
+Gadget  3
+Widget  3
+
+# ----- COUNT DISTINCT -----
+
+query I
+SELECT COUNT(DISTINCT product) FROM sales
+----
+2
+
+query I
+SELECT COUNT(DISTINCT region) FROM sales
+----
+3
+
+# ----- Aggregate with WHERE -----
+
+query R
+SELECT SUM(amount) FROM sales WHERE product = 'Widget'
+----
+350
+
+query R
+SELECT AVG(amount) FROM sales WHERE region = 'North'
+----
+100
+
+# ----- NULL aggregation -----
+
+statement ok
+CREATE TABLE nullagg (a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO nullagg VALUES (1, 10)
+
+statement ok
+INSERT INTO nullagg VALUES (2, NULL)
+
+statement ok
+INSERT INTO nullagg VALUES (3, 30)
+
+statement ok
+INSERT INTO nullagg VALUES (NULL, 40)
+
+# COUNT(*) counts NULLs; COUNT(col) does not
+query I
+SELECT COUNT(*) FROM nullagg
+----
+4
+
+query I
+SELECT COUNT(a) FROM nullagg
+----
+3
+
+query I
+SELECT COUNT(b) FROM nullagg
+----
+3
+
+query I
+SELECT SUM(b) FROM nullagg
+----
+80
+
+# ----- Subquery in aggregate -----
+
+query I
+SELECT COUNT(*) FROM sales WHERE amount > (SELECT AVG(amount) FROM sales)
+----
+3
+
+# ----- Cleanup -----
+
+statement ok
+DROP TABLE nullagg
+
+statement ok
+DROP TABLE sales

@@ -2,20 +2,71 @@ package sqlvibe
 
 import (
 	"fmt"
+	"hash/fnv"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/sqlvibe/sqlvibe/internal/CG"
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/IS"
 	"github.com/sqlvibe/sqlvibe/internal/PB"
-	"github.com/sqlvibe/sqlvibe/internal/VM"
 	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 	"github.com/sqlvibe/sqlvibe/internal/TM"
-	"github.com/sqlvibe/sqlvibe/internal/util"
+	"github.com/sqlvibe/sqlvibe/internal/VM"
 )
+
+// queryResultCache is a thread-safe in-process cache for full SELECT query results.
+// Entries are keyed by FNV-1a hash of the SQL string.
+// All entries are invalidated on any write operation (INSERT/UPDATE/DELETE/DDL).
+type queryResultCache struct {
+	mu   sync.RWMutex
+	data map[uint64]*queryResultEntry
+	max  int
+}
+
+type queryResultEntry struct {
+	columns []string
+	rows    [][]interface{}
+}
+
+func newQueryResultCache(max int) *queryResultCache {
+	return &queryResultCache{data: make(map[uint64]*queryResultEntry), max: max}
+}
+
+func (c *queryResultCache) Get(key uint64) ([]string, [][]interface{}, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if e, ok := c.data[key]; ok {
+		return e.columns, e.rows, true
+	}
+	return nil, nil, false
+}
+
+func (c *queryResultCache) Set(key uint64, columns []string, rows [][]interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.max > 0 && len(c.data) >= c.max {
+		// Evict an arbitrary entry to stay within limit.
+		for k := range c.data {
+			delete(c.data, k)
+			break
+		}
+	}
+	c.data[key] = &queryResultEntry{columns: columns, rows: rows}
+}
+
+func (c *queryResultCache) Invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data = make(map[uint64]*queryResultEntry)
+}
 
 type Database struct {
 	pm             *DS.PageManager
+	cache          *DS.Cache
 	engine         *VM.QueryEngine
 	tx             *Transaction
 	txMgr          *TM.TransactionManager
@@ -33,6 +84,12 @@ type Database struct {
 	isRegistry     *IS.Registry                        // information_schema registry
 	txSnapshot     *dbSnapshot                         // snapshot for transaction rollback
 	tableBTrees    map[string]*DS.BTree                // table name -> B-Tree for storage
+	journalMode    string                              // "delete" or "wal"
+	wal            *TM.WAL                             // WAL instance when in WAL mode
+	pkHashSet      map[string]map[interface{}]struct{} // table name -> PK value -> exists (single-col PK only)
+	indexData      map[string]map[interface{}][]int    // index name -> col value -> []row indices
+	planCache      *CG.PlanCache                       // compiled query plan cache
+	queryCache     *queryResultCache                   // full query result cache (columns + rows)
 }
 
 type dbSnapshot struct {
@@ -135,6 +192,7 @@ func (db *Database) restoreSnapshot(snap *dbSnapshot) {
 	db.columnNotNull = snap.columnNotNull
 	db.columnChecks = snap.columnChecks
 	db.indexes = snap.indexes
+	db.rebuildAllIndexes()
 }
 
 type IndexInfo struct {
@@ -267,6 +325,7 @@ func Open(path string) (*Database, error) {
 
 	return &Database{
 		pm:             pm,
+		cache:          DS.NewCache(-2000),
 		engine:         engine,
 		txMgr:          txMgr,
 		activeTx:       nil,
@@ -281,6 +340,12 @@ func Open(path string) (*Database, error) {
 		indexes:        make(map[string]*IndexInfo),
 		views:          make(map[string]string),
 		tableBTrees:    make(map[string]*DS.BTree),
+		journalMode:    "delete",
+		wal:            nil,
+		pkHashSet:      make(map[string]map[interface{}]struct{}),
+		indexData:      make(map[string]map[interface{}][]int),
+		planCache:      CG.NewPlanCache(256),
+		queryCache:     newQueryResultCache(512),
 	}, nil
 }
 
@@ -460,6 +525,11 @@ func (db *Database) Exec(sql string) (Result, error) {
 			db.primaryKeys[stmt.Name] = pkCols
 		}
 
+		// Initialise PK hash set for the new (empty) table.
+		if len(pkCols) > 0 {
+			db.pkHashSet[stmt.Name] = make(map[interface{}]struct{})
+		}
+
 		// Create BTree for table storage
 		bt := DS.NewBTree(db.pm, 0, true)
 		db.tableBTrees[stmt.Name] = bt
@@ -467,16 +537,33 @@ func (db *Database) Exec(sql string) (Result, error) {
 		return Result{}, nil
 	case "InsertStmt":
 		stmt := ast.(*QP.InsertStmt)
+		var result Result
+		var err error
 		if stmt.SelectQuery != nil {
-			return db.execInsertSelect(stmt)
+			result, err = db.execInsertSelect(stmt)
+		} else if stmt.OnConflict != nil {
+			result, err = db.execInsertOnConflict(stmt)
+		} else {
+			result, err = db.execVMDML(sql, stmt.Table)
 		}
-		return db.execVMDML(sql, stmt.Table)
+		if err == nil {
+			db.invalidateWriteCaches()
+		}
+		return result, err
 	case "UpdateStmt":
 		stmt := ast.(*QP.UpdateStmt)
-		return db.execVMDML(sql, stmt.Table)
+		result, err := db.execVMDML(sql, stmt.Table)
+		if err == nil {
+			db.invalidateWriteCaches()
+		}
+		return result, err
 	case "DeleteStmt":
 		stmt := ast.(*QP.DeleteStmt)
-		return db.execVMDML(sql, stmt.Table)
+		result, err := db.execVMDML(sql, stmt.Table)
+		if err == nil {
+			db.invalidateWriteCaches()
+		}
+		return result, err
 	case "DropTableStmt":
 		stmt := ast.(*QP.DropTableStmt)
 		if _, exists := db.tables[stmt.Name]; !exists {
@@ -492,6 +579,15 @@ func (db *Database) Exec(sql string) (Result, error) {
 		delete(db.columnChecks, stmt.Name)
 		delete(db.columnNotNull, stmt.Name)
 		delete(db.tableBTrees, stmt.Name)
+		delete(db.pkHashSet, stmt.Name)
+		// Drop all secondary indexes that cover this table.
+		for idxName, idx := range db.indexes {
+			if idx.Table == stmt.Name {
+				delete(db.indexes, idxName)
+				delete(db.indexData, idxName)
+			}
+		}
+		db.invalidateWriteCaches()
 		return Result{}, nil
 	case "CreateViewStmt":
 		return db.execCreateView(ast.(*QP.CreateViewStmt), sql)
@@ -523,10 +619,13 @@ func (db *Database) Exec(sql string) (Result, error) {
 			Columns: stmt.Columns,
 			Unique:  stmt.Unique,
 		}
+		// Build hash index immediately from existing table data.
+		db.buildIndexData(stmt.Name)
 		return Result{}, nil
 	case "DropIndexStmt":
 		stmt := ast.(*QP.DropIndexStmt)
 		delete(db.indexes, stmt.Name)
+		delete(db.indexData, stmt.Name)
 		return Result{}, nil
 	case "BeginStmt":
 		stmt := ast.(*QP.BeginStmt)
@@ -603,6 +702,20 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			}
 		}
 		return lastRows, nil
+	}
+
+	// Result cache check: serve repeated identical SELECT queries without re-execution.
+	// Only applies to single-statement queries. During an active transaction,
+	// caching is skipped to ensure transaction isolation.
+	sqlUpper := strings.TrimSpace(strings.ToUpper(sql))
+	isCacheable := (strings.HasPrefix(sqlUpper, "SELECT") || strings.HasPrefix(sqlUpper, "WITH")) &&
+		db.activeTx == nil
+	var cacheKey uint64
+	if isCacheable && db.queryCache != nil {
+		cacheKey = sqlQueryHash(sql)
+		if cachedCols, cachedRows, ok := db.queryCache.Get(cacheKey); ok {
+			return &Rows{Columns: cachedCols, Data: cachedRows}, nil
+		}
 	}
 
 	tokenizer := QP.NewTokenizer(sql)
@@ -758,7 +871,8 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			// Apply ORDER BY and LIMIT if present
 			rows := &Rows{Columns: leftRows.Columns, Data: combinedData}
 			if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
-				rows, err = db.sortResults(rows, stmt.OrderBy)
+				topK := extractLimitInt(stmt.Limit, stmt.Offset)
+				rows, err = db.sortResultsTopK(rows, stmt.OrderBy, topK)
 				if err != nil {
 					return nil, err
 				}
@@ -794,7 +908,8 @@ func (db *Database) Query(sql string) (*Rows, error) {
 
 		// Handle ORDER BY - sort results
 		if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
-			rows, err = db.sortResults(rows, stmt.OrderBy)
+			topK := extractLimitInt(stmt.Limit, stmt.Offset)
+			rows, err = db.sortResultsTopK(rows, stmt.OrderBy, topK)
 			if err != nil {
 				return nil, err
 			}
@@ -806,6 +921,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			if err != nil {
 				return nil, err
 			}
+		}
+
+		// Populate result cache for pure SELECT queries (no CTEs, no active transaction).
+		if isCacheable && db.queryCache != nil && len(stmt.CTEs) == 0 {
+			db.queryCache.Set(cacheKey, rows.Columns, rows.Data)
 		}
 
 		return rows, nil
@@ -839,7 +959,27 @@ func isDMLStatement(nodeType string) bool {
 }
 
 func (db *Database) Close() error {
+	if db.wal != nil {
+		_ = db.wal.Close()
+		db.wal = nil
+	}
 	return db.pm.Close()
+}
+
+// invalidateWriteCaches clears the result cache and plan cache after any
+// write operation (INSERT, UPDATE, DELETE, DROP, etc.) so that subsequent
+// reads see fresh data.
+func (db *Database) invalidateWriteCaches() {
+	if db.queryCache != nil {
+		db.queryCache.Invalidate()
+	}
+}
+
+// sqlQueryHash returns an FNV-1a hash of the SQL string for use as a cache key.
+func sqlQueryHash(sql string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(sql))
+	return h.Sum64()
 }
 
 func (db *Database) Prepare(sql string) (*Statement, error) {
@@ -890,6 +1030,12 @@ func ordinalSuffix(n int) string {
 }
 
 func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error) {
+	return db.sortResultsTopK(rows, orderBy, 0)
+}
+
+// sortResultsTopK sorts rows using ORDER BY with an optional top-K hint.
+// topK > 0 enables the O(N log K) heap sort path when only the first K results are needed.
+func (db *Database) sortResultsTopK(rows *Rows, orderBy []QP.OrderBy, topK int) (*Rows, error) {
 	if len(orderBy) == 0 || rows == nil || len(rows.Data) == 0 {
 		return rows, nil
 	}
@@ -909,7 +1055,7 @@ func (db *Database) sortResults(rows *Rows, orderBy []QP.OrderBy) (*Rows, error)
 		}
 	}
 
-	sorted := db.engine.SortRows(rows.Data, orderBy, rows.Columns)
+	sorted := db.engine.SortRowsTopK(rows.Data, orderBy, rows.Columns, topK)
 	return &Rows{Columns: rows.Columns, Data: sorted}, nil
 }
 
@@ -998,6 +1144,522 @@ func (db *Database) tryUseIndex(tableName string, where QP.Expr) []map[string]in
 
 func (db *Database) scanByIndexValue(tableName, colName string, value interface{}, unique bool) []map[string]interface{} {
 	return db.engine.ScanByIndexValue(tableName, colName, value, unique)
+}
+
+// normalizeIndexKey converts a value to a comparable map key.
+// []byte keys are converted to string so they are hashable.
+func normalizeIndexKey(v interface{}) interface{} {
+	if b, ok := v.([]byte); ok {
+		return string(b)
+	}
+	return v
+}
+
+// pkKey builds a comparable key for the primary key columns of a row.
+// Single-col PK: the value itself (normalised). Multi-col PK: a pipe-separated string.
+func pkKey(row map[string]interface{}, pkCols []string) interface{} {
+	if len(pkCols) == 1 {
+		return normalizeIndexKey(row[pkCols[0]])
+	}
+	var b strings.Builder
+	for i, col := range pkCols {
+		if i > 0 {
+			b.WriteByte('|')
+		}
+		switch v := row[col].(type) {
+		case int64:
+			b.WriteString(strconv.FormatInt(v, 10))
+		case float64:
+			b.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+		case string:
+			b.WriteString(v)
+		case bool:
+			if v {
+				b.WriteString("true")
+			} else {
+				b.WriteString("false")
+			}
+		case []byte:
+			b.Write(v)
+		case nil:
+			b.WriteString("<nil>")
+		default:
+			fmt.Fprintf(&b, "%v", v)
+		}
+	}
+	return b.String()
+}
+
+// pkHashAdd adds a row's PK to the hash set for tableName.
+func (db *Database) pkHashAdd(tableName string, row map[string]interface{}) {
+	pkCols := db.primaryKeys[tableName]
+	if len(pkCols) == 0 {
+		return
+	}
+	set := db.pkHashSet[tableName]
+	if set == nil {
+		set = make(map[interface{}]struct{})
+		db.pkHashSet[tableName] = set
+	}
+	set[pkKey(row, pkCols)] = struct{}{}
+}
+
+// pkHashRemove removes a row's PK from the hash set.
+func (db *Database) pkHashRemove(tableName string, row map[string]interface{}) {
+	pkCols := db.primaryKeys[tableName]
+	if len(pkCols) == 0 {
+		return
+	}
+	if set := db.pkHashSet[tableName]; set != nil {
+		delete(set, pkKey(row, pkCols))
+	}
+}
+
+// pkHashContains returns true if the PK value already exists (duplicate check).
+func (db *Database) pkHashContains(tableName string, row map[string]interface{}) bool {
+	pkCols := db.primaryKeys[tableName]
+	if len(pkCols) == 0 {
+		return false
+	}
+	set := db.pkHashSet[tableName]
+	if set == nil {
+		return false
+	}
+	_, exists := set[pkKey(row, pkCols)]
+	return exists
+}
+
+// buildPKHashSet rebuilds the PK hash set for tableName from current data.
+func (db *Database) buildPKHashSet(tableName string) {
+	pkCols := db.primaryKeys[tableName]
+	if len(pkCols) == 0 {
+		return
+	}
+	rows := db.data[tableName]
+	set := make(map[interface{}]struct{}, len(rows))
+	for _, row := range rows {
+		set[pkKey(row, pkCols)] = struct{}{}
+	}
+	db.pkHashSet[tableName] = set
+}
+
+// buildIndexData builds the hash index for a single secondary index from current data.
+func (db *Database) buildIndexData(indexName string) {
+	idx := db.indexes[indexName]
+	if idx == nil || len(idx.Columns) == 0 {
+		return
+	}
+	colName := idx.Columns[0]
+	rows := db.data[idx.Table]
+	hmap := make(map[interface{}][]int, len(rows))
+	for i, row := range rows {
+		key := normalizeIndexKey(row[colName])
+		hmap[key] = append(hmap[key], i)
+	}
+	db.indexData[indexName] = hmap
+}
+
+// indexAdd adds a row's indexed column value to the secondary hash index.
+func (db *Database) indexAdd(indexName string, rowIdx int, row map[string]interface{}) {
+	idx := db.indexes[indexName]
+	if idx == nil || len(idx.Columns) == 0 {
+		return
+	}
+	hmap := db.indexData[indexName]
+	if hmap == nil {
+		return
+	}
+	key := normalizeIndexKey(row[idx.Columns[0]])
+	hmap[key] = append(hmap[key], rowIdx)
+}
+
+// indexRemove removes a specific row index from the secondary hash index entry.
+func (db *Database) indexRemove(indexName string, rowIdx int, colValue interface{}) {
+	hmap := db.indexData[indexName]
+	if hmap == nil {
+		return
+	}
+	key := normalizeIndexKey(colValue)
+	entries := hmap[key]
+	for i, e := range entries {
+		if e == rowIdx {
+			hmap[key] = append(entries[:i], entries[i+1:]...)
+			return
+		}
+	}
+}
+
+// indexShiftDown decrements all row indices > fromIdx by 1 in the secondary hash index.
+// Called after a DELETE to keep indices in sync with the shrunk slice.
+// The entry for fromIdx itself is already removed by indexRemove before this is called.
+func (db *Database) indexShiftDown(indexName string, fromIdx int) {
+	hmap := db.indexData[indexName]
+	if hmap == nil {
+		return
+	}
+	for key, entries := range hmap {
+		for i, e := range entries {
+			if e > fromIdx {
+				entries[i] = e - 1
+			}
+		}
+		hmap[key] = entries
+	}
+}
+
+// addToIndexes updates all secondary indexes (and PK hash set) for a newly inserted row.
+func (db *Database) addToIndexes(tableName string, row map[string]interface{}, rowIdx int) {
+	db.pkHashAdd(tableName, row)
+	for idxName, idx := range db.indexes {
+		if idx.Table == tableName && len(idx.Columns) > 0 && db.indexData[idxName] != nil {
+			db.indexAdd(idxName, rowIdx, row)
+		}
+	}
+}
+
+// removeFromIndexes updates secondary indexes after a row is deleted at rowIdx.
+func (db *Database) removeFromIndexes(tableName string, row map[string]interface{}, rowIdx int) {
+	db.pkHashRemove(tableName, row)
+	for idxName, idx := range db.indexes {
+		if idx.Table == tableName && len(idx.Columns) > 0 {
+			if db.indexData[idxName] != nil {
+				db.indexRemove(idxName, rowIdx, row[idx.Columns[0]])
+				db.indexShiftDown(idxName, rowIdx)
+			}
+		}
+	}
+}
+
+// updateIndexes updates secondary indexes after a row update at rowIdx.
+func (db *Database) updateIndexes(tableName string, oldRow, newRow map[string]interface{}, rowIdx int) {
+	if oldRow != nil {
+		db.pkHashRemove(tableName, oldRow)
+	}
+	db.pkHashAdd(tableName, newRow)
+	for idxName, idx := range db.indexes {
+		if idx.Table == tableName && len(idx.Columns) > 0 && db.indexData[idxName] != nil {
+			if oldRow != nil {
+				db.indexRemove(idxName, rowIdx, oldRow[idx.Columns[0]])
+			}
+			db.indexAdd(idxName, rowIdx, newRow)
+		}
+	}
+}
+
+// rebuildAllIndexes rebuilds all PK hash sets and secondary index data from current db.data.
+// Called after snapshot restore (transaction rollback).
+func (db *Database) rebuildAllIndexes() {
+	// Rebuild PK hash sets
+	db.pkHashSet = make(map[string]map[interface{}]struct{})
+	for tableName := range db.tables {
+		db.buildPKHashSet(tableName)
+	}
+	// Rebuild secondary indexes
+	db.indexData = make(map[string]map[interface{}][]int)
+	for idxName := range db.indexes {
+		db.buildIndexData(idxName)
+	}
+}
+
+// compareIndexVals compares two index key values for ordering.
+// Returns -1, 0, or 1.  NULL (nil) sorts before all other values.
+func compareIndexVals(a, b interface{}) int {
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	switch av := a.(type) {
+	case int64:
+		switch bv := b.(type) {
+		case int64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		case float64:
+			af := float64(av)
+			if af < bv {
+				return -1
+			}
+			if af > bv {
+				return 1
+			}
+			return 0
+		}
+	case float64:
+		switch bv := b.(type) {
+		case float64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		case int64:
+			bf := float64(bv)
+			if av < bf {
+				return -1
+			}
+			if av > bf {
+				return 1
+			}
+			return 0
+		}
+	case string:
+		if bv, ok := b.(string); ok {
+			return strings.Compare(av, bv)
+		}
+	}
+	return strings.Compare(fmt.Sprintf("%v", a), fmt.Sprintf("%v", b))
+}
+
+// tryIndexLookup attempts to use a secondary hash index for WHERE clauses.
+// Returns nil if no index can be used, otherwise returns the pre-filtered rows.
+// Supported patterns:
+//   - col = val              (exact match)
+//   - col BETWEEN lo AND hi  (range scan over index keys)
+//   - col IN (a, b, c)       (union of per-value index lookups)
+//   - col LIKE 'prefix%'     (prefix range scan over index keys)
+func (db *Database) tryIndexLookup(tableName string, where QP.Expr) []map[string]interface{} {
+	if where == nil {
+		return nil
+	}
+	bin, ok := where.(*QP.BinaryExpr)
+	if !ok {
+		return nil
+	}
+
+	switch bin.Op {
+	case QP.TokenEq:
+		var colName string
+		var val interface{}
+		if cr, ok := bin.Left.(*QP.ColumnRef); ok {
+			if lit, ok := bin.Right.(*QP.Literal); ok {
+				colName, val = cr.Name, lit.Value
+			}
+		} else if cr, ok := bin.Right.(*QP.ColumnRef); ok {
+			if lit, ok := bin.Left.(*QP.Literal); ok {
+				colName, val = cr.Name, lit.Value
+			}
+		}
+		if colName == "" {
+			return nil
+		}
+		for idxName, idx := range db.indexes {
+			if idx.Table != tableName || len(idx.Columns) == 0 || idx.Columns[0] != colName {
+				continue
+			}
+			hmap := db.indexData[idxName]
+			if hmap == nil {
+				return nil
+			}
+			key := normalizeIndexKey(val)
+			rowIdxs := hmap[key]
+			if len(rowIdxs) == 0 {
+				return []map[string]interface{}{} // index hit: no matching rows
+			}
+			rows := db.data[tableName]
+			result := make([]map[string]interface{}, 0, len(rowIdxs))
+			for _, ri := range rowIdxs {
+				if ri >= 0 && ri < len(rows) {
+					result = append(result, rows[ri])
+				}
+			}
+			return result
+		}
+
+	case QP.TokenBetween:
+		// col BETWEEN lo AND hi
+		cr, ok := bin.Left.(*QP.ColumnRef)
+		if !ok {
+			return nil
+		}
+		rangeExpr, ok := bin.Right.(*QP.BinaryExpr)
+		if !ok || rangeExpr.Op != QP.TokenAnd {
+			return nil
+		}
+		loLit, ok1 := rangeExpr.Left.(*QP.Literal)
+		hiLit, ok2 := rangeExpr.Right.(*QP.Literal)
+		if !ok1 || !ok2 {
+			return nil
+		}
+		return db.tryIndexRangeScan(tableName, cr.Name, loLit.Value, hiLit.Value)
+
+	case QP.TokenIn:
+		// col IN (a, b, c)
+		cr, ok := bin.Left.(*QP.ColumnRef)
+		if !ok {
+			return nil
+		}
+		lit, ok := bin.Right.(*QP.Literal)
+		if !ok {
+			return nil
+		}
+		vals, ok := lit.Value.([]interface{})
+		if !ok {
+			return nil
+		}
+		return db.tryIndexInLookup(tableName, cr.Name, vals)
+
+	case QP.TokenLike:
+		// col LIKE 'prefix%'
+		cr, ok := bin.Left.(*QP.ColumnRef)
+		if !ok {
+			return nil
+		}
+		lit, ok := bin.Right.(*QP.Literal)
+		if !ok {
+			return nil
+		}
+		pattern, ok := lit.Value.(string)
+		if !ok {
+			return nil
+		}
+		return db.tryIndexLikePrefix(tableName, cr.Name, pattern)
+	}
+	return nil
+}
+
+// tryIndexRangeScan uses a secondary index to answer col BETWEEN lo AND hi.
+// It iterates all keys in the index and collects rows whose key is in [lo, hi].
+func (db *Database) tryIndexRangeScan(tableName, colName string, lo, hi interface{}) []map[string]interface{} {
+	for idxName, idx := range db.indexes {
+		if idx.Table != tableName || len(idx.Columns) == 0 || idx.Columns[0] != colName {
+			continue
+		}
+		hmap := db.indexData[idxName]
+		if hmap == nil {
+			return nil
+		}
+		rows := db.data[tableName]
+		var rowIdxs []int
+		for k, idxs := range hmap {
+			if compareIndexVals(k, lo) >= 0 && compareIndexVals(k, hi) <= 0 {
+				rowIdxs = append(rowIdxs, idxs...)
+			}
+		}
+		if len(rowIdxs) == 0 {
+			return []map[string]interface{}{}
+		}
+		result := make([]map[string]interface{}, 0, len(rowIdxs))
+		for _, ri := range rowIdxs {
+			if ri >= 0 && ri < len(rows) {
+				result = append(result, rows[ri])
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// tryIndexInLookup uses a secondary index to answer col IN (a, b, c).
+// It performs a hash lookup for each value and unions the results.
+func (db *Database) tryIndexInLookup(tableName, colName string, vals []interface{}) []map[string]interface{} {
+	for idxName, idx := range db.indexes {
+		if idx.Table != tableName || len(idx.Columns) == 0 || idx.Columns[0] != colName {
+			continue
+		}
+		hmap := db.indexData[idxName]
+		if hmap == nil {
+			return nil
+		}
+		rows := db.data[tableName]
+		seen := make(map[int]struct{})
+		var result []map[string]interface{}
+		for _, val := range vals {
+			key := normalizeIndexKey(val)
+			for _, ri := range hmap[key] {
+				if _, ok := seen[ri]; ok {
+					continue
+				}
+				seen[ri] = struct{}{}
+				if ri >= 0 && ri < len(rows) {
+					result = append(result, rows[ri])
+				}
+			}
+		}
+		if result == nil {
+			return []map[string]interface{}{}
+		}
+		return result
+	}
+	return nil
+}
+
+// tryIndexLikePrefix uses a secondary index to answer col LIKE 'prefix%'.
+// The pattern must be a simple constant prefix followed by a single trailing '%'
+// with no wildcards in the prefix itself.
+func (db *Database) tryIndexLikePrefix(tableName, colName, pattern string) []map[string]interface{} {
+	pctIdx := strings.Index(pattern, "%")
+	if pctIdx < 0 {
+		return nil // no wildcard — no help from this function
+	}
+	for i := 0; i < pctIdx; i++ {
+		if pattern[i] == '_' {
+			return nil // wildcard before %, can't do prefix scan
+		}
+	}
+	if pattern[pctIdx+1:] != "" {
+		return nil // not a pure trailing %, e.g. 'pre%fix'
+	}
+	prefix := pattern[:pctIdx]
+	if prefix == "" {
+		return nil // LIKE '%' matches everything — no index benefit
+	}
+
+	for idxName, idx := range db.indexes {
+		if idx.Table != tableName || len(idx.Columns) == 0 || idx.Columns[0] != colName {
+			continue
+		}
+		hmap := db.indexData[idxName]
+		if hmap == nil {
+			return nil
+		}
+		rows := db.data[tableName]
+		var rowIdxs []int
+		for k, idxs := range hmap {
+			kStr, ok := k.(string)
+			if !ok {
+				continue
+			}
+			if strings.HasPrefix(kStr, prefix) {
+				rowIdxs = append(rowIdxs, idxs...)
+			}
+		}
+		if len(rowIdxs) == 0 {
+			return []map[string]interface{}{}
+		}
+		result := make([]map[string]interface{}, 0, len(rowIdxs))
+		for _, ri := range rowIdxs {
+			if ri >= 0 && ri < len(rows) {
+				result = append(result, rows[ri])
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// execExistsSubquery checks whether a subquery returns at least one row,
+// short-circuiting after the first match by applying LIMIT 1.
+func (db *Database) execExistsSubquery(stmt *QP.SelectStmt, outerRow map[string]interface{}) (bool, error) {
+	// Shallow-copy the stmt so we can override Limit without mutating the shared AST.
+	stmtCopy := *stmt
+	stmtCopy.Limit = &QP.Literal{Value: int64(1)}
+	rows, err := db.execSelectStmtWithContext(&stmtCopy, outerRow)
+	if err != nil {
+		return false, err
+	}
+	return len(rows.Data) > 0, nil
 }
 
 func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, cols []string) [][]interface{} {
@@ -1417,32 +2079,32 @@ func (db *Database) getRightColumns(right []map[string]interface{}) []string {
 func (db *Database) execCreateView(stmt *QP.CreateViewStmt, origSQL string) (Result, error) {
 	util.AssertNotNil(stmt, "CreateViewStmt")
 	util.Assert(stmt.Name != "", "CreateViewStmt.Name cannot be empty")
-if _, exists := db.views[stmt.Name]; exists {
-if stmt.IfNotExists {
-return Result{}, nil
-}
-return Result{}, fmt.Errorf("view %s already exists", stmt.Name)
-}
-// Also check tables
-if _, exists := db.tables[stmt.Name]; exists {
-return Result{}, fmt.Errorf("view %s already exists as a table", stmt.Name)
-}
-// Reconstruct the SELECT SQL from the statement - we need to store it
-// Find the AS keyword position in origSQL to extract SELECT part
-upper := strings.ToUpper(origSQL)
-asIdx := strings.Index(upper, " AS ")
-if asIdx < 0 {
-asIdx = strings.Index(upper, "\nAS\n")
-}
-var selectSQL string
-if asIdx >= 0 {
-selectSQL = strings.TrimSpace(origSQL[asIdx+4:])
-} else {
-// Fallback: rebuild from stmt
-selectSQL = "SELECT * FROM unknown"
-}
-db.views[stmt.Name] = selectSQL
-return Result{}, nil
+	if _, exists := db.views[stmt.Name]; exists {
+		if stmt.IfNotExists {
+			return Result{}, nil
+		}
+		return Result{}, fmt.Errorf("view %s already exists", stmt.Name)
+	}
+	// Also check tables
+	if _, exists := db.tables[stmt.Name]; exists {
+		return Result{}, fmt.Errorf("view %s already exists as a table", stmt.Name)
+	}
+	// Reconstruct the SELECT SQL from the statement - we need to store it
+	// Find the AS keyword position in origSQL to extract SELECT part
+	upper := strings.ToUpper(origSQL)
+	asIdx := strings.Index(upper, " AS ")
+	if asIdx < 0 {
+		asIdx = strings.Index(upper, "\nAS\n")
+	}
+	var selectSQL string
+	if asIdx >= 0 {
+		selectSQL = strings.TrimSpace(origSQL[asIdx+4:])
+	} else {
+		// Fallback: rebuild from stmt
+		selectSQL = "SELECT * FROM unknown"
+	}
+	db.views[stmt.Name] = selectSQL
+	return Result{}, nil
 }
 
 // execDerivedTableQuery materializes a derived table (subquery in FROM) and executes the outer query.
@@ -1581,7 +2243,8 @@ func (db *Database) execDerivedTableQuery(stmt *QP.SelectStmt) (*Rows, error) {
 
 	// Apply ORDER BY and LIMIT if present
 	if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
-		rows, err = db.sortResults(rows, stmt.OrderBy)
+		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		rows, err = db.sortResultsTopK(rows, stmt.OrderBy, topK)
 		if err != nil {
 			return nil, err
 		}
@@ -1597,206 +2260,207 @@ func (db *Database) execDerivedTableQuery(stmt *QP.SelectStmt) (*Rows, error) {
 
 // queryView executes a query against a view by executing the underlying SELECT
 func (db *Database) queryView(viewSQL string, outerStmt *QP.SelectStmt, origSQL string) (*Rows, error) {
-// Execute the underlying view SELECT
-rows, err := db.Query(viewSQL)
-if err != nil {
-return nil, err
-}
-if rows == nil {
-return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
-}
-
-// Handle UNION/EXCEPT/INTERSECT with view on left side
-if outerStmt.SetOp != "" && outerStmt.SetOpRight != nil {
-	rightRows, err := db.execSelectStmt(outerStmt.SetOpRight)
+	// Execute the underlying view SELECT
+	rows, err := db.Query(viewSQL)
 	if err != nil {
 		return nil, err
 	}
-	if len(rows.Columns) != len(rightRows.Columns) {
-		return nil, fmt.Errorf("SELECTs to the left and right of %s do not have the same number of result columns", outerStmt.SetOp)
+	if rows == nil {
+		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
-	combined := db.applySetOp(rows.Data, rightRows.Data, outerStmt.SetOp, outerStmt.SetOpAll)
-	result := &Rows{Columns: rows.Columns, Data: combined}
+
+	// Handle UNION/EXCEPT/INTERSECT with view on left side
+	if outerStmt.SetOp != "" && outerStmt.SetOpRight != nil {
+		rightRows, err := db.execSelectStmt(outerStmt.SetOpRight)
+		if err != nil {
+			return nil, err
+		}
+		if len(rows.Columns) != len(rightRows.Columns) {
+			return nil, fmt.Errorf("SELECTs to the left and right of %s do not have the same number of result columns", outerStmt.SetOp)
+		}
+		combined := db.applySetOp(rows.Data, rightRows.Data, outerStmt.SetOp, outerStmt.SetOpAll)
+		result := &Rows{Columns: rows.Columns, Data: combined}
+		if len(outerStmt.OrderBy) > 0 {
+			result, err = db.sortResults(result, outerStmt.OrderBy)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if outerStmt.Limit != nil {
+			result, err = db.applyLimit(result, outerStmt.Limit, outerStmt.Offset)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return result, nil
+	}
+
+	// Apply outer SELECT column filtering if needed
+	if len(outerStmt.Columns) > 0 {
+		if cr, ok := outerStmt.Columns[0].(*QP.ColumnRef); ok && cr.Name == "*" {
+			// SELECT * - return all
+		} else {
+			// Filter to requested columns
+			reqCols := make([]string, 0)
+			colIdx := make(map[string]int)
+			for i, col := range rows.Columns {
+				colIdx[col] = i
+			}
+			for _, c := range outerStmt.Columns {
+				if cr, ok := c.(*QP.ColumnRef); ok {
+					reqCols = append(reqCols, cr.Name)
+				} else if ae, ok := c.(*QP.AliasExpr); ok {
+					if cr, ok := ae.Expr.(*QP.ColumnRef); ok {
+						reqCols = append(reqCols, cr.Name)
+					}
+				}
+			}
+			if len(reqCols) > 0 {
+				newData := make([][]interface{}, len(rows.Data))
+				for i, row := range rows.Data {
+					newRow := make([]interface{}, len(reqCols))
+					for j, col := range reqCols {
+						if idx, ok := colIdx[col]; ok {
+							newRow[j] = row[idx]
+						}
+					}
+					newData[i] = newRow
+				}
+				rows = &Rows{Columns: reqCols, Data: newData}
+			}
+		}
+	}
+
+	// Apply outer WHERE
+	if outerStmt.Where != nil {
+		colIdx := make(map[string]int)
+		for i, col := range rows.Columns {
+			colIdx[col] = i
+		}
+		filtered := make([][]interface{}, 0)
+		for _, row := range rows.Data {
+			rowMap := make(map[string]interface{})
+			for col, idx := range colIdx {
+				rowMap[col] = row[idx]
+			}
+			if db.evalWhereOnMap(outerStmt.Where, rowMap) {
+				filtered = append(filtered, row)
+			}
+		}
+		rows.Data = filtered
+	}
+
+	// Apply outer ORDER BY
 	if len(outerStmt.OrderBy) > 0 {
-		result, err = db.sortResults(result, outerStmt.OrderBy)
+		var err error
+		topK := extractLimitInt(outerStmt.Limit, outerStmt.Offset)
+		rows, err = db.sortResultsTopK(rows, outerStmt.OrderBy, topK)
 		if err != nil {
 			return nil, err
 		}
 	}
+
+	// Apply outer LIMIT
 	if outerStmt.Limit != nil {
-		result, err = db.applyLimit(result, outerStmt.Limit, outerStmt.Offset)
+		var err error
+		rows, err = db.applyLimit(rows, outerStmt.Limit, outerStmt.Offset)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return result, nil
-}
 
-// Apply outer SELECT column filtering if needed
-if len(outerStmt.Columns) > 0 {
-if cr, ok := outerStmt.Columns[0].(*QP.ColumnRef); ok && cr.Name == "*" {
-// SELECT * - return all
-} else {
-// Filter to requested columns
-reqCols := make([]string, 0)
-colIdx := make(map[string]int)
-for i, col := range rows.Columns {
-colIdx[col] = i
-}
-for _, c := range outerStmt.Columns {
-if cr, ok := c.(*QP.ColumnRef); ok {
-reqCols = append(reqCols, cr.Name)
-} else if ae, ok := c.(*QP.AliasExpr); ok {
-if cr, ok := ae.Expr.(*QP.ColumnRef); ok {
-reqCols = append(reqCols, cr.Name)
-}
-}
-}
-if len(reqCols) > 0 {
-newData := make([][]interface{}, len(rows.Data))
-for i, row := range rows.Data {
-newRow := make([]interface{}, len(reqCols))
-for j, col := range reqCols {
-if idx, ok := colIdx[col]; ok {
-newRow[j] = row[idx]
-}
-}
-newData[i] = newRow
-}
-rows = &Rows{Columns: reqCols, Data: newData}
-}
-}
-}
-
-// Apply outer WHERE
-if outerStmt.Where != nil {
-colIdx := make(map[string]int)
-for i, col := range rows.Columns {
-colIdx[col] = i
-}
-filtered := make([][]interface{}, 0)
-for _, row := range rows.Data {
-rowMap := make(map[string]interface{})
-for col, idx := range colIdx {
-rowMap[col] = row[idx]
-}
-if db.evalWhereOnMap(outerStmt.Where, rowMap) {
-filtered = append(filtered, row)
-}
-}
-rows.Data = filtered
-}
-
-// Apply outer ORDER BY
-if len(outerStmt.OrderBy) > 0 {
-var err error
-rows, err = db.sortResults(rows, outerStmt.OrderBy)
-if err != nil {
-return nil, err
-}
-}
-
-// Apply outer LIMIT
-if outerStmt.Limit != nil {
-var err error
-rows, err = db.applyLimit(rows, outerStmt.Limit, outerStmt.Offset)
-if err != nil {
-return nil, err
-}
-}
-
-return rows, nil
+	return rows, nil
 }
 
 // evalWhereOnMap evaluates a WHERE expression against a map row
 func (db *Database) evalWhereOnMap(expr QP.Expr, row map[string]interface{}) bool {
-if expr == nil {
-return true
-}
-switch e := expr.(type) {
-case *QP.BinaryExpr:
-switch e.Op {
-case QP.TokenAnd:
-return db.evalWhereOnMap(e.Left, row) && db.evalWhereOnMap(e.Right, row)
-case QP.TokenOr:
-return db.evalWhereOnMap(e.Left, row) || db.evalWhereOnMap(e.Right, row)
-default:
-lv := db.evalExprOnMap(e.Left, row)
-rv := db.evalExprOnMap(e.Right, row)
-return db.engine.CompareVals(lv, rv) == 0
-}
-case *QP.UnaryExpr:
-if e.Op == QP.TokenNot {
-return !db.evalWhereOnMap(e.Expr, row)
-}
-}
-return true
+	if expr == nil {
+		return true
+	}
+	switch e := expr.(type) {
+	case *QP.BinaryExpr:
+		switch e.Op {
+		case QP.TokenAnd:
+			return db.evalWhereOnMap(e.Left, row) && db.evalWhereOnMap(e.Right, row)
+		case QP.TokenOr:
+			return db.evalWhereOnMap(e.Left, row) || db.evalWhereOnMap(e.Right, row)
+		default:
+			lv := db.evalExprOnMap(e.Left, row)
+			rv := db.evalExprOnMap(e.Right, row)
+			return db.engine.CompareVals(lv, rv) == 0
+		}
+	case *QP.UnaryExpr:
+		if e.Op == QP.TokenNot {
+			return !db.evalWhereOnMap(e.Expr, row)
+		}
+	}
+	return true
 }
 
 func (db *Database) evalExprOnMap(expr QP.Expr, row map[string]interface{}) interface{} {
-if expr == nil {
-return nil
-}
-switch e := expr.(type) {
-case *QP.Literal:
-return e.Value
-case *QP.ColumnRef:
-if v, ok := row[e.Name]; ok {
-return v
-}
-if idx := strings.LastIndex(e.Name, "."); idx >= 0 {
-return row[e.Name[idx+1:]]
-}
-return nil
-}
-return nil
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *QP.Literal:
+		return e.Value
+	case *QP.ColumnRef:
+		if v, ok := row[e.Name]; ok {
+			return v
+		}
+		if idx := strings.LastIndex(e.Name, "."); idx >= 0 {
+			return row[e.Name[idx+1:]]
+		}
+		return nil
+	}
+	return nil
 }
 
 // execCreateTableAsSelect handles CREATE TABLE ... AS SELECT
 func (db *Database) execCreateTableAsSelect(stmt *QP.CreateTableStmt) (Result, error) {
-// Execute the SELECT
-// Build SQL for the inner SELECT
-rows, err := db.execSelectStmt(stmt.AsSelect)
-if err != nil {
-return Result{}, err
-}
-if rows == nil {
-rows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
-}
+	// Execute the SELECT
+	// Build SQL for the inner SELECT
+	rows, err := db.execSelectStmt(stmt.AsSelect)
+	if err != nil {
+		return Result{}, err
+	}
+	if rows == nil {
+		rows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
+	}
 
-// Create the table with columns from SELECT result
-schema := make(map[string]VM.ColumnType)
-colTypes := make(map[string]string)
-db.columnDefaults[stmt.Name] = make(map[string]interface{})
-db.columnNotNull[stmt.Name] = make(map[string]bool)
-db.columnChecks[stmt.Name] = make(map[string]QP.Expr)
+	// Create the table with columns from SELECT result
+	schema := make(map[string]VM.ColumnType)
+	colTypes := make(map[string]string)
+	db.columnDefaults[stmt.Name] = make(map[string]interface{})
+	db.columnNotNull[stmt.Name] = make(map[string]bool)
+	db.columnChecks[stmt.Name] = make(map[string]QP.Expr)
 
-for _, col := range rows.Columns {
-	// Try to infer column type from the source table schema
-	colType := db.inferColumnTypeFromSelect(col, stmt.AsSelect)
-	schema[col] = VM.ColumnType{Name: col, Type: colType}
-	colTypes[col] = colType
-}
-db.engine.RegisterTable(stmt.Name, schema)
-db.tables[stmt.Name] = colTypes
-db.columnOrder[stmt.Name] = rows.Columns
+	for _, col := range rows.Columns {
+		// Try to infer column type from the source table schema
+		colType := db.inferColumnTypeFromSelect(col, stmt.AsSelect)
+		schema[col] = VM.ColumnType{Name: col, Type: colType}
+		colTypes[col] = colType
+	}
+	db.engine.RegisterTable(stmt.Name, schema)
+	db.tables[stmt.Name] = colTypes
+	db.columnOrder[stmt.Name] = rows.Columns
 
-bt := DS.NewBTree(db.pm, 0, true)
-db.tableBTrees[stmt.Name] = bt
+	bt := DS.NewBTree(db.pm, 0, true)
+	db.tableBTrees[stmt.Name] = bt
 
-// Insert rows
-db.data[stmt.Name] = make([]map[string]interface{}, 0, len(rows.Data))
-for _, row := range rows.Data {
-rowMap := make(map[string]interface{})
-for i, col := range rows.Columns {
-if i < len(row) {
-rowMap[col] = row[i]
-}
-}
-db.data[stmt.Name] = append(db.data[stmt.Name], rowMap)
-}
+	// Insert rows
+	db.data[stmt.Name] = make([]map[string]interface{}, 0, len(rows.Data))
+	for _, row := range rows.Data {
+		rowMap := make(map[string]interface{})
+		for i, col := range rows.Columns {
+			if i < len(row) {
+				rowMap[col] = row[i]
+			}
+		}
+		db.data[stmt.Name] = append(db.data[stmt.Name], rowMap)
+	}
 
-return Result{}, nil
+	return Result{}, nil
 }
 
 // inferColumnTypeFromSelect tries to determine a column's type from its source in a SELECT statement.
@@ -1859,88 +2523,88 @@ func normalizeTypeForPragma(typ string) string {
 func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 	util.AssertNotNil(stmt, "AlterTableStmt")
 	util.Assert(stmt.Table != "", "AlterTableStmt.Table cannot be empty")
-switch stmt.Action {
-case "ADD_COLUMN":
-if _, exists := db.tables[stmt.Table]; !exists {
-return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
-}
-col := stmt.Column
-db.tables[stmt.Table][col.Name] = col.Type
-db.columnOrder[stmt.Table] = append(db.columnOrder[stmt.Table], col.Name)
-db.engine.RegisterTable(stmt.Table, db.buildSchema(stmt.Table))
+	switch stmt.Action {
+	case "ADD_COLUMN":
+		if _, exists := db.tables[stmt.Table]; !exists {
+			return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
+		}
+		col := stmt.Column
+		db.tables[stmt.Table][col.Name] = col.Type
+		db.columnOrder[stmt.Table] = append(db.columnOrder[stmt.Table], col.Name)
+		db.engine.RegisterTable(stmt.Table, db.buildSchema(stmt.Table))
 
-// Add default value for existing rows
-var defaultVal interface{}
-if col.Default != nil {
-defaultVal = db.evalConstExpr(col.Default)
-}
+		// Add default value for existing rows
+		var defaultVal interface{}
+		if col.Default != nil {
+			defaultVal = db.evalConstExpr(col.Default)
+		}
 
-// Update existing rows with the new column
-for i := range db.data[stmt.Table] {
-if db.data[stmt.Table][i] == nil {
-db.data[stmt.Table][i] = make(map[string]interface{})
-}
-db.data[stmt.Table][i][col.Name] = defaultVal
-}
+		// Update existing rows with the new column
+		for i := range db.data[stmt.Table] {
+			if db.data[stmt.Table][i] == nil {
+				db.data[stmt.Table][i] = make(map[string]interface{})
+			}
+			db.data[stmt.Table][i][col.Name] = defaultVal
+		}
 
-if col.Default != nil {
-if db.columnDefaults[stmt.Table] == nil {
-db.columnDefaults[stmt.Table] = make(map[string]interface{})
-}
-db.columnDefaults[stmt.Table][col.Name] = col.Default
-}
-if col.NotNull {
-if db.columnNotNull[stmt.Table] == nil {
-db.columnNotNull[stmt.Table] = make(map[string]bool)
-}
-db.columnNotNull[stmt.Table][col.Name] = true
-}
-return Result{}, nil
+		if col.Default != nil {
+			if db.columnDefaults[stmt.Table] == nil {
+				db.columnDefaults[stmt.Table] = make(map[string]interface{})
+			}
+			db.columnDefaults[stmt.Table][col.Name] = col.Default
+		}
+		if col.NotNull {
+			if db.columnNotNull[stmt.Table] == nil {
+				db.columnNotNull[stmt.Table] = make(map[string]bool)
+			}
+			db.columnNotNull[stmt.Table][col.Name] = true
+		}
+		return Result{}, nil
 
-case "RENAME_TO":
-if _, exists := db.tables[stmt.Table]; !exists {
-return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
-}
-// Rename table
-db.tables[stmt.NewName] = db.tables[stmt.Table]
-db.data[stmt.NewName] = db.data[stmt.Table]
-db.columnOrder[stmt.NewName] = db.columnOrder[stmt.Table]
-db.primaryKeys[stmt.NewName] = db.primaryKeys[stmt.Table]
-db.columnDefaults[stmt.NewName] = db.columnDefaults[stmt.Table]
-db.columnNotNull[stmt.NewName] = db.columnNotNull[stmt.Table]
-db.columnChecks[stmt.NewName] = db.columnChecks[stmt.Table]
-db.tableBTrees[stmt.NewName] = db.tableBTrees[stmt.Table]
+	case "RENAME_TO":
+		if _, exists := db.tables[stmt.Table]; !exists {
+			return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
+		}
+		// Rename table
+		db.tables[stmt.NewName] = db.tables[stmt.Table]
+		db.data[stmt.NewName] = db.data[stmt.Table]
+		db.columnOrder[stmt.NewName] = db.columnOrder[stmt.Table]
+		db.primaryKeys[stmt.NewName] = db.primaryKeys[stmt.Table]
+		db.columnDefaults[stmt.NewName] = db.columnDefaults[stmt.Table]
+		db.columnNotNull[stmt.NewName] = db.columnNotNull[stmt.Table]
+		db.columnChecks[stmt.NewName] = db.columnChecks[stmt.Table]
+		db.tableBTrees[stmt.NewName] = db.tableBTrees[stmt.Table]
 
-delete(db.tables, stmt.Table)
-delete(db.data, stmt.Table)
-delete(db.columnOrder, stmt.Table)
-delete(db.primaryKeys, stmt.Table)
-delete(db.columnDefaults, stmt.Table)
-delete(db.columnNotNull, stmt.Table)
-delete(db.columnChecks, stmt.Table)
-delete(db.tableBTrees, stmt.Table)
-return Result{}, nil
-}
-return Result{}, nil
+		delete(db.tables, stmt.Table)
+		delete(db.data, stmt.Table)
+		delete(db.columnOrder, stmt.Table)
+		delete(db.primaryKeys, stmt.Table)
+		delete(db.columnDefaults, stmt.Table)
+		delete(db.columnNotNull, stmt.Table)
+		delete(db.columnChecks, stmt.Table)
+		delete(db.tableBTrees, stmt.Table)
+		return Result{}, nil
+	}
+	return Result{}, nil
 }
 
 func (db *Database) buildSchema(tableName string) map[string]VM.ColumnType {
-schema := make(map[string]VM.ColumnType)
-for col, typ := range db.tables[tableName] {
-schema[col] = VM.ColumnType{Name: col, Type: typ}
-}
-return schema
+	schema := make(map[string]VM.ColumnType)
+	for col, typ := range db.tables[tableName] {
+		schema[col] = VM.ColumnType{Name: col, Type: typ}
+	}
+	return schema
 }
 
 // evalConstExpr evaluates a constant expression (literal, etc.)
 func (db *Database) evalConstExpr(expr QP.Expr) interface{} {
-if expr == nil {
-return nil
-}
-if lit, ok := expr.(*QP.Literal); ok {
-return lit.Value
-}
-return nil
+	if expr == nil {
+		return nil
+	}
+	if lit, ok := expr.(*QP.Literal); ok {
+		return lit.Value
+	}
+	return nil
 }
 
 // execInsertSelect handles INSERT INTO table SELECT ...
@@ -1991,6 +2655,147 @@ func (db *Database) execInsertSelect(stmt *QP.InsertStmt) (Result, error) {
 		affected += res.RowsAffected
 	}
 	return Result{RowsAffected: affected}, nil
+}
+
+// execInsertOnConflict handles INSERT ... ON CONFLICT DO NOTHING/UPDATE.
+func (db *Database) execInsertOnConflict(stmt *QP.InsertStmt) (Result, error) {
+	util.AssertNotNil(stmt, "InsertStmt")
+	util.Assert(stmt.Table != "", "InsertStmt.Table cannot be empty")
+	util.AssertNotNil(stmt.OnConflict, "OnConflict cannot be nil")
+
+	tableName := db.resolveTableName(stmt.Table)
+	if _, exists := db.tables[tableName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName)
+	}
+
+	tableCols := db.columnOrder[tableName]
+	if tableCols == nil {
+		tableCols = db.getOrderedColumns(tableName)
+	}
+
+	oc := stmt.OnConflict
+	var affected int64
+
+	for _, row := range stmt.Values {
+		// Determine column-to-value mapping for this row.
+		insertCols := stmt.Columns
+		if len(insertCols) == 0 {
+			insertCols = tableCols
+		}
+
+		// Build a map of column → SQL value string for this row.
+		colVals := make(map[string]string, len(insertCols))
+		for i, col := range insertCols {
+			if i < len(row) {
+				colVals[col] = exprToSQL(row[i])
+			} else {
+				colVals[col] = "NULL"
+			}
+		}
+
+		// Build plain INSERT SQL for this single row.
+		colParts := make([]string, 0, len(insertCols))
+		valParts := make([]string, 0, len(insertCols))
+		for _, col := range insertCols {
+			colParts = append(colParts, col)
+			valParts = append(valParts, colVals[col])
+		}
+		insertSQL := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+			tableName,
+			strings.Join(colParts, ", "),
+			strings.Join(valParts, ", "))
+
+		res, err := db.execVMDML(insertSQL, tableName)
+		if err == nil {
+			affected += res.RowsAffected
+			continue
+		}
+
+		// Check if this is a UNIQUE/PK constraint violation.
+		if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return Result{}, err
+		}
+
+		// Constraint violation — apply conflict resolution.
+		if oc.DoNothing {
+			// Skip this row silently.
+			continue
+		}
+
+		// DO UPDATE SET: build UPDATE SQL replacing excluded.col with actual values.
+		if len(oc.Updates) == 0 {
+			continue
+		}
+
+		// Build WHERE clause from conflict target columns.
+		// If no explicit target columns, use primary key columns.
+		conflictCols := oc.Columns
+		if len(conflictCols) == 0 {
+			conflictCols = db.primaryKeys[tableName]
+		}
+
+		whereParts := make([]string, 0, len(conflictCols))
+		for _, col := range conflictCols {
+			val, ok := colVals[col]
+			if !ok {
+				val = "NULL"
+			}
+			whereParts = append(whereParts, fmt.Sprintf("%s = %s", col, val))
+		}
+		if len(whereParts) == 0 {
+			continue
+		}
+
+		// Build SET clause, resolving excluded.col references.
+		setParts := make([]string, 0, len(oc.Updates))
+		for _, sc := range oc.Updates {
+			colRef, ok := sc.Column.(*QP.ColumnRef)
+			if !ok {
+				continue
+			}
+			valSQL := resolveExcluded(sc.Value, colVals)
+			setParts = append(setParts, fmt.Sprintf("%s = %s", colRef.Name, valSQL))
+		}
+		if len(setParts) == 0 {
+			continue
+		}
+
+		updateSQL := fmt.Sprintf("UPDATE %s SET %s WHERE %s",
+			tableName,
+			strings.Join(setParts, ", "),
+			strings.Join(whereParts, " AND "))
+
+		upRes, upErr := db.execVMDML(updateSQL, tableName)
+		if upErr != nil {
+			return Result{}, upErr
+		}
+		affected += upRes.RowsAffected
+	}
+
+	return Result{RowsAffected: affected}, nil
+}
+
+// resolveExcluded converts an expression to SQL, replacing excluded.col references
+// with the actual literal values from the attempted INSERT row.
+func resolveExcluded(expr QP.Expr, colVals map[string]string) string {
+	if expr == nil {
+		return "NULL"
+	}
+	switch e := expr.(type) {
+	case *QP.ColumnRef:
+		if strings.EqualFold(e.Table, "excluded") {
+			if val, ok := colVals[e.Name]; ok {
+				return val
+			}
+			return "NULL"
+		}
+		if e.Table != "" {
+			return e.Table + "." + e.Name
+		}
+		return e.Name
+	default:
+		return exprToSQL(expr)
+	}
 }
 
 // resolveSelectAliases resolves column aliases defined in SELECT in WHERE, GROUP BY, HAVING, ORDER BY.
@@ -2045,59 +2850,59 @@ func substituteAliasExpr(expr QP.Expr, aliasMap map[string]QP.Expr) QP.Expr {
 
 // splitStatements splits SQL on top-level semicolons (not inside strings/parens).
 func splitStatements(sql string) []string {
-var stmts []string
-var cur strings.Builder
-depth := 0
-inSingle := false
-inDouble := false
-for i := 0; i < len(sql); i++ {
-c := sql[i]
-if inSingle {
-cur.WriteByte(c)
-if c == '\'' && i+1 < len(sql) && sql[i+1] == '\'' {
-cur.WriteByte(sql[i+1])
-i++
-} else if c == '\'' {
-inSingle = false
-}
-continue
-}
-if inDouble {
-cur.WriteByte(c)
-if c == '"' {
-inDouble = false
-}
-continue
-}
-switch c {
-case '\'':
-inSingle = true
-cur.WriteByte(c)
-case '"':
-inDouble = true
-cur.WriteByte(c)
-case '(':
-depth++
-cur.WriteByte(c)
-case ')':
-depth--
-cur.WriteByte(c)
-case ';':
-if depth == 0 {
-s := strings.TrimSpace(cur.String())
-if s != "" {
-stmts = append(stmts, s)
-}
-cur.Reset()
-} else {
-cur.WriteByte(c)
-}
-default:
-cur.WriteByte(c)
-}
-}
-if s := strings.TrimSpace(cur.String()); s != "" {
-stmts = append(stmts, s)
-}
-return stmts
+	var stmts []string
+	var cur strings.Builder
+	depth := 0
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(sql); i++ {
+		c := sql[i]
+		if inSingle {
+			cur.WriteByte(c)
+			if c == '\'' && i+1 < len(sql) && sql[i+1] == '\'' {
+				cur.WriteByte(sql[i+1])
+				i++
+			} else if c == '\'' {
+				inSingle = false
+			}
+			continue
+		}
+		if inDouble {
+			cur.WriteByte(c)
+			if c == '"' {
+				inDouble = false
+			}
+			continue
+		}
+		switch c {
+		case '\'':
+			inSingle = true
+			cur.WriteByte(c)
+		case '"':
+			inDouble = true
+			cur.WriteByte(c)
+		case '(':
+			depth++
+			cur.WriteByte(c)
+		case ')':
+			depth--
+			cur.WriteByte(c)
+		case ';':
+			if depth == 0 {
+				s := strings.TrimSpace(cur.String())
+				if s != "" {
+					stmts = append(stmts, s)
+				}
+				cur.Reset()
+			} else {
+				cur.WriteByte(c)
+			}
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	if s := strings.TrimSpace(cur.String()); s != "" {
+		stmts = append(stmts, s)
+	}
+	return stmts
 }
