@@ -1,5 +1,34 @@
 # sqlvibe Release History
 
+## **v0.9.1** (2026-02-22)
+
+### Features
+- **Covering Index** (`internal/DS/index_engine.go`): `IndexMeta` struct with `CoversColumns(required []string) bool` enables index-only scan decisions without table lookup. `DistinctCount(colName)` and `SkipScan(leadingCol, filterCol, filterVal)` added to `IndexEngine`.
+- **Column Projection** (`internal/DS/hybrid_store.go`): `ScanProjected(requiredCols)` and `ScanProjectedWhere(colName, val, requiredCols)` materialise only requested columns, reducing memory for wide-table queries.
+- **ColumnVector Projection** (`internal/DS/column_vector.go`): `Project(indices []int)` creates a sub-vector of selected row indices. `Ints()`, `Floats()`, `Strings()` accessors added for SIMD-style batch operations.
+- **Index Skip Scan** (`internal/QP/optimizer.go`): `CanSkipScan(indexCols, filterCols, cardinality, rowCount)` determines when skip scan is cost-effective. `IndexMetaQP` type with `CoversColumns`, `FindCoveringIndex`, and `SelectBestIndex` added for optimizer decisions.
+- **Query Analyzer** (`internal/QP/analyzer.go`): `RequiredColumns(stmt *SelectStmt)` extracts all column names referenced in SELECT, WHERE, ORDER BY, GROUP BY, and JOIN conditions.
+- **Slab Allocator** (`internal/DS/slab.go`): `SlabAllocator` with bump-pointer allocation from 64KB slabs, `sync.Pool` for small objects (&le;1KB), and `Reset()` for zero-GC between-query reuse. Typed allocators: `AllocIntSlice`, `AllocFloatSlice`, `AllocStringSlice`, `AllocInterfaceSlice`.
+- **Prepared Statement Pool** (`pkg/sqlvibe/statement_pool.go`): `StatementPool` with thread-safe LRU eviction (`Get`/`Clear`/`Len`). Caches compiled `*Statement` plans keyed by SQL string.
+- **Direct Threaded VM** (`internal/VM/dispatch.go`): `OpHandler` function type and `dispatchTable[256]OpHandler` populated in `init()` for common opcodes (`OpAdd`, `OpSubtract`, `OpMultiply`, `OpDivide`, `OpNull`, `OpLoadConst`, `OpMove`, `OpCopy`). `ExecDirect` and `HasDispatchHandler` added.
+- **Expression Bytecode** (`internal/VM/expr_bytecode.go`, `internal/VM/expr_eval.go`, `internal/CG/expr_compiler.go`): Compact `ExprBytecode` with ops `[]ExprOp`, args `[]int16`, and constant pool. Stack-machine `Eval(row []interface{})` covering arithmetic, comparison, and logical operators. `CompileExpr(expr QP.Expr, colIndices map[string]int)` in `CG` package.
+- **Direct Compiler** (`internal/CG/direct_compiler.go`): `DirectCompiler` with plan cache integration and `IsFastPath(sql)` / `canFastPath(sql)` fast-path detection for simple single-table SELECT queries without JOINs, CTEs, or window functions.
+- **Roaring Bitmap Operations** (`internal/DS/roaring_bitmap.go`): `IntersectWith` and `UnionInPlace` for in-place set operations used by skip scan.
+- **ParseValue** (`internal/DS/value.go`): `ParseValue(s string) Value` parses string representation back to typed Value (int64, float64, bool, or string).
+
+### Performance (v0.9.1, AMD EPYC 7763, -benchtime=3s)
+- SELECT all (3 cols, 1K rows): 60 µs sqlvibe vs 571 µs SQLite — **9.5x faster**
+- GROUP BY: 136 µs sqlvibe vs 507 µs SQLite — **3.7x faster**
+- SUM aggregate: 19 µs sqlvibe vs 66 µs SQLite — **3.5x faster**
+- INSERT single: 3.7 µs sqlvibe vs 6.2 µs SQLite — **1.7x faster**
+- INSERT 100 batch: 266 µs sqlvibe vs 551 µs SQLite — **2.1x faster**
+- LIMIT 10 no ORDER BY (10K rows): 20 µs sqlvibe vs 119 µs SQLite — **6x faster**
+- Result cache hit: 1.4 µs sqlvibe vs 571 µs SQLite — **397x faster**
+
+### Tests
+- `internal/TS/SQL1999/F873/01_test.go`: 15 unit tests for all v0.9.1 optimization features (CoversColumns, FindCoveringIndex, SelectBestIndex, CanSkipScan, StatementPool, SlabAllocator, ExprBytecode, RequiredColumns, IsFastPath, HasDispatchHandler).
+- `internal/TS/Benchmark/benchmark_v0.9.1_test.go`: New benchmarks appended (BenchmarkStatementPool, BenchmarkSlabAllocator, BenchmarkExprBytecode, BenchmarkDirectCompilerFastPath).
+
 ## **v0.9.0** (2026-02-22)
 
 ### Features

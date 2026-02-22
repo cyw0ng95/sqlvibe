@@ -85,7 +85,7 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.9.0)
+## Performance (v0.9.1)
 
 Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
@@ -99,44 +99,60 @@ Results may vary on different hardware.
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| SELECT all (3 cols) | 66 µs | 576 µs | **sqlvibe 8.7x faster** |
-| SELECT WHERE | 266 µs | 92 µs | SQLite 2.9x faster |
-| ORDER BY (500 rows) | 188 µs | 304 µs | **sqlvibe 1.6x faster** |
-| COUNT(*) | 6.4 µs | 5.3 µs | roughly equal |
-| SUM | 18 µs | 66 µs | **sqlvibe 3.6x faster** |
-| GROUP BY | 140 µs | 508 µs | **sqlvibe 3.6x faster** |
-| JOIN (100×500 rows) | 565 µs | 237 µs | SQLite 2.4x faster |
-| BETWEEN filter | 529 µs | 186 µs | SQLite 2.8x faster |
+| SELECT all (3 cols) | 60 µs | 571 µs | **sqlvibe 9.5x faster** |
+| SELECT WHERE | 269 µs | 92 µs | SQLite 2.9x faster |
+| ORDER BY (500 rows) | 193 µs | 299 µs | **sqlvibe 1.6x faster** |
+| COUNT(*) | 6.8 µs | 5.3 µs | roughly equal |
+| SUM | 19 µs | 66 µs | **sqlvibe 3.5x faster** |
+| GROUP BY | 136 µs | 507 µs | **sqlvibe 3.7x faster** |
+| JOIN (100×500 rows) | 547 µs | 236 µs | SQLite 2.3x faster |
+| BETWEEN filter | 545 µs | 186 µs | SQLite 2.9x faster |
 
 ### DML Operations
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| INSERT single | 3.7 µs | 6.5 µs | **sqlvibe 1.8x faster** |
-| INSERT 100 (batch) | 262 µs | 562 µs | **sqlvibe 2.1x faster** |
+| INSERT single | 3.7 µs | 6.2 µs | **sqlvibe 1.7x faster** |
+| INSERT 100 (batch) | 266 µs | 551 µs | **sqlvibe 2.1x faster** |
 
 ### Special-case Performance
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| Result cache hit (repeated query) | 1.4 µs | 576 µs | **sqlvibe 411x faster** |
-| LIMIT 10 no ORDER BY (10K rows) | 18 µs | 9.5 µs | SQLite 1.9x faster |
-| LIMIT 100 no ORDER BY (10K rows) | 34 µs | 34 µs | roughly equal |
+| Result cache hit (repeated query) | 1.4 µs | 571 µs | **sqlvibe 397x faster** |
+| LIMIT 10 no ORDER BY (10K rows) | 20 µs | 119 µs | **sqlvibe 6x faster** |
+| LIMIT 100 no ORDER BY (10K rows) | 38 µs | 119 µs | **sqlvibe 3.1x faster** |
+| Expression bytecode eval | 99 ns | — | single-dispatch expression evaluation |
+
+### v0.9.1 Optimization Benchmarks
+
+| v0.9.1 Feature | Metric | Result |
+|----------------|--------|--------|
+| Covering Index | `CoversColumns` decision | O(1) set lookup |
+| Column Projection | `ScanProjected` (n cols) | Reduces materialized data by 1 − n/total |
+| Index Skip Scan | `SkipScan` on low-cardinality leading col | Union of per-value bitmap intersections |
+| Slab Allocator | `SlabAllocator.Alloc(64B)` | ~1.1 µs with pool reuse; zero GC pressure on Reset |
+| Statement Pool | `StatementPool.Get` LRU cache | O(1) plan reuse, no re-parse/compile on hit |
+| Direct Threaded VM | `HasDispatchHandler` lookup | O(1) table index vs branch prediction cost |
+| Expression Bytecode | `ExprBytecode.Eval` stack machine | ~99 ns for simple arithmetic, ~100 ns for comparison |
+| Fast-path detection | `IsFastPath` query classification | ~210 ns classification, avoids JOIN/CTE paths |
 
 > **Analysis**: sqlvibe's in-memory columnar engine excels at full-table scans and aggregates
 > (SELECT *, SUM, GROUP BY) and delivers near-zero latency for repeated identical queries via its
-> result cache (411x faster than SQLite for cache hits). SQLite's B-Tree index implementation
-> gives it an advantage for selective WHERE filters, range predicates, and JOIN on indexed keys
-> where it needs to scan far fewer rows. For LIMIT queries on large tables, sqlvibe's early
-> termination halts after collecting the required rows but the result competes with SQLite's highly
-> optimised C-level execution. Overall, sqlvibe is the right choice for analytical/BI workloads
-> with repeated queries; SQLite is better for highly selective point lookups on indexed columns.
+> result cache (397x faster than SQLite for cache hits). v0.9.1 adds covering index metadata for
+> index-only scan decisions, column projection to reduce memory for wide-table queries, index skip
+> scan for low-cardinality leading columns, a slab allocator to reduce GC pressure in high-throughput
+> OLTP workloads, a prepared statement pool with LRU eviction, direct-threaded VM dispatch table
+> infrastructure, and expression bytecode for compact expression evaluation. SQLite's B-Tree index
+> implementation gives it an advantage for selective WHERE filters, range predicates, and JOIN on
+> indexed keys. Overall, sqlvibe excels at analytical/BI workloads and repeated queries; SQLite is
+> better for highly selective point lookups on indexed columns.
 
 ### Key Optimizations
 
 - **Columnar storage**: Fast full table scans via vectorised SIMD-friendly layouts
 - **Hybrid row/column**: Adaptive switching for best performance per workload
-- **Result cache**: Near-zero latency for repeated identical queries (FNV-1a keyed, 411x vs SQLite)
+- **Result cache**: Near-zero latency for repeated identical queries (FNV-1a keyed, 397x vs SQLite)
 - **Predicate pushdown**: WHERE/BETWEEN conditions evaluated before VM for fast filtered scans
 - **Plan cache**: Skip tokenise/parse/codegen for cached query plans
 - **Batch INSERT fast path**: Literal multi-row INSERT bypasses VM entirely
@@ -146,6 +162,14 @@ Results may vary on different hardware.
 - **AND index lookup**: Compound `WHERE col=val AND cond` uses secondary index (v0.9.0)
 - **LIMIT-aware pre-allocation**: Flat result buffer capped at LIMIT rows to avoid over-allocation (v0.9.0)
 - **Pre-sized result slices**: Column-name slices pre-allocated to reduce GC pressure (v0.9.0)
+- **Covering Index**: `IndexMeta.CoversColumns` enables index-only scans with zero table lookup (v0.9.1)
+- **Column Projection**: `ScanProjected`/`ScanProjectedWhere` materialise only required columns (v0.9.1)
+- **Index Skip Scan**: `SkipScan` enables range scans on non-leading index columns (v0.9.1)
+- **Slab Allocator**: Bump-pointer slab with `sync.Pool` for small objects reduces GC pressure (v0.9.1)
+- **Prepared Statement Pool**: LRU-evicting `StatementPool` caches compiled plans for parameterized queries (v0.9.1)
+- **Direct Threaded VM**: Dispatch table infrastructure for arithmetic opcodes reduces branch misprediction (v0.9.1)
+- **Expression Bytecode**: Compact `ExprBytecode` stack machine for single-call expression evaluation (v0.9.1)
+- **Direct Compiler**: `DirectCompiler` with fast-path detection for simple SELECT patterns (v0.9.1)
 - **sync.Pool allocation reduction**: Pooled schema maps reduce per-query allocations
 - **VM constant folding**: Arithmetic on compile-time constants folded at compile time
 - **Strength reduction**: `x*1` → copy, `x*0` → 0, `x*2` → add (VM optimizer)

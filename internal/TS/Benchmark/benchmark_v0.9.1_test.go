@@ -1,8 +1,12 @@
 // Package Benchmark provides v0.9.1 additional performance benchmarks.
-// These benchmarks cover the v0.9.0 additional optimizations:
+// These benchmarks cover the v0.9.1 additional optimizations:
 //   - Early termination for LIMIT (stops VM after N rows are collected)
 //   - AND index lookup (uses index on one sub-predicate of a compound AND)
 //   - Pre-sized result slices (reduces allocations in column-name building)
+//   - Prepared statement pool (LRU-evicting cache of compiled query plans)
+//   - Slab allocator (bump-pointer slab with sync.Pool for small objects)
+//   - Expression bytecode (stack-machine evaluator for SQL expressions)
+//   - Direct compiler fast-path detection (simple SELECT classification)
 //
 // NOTE on cache fairness: sqlvibe has an in-process result cache keyed on the
 // SQL string. The benchmarks call db.ClearResultCache() before each iteration

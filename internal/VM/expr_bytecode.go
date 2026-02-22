@@ -22,6 +22,7 @@ const (
 	EOpAnd
 	EOpOr
 	EOpNot
+	EOpNeg   // unary negation: negate top of stack
 	EOpFunc1
 	EOpFunc2
 )

@@ -319,16 +319,24 @@ return idx
 return FindCoveringIndex(indexes, required)
 }
 
+// skipScanCardinalityRatio is the maximum leading-column cardinality relative
+// to table row count for which a skip scan is considered cost-effective.
+const skipScanCardinalityRatio = 10
+
+// skipScanAbsoluteThreshold is the absolute leading-column cardinality below
+// which a skip scan is always considered cost-effective regardless of table size.
+const skipScanAbsoluteThreshold = 100
+
 // CanSkipScan returns true when a skip scan on index is cost-effective.
 func CanSkipScan(indexCols []string, filterCols []string, leadingCardinality, rowCount int) bool {
-if len(indexCols) <= len(filterCols) {
-return false
-}
-offset := len(indexCols) - len(filterCols)
-for i, fc := range filterCols {
-if indexCols[offset+i] != fc {
-return false
-}
-}
-return leadingCardinality < rowCount/10 || leadingCardinality < 100
+	if len(indexCols) <= len(filterCols) {
+		return false
+	}
+	offset := len(indexCols) - len(filterCols)
+	for i, fc := range filterCols {
+		if indexCols[offset+i] != fc {
+			return false
+		}
+	}
+	return leadingCardinality < rowCount/skipScanCardinalityRatio || leadingCardinality < skipScanAbsoluteThreshold
 }

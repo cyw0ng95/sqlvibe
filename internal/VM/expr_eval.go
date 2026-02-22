@@ -107,8 +107,17 @@ func (eb *ExprBytecode) Eval(row []interface{}) interface{} {
 			} else {
 				stack = append(stack, int64(1))
 			}
-		}
-	}
+		case EOpNeg:
+			a := exprPop(&stack)
+			switch av := a.(type) {
+			case int64:
+				stack = append(stack, -av)
+			case float64:
+				stack = append(stack, -av)
+			default:
+				stack = append(stack, nil)
+			}
+		}	}
 
 	if len(stack) > 0 {
 		return stack[len(stack)-1]
@@ -118,6 +127,9 @@ func (eb *ExprBytecode) Eval(row []interface{}) interface{} {
 
 func exprPop(stack *[]interface{}) interface{} {
 	s := *stack
+	if len(s) == 0 {
+		return nil
+	}
 	v := s[len(s)-1]
 	*stack = s[:len(s)-1]
 	return v

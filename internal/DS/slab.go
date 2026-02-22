@@ -123,6 +123,7 @@ func (sa *SlabAllocator) AllocInterfaceSlice(n int) []interface{} {
 	if n == 0 {
 		return nil
 	}
-	buf := sa.Alloc(int(unsafe.Sizeof((*interface{})(nil))*2) * n)
+	var iface interface{}
+	buf := sa.Alloc(int(unsafe.Sizeof(iface)) * n)
 	return unsafe.Slice((*interface{})(unsafe.Pointer(&buf[0])), n)
 }

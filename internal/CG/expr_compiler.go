@@ -77,8 +77,9 @@ func (ec *ExprCompiler) compile(expr QP.Expr) {
 		ec.compile(e.Expr)
 		if e.Op == QP.TokenNot {
 			ec.bytecode.Emit(VM.EOpNot)
+		} else if e.Op == QP.TokenMinus {
+			ec.bytecode.Emit(VM.EOpNeg)
 		}
-		// TokenMinus negation passes through the inner expression value unchanged.
 
 
 	case *QP.AliasExpr:
