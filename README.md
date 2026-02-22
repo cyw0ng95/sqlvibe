@@ -33,7 +33,7 @@ rows, _ := db.Query(`SELECT name FROM users WHERE id > 0`)
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.8.0)
+## Performance (v0.8.1)
 
 Benchmarks on Intel Xeon @ 2.50GHz, in-memory database, `-benchtime=3s -benchmem`:
 
@@ -41,23 +41,24 @@ Benchmarks on Intel Xeon @ 2.50GHz, in-memory database, `-benchtime=3s -benchmem
 
 | Operation | sqlvibe | SQLite Go | Winner |
 |-----------|--------:|----------:|--------|
-| SELECT all (1K rows) | 578 ns | 1,015 ns | **1,755x faster** |
-| SELECT WHERE (1K rows) | 731 ns | 121 ns | SQLite 6x |
-| SELECT ORDER BY (500 rows) | 812 ns | 423 ns | SQLite 2x |
-| COUNT(*) | 661 ns | 6 ns | SQLite 100x |
-| SUM | 679 ns | 74 ns | SQLite 10x |
-| GROUP BY | 1.34 µs | 539 ns | **2.5x faster** |
-| INNER JOIN | 1.04 µs | 377 ns | SQLite 3x |
-| Result cache hit | <1 µs | 138 ns | **>100x faster** |
-| INSERT single | 11.3 µs | 24.5 µs | **2.2x faster** |
-| UPDATE single | 22.5 µs | 27.8 µs | **24% faster** |
-| DELETE single | 23.8 µs | 43.5 µs | **1.8x faster** |
+| SELECT all (1K rows) | 591 ns | 1,017 ns | **1,720x faster** |
+| SELECT WHERE (1K rows) | 722 ns | 122 ns | SQLite 6x |
+| SELECT ORDER BY (500 rows) | 795 ns | 417 ns | SQLite 2x |
+| COUNT(*) | 663 ns | 6 ns | SQLite 100x |
+| SUM | 673 ns | 75 ns | SQLite 11x |
+| GROUP BY | 1.33 µs | 537 µs | **2.5x faster** |
+| INNER JOIN | 1.06 µs | 374 µs | SQLite 3x |
+| Result cache hit | 931 ns | 287 ns | SQLite 3x |
+| INSERT single | 12.1 µs | 25.3 µs | **2.1x faster** |
+| UPDATE single | 27.1 µs | 25.5 µs | 6% slower |
+| DELETE single | 22.9 µs | 41.0 ns | **1.8x faster** |
 
 ### Key Optimizations
 
-- **Result cache**: >100x for repeated queries
-- **Columnar storage**: 1,755x faster full scans
-- **Plan cache**: Skip parse/codegen for cached queries
+- **Columnar storage**: 1,720x faster full scans
+- **Hybrid row/column**: Adaptive switching for best performance
+- **Plan cache**: Skip parse/codegen for repeated queries
+- **Result cache**: Fast path for cached results
 - **Predicate pushdown**: Filter at Go layer before VM
 
 ## SQL:1999 Compatibility
