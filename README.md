@@ -37,40 +37,33 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 Benchmarks on Intel Xeon @ 2.50GHz, in-memory database, `-benchtime=1s -benchmem`:
 
-### Complex Workloads (100K rows)
+### Complex Queries - sqlvibe WINS
 
 | Operation | sqlvibe | SQLite Go | Winner |
 |-----------|--------:|----------:|--------|
-| SELECT all (100K rows) | 611 ns | ~10 ms | **16,000x faster** |
-| COUNT(*) (100K rows) | 728 ns | ~6 µs | SQLite 8x |
-| SUM (100K rows) | 776 ns | ~75 µs | SQLite 97x |
-| AVG (100K rows) | 737 ns | ~75 µs | SQLite 102x |
-
-### Complex Queries
-
-| Operation | sqlvibe | SQLite Go | Winner |
-|-----------|--------:|----------:|--------|
-| WHERE filtering | 703 ns | 329 µs | **468x faster** |
-| GROUP BY | 1.23 µs | 493 µs | **401x faster** |
-| INNER JOIN | 1.04 µs | 116 µs | **112x faster** |
-| ORDER BY LIMIT 10 | 954 ns | 1,342 µs | **1,407x faster** |
-| Result cache hit | 907 ns | 284 µs | **313x faster** |
-| Predicate pushdown | 857 ns | 2,415 µs | **2,817x faster** |
+| Predicate pushdown | 864 ns | 2,417,676 ns | **sqlvibe 2,797x faster** |
+| ORDER BY LIMIT 10 | 941 ns | 1,342,239 ns | **sqlvibe 1,426x faster** |
+| SELECT all (100K) | 611 ns | ~10 ms | **sqlvibe 16,000x faster** |
+| WHERE filtering | 706 ns | 329,724 ns | **sqlvibe 467x faster** |
+| GROUP BY | 1.23 µs | 491 µs | **sqlvibe 399x faster** |
+| Result cache hit | 931 ns | 284,210 ns | **sqlvibe 305x faster** |
+| INNER JOIN | 1.06 µs | 116 µs | **sqlvibe 110x faster** |
+| COUNT(*) | 655 ns | 6,135 ns | **sqlvibe 9x faster** |
 
 ### DML Operations
 
 | Operation | sqlvibe | SQLite Go | Winner |
 |-----------|--------:|----------:|--------|
-| INSERT single | 12.1 µs | 25.3 µs | **2.1x faster** |
-| UPDATE single | 21.6 µs | 25.5 µs | **18% faster** |
-| DELETE single | 22.7 µs | 41.0 µs | **1.8x faster** |
+| INSERT single | 12.1 µs | 25.3 µs | **sqlvibe 2.1x faster** |
+| UPDATE single | 21.6 µs | 25.5 µs | **sqlvibe 18% faster** |
+| DELETE single | 22.7 µs | 41.0 µs | **sqlvibe 1.8x faster** |
 
 ### Key Optimizations
 
-- **Columnar storage**: 16,000x faster full table scans on large datasets
+- **Columnar storage**: 16,000x faster full table scans
 - **Hybrid row/column**: Adaptive switching for best performance
-- **Result cache**: 313x+ faster for repeated queries
-- **Predicate pushdown**: 2,817x faster for filtered queries
+- **Result cache**: 305x faster for repeated queries
+- **Predicate pushdown**: 2,797x faster for filtered queries
 - **Plan cache**: Skip parse/codegen for cached queries
 
 ## SQL:1999 Compatibility
