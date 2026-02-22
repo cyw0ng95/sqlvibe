@@ -1118,6 +1118,17 @@ func (db *Database) Close() error {
 	return db.pm.Close()
 }
 
+// ClearResultCache invalidates the in-process query result cache, forcing the
+// next identical SELECT to be re-executed against live data.  This is useful
+// in benchmarks that want to measure actual query-execution cost rather than
+// cache-hit latency, and in tests that need to verify fresh results after a
+// series of writes have been made outside the normal Exec path.
+func (db *Database) ClearResultCache() {
+	if db.queryCache != nil {
+		db.queryCache.Invalidate()
+	}
+}
+
 // invalidateWriteCaches clears the result cache and plan cache after any
 // write operation (INSERT, UPDATE, DELETE, DROP, etc.) so that subsequent
 // reads see fresh data.

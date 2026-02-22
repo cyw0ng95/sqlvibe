@@ -296,8 +296,14 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 
 	// Pre-allocate flat result buffer to avoid per-row allocations.
+	// Cap at the result limit (LIMIT+OFFSET) to avoid over-allocating for queries
+	// that request only a small number of rows from a large table.
 	if stmt.From.Join == nil && len(tableCols) > 0 && len(tableData) > 0 {
-		vm.PreallocResultsFlat(len(tableData), len(tableCols))
+		preallocRows := len(tableData)
+		if n := extractLimitInt(stmt.Limit, stmt.Offset); n > 0 && n < preallocRows {
+			preallocRows = n
+		}
+		vm.PreallocResultsFlat(preallocRows, len(tableCols))
 	}
 
 	// Execute without calling Reset again (use Exec instead of Run)
@@ -631,14 +637,20 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	}
 
 	// Pre-allocate result slice based on estimated table size to reduce reallocations.
+	// Cap at the result limit (LIMIT+OFFSET) when set to avoid over-allocating for
+	// queries that request only a small number of rows from a large table.
 	if stmt.From.Join == nil && tableName != "" {
 		if tableData, ok := db.data[tableName]; ok {
+			preallocRows := len(tableData)
+			if n := extractLimitInt(stmt.Limit, stmt.Offset); n > 0 && n < preallocRows {
+				preallocRows = n
+			}
 			if len(tableCols) > 0 {
 				// Full flat-buffer pre-allocation: eliminates per-row allocations.
-				vm.PreallocResultsFlat(len(tableData), len(tableCols))
+				vm.PreallocResultsFlat(preallocRows, len(tableCols))
 			} else {
 				// Zero-column schema: pre-allocate result header only.
-				vm.PreallocResults(len(tableData))
+				vm.PreallocResults(preallocRows)
 			}
 		}
 	}

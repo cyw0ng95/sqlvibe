@@ -1,8 +1,16 @@
-// Package Benchmark provides v0.9.1 performance benchmarks.
-// These benchmarks cover the v0.9.1 additional optimizations:
+// Package Benchmark provides v0.9.0 additional performance benchmarks.
+// These benchmarks cover the v0.9.0 additional optimizations:
 //   - Early termination for LIMIT (stops VM after N rows are collected)
 //   - AND index lookup (uses index on one sub-predicate of a compound AND)
 //   - Pre-sized result slices (reduces allocations in column-name building)
+//
+// NOTE on cache fairness: sqlvibe has an in-process result cache keyed on the
+// SQL string. The benchmarks call db.ClearResultCache() before each iteration
+// via b.StopTimer()/b.StartTimer() so actual query-execution cost is measured,
+// not cache-hit cost. The plan cache (bytecode compilation) is intentionally
+// kept warm, matching how database/sql keeps SQLite prepared statements alive
+// across iterations. This gives an apples-to-apples comparison of per-query
+// execution time for both engines.
 package Benchmark
 
 import (
@@ -11,12 +19,13 @@ import (
 )
 
 // -----------------------------------------------------------------
-// Early Termination for LIMIT (v0.9.1 Optimization #5)
+// Early Termination for LIMIT (v0.9.0 Optimization #5)
 // -----------------------------------------------------------------
 
 // BenchmarkLimitEarlyTermination measures SELECT ... LIMIT N without ORDER BY
 // on a 10 000-row table.  With early termination the VM halts after collecting
 // N rows instead of scanning all rows.
+// The result cache is cleared before each iteration for a fair comparison.
 func BenchmarkLimitEarlyTermination(b *testing.B) {
 	db := openDB(b)
 	defer db.Close()
@@ -29,6 +38,9 @@ func BenchmarkLimitEarlyTermination(b *testing.B) {
 	b.Run("Limit10_NoOrderBy", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+			db.ClearResultCache()
+			b.StartTimer()
 			rows := mustQuery(b, db, "SELECT id, val FROM t LIMIT 10")
 			for rows.Next() {
 			}
@@ -38,6 +50,9 @@ func BenchmarkLimitEarlyTermination(b *testing.B) {
 	b.Run("Limit100_NoOrderBy", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+			db.ClearResultCache()
+			b.StartTimer()
 			rows := mustQuery(b, db, "SELECT id, val FROM t LIMIT 100")
 			for rows.Next() {
 			}
@@ -47,6 +62,9 @@ func BenchmarkLimitEarlyTermination(b *testing.B) {
 	b.Run("Limit10_WithWhere", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+			db.ClearResultCache()
+			b.StartTimer()
 			rows := mustQuery(b, db, "SELECT id, val FROM t WHERE val > 100 LIMIT 10")
 			for rows.Next() {
 			}
@@ -86,12 +104,13 @@ func BenchmarkSQLite_LimitEarlyTermination(b *testing.B) {
 }
 
 // -----------------------------------------------------------------
-// AND Index Lookup / Composite Index Reorder (v0.9.1 Optimization #10)
+// AND Index Lookup / Composite Index Reorder (v0.9.0 Optimization #10)
 // -----------------------------------------------------------------
 
 // BenchmarkIndexAndLookup measures a WHERE with two conditions where one
 // matches an index.  With the AND index extension, the index is used for
 // the first indexable predicate and pre-filters rows before the VM runs.
+// The result cache is cleared before each iteration for a fair comparison.
 func BenchmarkIndexAndLookup(b *testing.B) {
 	db := openDB(b)
 	defer db.Close()
@@ -109,16 +128,22 @@ func BenchmarkIndexAndLookup(b *testing.B) {
 	b.Run("AndIndex_Id_And_Dept", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+			db.ClearResultCache()
+			b.StartTimer()
 			rows := mustQuery(b, db, "SELECT id, dept, salary FROM emp WHERE id = 42 AND dept = 'eng'")
 			for rows.Next() {
 			}
 		}
 	})
 
-	// WHERE with two indexed column conditions.
+	// WHERE with indexed column AND range filter.
 	b.Run("AndIndex_Id_And_Salary", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+			db.ClearResultCache()
+			b.StartTimer()
 			rows := mustQuery(b, db, "SELECT id, salary FROM emp WHERE id = 100 AND salary > 30000")
 			for rows.Next() {
 			}
@@ -151,11 +176,12 @@ func BenchmarkSQLite_AndIndex(b *testing.B) {
 }
 
 // -----------------------------------------------------------------
-// Pre-sized slices (v0.9.1 Optimization #22)
+// Pre-sized slices (v0.9.0 Optimization #22)
 // -----------------------------------------------------------------
 
 // BenchmarkPresizedColumnsWideTable measures SELECT with many columns where
 // pre-sizing the column-name result slice reduces reallocations.
+// The result cache is cleared before each iteration for a fair comparison.
 func BenchmarkPresizedColumnsWideTable(b *testing.B) {
 	db := openDB(b)
 	defer db.Close()
@@ -171,8 +197,12 @@ func BenchmarkPresizedColumnsWideTable(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		db.ClearResultCache()
+		b.StartTimer()
 		rows := mustQuery(b, db, "SELECT c1,c2,c3,c4,c5,c6,c7,c8,c9,c10 FROM wide WHERE c1 > 100")
 		for rows.Next() {
 		}
 	}
 }
+
