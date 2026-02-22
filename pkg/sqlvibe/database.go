@@ -16,7 +16,7 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 	"github.com/sqlvibe/sqlvibe/internal/TM"
 	"github.com/sqlvibe/sqlvibe/internal/VM"
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe/storage"
+
 )
 
 // queryResultCache is a thread-safe in-process cache for full SELECT query results.
@@ -91,7 +91,8 @@ type Database struct {
 	indexData      map[string]map[interface{}][]int    // index name -> col value -> []row indices
 	planCache          *CG.PlanCache                       // compiled query plan cache
 	queryCache         *queryResultCache                   // full query result cache (columns + rows)
-	hybridStores       map[string]*storage.HybridStore     // table name -> columnar hybrid store (analytical fast path)
+	schemaCache        *IS.SchemaCache                     // information_schema result cache (DDL-invalidated)
+	hybridStores       map[string]*DS.HybridStore     // table name -> columnar hybrid store (analytical fast path)
 	hybridStoresDirty  map[string]bool                     // table name -> needs rebuild on next access
 }
 
@@ -349,7 +350,8 @@ func Open(path string) (*Database, error) {
 		indexData:      make(map[string]map[interface{}][]int),
 		planCache:          CG.NewPlanCache(256),
 		queryCache:         newQueryResultCache(512),
-		hybridStores:       make(map[string]*storage.HybridStore),
+		schemaCache:        IS.NewSchemaCache(),
+		hybridStores:       make(map[string]*DS.HybridStore),
 		hybridStoresDirty:  make(map[string]bool),
 	}, nil
 }
@@ -541,6 +543,9 @@ func (db *Database) Exec(sql string) (Result, error) {
 		// Initialise an empty HybridStore for the new table.
 		db.hybridStores[stmt.Name] = db.buildHybridStore(stmt.Name)
 		db.hybridStoresDirty[stmt.Name] = false
+		if db.schemaCache != nil {
+			db.schemaCache.Invalidate()
+		}
 
 		return Result{}, nil
 	case "InsertStmt":
@@ -597,10 +602,14 @@ func (db *Database) Exec(sql string) (Result, error) {
 				delete(db.indexData, idxName)
 			}
 		}
-		db.invalidateWriteCaches()
+		db.invalidateSchemaCaches()
 		return Result{}, nil
 	case "CreateViewStmt":
-		return db.execCreateView(ast.(*QP.CreateViewStmt), sql)
+		result, err := db.execCreateView(ast.(*QP.CreateViewStmt), sql)
+		if err == nil && db.schemaCache != nil {
+			db.schemaCache.Invalidate()
+		}
+		return result, err
 	case "DropViewStmt":
 		stmt := ast.(*QP.DropViewStmt)
 		if _, exists := db.views[stmt.Name]; !exists {
@@ -609,9 +618,16 @@ func (db *Database) Exec(sql string) (Result, error) {
 			}
 		}
 		delete(db.views, stmt.Name)
+		if db.schemaCache != nil {
+			db.schemaCache.Invalidate()
+		}
 		return Result{}, nil
 	case "AlterTableStmt":
-		return db.execAlterTable(ast.(*QP.AlterTableStmt))
+		result, err := db.execAlterTable(ast.(*QP.AlterTableStmt))
+		if err == nil && db.schemaCache != nil {
+			db.schemaCache.Invalidate()
+		}
+		return result, err
 	case "CreateIndexStmt":
 		stmt := ast.(*QP.CreateIndexStmt)
 		if _, exists := db.indexes[stmt.Name]; exists {
@@ -631,11 +647,13 @@ func (db *Database) Exec(sql string) (Result, error) {
 		}
 		// Build hash index immediately from existing table data.
 		db.buildIndexData(stmt.Name)
+		db.schemaCache.Invalidate()
 		return Result{}, nil
 	case "DropIndexStmt":
 		stmt := ast.(*QP.DropIndexStmt)
 		delete(db.indexes, stmt.Name)
 		delete(db.indexData, stmt.Name)
+		db.schemaCache.Invalidate()
 		return Result{}, nil
 	case "BeginStmt":
 		stmt := ast.(*QP.BeginStmt)
@@ -986,6 +1004,16 @@ func (db *Database) invalidateWriteCaches() {
 	// Mark all hybrid stores as needing a rebuild on next access.
 	for tbl := range db.tables {
 		db.hybridStoresDirty[tbl] = true
+	}
+}
+
+// invalidateSchemaCaches clears caches that depend on schema structure.
+// Call this after DDL operations (CREATE/DROP/ALTER TABLE, CREATE/DROP INDEX)
+// so information_schema queries are re-evaluated with the updated schema.
+func (db *Database) invalidateSchemaCaches() {
+	db.invalidateWriteCaches()
+	if db.schemaCache != nil {
+		db.schemaCache.Invalidate()
 	}
 }
 
@@ -1379,88 +1407,88 @@ func (db *Database) rebuildAllIndexes() {
 	}
 }
 
-// sqlTypeToStorageType converts a SQL column type declaration to a storage.ValueType.
-func sqlTypeToStorageType(typStr string) storage.ValueType {
+// sqlTypeToStorageType converts a SQL column type declaration to a DS.ValueType.
+func sqlTypeToStorageType(typStr string) DS.ValueType {
 	upper := strings.ToUpper(strings.TrimSpace(typStr))
 	switch {
 	case strings.Contains(upper, "INT"):
-		return storage.TypeInt
+		return DS.TypeInt
 	case strings.Contains(upper, "REAL"), strings.Contains(upper, "FLOAT"),
 		strings.Contains(upper, "DOUBLE"), strings.Contains(upper, "NUMERIC"),
 		strings.Contains(upper, "DECIMAL"):
-		return storage.TypeFloat
+		return DS.TypeFloat
 	case strings.Contains(upper, "BOOL"):
-		return storage.TypeBool
+		return DS.TypeBool
 	case strings.Contains(upper, "BLOB"), strings.Contains(upper, "BYTES"):
-		return storage.TypeBytes
+		return DS.TypeBytes
 	default:
-		return storage.TypeString
+		return DS.TypeString
 	}
 }
 
-// interfaceToStorageValue converts a Go interface{} row value to a storage.Value.
-func interfaceToStorageValue(v interface{}, vt storage.ValueType) storage.Value {
+// interfaceToStorageValue converts a Go interface{} row value to a DS.Value.
+func interfaceToStorageValue(v interface{}, vt DS.ValueType) DS.Value {
 	if v == nil {
-		return storage.NullValue()
+		return DS.NullValue()
 	}
 	switch vt {
-	case storage.TypeInt:
+	case DS.TypeInt:
 		switch n := v.(type) {
 		case int64:
-			return storage.IntValue(n)
+			return DS.IntValue(n)
 		case int:
-			return storage.IntValue(int64(n))
+			return DS.IntValue(int64(n))
 		case float64:
-			return storage.IntValue(int64(n))
+			return DS.IntValue(int64(n))
 		case bool:
 			if n {
-				return storage.IntValue(1)
+				return DS.IntValue(1)
 			}
-			return storage.IntValue(0)
+			return DS.IntValue(0)
 		case string:
 			if i, err := strconv.ParseInt(n, 10, 64); err == nil {
-				return storage.IntValue(i)
+				return DS.IntValue(i)
 			}
 		}
-	case storage.TypeFloat:
+	case DS.TypeFloat:
 		switch n := v.(type) {
 		case float64:
-			return storage.FloatValue(n)
+			return DS.FloatValue(n)
 		case int64:
-			return storage.FloatValue(float64(n))
+			return DS.FloatValue(float64(n))
 		case int:
-			return storage.FloatValue(float64(n))
+			return DS.FloatValue(float64(n))
 		case string:
 			if f, err := strconv.ParseFloat(n, 64); err == nil {
-				return storage.FloatValue(f)
+				return DS.FloatValue(f)
 			}
 		}
-	case storage.TypeBool:
+	case DS.TypeBool:
 		switch n := v.(type) {
 		case bool:
-			return storage.BoolValue(n)
+			return DS.BoolValue(n)
 		case int64:
-			return storage.BoolValue(n != 0)
+			return DS.BoolValue(n != 0)
 		case float64:
-			return storage.BoolValue(n != 0)
+			return DS.BoolValue(n != 0)
 		}
-	case storage.TypeBytes:
+	case DS.TypeBytes:
 		if b, ok := v.([]byte); ok {
-			return storage.BytesValue(b)
+			return DS.BytesValue(b)
 		}
 	}
 	// Default: string representation.
-	return storage.StringValue(fmt.Sprintf("%v", v))
+	return DS.StringValue(fmt.Sprintf("%v", v))
 }
 
-// rowToStorageValues converts a row map to an ordered []storage.Value for tableName.
-func (db *Database) rowToStorageValues(tableName string, row map[string]interface{}) []storage.Value {
+// rowToStorageValues converts a row map to an ordered []DS.Value for tableName.
+func (db *Database) rowToStorageValues(tableName string, row map[string]interface{}) []DS.Value {
 	cols := db.columnOrder[tableName]
 	if len(cols) == 0 {
 		return nil
 	}
 	colTypes := db.tables[tableName]
-	vals := make([]storage.Value, len(cols))
+	vals := make([]DS.Value, len(cols))
 	for i, col := range cols {
 		vt := sqlTypeToStorageType(colTypes[col])
 		vals[i] = interfaceToStorageValue(row[col], vt)
@@ -1469,22 +1497,22 @@ func (db *Database) rowToStorageValues(tableName string, row map[string]interfac
 }
 
 // buildHybridStore constructs a fresh HybridStore for tableName from db.data.
-func (db *Database) buildHybridStore(tableName string) *storage.HybridStore {
+func (db *Database) buildHybridStore(tableName string) *DS.HybridStore {
 	cols := db.columnOrder[tableName]
 	if len(cols) == 0 {
 		return nil
 	}
 	colTypeStrs := db.tables[tableName]
-	stTypes := make([]storage.ValueType, len(cols))
+	stTypes := make([]DS.ValueType, len(cols))
 	for i, col := range cols {
 		stTypes[i] = sqlTypeToStorageType(colTypeStrs[col])
 	}
-	hs := storage.NewHybridStore(cols, stTypes)
+	hs := DS.NewHybridStore(cols, stTypes)
 	for _, row := range db.data[tableName] {
 		if row == nil {
 			continue
 		}
-		vals := make([]storage.Value, len(cols))
+		vals := make([]DS.Value, len(cols))
 		for i, col := range cols {
 			vals[i] = interfaceToStorageValue(row[col], stTypes[i])
 		}
@@ -1502,7 +1530,7 @@ func (db *Database) markHybridDirty(tableName string) {
 
 // GetHybridStore returns the HybridStore for tableName, rebuilding it when necessary.
 // Returns nil if the table does not exist.
-func (db *Database) GetHybridStore(tableName string) *storage.HybridStore {
+func (db *Database) GetHybridStore(tableName string) *DS.HybridStore {
 	tbl := db.resolveTableName(tableName)
 	if _, ok := db.tables[tbl]; !ok {
 		return nil
@@ -2001,11 +2029,20 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 	}
 	viewName := strings.ToLower(parts[1])
 
-	// Generate data based on view type
+	// Check schema cache for pre-built view data.
+	// The cache is invalidated on DDL; DML never changes the schema.
 	var allResults [][]interface{}
 	var columnNames []string
+	if db.schemaCache != nil {
+		if cachedCols, cachedRows, ok := db.schemaCache.Get(viewName); ok {
+			columnNames = cachedCols
+			allResults = cachedRows
+		}
+	}
 
-	switch viewName {
+	if allResults == nil {
+		// Generate data based on view type
+		switch viewName {
 	case "columns":
 		columnNames = []string{"column_name", "table_name", "table_schema", "data_type", "is_nullable", "column_default"}
 		// Extract columns from in-memory schema
@@ -2091,6 +2128,11 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 	default:
 		return nil, fmt.Errorf("unknown information_schema view: %s", viewName)
 	}
+		// Store built results in schema cache for subsequent calls.
+		if db.schemaCache != nil {
+			db.schemaCache.Set(viewName, columnNames, allResults)
+		}
+	} // end if allResults == nil
 
 	// Filter based on WHERE clause (simple support)
 	filtered := allResults

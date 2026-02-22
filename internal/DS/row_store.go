@@ -1,4 +1,4 @@
-package storage
+package DS
 
 // RowStore is a row-oriented in-memory store with tombstone-based deletion.
 type RowStore struct {

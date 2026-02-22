@@ -1,4 +1,4 @@
-package storage
+package DS
 
 // Mode represents the recommended storage mode for a workload.
 type Mode int
@@ -207,6 +207,16 @@ func (hs *HybridStore) LiveCount() int { return hs.rowStore.LiveCount() }
 
 // Columns returns the column names.
 func (hs *HybridStore) Columns() []string { return hs.columns }
+
+// ColType returns the ValueType for the named column, or TypeNull if not found.
+func (hs *HybridStore) ColType(name string) ValueType {
+	for i, col := range hs.columns {
+		if col == name {
+			return hs.colTypes[i]
+		}
+	}
+	return TypeNull
+}
 
 // ColIndex returns the zero-based index for a column name (-1 if not found).
 func (hs *HybridStore) ColIndex(name string) int { return hs.rowStore.ColIndex(name) }

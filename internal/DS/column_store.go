@@ -1,4 +1,4 @@
-package storage
+package DS
 
 // ColumnStore stores data column-by-column for analytical workloads.
 type ColumnStore struct {

@@ -1,4 +1,4 @@
-package storage
+package DS
 
 const arenaChunkSize = 64 * 1024 // 64 KB default chunk
 
