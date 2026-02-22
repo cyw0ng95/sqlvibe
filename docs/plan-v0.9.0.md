@@ -444,26 +444,90 @@ func compileJSONExtract(expr *Expr, prog *Program) error {
 
 ---
 
-## Phase 3: Math Extension (6h)
+## Phase 3: Math Extension (10h)
 
 ### Overview
 
-Move complex math operations from core to math extension. Only basic `+`, `-`, `*`, `/` remain in core.
+Move ALL math functions from core to math extension. Without SVDB_EXT_MATH, calling these functions will return an error.
 
-### Functions to Move
+### Breaking Change
 
-| Function | Description |
-|----------|-------------|
-| `ABS(n)` | Absolute value |
-| `CEIL(n)` | Ceiling |
-| `CEILING(n)` | Ceiling (alias) |
-| `FLOOR(n)` | Floor |
-| `ROUND(n, d)` | Round to d decimals |
-| `POWER(n, e)` | Power (n^e) |
-| `SQRT(n)` | Square root |
-| `MOD(n, d)` | Modulo |
-| `RANDOM()` | Random number |
-| `RANDOMBLOB(n)` | Random blob |
+- **Without SVDB_EXT_MATH**: Functions ABS, CEIL, FLOOR, ROUND, POWER, SQRT, MOD, etc. will NOT be available
+- Users must use build tag `SVDB_EXT_MATH` to enable math functions
+
+### Functions to Move (from Core to Extension)
+
+| Function | Current Location | Move to |
+|----------|-----------------|---------|
+| ABS | VM/query_engine.go | ext/math |
+| CEIL/CEILING | VM/query_engine.go | ext/math |
+| FLOOR | VM/query_engine.go | ext/math |
+| ROUND | VM/query_engine.go | ext/math |
+| POWER | VM/query_engine.go | ext/math |
+| SQRT | VM/query_engine.go | ext/math |
+| MOD | VM/query_engine.go | ext/math |
+| RANDOM | VM/exec.go | ext/math |
+| RANDOMBLOB | VM/exec.go | ext/math |
+| ZEROBLOB | VM/exec.go | ext/math |
+| EXP | VM/query_engine.go | ext/math |
+| LN/LOG/LOG10 | VM/query_engine.go | ext/math |
+| PI | VM/query_engine.go | ext/math |
+| SIGN | VM/query_engine.go | ext/math |
+
+### Implementation Steps
+
+1. **Remove from core** (VM/query_engine.go, VM/exec.go):
+   - Remove all math function cases from switch statements
+   - Keep basic `+`, `-`, `*`, `/` operators
+
+2. **Add to extension** (ext/math/math.go):
+   - Implement all math functions in extension
+   - Register via Extension interface
+
+3. **Error handling** (when called without extension):
+   ```go
+   // pkg/sqlvibe/database.go
+   func (db *Database) evalFunc(name string, args []interface{}) interface{} {
+       // Check if function is from an extension
+       if ext.FuncExists(name) {
+           return fmt.Errorf("function %s requires SVDB_EXT_MATH extension", name)
+       }
+       return fmt.Errorf("no such function: %s", name)
+   }
+   ```
+
+4. **Test both builds**:
+   - Build WITHOUT extensions: expect errors for math functions
+   - Build WITH SVDB_EXT_MATH: math functions work
+
+### Tasks
+
+- [ ] Remove ABS from VM/query_engine.go
+- [ ] Remove CEIL/CEILING from VM/query_engine.go
+- [ ] Remove FLOOR from VM/query_engine.go
+- [ ] Remove ROUND from VM/query_engine.go
+- [ ] Remove POWER/SQRT from VM/query_engine.go
+- [ ] Remove MOD from VM/query_engine.go
+- [ ] Remove RANDOM/RANDOMBLOB from VM/exec.go
+- [ ] Remove EXP/LN/LOG/LOG10 from VM/query_engine.go
+- [ ] Add all math functions to ext/math/math.go
+- [ ] Add error handling for missing extension
+- [ ] Test WITHOUT SVDB_EXT_MATH (should error)
+- [ ] Test WITH SVDB_EXT_MATH (should work)
+
+### Expected Behavior
+
+**Without SVDB_EXT_MATH**:
+```sql
+SELECT ABS(-1);
+-- Error: no such function: ABS (requires SVDB_EXT_MATH)
+```
+
+**With SVDB_EXT_MATH**:
+```sql
+SELECT ABS(-1);
+-- Result: 1
+```
 
 ### Implementation
 
@@ -555,12 +619,12 @@ ext/
 |-------|---------|-------|
 | 1 | Extension Framework | 8 |
 | 2 | JSON Extension | 10 |
-| 3 | Math Extension | 6 |
+| 3 | Math Extension (Move from Core) | 10 |
 | 4 | sqlvibe_extensions Table | 4 |
 | 5 | CLI .ext Command | 2 |
 | 6 | Testing | 4 |
 
-**Total:** ~34 hours
+**Total:** ~38 hours
 
 ---
 
@@ -669,6 +733,7 @@ go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
 
 ## Notes
 
+- **Breaking Change in v0.9.0**: Math functions (ABS, CEIL, FLOOR, etc.) are moved to extension. Without `SVDB_EXT_MATH`, these functions will NOT be available.
 - **Unified registration**: Extensions declare Opcodes/Functions in one place
 - No separate ops_*.go or cg_*.go files needed
 - Build tags only for entry point (ext/ext.go)
