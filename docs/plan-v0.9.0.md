@@ -1,4 +1,4 @@
-# Plan v0.8.10 - Extension Framework
+# Plan v0.9.0 - Production Release: Extension Framework
 
 ## Summary
 
@@ -8,7 +8,7 @@ Design and implement an extension framework for sqlvibe. Extensions add function
 - Extensions in `ext/` directory (source root)
 - Extensions can modify VM, CG, and other internal packages
 - Use build tags to include extensions at compile time
-- Virtual table `sqlitevibe_extensions` shows loaded extensions
+- Virtual table `sqlvibe_extensions` shows loaded extensions
 - CLI command `.ext` shows extensions in sv-cli
 - **JSON extension aligns with SQLite JSON1**: https://sqlite.org/json1.html
 
@@ -27,13 +27,13 @@ sqlvibe/
 
 No separate ops_*.go or cg_*.go files needed - extensions declare Opcodes/Functions directly.
 
-### sqlitevibe_extensions Virtual Table
+### sqlvibe_extensions Virtual Table
 
 A read-only virtual table that lists all loaded extensions.
 
 ```sql
 -- Query loaded extensions
-SELECT * FROM sqlitevibe_extensions;
+SELECT * FROM sqlvibe_extensions;
 
 -- Result example:
 -- name    | description       | functions
@@ -49,7 +49,7 @@ SELECT * FROM sqlitevibe_extensions;
 
 **Implementation**:
 ```go
-// pkg/sqlvibe/sqlitevibe_extensions.go
+// pkg/sqlvibe/sqlvibe_extensions.go
 
 type sqlitevibeExtensionsTable struct{}
 
@@ -76,7 +76,7 @@ func (t *sqlitevibeExtensionsTable) Next() ([]interface{}, error) {
 ```go
 func init() {
     // Register virtual table
-    RegisterVirtualTable("sqlitevibe_extensions", &sqlitevibeExtensionsTable{})
+    RegisterVirtualTable("sqlvibe_extensions", &sqlitevibeExtensionsTable{})
 }
 ```
 
@@ -100,7 +100,7 @@ func handleMetaCommand(line string) bool {
 }
 
 func showExtensions() {
-    rows, err := db.Query("SELECT * FROM sqlitevibe_extensions")
+    rows, err := db.Query("SELECT * FROM sqlvibe_extensions")
     if err != nil {
         fmt.Fprintf(os.Stderr, "Error: %v\n", err)
         return
@@ -114,7 +114,7 @@ func showExtensions() {
 **v0.8.10 Scope**:
 - Extension Framework: 8h
 - JSON Extension: 10h
-- sqlitevibe_extensions Table: 4h
+- sqlvibe_extensions Table: 4h
 - CLI .ext Command: 2h
 - Testing: 4h
 
@@ -251,7 +251,7 @@ func init() {
 }
 ```
 
-### 1.5 sqlitevibe_extensions Virtual Table
+### 1.5 sqlvibe_extensions Virtual Table
 
 Uses the registry directly:
 
@@ -274,7 +274,7 @@ func (t *sqlitevibeExtensionsTable) Next() ([]interface{}, error) {
 - [ ] Create `ext/registry.go` with unified registry
 - [ ] Create `ext/ext.go` build tags entry
 - [ ] Add auto-registration to Database
-- [ ] Create sqlitevibe_extensions virtual table
+- [ ] Create sqlvibe_extensions virtual table
 
 ---
 
@@ -475,7 +475,7 @@ ext/
 |-------|---------|-------|
 | 1 | Extension Framework | 8 |
 | 2 | JSON Extension | 10 |
-| 3 | sqlitevibe_extensions Table | 4 |
+| 3 | sqlvibe_extensions Table | 4 |
 | 4 | CLI .ext Command | 2 |
 | 5 | Testing | 4 |
 
@@ -516,7 +516,7 @@ go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
 | Unified registry | Works | [ ] |
 | Build tags entry | Works | [ ] |
 | Auto-registration in DB | Works | [ ] |
-| sqlitevibe_extensions table | Works | [ ] |
+| sqlvibe_extensions table | Works | [ ] |
 
 ### Phase 2: JSON Extension
 
@@ -537,7 +537,7 @@ go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
 | json_update | Works | [ ] |
 | SQLite JSON1 compatibility | Works | [ ] |
 
-### Phase 3: sqlitevibe_extensions Table
+### Phase 3: sqlvibe_extensions Table
 
 | Criteria | Target | Status |
 |----------|--------|--------|

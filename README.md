@@ -2,6 +2,12 @@
 
 **sqlvibe** is a high-performance in-memory database engine written in Go with SQL compatibility.
 
+## Stable Releases
+
+| Version | Date | Description |
+|---------|------|-------------|
+| **v0.8.9** | 2026-02-22 | CLI tools (sv-cli, sv-check), Info APIs, Integrity check |
+
 ## Features
 
 - **SQL:1999 compatibility** — 84+ test suites passing (added F870/F871/F872)
@@ -48,7 +54,7 @@ rows, _ := db.Query(`SELECT name FROM users WHERE id > 0`)
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.8.7)
+## Performance (v0.8.9)
 
 Benchmarks on AMD EPYC 7763 @ 2.45GHz, in-memory database, `-benchtime=1s -benchmem`.
 
