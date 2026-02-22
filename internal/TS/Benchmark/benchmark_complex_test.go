@@ -5,8 +5,6 @@ package Benchmark
 import (
 	"fmt"
 	"testing"
-
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // -----------------------------------------------------------------
