@@ -1,6 +1,30 @@
 # sqlvibe Release History
 
-## **v0.8.9** (2026-02-22)
+## **v0.9.0** (2026-02-22)
+
+### Features
+- **Extension Framework** (`ext/`): Static extension infrastructure using Go build tags.
+  - `ext/extension.go`: `Extension` interface with `Name()`, `Description()`, `Functions()`, `Opcodes()`, `CallFunc()`, `Register()`, `Close()`.
+  - `ext/registry.go`: Unified global registry (`Register`, `Get`, `List`, `CallFunc`, `AllFunctions`, `AllOpcodes`).
+  - Build-tag entry points: `pkg/sqlvibe/ext_json.go` (`SVDB_EXT_JSON`) and `pkg/sqlvibe/ext_math.go` (`SVDB_EXT_MATH`).
+- **JSON Extension** (`ext/json/`, tag `SVDB_EXT_JSON`): SQLite JSON1-compatible functions:
+  - `json`, `json_array`, `json_extract`, `json_invalid`, `json_isvalid`, `json_length`, `json_object`, `json_quote`, `json_remove`, `json_replace`, `json_set`, `json_type`, `json_update`.
+  - Full `$`-path navigation (`.key`, `[N]`, nested paths).
+- **Math Extension** (`ext/math/`, tag `SVDB_EXT_MATH`): Additional math functions:
+  - `POWER`/`POW`, `SQRT`, `MOD`, `PI`, `EXP`, `LN`, `LOG`, `LOG2`, `LOG10`, `SIGN`.
+- **`sqlvibe_extensions` Virtual Table**: Read-only virtual table listing loaded extensions (columns: `name`, `description`, `functions`). Supports `WHERE` and column projection.
+- **CLI `.ext` Command** (`cmd/sv-cli`): Shows loaded extensions as a formatted table.
+- **VM/QE Extension Hook**: `evaluateFuncCallOnRow` (VM) and `evalFuncCall` (QP) now dispatch unknown function names to the extension registry for transparent extension function calls.
+
+### Tests
+- `ext/extension_test.go`: Registry unit tests (Register, Get, List, CallFunc).
+- `ext/json/json_test.go`: JSON function unit tests (build tag `SVDB_EXT_JSON`).
+- `internal/TS/SQL1999/F900/01_test.go`: SQL-level JSON function integration tests (build tag `SVDB_EXT_JSON`).
+- `pkg/sqlvibe/sqlvibe_extensions_test.go`: Virtual table query test.
+
+### Breaking Changes
+- None
+
 
 ### Features
 - **CLI Rename**: `cmd/sqlvibe` renamed to `cmd/sv-cli` with updated banner and improved REPL.
