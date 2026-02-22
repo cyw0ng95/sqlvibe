@@ -199,20 +199,23 @@ func (db *Database) ListExtensions() []string {
 }
 ```
 
-### 1.5 PRAGMA Extension Support
+### 1.5 Extension Loading (Static, Build-Time Only)
 
-```sql
-PRAGMA extension_list;           -- List loaded extensions
-PRAGMA extension_load('json');   -- Load an extension
+Extensions are loaded **at compile time** via build tags. No runtime loading.
+
+```bash
+# Build with JSON extension
+go build -tags "svdb_ext_json" -o sqlvibe .
 ```
+
+When extensions are included at build time, they are automatically registered when the binary starts.
 
 ### Tasks
 
 - [ ] Create `ext/extension.go` with interface
 - [ ] Create `ext/registry.go` with registry pattern
 - [ ] Create `ext/extensions.go` with build tags
-- [ ] Add extension loading to Database
-- [ ] Add PRAGMA extension support
+- [ ] Auto-register extensions on binary startup
 
 **Workload:** ~6 hours
 
@@ -510,7 +513,7 @@ func TestJSONValid(t *testing.T) {
 | Extension interface | Works | [ ] |
 | Registry pattern | Works | [ ] |
 | Build tags | Works | [ ] |
-| PRAGMA support | Works | [ ] |
+| Auto-register at startup | Works | [ ] |
 
 ### Phase 2: JSON Extension
 
@@ -531,24 +534,25 @@ func TestJSONValid(t *testing.T) {
 
 ---
 
-## Building with Extensions
+## Building with Extensions (Static, Build-Time Only)
+
+Extensions are **statically linked** at compile time. No runtime loading.
 
 ```bash
 # Default (no extensions)
 go build -o sqlvibe .
 
-# Include JSON extension only
-go build -tags "svdb_ext_json" -o sqlvibe .
-
-# Include multiple extensions
+# Include JSON extension
 go build -tags "svdb_ext_json" -o sqlvibe .
 
 # Include all extensions
 go build -tags "extensions" -o sqlvibe .
+```
 
-# Run with extensions
-sqlvibe> PRAGMA extension_load('json');
-sqlvibe> SELECT json_extract('{"a":1}', '$.a');
+When built with extensions, functions are available immediately:
+
+```sql
+SELECT json_extract('{"a":1}', '$.a');
 ```
 
 ---
@@ -568,6 +572,6 @@ sqlvibe> SELECT json_extract('{"a":1}', '$.a');
 
 - Extensions use Registry Pattern for simplicity
 - Build tags (e.g., `svdb_ext_json`) control inclusion to keep base binary small
+- **Static linking only** - extensions are compiled in, no runtime loading
 - Each extension has its own build tag for fine-grained control
-- Extensions can be loaded at runtime via PRAGMA
 - All tests use L2 temp files only
