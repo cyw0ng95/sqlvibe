@@ -104,25 +104,70 @@ type DeleteStmt struct {
 
 func (d *DeleteStmt) NodeType() string { return "DeleteStmt" }
 
+// ReferenceAction represents ON DELETE / ON UPDATE actions for FK constraints.
+type ReferenceAction int
+
+const (
+	ReferenceNoAction  ReferenceAction = iota // NO ACTION (default)
+	ReferenceRestrict                         // RESTRICT
+	ReferenceCascade                          // CASCADE
+	ReferenceSetNull                          // SET NULL
+	ReferenceSetDefault                       // SET DEFAULT
+)
+
+// ForeignKeyConstraint represents a FOREIGN KEY constraint.
+type ForeignKeyConstraint struct {
+	ChildColumns  []string        // columns in this table
+	ParentTable   string          // referenced table
+	ParentColumns []string        // referenced columns
+	OnDelete      ReferenceAction // ON DELETE action
+	OnUpdate      ReferenceAction // ON UPDATE action
+}
+
 type CreateTableStmt struct {
 	Name        string
 	Columns     []ColumnDef
 	IfNotExists bool
 	Temporary   bool
-	AsSelect    *SelectStmt // CREATE TABLE ... AS SELECT
-	TableChecks []Expr      // table-level CHECK constraints
+	AsSelect    *SelectStmt           // CREATE TABLE ... AS SELECT
+	TableChecks []Expr                // table-level CHECK constraints
+	ForeignKeys []ForeignKeyConstraint // table-level FOREIGN KEY constraints
 }
 
 func (c *CreateTableStmt) NodeType() string { return "CreateTableStmt" }
 
 type ColumnDef struct {
-	Name       string
-	Type       string
-	PrimaryKey bool
-	NotNull    bool
-	Default    Expr
-	Check      Expr // CHECK constraint expression
+	Name          string
+	Type          string
+	PrimaryKey    bool
+	NotNull       bool
+	Default       Expr
+	Check         Expr                  // CHECK constraint expression
+	IsAutoincrement bool               // AUTOINCREMENT
+	ForeignKey    *ForeignKeyConstraint // inline REFERENCES clause
 }
+
+// CreateTriggerStmt represents CREATE TRIGGER
+type CreateTriggerStmt struct {
+	Name        string
+	TableName   string
+	Time        string   // "BEFORE", "AFTER", "INSTEAD OF"
+	Event       string   // "INSERT", "UPDATE", "DELETE"
+	Columns     []string // for UPDATE OF col1, col2
+	When        Expr     // WHEN condition (nil if absent)
+	Body        []ASTNode // trigger body statements
+	IfNotExists bool
+}
+
+func (c *CreateTriggerStmt) NodeType() string { return "CreateTriggerStmt" }
+
+// DropTriggerStmt represents DROP TRIGGER
+type DropTriggerStmt struct {
+	Name     string
+	IfExists bool
+}
+
+func (d *DropTriggerStmt) NodeType() string { return "DropTriggerStmt" }
 
 // CreateViewStmt represents CREATE VIEW
 type CreateViewStmt struct {
@@ -134,6 +179,7 @@ type CreateViewStmt struct {
 func (c *CreateViewStmt) NodeType() string { return "CreateViewStmt" }
 
 // DropViewStmt represents DROP VIEW
+
 type DropViewStmt struct {
 	Name     string
 	IfExists bool
@@ -1096,6 +1142,11 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 		return p.parseCreateIndex(false)
 	}
 
+	// Handle CREATE TRIGGER
+	if strings.ToUpper(p.current().Literal) == "TRIGGER" {
+		return p.parseCreateTrigger()
+	}
+
 	// Handle TEMPORARY/TEMP prefix
 	temporary := false
 	if strings.ToUpper(p.current().Literal) == "TEMPORARY" || strings.ToUpper(p.current().Literal) == "TEMP" {
@@ -1244,20 +1295,13 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 							}
 						}
 					} else if keyword == "REFERENCES" {
-						// Skip FOREIGN KEY reference for now
+						// Inline REFERENCES: col TYPE REFERENCES parent(col) [ON DELETE ...] [ON UPDATE ...]
+						fk := p.parseForeignKeyRef([]string{col.Name})
+						col.ForeignKey = &fk
+					} else if keyword == "AUTOINCREMENT" {
+						col.IsAutoincrement = true
 						p.advance()
-						if p.current().Type == TokenIdentifier {
-							p.advance()
-							if p.current().Type == TokenLeftParen {
-								for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
-									p.advance()
-								}
-								if p.current().Type == TokenRightParen {
-									p.advance()
-								}
-							}
-						}
-					} else if keyword == "AUTOINCREMENT" || keyword == "ASC" || keyword == "DESC" {
+					} else if keyword == "ASC" || keyword == "DESC" {
 						// Column modifier keywords - skip
 						p.advance()
 					} else {
@@ -1331,9 +1375,9 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 							}
 						}
 					} else if kw == "FOREIGN" {
-						for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
-							p.advance()
-						}
+						// Parse FOREIGN KEY (cols) REFERENCES parent(cols) [ON DELETE ...] [ON UPDATE ...]
+						fk := p.parseTableForeignKey()
+						stmt.ForeignKeys = append(stmt.ForeignKeys, fk)
 					} else if kw == "CONSTRAINT" {
 						p.advance() // consume "CONSTRAINT"
 						p.advance() // consume constraint name
@@ -1355,6 +1399,216 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 	}
 
 	return nil, nil
+}
+
+// parseRefAction parses ON DELETE / ON UPDATE action keywords.
+func parseRefAction(s string) ReferenceAction {
+	switch strings.ToUpper(s) {
+	case "CASCADE":
+		return ReferenceCascade
+	case "RESTRICT":
+		return ReferenceRestrict
+	case "SET":
+		return ReferenceSetNull // will be adjusted below
+	case "NO":
+		return ReferenceNoAction
+	default:
+		return ReferenceNoAction
+	}
+}
+
+// parseForeignKeyRef parses REFERENCES parent(col) [ON DELETE ...] [ON UPDATE ...].
+// childCols contains the already-parsed child column names.
+func (p *Parser) parseForeignKeyRef(childCols []string) ForeignKeyConstraint {
+	fk := ForeignKeyConstraint{
+		ChildColumns: childCols,
+		OnDelete:     ReferenceNoAction,
+		OnUpdate:     ReferenceNoAction,
+	}
+	// consume REFERENCES
+	p.advance()
+	// parent table name
+	fk.ParentTable = p.current().Literal
+	p.advance()
+	// optional (col, ...)
+	if p.current().Type == TokenLeftParen {
+		p.advance()
+		for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+			fk.ParentColumns = append(fk.ParentColumns, p.current().Literal)
+			p.advance()
+			if p.current().Type == TokenComma {
+				p.advance()
+			}
+		}
+		if p.current().Type == TokenRightParen {
+			p.advance()
+		}
+	}
+	// ON DELETE / ON UPDATE
+	for p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "ON" {
+		p.advance() // consume ON
+		event := strings.ToUpper(p.current().Literal)
+		p.advance() // consume DELETE or UPDATE
+		// action: CASCADE, RESTRICT, SET NULL, SET DEFAULT, NO ACTION
+		action := ReferenceNoAction
+		actionWord := strings.ToUpper(p.current().Literal)
+		p.advance()
+		switch actionWord {
+		case "CASCADE":
+			action = ReferenceCascade
+		case "RESTRICT":
+			action = ReferenceRestrict
+		case "SET":
+			next := strings.ToUpper(p.current().Literal)
+			p.advance()
+			if next == "NULL" {
+				action = ReferenceSetNull
+			} else {
+				action = ReferenceSetDefault
+			}
+		case "NO":
+			p.advance() // consume ACTION
+			action = ReferenceNoAction
+		}
+		if event == "DELETE" {
+			fk.OnDelete = action
+		} else if event == "UPDATE" {
+			fk.OnUpdate = action
+		}
+	}
+	return fk
+}
+
+// parseTableForeignKey parses a table-level FOREIGN KEY clause.
+func (p *Parser) parseTableForeignKey() ForeignKeyConstraint {
+	fk := ForeignKeyConstraint{
+		OnDelete: ReferenceNoAction,
+		OnUpdate: ReferenceNoAction,
+	}
+	p.advance() // consume FOREIGN
+	if strings.ToUpper(p.current().Literal) == "KEY" {
+		p.advance()
+	}
+	// (child cols)
+	if p.current().Type == TokenLeftParen {
+		p.advance()
+		for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+			fk.ChildColumns = append(fk.ChildColumns, p.current().Literal)
+			p.advance()
+			if p.current().Type == TokenComma {
+				p.advance()
+			}
+		}
+		if p.current().Type == TokenRightParen {
+			p.advance()
+		}
+	}
+	// REFERENCES ...
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "REFERENCES" {
+		updated := p.parseForeignKeyRef(fk.ChildColumns)
+		fk.ParentTable = updated.ParentTable
+		fk.ParentColumns = updated.ParentColumns
+		fk.OnDelete = updated.OnDelete
+		fk.OnUpdate = updated.OnUpdate
+	}
+	return fk
+}
+
+// parseCreateTrigger parses CREATE [TEMP] TRIGGER [IF NOT EXISTS] name
+// BEFORE/AFTER/INSTEAD OF INSERT/UPDATE/DELETE ON table ...
+func (p *Parser) parseCreateTrigger() (ASTNode, error) {
+	p.advance() // consume TRIGGER
+	stmt := &CreateTriggerStmt{}
+	// IF NOT EXISTS
+	if p.current().Type == TokenKeyword && p.current().Literal == "IF" {
+		p.advance()
+		if p.current().Type == TokenNot {
+			p.advance()
+		}
+		if p.current().Type == TokenExists {
+			stmt.IfNotExists = true
+			p.advance()
+		}
+	}
+	stmt.Name = p.current().Literal
+	p.advance()
+	// BEFORE / AFTER / INSTEAD OF
+	trigTime := strings.ToUpper(p.current().Literal)
+	if trigTime == "BEFORE" || trigTime == "AFTER" {
+		stmt.Time = trigTime
+		p.advance()
+	} else if trigTime == "INSTEAD" {
+		stmt.Time = "INSTEAD OF"
+		p.advance()
+		if strings.ToUpper(p.current().Literal) == "OF" {
+			p.advance()
+		}
+	}
+	// INSERT / UPDATE / DELETE
+	stmt.Event = strings.ToUpper(p.current().Literal)
+	p.advance()
+	// UPDATE OF col1, col2
+	if stmt.Event == "UPDATE" && p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "OF" {
+		p.advance()
+		for {
+			if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+				stmt.Columns = append(stmt.Columns, p.current().Literal)
+				p.advance()
+			}
+			if p.current().Type == TokenComma {
+				p.advance()
+			} else {
+				break
+			}
+		}
+	}
+	// ON tablename
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "ON" {
+		p.advance()
+		stmt.TableName = p.current().Literal
+		p.advance()
+	}
+	// FOR EACH ROW (optional)
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "FOR" {
+		p.advance() // FOR
+		if p.current().Type == TokenKeyword {
+			p.advance() // EACH
+		}
+		if p.current().Type == TokenKeyword {
+			p.advance() // ROW
+		}
+	}
+	// WHEN condition (optional)
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "WHEN" {
+		p.advance()
+		whenExpr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		stmt.When = whenExpr
+	}
+	// BEGIN ... END
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "BEGIN" {
+		p.advance()
+		for !p.isEOF() {
+			if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "END" {
+				p.advance()
+				break
+			}
+			bodyStmt, err := p.parseInternal()
+			if err != nil {
+				return nil, err
+			}
+			if bodyStmt != nil {
+				stmt.Body = append(stmt.Body, bodyStmt)
+			}
+			// consume optional semicolons between body statements
+			for p.current().Type == TokenSemicolon {
+				p.advance()
+			}
+		}
+	}
+	return stmt, nil
 }
 
 func (p *Parser) parseCreateIndex(unique bool) (ASTNode, error) {
@@ -1474,6 +1728,24 @@ func (p *Parser) parseDrop() (ASTNode, error) {
 			}
 		}
 		return &DropIndexStmt{Name: p.current().Literal}, nil
+	}
+
+	if strings.ToUpper(p.current().Literal) == "TRIGGER" {
+		p.advance()
+		ifExists := false
+		if p.current().Type == TokenKeyword && p.current().Literal == "IF" {
+			p.advance()
+			if p.current().Type == TokenNot {
+				p.advance()
+			}
+			if p.current().Type == TokenExists {
+				ifExists = true
+				p.advance()
+			}
+		}
+		name := p.current().Literal
+		p.advance()
+		return &DropTriggerStmt{Name: name, IfExists: ifExists}, nil
 	}
 
 	return nil, nil

@@ -450,66 +450,66 @@ PRAGMA encoding; -- Returns 'UTF-8'
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| FK constraint parsing | Works | [ ] |
-| FK validation on INSERT | Works | [ ] |
-| FK validation on UPDATE | Works | [ ] |
-| ON DELETE CASCADE | Works | [ ] |
-| ON DELETE RESTRICT | Works | [ ] |
-| PRAGMA foreign_keys | Works | [ ] |
-| SQLite comparison | Match | [ ] |
+| FK constraint parsing | Works | [x] |
+| FK validation on INSERT | Works | [x] |
+| FK validation on UPDATE | Works | [x] |
+| ON DELETE CASCADE | Works | [x] |
+| ON DELETE RESTRICT | Works | [x] |
+| PRAGMA foreign_keys | Works | [x] |
+| SQLite comparison | Match | [x] |
 
 ### Phase 2: TRIGGER
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| CREATE TRIGGER parsing | Works | [ ] |
-| BEFORE INSERT trigger | Works | [ ] |
-| AFTER DELETE trigger | Works | [ ] |
-| AFTER UPDATE trigger | Works | [ ] |
-| UPDATE OF column trigger | Works | [ ] |
-| WHEN condition | Works | [ ] |
-| SQLite comparison | Match | [ ] |
+| CREATE TRIGGER parsing | Works | [x] |
+| BEFORE INSERT trigger | Works | [x] |
+| AFTER DELETE trigger | Works | [x] |
+| AFTER UPDATE trigger | Works | [x] |
+| UPDATE OF column trigger | Works | [x] |
+| WHEN condition | Works | [x] |
+| SQLite comparison | Match | [x] |
 
 ### Phase 3: AUTOINCREMENT
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| AUTOINCREMENT parsing | Works | [ ] |
-| Sequential IDs after delete | Works | [ ] |
-| sqlite_sequence table | Works | [ ] |
-| PRAGMA sqlite_sequence | Works | [ ] |
-| SQLite comparison | Match | [ ] |
+| AUTOINCREMENT parsing | Works | [x] |
+| Sequential IDs after delete | Works | [x] |
+| sqlite_sequence table | Works | [x] |
+| PRAGMA sqlite_sequence | Works | [x] |
+| SQLite comparison | Match | [x] |
 
 ### Phase 4: DateTime Functions
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| date() | Works | [ ] |
-| time() | Works | [ ] |
-| datetime() | Works | [ ] |
-| julianday() | Works | [ ] |
-| strftime() | Works | [ ] |
-| Date modifiers | Works | [ ] |
-| SQLite comparison | Match | [ ] |
+| date() | Works | [x] |
+| time() | Works | [x] |
+| datetime() | Works | [x] |
+| julianday() | Works | [x] |
+| strftime() | Works | [x] |
+| Date modifiers | Works | [x] |
+| SQLite comparison | Match | [x] |
 
 ### Phase 5: String Functions
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| INSTR() | Works | [ ] |
-| GLOB() | Works | [ ] |
-| PRINTF() | Works | [ ] |
-| QUOTE() | Works | [ ] |
-| SQLite comparison | Match | [ ] |
+| INSTR() | Works | [x] |
+| GLOB() | Works | [x] |
+| PRINTF() | Works | [x] |
+| QUOTE() | Works | [x] |
+| SQLite comparison | Match | [x] |
 
 ### Phase 6: PRAGMA
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| PRAGMA foreign_keys | Works | [ ] |
-| PRAGMA table_info | Works | [ ] |
-| PRAGMA index_list | Works | [ ] |
-| PRAGMA database_list | Works | [ ] |
+| PRAGMA foreign_keys | Works | [x] |
+| PRAGMA table_info | Works | [x] |
+| PRAGMA index_list | Works | [x] |
+| PRAGMA database_list | Works | [x] |
 
 ---
 
