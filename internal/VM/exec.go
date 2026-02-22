@@ -4038,19 +4038,8 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				return state.Mins[i]
 			case "MAX":
 				return state.Maxs[i]
-case "GROUP_CONCAT":
-if i < len(state.GroupConcats) && len(state.GroupConcats[i]) > 0 {
-sep := ","
-if len(aggDef.Args) >= 2 {
-if lit, ok2 := aggDef.Args[1].(*QP.Literal); ok2 {
-if s, ok3 := lit.Value.(string); ok3 {
-sep = s
-}
-}
-}
-return strings.Join(state.GroupConcats[i], sep)
-}
-return nil
+			case "GROUP_CONCAT":
+				return state.groupConcatResult(i, aggDef)
 			}
 		}
 		// Fallback: if no arg-matching entry found, try first matching function name
@@ -4078,19 +4067,8 @@ return nil
 				return state.Mins[i]
 			case "MAX":
 				return state.Maxs[i]
-case "GROUP_CONCAT":
-if i < len(state.GroupConcats) && len(state.GroupConcats[i]) > 0 {
-sep := ","
-if len(aggDef.Args) >= 2 {
-if lit, ok2 := aggDef.Args[1].(*QP.Literal); ok2 {
-if s, ok3 := lit.Value.(string); ok3 {
-sep = s
-}
-}
-}
-return strings.Join(state.GroupConcats[i], sep)
-}
-return nil
+			case "GROUP_CONCAT":
+				return state.groupConcatResult(i, aggDef)
 			}
 		}
 		return nil
@@ -4116,6 +4094,22 @@ return nil
 
 // sumResult returns the accumulated sum as an interface{} (nil if no values were seen).
 // Boxing occurs once at read time rather than once per accumulated row.
+// groupConcatResult returns the GROUP_CONCAT result for the given aggregate index and separator arg.
+func (s *AggregateState) groupConcatResult(idx int, aggDef AggregateDef) interface{} {
+	if idx >= len(s.GroupConcats) || len(s.GroupConcats[idx]) == 0 {
+		return nil
+	}
+	sep := ","
+	if len(aggDef.Args) >= 2 {
+		if lit, ok := aggDef.Args[1].(*QP.Literal); ok {
+			if sv, ok2 := lit.Value.(string); ok2 {
+				sep = sv
+			}
+		}
+	}
+	return strings.Join(s.GroupConcats[idx], sep)
+}
+
 func (s *AggregateState) sumResult(idx int) interface{} {
 	if !s.SumsHasVal[idx] {
 		return nil
