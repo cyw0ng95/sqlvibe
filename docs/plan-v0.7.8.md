@@ -552,15 +552,15 @@ test/benchmark/
 - [x] Implement plan cache in CG
 - [x] Implement result cache in QE (pkg/sqlvibe queryResultCache)
 - [x] Implement Top-N optimization (QP/topn.go)
-- [ ] Implement predicate pushdown
+- [x] Implement predicate pushdown (QP/optimizer.go + execSelectStmtWithContext)
 - [ ] Implement hash join (already exists in hash_join.go)
 - [x] Add query optimization benchmarks
 
 ### Phase 3: Benchmark & Compare
-- [ ] Create SQLite comparison tests
+- [x] Create SQLite comparison tests (benchmark_v0.7.8_sqlite_compare_test.go)
 - [x] Run full benchmark suite
-- [ ] Compare with go-sqlite driver
-- [ ] Document results
+- [x] Compare with go-sqlite driver (documented in README.md)
+- [x] Document results (README.md v0.7.8 section)
 - [x] Update HISTORY.md
 
 ---

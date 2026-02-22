@@ -11,20 +11,25 @@
 - **CG: Plan cache** (`internal/CG/plan_cache.go`) — New thread-safe `PlanCache` that maps SQL strings to compiled `*VM.Program` instances. Integrated into `ExecVM`: the plan is compiled once and then served from cache on subsequent identical calls, bypassing the tokenise+parse+code-generation pipeline entirely.
 - **DB: Full query result cache** (`pkg/sqlvibe/database.go`) — Added `queryResultCache` (columns + rows) keyed by FNV-1a hash of the SQL string. Pure SELECT queries are served from the cache after the first execution. The cache is invalidated atomically on any write operation (INSERT, UPDATE, DELETE, DDL). Cache is skipped during active transactions to maintain isolation.
 - **QP: Top-N heap accumulator** (`internal/QP/topn.go`) — New `TopN` struct implementing a bounded max-heap for ORDER BY … LIMIT N. Streams rows in and retains only the N best using `container/heap`, giving O(N log K) time and O(K) peak memory vs. O(N log N) / O(N) for a full sort. Used by callers that know the limit at planning time.
+- **QP: Predicate pushdown** (`internal/QP/optimizer.go`) — New `SplitPushdownPredicates`, `IsPushableExpr`, `EvalPushdown`, and `ApplyPushdownFilter` functions. Simple `col OP constant` conditions in a WHERE clause are now evaluated at the Go layer (in `execSelectStmtWithContext`) before rows are handed to the VM, reducing the number of rows the VM must process. AND predicates are split recursively so complex conditions have their pushable leaves extracted. Non-pushable predicates (subqueries, column OP column, function calls) remain in the WHERE clause for the VM. `stmt.Where` is restored after execution to avoid mutating the shared AST.
 
 ### New Benchmarks
 
-- `internal/TS/Benchmark/benchmark_v0.7.8_test.go` — v0.7.8 benchmarks:
-  - `BenchmarkBranchPrediction_WarmLoop` — full table scan (warm predictor)
-  - `BenchmarkBranchPrediction_ShortLoop` — LIMIT 10 scan (early exit path)
+- `internal/TS/Benchmark/benchmark_v0.7.8_test.go` — v0.7.8 benchmarks (12 tests):
+  - `BenchmarkBranchPrediction_WarmLoop`, `BenchmarkBranchPrediction_ShortLoop` — branch prediction paths
   - `BenchmarkPlanCache_Hit` — plan-cache hit throughput
-  - `BenchmarkResultCache_Hit` — result-cache hit throughput
-  - `BenchmarkResultCache_Miss` — result-cache miss baseline
-  - `BenchmarkTopN_Limit10` — ORDER BY + LIMIT 10 on 10 000 rows
-  - `BenchmarkTopN_Limit100` — ORDER BY + LIMIT 100 on 10 000 rows
-  - `BenchmarkStringInterning_Repeated` — DISTINCT tag query with repeated values
-  - `BenchmarkWhereFiltering_1K`, `BenchmarkCountStar_1K`, `BenchmarkCountStarWhere_1K` — WHERE/COUNT baselines
-  - `BenchmarkJoinTwoTables`, `BenchmarkSubqueryIN` — JOIN and subquery baselines
+  - `BenchmarkResultCache_Hit`, `BenchmarkResultCache_Miss` — result-cache hit/miss
+  - `BenchmarkTopN_Limit10`, `BenchmarkTopN_Limit100` — ORDER BY + LIMIT
+  - `BenchmarkStringInterning_Repeated` — DISTINCT with repeated values
+  - `BenchmarkWhereFiltering_1K`, `BenchmarkCountStar_1K`, `BenchmarkCountStarWhere_1K`, `BenchmarkJoinTwoTables`, `BenchmarkSubqueryIN`
+- `internal/TS/Benchmark/benchmark_v0.7.8_sqlite_compare_test.go` — v0.7.8 SQLite comparison benchmarks (14 tests):
+  - `BenchmarkSQLite78_WhereFiltering` / `BenchmarkSqlvibe78_WhereFiltering` — predicate pushdown comparison
+  - `BenchmarkSQLite78_CountStar` / `BenchmarkSqlvibe78_CountStar`
+  - `BenchmarkSQLite78_TopN_Limit10` / `BenchmarkSqlvibe78_TopN_Limit10` — ORDER BY LIMIT 10
+  - `BenchmarkSQLite78_ResultCache_Hit` / `BenchmarkSqlvibe78_ResultCache_Hit`
+  - `BenchmarkSQLite78_InnerJoin` / `BenchmarkSqlvibe78_InnerJoin`
+  - `BenchmarkSQLite78_GroupBy` / `BenchmarkSqlvibe78_GroupBy`
+  - `BenchmarkSQLite78_PredicatePushdown` / `BenchmarkSqlvibe78_PredicatePushdown` — 10K row AND pushdown
 
 ---
 

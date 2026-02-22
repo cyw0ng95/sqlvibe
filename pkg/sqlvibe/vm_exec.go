@@ -249,9 +249,20 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 
 	// Secondary index pre-filter: if WHERE is a simple col=val on an indexed column,
 	// pass only matching rows to the VM instead of the full table.
+	origWhere := stmt.Where // save to restore after execution
 	if stmt.Where != nil {
 		if filtered := db.tryIndexLookup(tableName, stmt.Where); filtered != nil {
 			tableData = filtered
+		} else if stmt.From.Join == nil {
+			// Predicate pushdown: evaluate simple col OP constant conditions at the
+			// Go layer before handing rows to the VM.  This avoids VM opcode execution
+			// overhead for rows that are definitely filtered out.
+			// The remaining (non-pushable) conditions are left in stmt.Where for the VM.
+			pushable, remaining := QP.SplitPushdownPredicates(stmt.Where)
+			if len(pushable) > 0 {
+				tableData = QP.ApplyPushdownFilter(tableData, pushable)
+				stmt.Where = remaining
+			}
 		}
 	}
 
@@ -266,6 +277,8 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 
 	// Execute without calling Reset again (use Exec instead of Run)
 	err := vm.Exec(nil)
+	// Restore WHERE clause in case predicate pushdown temporarily modified it.
+	stmt.Where = origWhere
 	if err == VM.ErrHalt {
 		err = nil
 	}
