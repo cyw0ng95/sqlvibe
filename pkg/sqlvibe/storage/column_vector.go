@@ -34,6 +34,36 @@ func (cv *ColumnVector) SetNull(i int, null bool) {
 	}
 }
 
+// Set overwrites the value at index i.
+func (cv *ColumnVector) Set(i int, v Value) {
+	if i < 0 || i >= len(cv.nulls) {
+		return
+	}
+	if v.IsNull() {
+		cv.nulls[i] = true
+		return
+	}
+	cv.nulls[i] = false
+	switch cv.Type {
+	case TypeInt, TypeBool:
+		if i < len(cv.ints) {
+			cv.ints[i] = v.Int
+		}
+	case TypeFloat:
+		if i < len(cv.floats) {
+			cv.floats[i] = v.Float
+		}
+	case TypeString:
+		if i < len(cv.strings) {
+			cv.strings[i] = v.Str
+		}
+	case TypeBytes:
+		if i < len(cv.bytes) {
+			cv.bytes[i] = v.Bytes
+		}
+	}
+}
+
 // Append appends a Value to the vector.
 func (cv *ColumnVector) Append(v Value) {
 	if v.IsNull() {

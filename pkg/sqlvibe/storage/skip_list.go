@@ -2,6 +2,7 @@ package storage
 
 import (
 	"math/rand"
+	"time"
 )
 
 const maxSkipListLevel = 16
@@ -23,7 +24,7 @@ type SkipList struct {
 // NewSkipList creates an empty SkipList.
 func NewSkipList() *SkipList {
 	head := &skipNode{forward: make([]*skipNode, maxSkipListLevel)}
-	return &SkipList{head: head, levels: 1, rng: rand.New(rand.NewSource(42))}
+	return &SkipList{head: head, levels: 1, rng: rand.New(rand.NewSource(time.Now().UnixNano()))}
 }
 
 // Len returns the number of unique keys.

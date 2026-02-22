@@ -109,7 +109,7 @@ func (cs *ColumnStore) Filter(colName string, pred func(Value) bool) *RoaringBit
 		return rb
 	}
 	for i := 0; i < vec.Len(); i++ {
-		if cs.deleted[i] {
+		if i >= len(cs.deleted) || cs.deleted[i] {
 			continue
 		}
 		if pred(vec.Get(i)) {

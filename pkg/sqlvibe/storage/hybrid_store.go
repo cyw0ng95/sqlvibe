@@ -59,20 +59,8 @@ func (hs *HybridStore) Update(rowIdx int, vals []Value) {
 	// Update column store by overwriting each column vector value
 	for ci, vec := range hs.colStore.vectors {
 		if ci < len(vals) {
-			// Overwrite in place by setting the underlying slot
 			if rowIdx >= 0 && rowIdx < vec.Len() {
-				v := vals[ci]
-				switch vec.Type {
-				case TypeInt, TypeBool:
-					vec.ints[rowIdx] = v.Int
-				case TypeFloat:
-					vec.floats[rowIdx] = v.Float
-				case TypeString:
-					vec.strings[rowIdx] = v.Str
-				case TypeBytes:
-					vec.bytes[rowIdx] = v.Bytes
-				}
-				vec.nulls[rowIdx] = v.IsNull()
+				vec.Set(rowIdx, vals[ci])
 			}
 		}
 	}

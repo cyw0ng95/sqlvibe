@@ -207,22 +207,31 @@ func TestColumnarMax_AllNull(t *testing.T) {
 
 func TestColumnarAvg(t *testing.T) {
 	col := buildIntCol([]int64{2, 4, 6}, nil)
-	if got := ColumnarAvg(col); got != 4.0 {
+	got, ok := ColumnarAvg(col)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if got != 4.0 {
 		t.Fatalf("expected 4.0, got %v", got)
 	}
 }
 
 func TestColumnarAvg_SkipsNulls(t *testing.T) {
 	col := buildIntCol([]int64{10, 0, 20}, []bool{false, true, false})
-	if got := ColumnarAvg(col); got != 15.0 {
+	got, ok := ColumnarAvg(col)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if got != 15.0 {
 		t.Fatalf("expected 15.0, got %v", got)
 	}
 }
 
 func TestColumnarAvg_NoValues(t *testing.T) {
 	col := buildIntCol([]int64{0}, []bool{true})
-	if got := ColumnarAvg(col); got != 0 {
-		t.Fatalf("expected 0, got %v", got)
+	_, ok := ColumnarAvg(col)
+	if ok {
+		t.Fatal("expected ok=false for all-null column")
 	}
 }
 

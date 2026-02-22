@@ -95,9 +95,9 @@ func ColumnarMax(col *storage.ColumnVector) storage.Value {
 	return max
 }
 
-// ColumnarAvg returns the average of all non-null TypeInt and TypeFloat values.
-// Returns 0 when there are no qualifying values.
-func ColumnarAvg(col *storage.ColumnVector) float64 {
+// ColumnarAvg returns the average of all non-null TypeInt and TypeFloat values,
+// and whether any qualifying values existed (false means no data / all NULL).
+func ColumnarAvg(col *storage.ColumnVector) (float64, bool) {
 	var sum float64
 	var count int64
 	for i := 0; i < col.Len(); i++ {
@@ -115,9 +115,9 @@ func ColumnarAvg(col *storage.ColumnVector) float64 {
 		}
 	}
 	if count == 0 {
-		return 0
+		return 0, false
 	}
-	return sum / float64(count)
+	return sum / float64(count), true
 }
 
 // groupState holds per-group aggregation accumulators.
