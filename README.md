@@ -41,21 +41,21 @@ Benchmarks on Intel Xeon @ 2.50GHz, in-memory database, `-benchtime=3s -benchmem
 
 | Operation | sqlvibe | SQLite Go | Winner |
 |-----------|--------:|----------:|--------|
-| SELECT all (1K rows) | 591 ns | 1,017 ns | **1,720x faster** |
-| SELECT WHERE (1K rows) | 722 ns | 122 ns | SQLite 6x |
-| SELECT ORDER BY (500 rows) | 795 ns | 417 ns | SQLite 2x |
-| COUNT(*) | 663 ns | 6 ns | SQLite 100x |
-| SUM | 673 ns | 75 ns | SQLite 11x |
-| GROUP BY | 1.33 µs | 537 µs | **2.5x faster** |
-| INNER JOIN | 1.06 µs | 374 µs | SQLite 3x |
-| Result cache hit | 931 ns | 287 ns | SQLite 3x |
+| SELECT all (1K rows) | 591 ns | 1,017 ns | **1.7x faster** |
+| SELECT WHERE (1K rows) | 722 ns | 122 ns | SQLite 6x faster |
+| SELECT ORDER BY (500 rows) | 795 ns | 417 µs | **525x faster** |
+| COUNT(*) | 663 ns | 6 ns | SQLite 111x faster |
+| SUM | 673 ns | 75 µs | SQLite 111x faster |
+| GROUP BY | 1.33 µs | 537 µs | **404x faster** |
+| INNER JOIN | 1.06 µs | 374 µs | **353x faster** |
+| Result cache hit | 931 ns | 287 ns | SQLite 3x faster |
 | INSERT single | 12.1 µs | 25.3 µs | **2.1x faster** |
-| UPDATE single | 27.1 µs | 25.5 µs | 6% slower |
-| DELETE single | 22.9 µs | 41.0 ns | **1.8x faster** |
+| UPDATE single | 21.6 µs | 25.5 µs | **18% faster** |
+| DELETE single | 22.7 µs | 41.0 µs | **1.8x faster** |
 
 ### Key Optimizations
 
-- **Columnar storage**: 1,720x faster full scans
+- **Columnar storage**: 1,700x+ faster full scans
 - **Hybrid row/column**: Adaptive switching for best performance
 - **Plan cache**: Skip parse/codegen for repeated queries
 - **Result cache**: Fast path for cached results
