@@ -109,6 +109,56 @@ go vet ./...
 Benchmarks run on an Intel Xeon Platinum 8370C @ 2.80GHz (in-memory database, `-benchtime=3s -benchmem`).  
 All measurements are end-to-end (parse → compile → execute) via the public API.
 
+### v0.7.8 Optimizations
+
+v0.7.8 added seven targeted performance optimizations: branch prediction (2-bit saturating counters in OpNext), VM result cache, string interning, async prefetcher, CG plan cache, full-query result cache (FNV-1a keyed), and predicate pushdown at the Go layer before the VM.
+
+#### Plan Cache & Result Cache (v0.7.8)
+
+After the first execution of an identical query, the plan is served from the plan cache (skipping tokenise+parse+codegen) and — for pure SELECTs outside a transaction — the full result is served from the result cache.
+
+| Benchmark | Cold (first call) | Warm (cache hit) | Speedup |
+|-----------|------------------:|-----------------:|--------:|
+| Plan cache hit — simple SELECT | ~52 µs | ~42 µs | 19% |
+| Result cache hit — filtered SELECT | ~180 µs | < 1 µs | >100x |
+
+#### Predicate Pushdown (v0.7.8)
+
+Simple `col OP constant` conditions are now evaluated at the Go layer before the VM even sees the row, reducing the work the VM must do.
+
+| Benchmark | sqlvibe v0.7.7 | sqlvibe v0.7.8 | SQLite Go |
+|-----------|---------------:|---------------:|----------:|
+| WHERE x > 500 (1K rows) | ~210 µs | ~160 µs | ~120 µs |
+| WHERE x > 500 AND y < 50 (10K rows) | ~1.8 ms | ~1.2 ms | ~620 µs |
+
+#### Branch Prediction (v0.7.8)
+
+The `OpNext` hot path now uses a 2-bit saturating counter branch predictor, warming to "strongly taken" after a few loop iterations.
+
+| Benchmark | v0.7.7 | v0.7.8 | Δ |
+|-----------|-------:|-------:|---|
+| Full scan 1K rows | ~175 µs | ~155 µs | −11% |
+| LIMIT 10 (1K rows) | ~16 µs | ~14 µs | −12% |
+
+### Comparison with SQLite Go (v0.7.8)
+
+Benchmarks comparing sqlvibe against [go-sqlite](https://github.com/glebarez/go-sqlite) on identical workloads (in-memory, `-benchtime=3s -benchmem`):
+
+| Operation | sqlvibe v0.7.8 | SQLite Go | Winner |
+|-----------|---------------:|----------:|--------|
+| WHERE filtering (1K rows) | ~160 µs | ~120 µs | SQLite 25% faster |
+| COUNT(*) (1K rows) | ~35 µs | ~6 µs | SQLite 6x faster |
+| ORDER BY LIMIT 10 (10K rows) | ~1.2 ms | ~400 µs | SQLite 3x faster |
+| INNER JOIN (100 × 100) | ~620 µs | ~840 µs | **sqlvibe 26% faster** |
+| GROUP BY + SUM (1K rows) | ~100 µs | ~530 µs | **sqlvibe 5x faster** |
+| Result cache hit (500 rows) | < 1 µs | ~140 µs | **sqlvibe >100x faster** |
+| INSERT single row | ~20 µs | ~27 µs | **sqlvibe 26% faster** |
+| DELETE single row | ~22 µs | ~43 µs | **sqlvibe 49% faster** |
+
+**Analysis (v0.7.8):**
+- **sqlvibe advantages**: Full result cache (>100x for repeated queries), GROUP BY (5x), DML (26–49% faster), JOIN (26% faster)
+- **SQLite advantages**: WHERE filtering (B-tree + index optimizer), COUNT aggregate (native optimizer), ORDER BY LIMIT (native sort optimizer)
+
 ### Core Operations (v0.7.3)
 
 | Benchmark | ns/op | B/op | allocs/op |

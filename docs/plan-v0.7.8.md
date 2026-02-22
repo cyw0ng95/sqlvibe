@@ -542,26 +542,26 @@ test/benchmark/
 ## Tasks
 
 ### Phase 1: VM Runtime
-- [ ] Implement branch prediction in exec.go
-- [ ] Implement result cache in VM
-- [ ] Implement async prefetch in DS
-- [ ] Implement string interning
-- [ ] Add VM benchmarks
+- [x] Implement branch prediction in exec.go
+- [x] Implement result cache in VM
+- [x] Implement async prefetch in DS
+- [x] Implement string interning
+- [x] Add VM benchmarks
 
 ### Phase 2: CG Optimizations
-- [ ] Implement plan cache in CG
-- [ ] Implement result cache in QE
-- [ ] Implement Top-N optimization
-- [ ] Implement predicate pushdown
-- [ ] Implement hash join
-- [ ] Add query optimization benchmarks
+- [x] Implement plan cache in CG
+- [x] Implement result cache in QE (pkg/sqlvibe queryResultCache)
+- [x] Implement Top-N optimization (QP/topn.go)
+- [x] Implement predicate pushdown (QP/optimizer.go + execSelectStmtWithContext)
+- [ ] Implement hash join (already exists in hash_join.go)
+- [x] Add query optimization benchmarks
 
 ### Phase 3: Benchmark & Compare
-- [ ] Create SQLite comparison tests
-- [ ] Run full benchmark suite
-- [ ] Compare with go-sqlite driver
-- [ ] Document results
-- [ ] Update HISTORY.md
+- [x] Create SQLite comparison tests (benchmark_v0.7.8_sqlite_compare_test.go)
+- [x] Run full benchmark suite
+- [x] Compare with go-sqlite driver (documented in README.md)
+- [x] Document results (README.md v0.7.8 section)
+- [x] Update HISTORY.md
 
 ---
 

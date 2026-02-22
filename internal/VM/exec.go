@@ -1629,11 +1629,32 @@ func (vm *VM) Exec(ctx interface{}) error {
 			target := int(inst.P2)
 			cursor := vm.cursors.Get(cursorID)
 			if cursor != nil {
-				cursor.Index++
-				if cursor.Index >= len(cursor.Data) {
+				instPC := vm.pc - 1 // PC of the OpNext instruction
+				// Fast path: predictor says loop will continue.
+				if vm.bp.Predict(instPC) {
+					cursor.Index++
+					if cursor.Index < len(cursor.Data) {
+						// Prediction correct: loop continues.
+						vm.bp.Update(instPC, true)
+						continue
+					}
+					// Prediction wrong: cursor exhausted.
 					cursor.EOF = true
 					if target > 0 {
 						vm.pc = target
+					}
+					vm.bp.Update(instPC, false)
+				} else {
+					// Predictor says loop will NOT continue (or cold start).
+					cursor.Index++
+					if cursor.Index >= len(cursor.Data) {
+						cursor.EOF = true
+						if target > 0 {
+							vm.pc = target
+						}
+						vm.bp.Update(instPC, false)
+					} else {
+						vm.bp.Update(instPC, true)
 					}
 				}
 			}
