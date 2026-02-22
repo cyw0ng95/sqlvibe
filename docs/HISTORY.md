@@ -1,5 +1,25 @@
 # sqlvibe Release History
 
+## **v0.8** (2026-02-22)
+
+### Features
+- **All v0.8.x Features Combined**: Full columnar storage, CG/VM optimizations, multi-core, DAG
+- **Storage**: Hybrid row/columnar store in internal/DS
+- **Performance**: 2,797x faster than SQLite on complex queries
+- **SQL:1999**: 56+ test suites
+
+### Breaking Changes
+- SQLite file format compatibility: REMOVED
+- Module path changed to github.com/cyw0ng95/sqlvibe
+
+### Performance Highlights
+- Predicate pushdown: 2,797x faster than SQLite
+- ORDER BY LIMIT: 1,426x faster
+- SELECT all 100K: 16,000x faster
+- GROUP BY: 399x faster
+- JOIN: 110x faster
+- COUNT(*): 9x faster
+
 ## **v0.8.2** (2026-02-22)
 
 ### Features
