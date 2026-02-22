@@ -1892,6 +1892,94 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpColumnarScan:
+			// P1=tableID (unused), P2=destReg, P4=tableName string
+			tableName := ""
+			if inst.P4 != nil {
+				if s, ok := inst.P4.(string); ok {
+					tableName = s
+				}
+			}
+			if vm.ctx != nil && tableName != "" {
+				rows, err := vm.ctx.GetTableData(tableName)
+				if err == nil {
+					vm.registers[inst.P2] = rows
+				} else {
+					vm.registers[inst.P2] = []map[string]interface{}{}
+				}
+			} else {
+				vm.registers[inst.P2] = []map[string]interface{}{}
+			}
+			continue
+
+		case OpColumnarFilter:
+			// P1=srcReg (rows), P2=valReg (filter value), P4=*ColumnarFilterSpec (includes DstReg)
+			rows, _ := vm.registers[inst.P1].([]map[string]interface{})
+			filterVal := vm.registers[inst.P2]
+			spec, _ := inst.P4.(*ColumnarFilterSpec)
+			if spec == nil || rows == nil {
+				if spec != nil {
+					vm.registers[spec.DstReg] = rows
+				}
+				continue
+			}
+			filtered := make([]map[string]interface{}, 0, len(rows))
+			for _, row := range rows {
+				v := row[spec.ColName]
+				if columnarCompare(v, filterVal, spec.Op) {
+					filtered = append(filtered, row)
+				}
+			}
+			vm.registers[spec.DstReg] = filtered
+			continue
+
+		case OpColumnarAgg:
+			// P1=srcReg (rows), P2=aggType, P4=*ColumnarAggSpec (includes colName and DstReg)
+			rows, _ := vm.registers[inst.P1].([]map[string]interface{})
+			aggSpec, _ := inst.P4.(*ColumnarAggSpec)
+			if aggSpec == nil {
+				continue
+			}
+			aggType := int(inst.P2)
+			vm.registers[aggSpec.DstReg] = columnarAggregate(rows, aggSpec.ColName, aggType)
+			continue
+
+		case OpColumnarProject:
+			// P1=srcReg (rows), P2=colNamesReg ([]string), P4=destReg as int
+			rows, _ := vm.registers[inst.P1].([]map[string]interface{})
+			colNames, _ := vm.registers[inst.P2].([]string)
+			destReg, _ := inst.P4.(int)
+			if colNames == nil || rows == nil {
+				vm.registers[destReg] = rows
+				continue
+			}
+			projected := make([][]interface{}, 0, len(rows))
+			for _, row := range rows {
+				r := make([]interface{}, len(colNames))
+				for i, c := range colNames {
+					r[i] = row[c]
+				}
+				projected = append(projected, r)
+			}
+			vm.registers[destReg] = projected
+			continue
+
+		case OpTopK:
+			// P1=k, P2=srcReg ([][]interface{}), P4=destReg as int
+			k := int(inst.P1)
+			rows, _ := vm.registers[inst.P2].([][]interface{})
+			destReg, _ := inst.P4.(int)
+			if k <= 0 || rows == nil {
+				vm.registers[destReg] = rows
+				continue
+			}
+			if k >= len(rows) {
+				vm.registers[destReg] = rows
+			} else {
+				vm.registers[destReg] = rows[:k]
+			}
+			continue
+
 		default:
 			return fmt.Errorf("unimplemented opcode: %v", inst.Op)
 		}
@@ -4048,4 +4136,101 @@ func (vm *VM) compareVals(a, b interface{}) int {
 	}
 
 	return 0
+}
+
+// ColumnarFilterSpec specifies a columnar filter predicate.
+type ColumnarFilterSpec struct {
+ColName string
+Op      string // "=", "!=", "<", "<=", ">", ">="
+DstReg  int    // destination register for filtered rows
+}
+
+// ColumnarAggSpec specifies a columnar aggregation.
+type ColumnarAggSpec struct {
+ColName string
+DstReg  int // destination register for the aggregate result
+}
+
+// columnarCompare compares a row value against a filter value using the given operator.
+func columnarCompare(rowVal, filterVal interface{}, op string) bool {
+cmp := compareVals(rowVal, filterVal)
+switch op {
+case "=":
+return cmp == 0
+case "!=":
+return cmp != 0
+case "<":
+return cmp < 0
+case "<=":
+return cmp <= 0
+case ">":
+return cmp > 0
+case ">=":
+return cmp >= 0
+}
+return false
+}
+
+// columnarAggregate computes an aggregate over rows for a given column.
+// aggType: 0=COUNT, 1=SUM, 2=MIN, 3=MAX, 4=AVG
+func columnarAggregate(rows []map[string]interface{}, colName string, aggType int) interface{} {
+switch aggType {
+case 0: // COUNT
+return int64(len(rows))
+case 1: // SUM
+var sum float64
+for _, row := range rows {
+v := row[colName]
+switch n := v.(type) {
+case int64:
+sum += float64(n)
+case float64:
+sum += n
+}
+}
+return sum
+case 2: // MIN
+var minVal interface{}
+for _, row := range rows {
+v := row[colName]
+if v == nil {
+continue
+}
+if minVal == nil || compareVals(v, minVal) < 0 {
+minVal = v
+}
+}
+return minVal
+case 3: // MAX
+var maxVal interface{}
+for _, row := range rows {
+v := row[colName]
+if v == nil {
+continue
+}
+if maxVal == nil || compareVals(v, maxVal) > 0 {
+maxVal = v
+}
+}
+return maxVal
+case 4: // AVG
+var sum float64
+count := 0
+for _, row := range rows {
+v := row[colName]
+switch n := v.(type) {
+case int64:
+sum += float64(n)
+count++
+case float64:
+sum += n
+count++
+}
+}
+if count == 0 {
+return nil
+}
+return sum / float64(count)
+}
+return nil
 }

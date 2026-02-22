@@ -204,6 +204,13 @@ const (
 	OpJson
 	OpJsonExtract
 
+	// Columnar operations (v0.8.1)
+	OpColumnarScan    // Full scan returning column vectors; P1=tableID, P2=destReg, P4=tableName string
+	OpColumnarFilter  // Filter column vector; P1=srcReg, P2=valReg, P3=destReg; P4=*ColumnarFilterSpec
+	OpColumnarAgg     // Aggregate on vector; P1=srcReg, P2=aggType(0=COUNT,1=SUM,2=MIN,3=MAX,4=AVG), P3=destReg; P4=colName string
+	OpColumnarProject // Project columns from vectors; P1=srcReg, P2=colNamesReg, P3=destReg
+	OpTopK            // Heap-based top-K for LIMIT; P1=k, P2=srcReg, P3=destReg
+
 	// Last - must be last
 	OpLastCode
 )
@@ -409,6 +416,13 @@ var OpCodeInfo = map[OpCode]string{
 	// JSON operations (future)
 	OpJson:        "Json",
 	OpJsonExtract: "JsonExtract",
+
+	// Columnar operations (v0.8.1)
+	OpColumnarScan:    "ColumnarScan",
+	OpColumnarFilter:  "ColumnarFilter",
+	OpColumnarAgg:     "ColumnarAgg",
+	OpColumnarProject: "ColumnarProject",
+	OpTopK:            "TopK",
 }
 
 // IsJump returns true if the opcode is a jump instruction
