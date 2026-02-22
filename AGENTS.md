@@ -201,7 +201,7 @@ During development, always reference the current plan:
 4. **Commit and push EVERY time** - After marking tasks complete OR any plan change:
    ```
    git add -A
-   git commit -m "docs: Update plan-v0.3.x progress"
+   git commit -m "docs: Update plan-v0.8.0 progress"
    git push
    ```
 5. **When all tasks complete** - It's time to release:
@@ -262,7 +262,7 @@ When user adds new tasks during development:
 4. **Commit and push immediately** - Never proceed without committing plan changes:
    ```
    git add -A
-   git commit -m "docs: Add new task to plan-v0.3.x"
+   git commit -m "docs: Add new task to plan-v0.8.0"
    git push
    ```
 5. **Implement according to DAG** - Never start implementation without following the DAG order
