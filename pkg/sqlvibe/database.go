@@ -94,6 +94,8 @@ type Database struct {
 	schemaCache        *IS.SchemaCache                     // information_schema result cache (DDL-invalidated)
 	hybridStores       map[string]*DS.HybridStore     // table name -> columnar hybrid store (analytical fast path)
 	hybridStoresDirty  map[string]bool                     // table name -> needs rebuild on next access
+	isolationConfig    *TM.IsolationConfig                 // isolation level and busy_timeout settings
+	compressionName    string                              // active compression algorithm (NONE/RLE/LZ4/ZSTD/GZIP)
 }
 
 type dbSnapshot struct {
@@ -353,6 +355,8 @@ func Open(path string) (*Database, error) {
 		schemaCache:        IS.NewSchemaCache(),
 		hybridStores:       make(map[string]*DS.HybridStore),
 		hybridStoresDirty:  make(map[string]bool),
+		isolationConfig:    TM.NewIsolationConfig(),
+		compressionName:    "NONE",
 	}, nil
 }
 
@@ -768,6 +772,10 @@ func (db *Database) Query(sql string) (*Rows, error) {
 
 	if ast.NodeType() == "PragmaStmt" {
 		return db.handlePragma(ast.(*QP.PragmaStmt))
+	}
+
+	if ast.NodeType() == "BackupStmt" {
+		return db.handleBackup(ast.(*QP.BackupStmt))
 	}
 
 	if ast.NodeType() == "ExplainStmt" {

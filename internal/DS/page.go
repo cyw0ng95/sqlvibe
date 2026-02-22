@@ -57,11 +57,13 @@ func (pt PageType) String() string {
 }
 
 type Page struct {
-	Num      uint32
-	Type     PageType
-	Data     []byte
-	IsDirty  bool
-	RefCount int
+	Num              uint32
+	Type             PageType
+	Data             []byte
+	IsDirty          bool
+	RefCount         int
+	IsCompressed     bool
+	UncompressedSize int
 }
 
 func NewPage(num uint32, size int) *Page {
@@ -245,4 +247,41 @@ func IsValidPageSize(size int) bool {
 
 func GetDefaultPageSize() int {
 	return DefaultPageSize
+}
+
+// Compress compresses the page Data in-place using the supplied Compressor.
+// After a successful call IsCompressed is true and UncompressedSize holds the
+// original byte count. Calling Compress on an already-compressed page returns
+// nil without doing any work.
+func (p *Page) Compress(c Compressor) error {
+	if p.IsCompressed {
+		return nil
+	}
+	compressed, err := c.Compress(p.Data)
+	if err != nil {
+		return err
+	}
+	p.UncompressedSize = len(p.Data)
+	p.Data = compressed
+	p.IsCompressed = true
+	p.IsDirty = true
+	return nil
+}
+
+// Decompress restores the page Data from its compressed form using the
+// supplied Compressor. Calling Decompress on a non-compressed page returns
+// nil without doing any work.
+func (p *Page) Decompress(c Compressor) error {
+	if !p.IsCompressed {
+		return nil
+	}
+	decompressed, err := c.Decompress(p.Data)
+	if err != nil {
+		return err
+	}
+	p.Data = decompressed
+	p.IsCompressed = false
+	p.UncompressedSize = 0
+	p.IsDirty = true
+	return nil
 }
