@@ -308,3 +308,318 @@ func TestPersistence_ExtraSchema(t *testing.T) {
 		t.Errorf("extra schema field lost: version = %v", schema2["version"])
 	}
 }
+
+// ---- Compression round-trip tests ----
+
+func TestPersistence_RLE_RoundTrip(t *testing.T) {
+path := tmpFile(t)
+hs, cols, types := makeStore(t)
+schema := makeSchema(cols, types)
+
+if err := WriteDatabaseOpts(path, hs, schema, CompressionRLE); err != nil {
+t.Fatalf("WriteDatabaseOpts(RLE): %v", err)
+}
+
+hs2, _, err := ReadDatabase(path)
+if err != nil {
+t.Fatalf("ReadDatabase(RLE): %v", err)
+}
+if hs2.LiveCount() != hs.LiveCount() {
+t.Fatalf("row count mismatch: got %d, want %d", hs2.LiveCount(), hs.LiveCount())
+}
+}
+
+func TestPersistence_Gzip_RoundTrip(t *testing.T) {
+path := tmpFile(t)
+hs, cols, types := makeStore(t)
+schema := makeSchema(cols, types)
+
+if err := WriteDatabaseOpts(path, hs, schema, CompressionGzip); err != nil {
+t.Fatalf("WriteDatabaseOpts(Gzip): %v", err)
+}
+
+hs2, _, err := ReadDatabase(path)
+if err != nil {
+t.Fatalf("ReadDatabase(Gzip): %v", err)
+}
+rows2 := hs2.Scan()
+rows1 := hs.Scan()
+if len(rows2) != len(rows1) {
+t.Fatalf("row count mismatch: got %d, want %d", len(rows2), len(rows1))
+}
+// Spot-check first row's first column.
+if !rows2[0][0].Equal(rows1[0][0]) {
+t.Errorf("first cell mismatch: got %v, want %v", rows2[0][0], rows1[0][0])
+}
+}
+
+// ---- RLE encode/decode unit tests ----
+
+func TestRLE_EncodeDecode(t *testing.T) {
+cases := [][]byte{
+{},
+{0x41},
+{0x41, 0x41, 0x41, 0x42, 0x42},
+make([]byte, 300), // 300 zeros – tests run > 256
+}
+for _, tc := range cases {
+encoded := encodeRLE(tc)
+decoded, err := decodeRLE(encoded)
+if err != nil {
+t.Errorf("decodeRLE error for input len %d: %v", len(tc), err)
+continue
+}
+if len(decoded) != len(tc) {
+t.Errorf("len mismatch: got %d, want %d", len(decoded), len(tc))
+continue
+}
+for i := range tc {
+if decoded[i] != tc[i] {
+t.Errorf("byte %d: got %x, want %x", i, decoded[i], tc[i])
+}
+}
+}
+}
+
+// ---- Index serialization round-trip ----
+
+func TestIndexSerialization_RoundTrip(t *testing.T) {
+ie := NewIndexEngine()
+ie.AddBitmapIndex("status")
+ie.AddSkipListIndex("score")
+
+// Populate
+ie.IndexRow(0, "status", StringValue("active"))
+ie.IndexRow(1, "status", StringValue("inactive"))
+ie.IndexRow(2, "status", StringValue("active"))
+ie.IndexRow(0, "score", IntValue(90))
+ie.IndexRow(1, "score", IntValue(75))
+ie.IndexRow(2, "score", IntValue(88))
+
+data := SerializeIndexes(ie)
+if len(data) == 0 {
+t.Fatal("SerializeIndexes returned empty data")
+}
+
+ie2 := NewIndexEngine()
+if err := DeserializeIndexes(data, ie2); err != nil {
+t.Fatalf("DeserializeIndexes: %v", err)
+}
+
+// Verify bitmap index.
+rb := ie2.LookupEqual("status", StringValue("active"))
+if rb == nil {
+t.Fatal("bitmap lookup returned nil")
+}
+if rb.Cardinality() != 2 {
+t.Errorf("bitmap cardinality: got %d, want 2", rb.Cardinality())
+}
+
+// Verify skip-list index.
+rbRange := ie2.LookupRange("score", IntValue(80), IntValue(100), true)
+if rbRange == nil {
+t.Fatal("skip-list range lookup returned nil")
+}
+if rbRange.Cardinality() != 2 {
+t.Errorf("skip-list range cardinality: got %d, want 2", rbRange.Cardinality())
+}
+}
+
+// ---- MmapFile tests ----
+
+func TestMmapFile_RoundTrip(t *testing.T) {
+path := tmpFile(t)
+hs, cols, types := makeStore(t)
+if err := WriteDatabase(path, hs, makeSchema(cols, types)); err != nil {
+t.Fatal(err)
+}
+
+hs2, _, err := ReadDatabaseMmap(path)
+if err != nil {
+t.Fatalf("ReadDatabaseMmap: %v", err)
+}
+if hs2.LiveCount() != hs.LiveCount() {
+t.Fatalf("row count mismatch: got %d, want %d", hs2.LiveCount(), hs.LiveCount())
+}
+}
+
+func TestMmapFile_CompressedRoundTrip(t *testing.T) {
+path := tmpFile(t)
+hs, cols, types := makeStore(t)
+if err := WriteDatabaseOpts(path, hs, makeSchema(cols, types), CompressionGzip); err != nil {
+t.Fatal(err)
+}
+
+hs2, _, err := ReadDatabaseMmap(path)
+if err != nil {
+t.Fatalf("ReadDatabaseMmap (gzip): %v", err)
+}
+if hs2.LiveCount() != hs.LiveCount() {
+t.Fatalf("row count mismatch: got %d, want %d", hs2.LiveCount(), hs.LiveCount())
+}
+}
+
+// ---- WAL tests ----
+
+func TestWAL_AppendAndReplay(t *testing.T) {
+dir := t.TempDir()
+walPath := dir + "/test.wal"
+
+// Build a store and record all ops in the WAL.
+wal, err := OpenWAL(walPath)
+if err != nil {
+t.Fatal(err)
+}
+
+cols := []string{"id", "val"}
+types := []ValueType{TypeInt, TypeInt}
+hs := NewHybridStore(cols, types)
+
+row1 := []Value{IntValue(1), IntValue(10)}
+row2 := []Value{IntValue(2), IntValue(20)}
+row3 := []Value{IntValue(3), IntValue(30)}
+
+hs.Insert(row1)
+if err := wal.AppendInsert(row1); err != nil {
+t.Fatal(err)
+}
+hs.Insert(row2)
+if err := wal.AppendInsert(row2); err != nil {
+t.Fatal(err)
+}
+hs.Insert(row3)
+if err := wal.AppendInsert(row3); err != nil {
+t.Fatal(err)
+}
+
+// Update row 1 (index 1 → zero-based).
+updated := []Value{IntValue(2), IntValue(99)}
+hs.Update(1, updated)
+if err := wal.AppendUpdate(1, updated); err != nil {
+t.Fatal(err)
+}
+
+// Delete row 0.
+hs.Delete(0)
+if err := wal.AppendDelete(0); err != nil {
+t.Fatal(err)
+}
+
+if err := wal.Close(); err != nil {
+t.Fatal(err)
+}
+
+// Replay into a fresh store.
+wal2, err := OpenWAL(walPath)
+if err != nil {
+t.Fatal(err)
+}
+defer wal2.Close()
+
+fresh := NewHybridStore(cols, types)
+if err := wal2.Replay(fresh); err != nil {
+t.Fatalf("Replay: %v", err)
+}
+
+if fresh.LiveCount() != hs.LiveCount() {
+t.Fatalf("live count after replay: got %d, want %d", fresh.LiveCount(), hs.LiveCount())
+}
+}
+
+func TestWAL_Checkpoint(t *testing.T) {
+dir := t.TempDir()
+walPath := dir + "/test.wal"
+dbPath := dir + "/test.db"
+
+wal, err := OpenWAL(walPath)
+if err != nil {
+t.Fatal(err)
+}
+defer wal.Close()
+
+cols := []string{"x"}
+types := []ValueType{TypeInt}
+hs := NewHybridStore(cols, types)
+row := []Value{IntValue(42)}
+hs.Insert(row)
+wal.AppendInsert(row)
+
+schema := map[string]interface{}{
+"column_names": cols,
+"column_types": []int{int(TypeInt)},
+}
+if err := wal.Checkpoint(hs, dbPath, schema); err != nil {
+t.Fatalf("Checkpoint: %v", err)
+}
+
+// WAL should be empty after checkpoint.
+sz, err := wal.Size()
+if err != nil {
+t.Fatal(err)
+}
+if sz != 0 {
+t.Errorf("WAL not empty after checkpoint: %d bytes", sz)
+}
+
+// DB file should be readable.
+hs2, _, err := ReadDatabase(dbPath)
+if err != nil {
+t.Fatalf("ReadDatabase after checkpoint: %v", err)
+}
+if hs2.LiveCount() != 1 {
+t.Fatalf("expected 1 row after checkpoint, got %d", hs2.LiveCount())
+}
+}
+
+// ---- Compact tests ----
+
+func TestCompact_RemovesTombstones(t *testing.T) {
+cols := []string{"id", "val"}
+types := []ValueType{TypeInt, TypeInt}
+hs := NewHybridStore(cols, types)
+for i := 0; i < 5; i++ {
+hs.Insert([]Value{IntValue(int64(i)), IntValue(int64(i * 10))})
+}
+hs.Delete(1)
+hs.Delete(3)
+
+if hs.LiveCount() != 3 {
+t.Fatalf("pre-compact live count: got %d, want 3", hs.LiveCount())
+}
+// RowStore has 5 entries (2 deleted).
+if hs.rowStore.RowCount() != 5 {
+t.Fatalf("pre-compact row count: got %d, want 5", hs.rowStore.RowCount())
+}
+
+compact := Compact(hs)
+
+if compact.LiveCount() != 3 {
+t.Fatalf("post-compact live count: got %d, want 3", compact.LiveCount())
+}
+// After compaction there are no tombstones.
+if compact.rowStore.RowCount() != 3 {
+t.Fatalf("post-compact total rows: got %d, want 3", compact.rowStore.RowCount())
+}
+}
+
+func TestCompactFile_RoundTrip(t *testing.T) {
+path := tmpFile(t)
+hs, cols, types := makeStore(t)
+hs.Delete(0) // mark one row deleted
+if err := WriteDatabase(path, hs, makeSchema(cols, types)); err != nil {
+t.Fatal(err)
+}
+
+if err := CompactFile(path); err != nil {
+t.Fatalf("CompactFile: %v", err)
+}
+
+hs2, _, err := ReadDatabase(path)
+if err != nil {
+t.Fatalf("ReadDatabase after CompactFile: %v", err)
+}
+// Original had 3 rows, deleted 1 → expect 2 after compact.
+if hs2.LiveCount() != hs.LiveCount() {
+t.Fatalf("expected %d rows, got %d", hs.LiveCount(), hs2.LiveCount())
+}
+}

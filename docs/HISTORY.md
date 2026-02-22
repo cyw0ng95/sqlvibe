@@ -1,5 +1,77 @@
 # sqlvibe Release History
 
+## **v0.8.0** (2026-02-22)
+
+### New Features
+
+- **Columnar storage engine** (`pkg/sqlvibe/storage/`) — Pure-Go columnar analytical layer built without external dependencies:
+  - `HybridStore` — adaptive engine that transparently switches between row-store and column-store mode based on query patterns. Per-table instances are embedded in `Database` and kept in sync with all SQL writes (`GetHybridStore` API).
+  - `RowStore` — tombstone-based row-oriented store with O(1) append, O(1) indexed get/update/delete.
+  - `ColumnStore` — typed column vectors with cache-friendly layout (`int64`, `float64`, `string`, `[]byte`, `bool`).
+  - `ColumnVector` — per-column typed backing slice; supports `Append`, `Get`, `Set`, `AppendNull`, null-bitmap tracking.
+  - `RoaringBitmap` — pure-Go roaring bitmap with `Add`, `And`, `Or`, `Not`, `ToSlice`, `Cardinality`. Switches automatically between array-container and bitmap-container at 4096 elements.
+  - `SkipList` — O(log N) ordered key → `[]uint32` index map with `Insert`, `Lookup`, `Range`, `Min`, `Max`, `Pairs` (for serialization).
+  - `Arena` — bump-pointer allocator with batch-free (`Reset`); reduces GC pressure for short-lived vectorized allocations.
+  - `IndexEngine` — combined bitmap + skip-list index over one or more columns. Methods: `AddBitmapIndex`, `AddSkipListIndex`, `LookupEqual`, `LookupRange`, `IndexRow`, `UnindexRow`, plus serialization accessors (`BitmapColumns`, `BitmapMap`, `SetBitmap`, `SkipListColumns`, `SkipList`).
+
+- **Vectorized execution operators** (`pkg/sqlvibe/exec_columnar.go`):
+  - `VectorizedFilter(col, op, val)` — SIMD-friendly null-skipping predicate over a ColumnVector; returns a `RoaringBitmap` of matching row indices.
+  - `ColumnarSum`, `ColumnarCount`, `ColumnarMin`, `ColumnarMax`, `ColumnarAvg` — single-pass typed aggregates over a ColumnVector.
+  - `ColumnarGroupBy(keyCol, valCol, agg)` — GROUP BY a string key column with one aggregate.
+  - `ColumnarHashJoin(left, right, leftCol, rightCol)` — inner join via hash table on two `HybridStore`s.
+  - `VectorizedGroupBy(hs, groupCols, aggCol, agg)` — composite-key GROUP BY in a single scan pass; representative key values captured on first occurrence (no re-scan).
+
+- **SQLVIBE binary format v1.0.0** (`pkg/sqlvibe/storage/persistence.go`, `docs/DB-FORMAT.md`):
+  - Fixed 256-byte file header with magic bytes, version, schema offset/length, column count, row count, CRC-64 (ECMA), and compression type.
+  - Schema section: JSON metadata (column names, types, arbitrary user fields).
+  - Column data: typed binary vectors with per-row null bitmaps.
+  - File footer: 32 bytes with file-level CRC-64.
+  - `WriteDatabase` / `WriteDatabaseOpts` — write with no compression, RLE, or gzip.
+  - `ReadDatabase` — full validation (magic, header CRC, file CRC) + decompression.
+
+- **Column compression** (`pkg/sqlvibe/storage/persistence.go`):
+  - **RLE** (`encodeRLE`/`decodeRLE`) — byte-level run-length encoding; best for low-cardinality integer/bool columns.
+  - **Gzip** (`compressGzip`/`decompressGzip`) — deflate via `compress/gzip`; best for text/float columns.
+  - Both use a `[rawSize u32][compressedSize u32][payload]` prefix for reliable seek and decompressed-size validation.
+
+- **Index serialization** (`pkg/sqlvibe/storage/persistence.go`):
+  - `SerializeIndexes(ie)` — compact binary serialization of all bitmap and skip-list indexes.
+  - `DeserializeIndexes(data, ie)` — full reconstruction including bitmap cardinality and skip-list key order.
+
+- **Memory-mapped file reader** (`pkg/sqlvibe/storage/mmap.go`):
+  - `MmapFile` — maps a SQLVIBE binary file into virtual memory with `MAP_SHARED | PROT_READ` via `syscall.Mmap`. Column reads are zero-copy slices into the mapped region.
+  - `ReadDatabaseMmap(path)` — drop-in replacement for `ReadDatabase`; uses mmap for the uncompressed column data path. Falls back to `ReadDatabase` if mapping fails.
+
+- **Write-Ahead Log** (`pkg/sqlvibe/storage/wal.go`):
+  - `WriteAheadLog` — append-only log backed by a persistent file. Records `WalInsert`, `WalDelete`, `WalUpdate` entries as length-prefixed JSON.
+  - `OpenWAL(path)` — open or create a WAL file; ready for immediate `Append*` calls.
+  - `AppendInsert` / `AppendDelete` / `AppendUpdate` — thread-safe append with buffered I/O.
+  - `Replay(hs)` — replay all entries from the beginning of the WAL into a `HybridStore`; safe to call on startup after an unclean shutdown.
+  - `Checkpoint(hs, dbPath, schema)` — atomically rewrite the main database file (via tmp+rename) with the current store state, then truncate the WAL to zero.
+  - `Size()` — returns the current WAL file size (useful for deciding when to checkpoint).
+
+- **Compact / checkpoint** (`pkg/sqlvibe/storage/compact.go`):
+  - `Compact(hs)` — returns a new `HybridStore` with tombstone rows removed and indexes rebuilt. Original store is not modified.
+  - `CompactFile(path)` — reads a SQLVIBE binary file, compacts it (removes deleted rows), and rewrites it in-place.
+  - `CompactFileOpts(path, compressionType)` — like `CompactFile` but rewrites with a specified compression.
+
+- **Per-table HybridStore in Database** (`pkg/sqlvibe/database.go`):
+  - `hybridStores` / `hybridStoresDirty` maps maintain one `HybridStore` per SQL table.
+  - `GetHybridStore(tableName)` — lazily rebuilds the store from `db.data` on first access after any DML/DDL and returns it for direct columnar operations.
+  - `sqlTypeToStorageType` / `interfaceToStorageValue` — bridge SQL row maps to `storage.Value`.
+  - All write operations (`INSERT`, `UPDATE`, `DELETE`, DDL) mark the affected table's store dirty via `invalidateWriteCaches`.
+
+### New Benchmarks
+
+- `internal/TS/Benchmark/benchmark_storage_v080_test.go` — v0.8.0 storage benchmarks (16 tests):
+  - Insert/scan/filter/sum/count comparisons between `HybridStore` and SQL `Database`
+  - `BenchmarkStorage_RoaringBitmap_AndFilter`
+  - `BenchmarkStorage_MemoryProfile_*` (4 benchmarks) — `ReportAllocs` memory profiling
+  - `BenchmarkStorage_GCProfile_HybridScan`
+  - `BenchmarkStorage_Compression_RLE_Encode`
+
+---
+
 ## **v0.7.8** (2026-02-22)
 
 ### Performance Improvements
