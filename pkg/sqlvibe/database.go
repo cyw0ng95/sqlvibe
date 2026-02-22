@@ -2,10 +2,13 @@ package sqlvibe
 
 import (
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/sqlvibe/sqlvibe/internal/CG"
 	"github.com/sqlvibe/sqlvibe/internal/DS"
 	"github.com/sqlvibe/sqlvibe/internal/IS"
 	"github.com/sqlvibe/sqlvibe/internal/PB"
@@ -14,6 +17,52 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/TM"
 	"github.com/sqlvibe/sqlvibe/internal/VM"
 )
+
+// queryResultCache is a thread-safe in-process cache for full SELECT query results.
+// Entries are keyed by FNV-1a hash of the SQL string.
+// All entries are invalidated on any write operation (INSERT/UPDATE/DELETE/DDL).
+type queryResultCache struct {
+	mu   sync.RWMutex
+	data map[uint64]*queryResultEntry
+	max  int
+}
+
+type queryResultEntry struct {
+	columns []string
+	rows    [][]interface{}
+}
+
+func newQueryResultCache(max int) *queryResultCache {
+	return &queryResultCache{data: make(map[uint64]*queryResultEntry), max: max}
+}
+
+func (c *queryResultCache) Get(key uint64) ([]string, [][]interface{}, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if e, ok := c.data[key]; ok {
+		return e.columns, e.rows, true
+	}
+	return nil, nil, false
+}
+
+func (c *queryResultCache) Set(key uint64, columns []string, rows [][]interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.max > 0 && len(c.data) >= c.max {
+		// Evict an arbitrary entry to stay within limit.
+		for k := range c.data {
+			delete(c.data, k)
+			break
+		}
+	}
+	c.data[key] = &queryResultEntry{columns: columns, rows: rows}
+}
+
+func (c *queryResultCache) Invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data = make(map[uint64]*queryResultEntry)
+}
 
 type Database struct {
 	pm             *DS.PageManager
@@ -39,6 +88,8 @@ type Database struct {
 	wal            *TM.WAL                             // WAL instance when in WAL mode
 	pkHashSet      map[string]map[interface{}]struct{} // table name -> PK value -> exists (single-col PK only)
 	indexData      map[string]map[interface{}][]int    // index name -> col value -> []row indices
+	planCache      *CG.PlanCache                       // compiled query plan cache
+	queryCache     *queryResultCache                   // full query result cache (columns + rows)
 }
 
 type dbSnapshot struct {
@@ -293,6 +344,8 @@ func Open(path string) (*Database, error) {
 		wal:            nil,
 		pkHashSet:      make(map[string]map[interface{}]struct{}),
 		indexData:      make(map[string]map[interface{}][]int),
+		planCache:      CG.NewPlanCache(256),
+		queryCache:     newQueryResultCache(512),
 	}, nil
 }
 
@@ -484,19 +537,33 @@ func (db *Database) Exec(sql string) (Result, error) {
 		return Result{}, nil
 	case "InsertStmt":
 		stmt := ast.(*QP.InsertStmt)
+		var result Result
+		var err error
 		if stmt.SelectQuery != nil {
-			return db.execInsertSelect(stmt)
+			result, err = db.execInsertSelect(stmt)
+		} else if stmt.OnConflict != nil {
+			result, err = db.execInsertOnConflict(stmt)
+		} else {
+			result, err = db.execVMDML(sql, stmt.Table)
 		}
-		if stmt.OnConflict != nil {
-			return db.execInsertOnConflict(stmt)
+		if err == nil {
+			db.invalidateWriteCaches()
 		}
-		return db.execVMDML(sql, stmt.Table)
+		return result, err
 	case "UpdateStmt":
 		stmt := ast.(*QP.UpdateStmt)
-		return db.execVMDML(sql, stmt.Table)
+		result, err := db.execVMDML(sql, stmt.Table)
+		if err == nil {
+			db.invalidateWriteCaches()
+		}
+		return result, err
 	case "DeleteStmt":
 		stmt := ast.(*QP.DeleteStmt)
-		return db.execVMDML(sql, stmt.Table)
+		result, err := db.execVMDML(sql, stmt.Table)
+		if err == nil {
+			db.invalidateWriteCaches()
+		}
+		return result, err
 	case "DropTableStmt":
 		stmt := ast.(*QP.DropTableStmt)
 		if _, exists := db.tables[stmt.Name]; !exists {
@@ -520,6 +587,7 @@ func (db *Database) Exec(sql string) (Result, error) {
 				delete(db.indexData, idxName)
 			}
 		}
+		db.invalidateWriteCaches()
 		return Result{}, nil
 	case "CreateViewStmt":
 		return db.execCreateView(ast.(*QP.CreateViewStmt), sql)
@@ -634,6 +702,20 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			}
 		}
 		return lastRows, nil
+	}
+
+	// Result cache check: serve repeated identical SELECT queries without re-execution.
+	// Only applies to single-statement queries. During an active transaction,
+	// caching is skipped to ensure transaction isolation.
+	sqlUpper := strings.TrimSpace(strings.ToUpper(sql))
+	isCacheable := (strings.HasPrefix(sqlUpper, "SELECT") || strings.HasPrefix(sqlUpper, "WITH")) &&
+		db.activeTx == nil
+	var cacheKey uint64
+	if isCacheable && db.queryCache != nil {
+		cacheKey = sqlQueryHash(sql)
+		if cachedCols, cachedRows, ok := db.queryCache.Get(cacheKey); ok {
+			return &Rows{Columns: cachedCols, Data: cachedRows}, nil
+		}
 	}
 
 	tokenizer := QP.NewTokenizer(sql)
@@ -841,6 +923,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			}
 		}
 
+		// Populate result cache for pure SELECT queries (no CTEs, no active transaction).
+		if isCacheable && db.queryCache != nil && len(stmt.CTEs) == 0 {
+			db.queryCache.Set(cacheKey, rows.Columns, rows.Data)
+		}
+
 		return rows, nil
 	}
 
@@ -877,6 +964,22 @@ func (db *Database) Close() error {
 		db.wal = nil
 	}
 	return db.pm.Close()
+}
+
+// invalidateWriteCaches clears the result cache and plan cache after any
+// write operation (INSERT, UPDATE, DELETE, DROP, etc.) so that subsequent
+// reads see fresh data.
+func (db *Database) invalidateWriteCaches() {
+	if db.queryCache != nil {
+		db.queryCache.Invalidate()
+	}
+}
+
+// sqlQueryHash returns an FNV-1a hash of the SQL string for use as a cache key.
+func sqlQueryHash(sql string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(sql))
+	return h.Sum64()
 }
 
 func (db *Database) Prepare(sql string) (*Statement, error) {

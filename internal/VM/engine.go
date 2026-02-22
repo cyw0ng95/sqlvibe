@@ -28,6 +28,36 @@ type VmContext interface {
 	DeleteRow(tableName string, rowIndex int) error
 }
 
+// BranchPredictor implements a 2-bit saturating counter branch prediction table.
+// Each table entry counts from 0 (strongly not-taken) to 3 (strongly taken).
+// Entries with value >= 2 are predicted "taken".  The table has 1024 slots;
+// instruction PCs are mapped modulo 1024.
+type BranchPredictor struct {
+	table [1024]uint8
+}
+
+// Predict returns true when the branch at pc is predicted taken (counter >= 2).
+func (bp *BranchPredictor) Predict(pc int) bool {
+	return bp.table[pc%1024] >= 2
+}
+
+// Update adjusts the saturating counter at pc based on whether the branch was
+// actually taken.
+func (bp *BranchPredictor) Update(pc int, taken bool) {
+	idx := pc % 1024
+	c := bp.table[idx]
+	if taken {
+		if c < 3 {
+			c++
+		}
+	} else {
+		if c > 0 {
+			c--
+		}
+	}
+	bp.table[idx] = c
+}
+
 type VM struct {
 	program        *Program
 	pc             int
@@ -44,6 +74,7 @@ type VM struct {
 	rowsAffected   int64
 	ephemeralTbls  map[int]map[string]bool // ephemeral tables for SetOps (table_id -> row_key -> exists)
 	subqueryCache  *subqueryResultCache    // caches non-correlated subquery results per execution
+	bp             BranchPredictor         // 2-bit saturating branch predictor for loop opcodes
 }
 
 func NewVM(program *Program) *VM {

@@ -45,10 +45,24 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 		tableName = stmt.Table
 	}
 
-	program, err := CG.Compile(sql)
-	if err != nil {
-		return nil, fmt.Errorf("VM compile error: %v", err)
+	// Check plan cache before compiling.
+	var compiledProgram *VM.Program
+	if db.planCache != nil {
+		if cached, ok := db.planCache.Get(sql); ok {
+			compiledProgram = cached
+		}
 	}
+	if compiledProgram == nil {
+		compiledProgram, err = CG.Compile(sql)
+		if err != nil {
+			return nil, fmt.Errorf("VM compile error: %v", err)
+		}
+		// Cache compiled plan for future reuse.
+		if db.planCache != nil {
+			db.planCache.Put(sql, compiledProgram)
+		}
+	}
+	program := compiledProgram
 
 	ctx := newDsVmContext(db)
 	vm := VM.NewVMWithContext(program, ctx)

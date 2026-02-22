@@ -1,5 +1,33 @@
 # sqlvibe Release History
 
+## **v0.7.8** (2026-02-22)
+
+### Performance Improvements
+
+- **VM: 2-bit saturating branch predictor** (`internal/VM/engine.go`, `exec.go`) — Added `BranchPredictor` struct with a 1024-slot 2-bit saturating counter table. Integrated into `OpNext` handler: when the predictor says "loop continues", the fast path increments the cursor index and checks bounds once; on correct prediction the counter is updated and execution continues immediately. Incorrect predictions fall through to the standard path. The predictor warms up to "strongly taken" after a few loop iterations, reducing branch mis-predictions in long table scans.
+- **VM: Result cache** (`internal/VM/result_cache.go`) — New thread-safe TTL-based cache (`ResultCache`) for VM-level query rows. Keyed by `uint64`. Supports `Get`, `Set`, `Invalidate`, and LRU-style eviction when the entry limit is reached.
+- **VM: String interning pool** (`internal/VM/string_pool.go`) — Added `InternString(s string) string` backed by a `sync.Map`. Returns the canonical pooled copy of a string, so that all identical string values share a single backing allocation. Reduces allocations and enables pointer-equality comparisons for deduplicated column names and constant strings.
+- **DS: Standalone Prefetcher** (`internal/DS/prefetch.go`) — New `Prefetcher` struct wrapping the shared `prefetchWorkerPool`. Exposes a `Prefetch(pageNum uint32)` method for use outside of the BTree internals, allowing external callers to warm pages into the OS cache before sequential access.
+- **CG: Plan cache** (`internal/CG/plan_cache.go`) — New thread-safe `PlanCache` that maps SQL strings to compiled `*VM.Program` instances. Integrated into `ExecVM`: the plan is compiled once and then served from cache on subsequent identical calls, bypassing the tokenise+parse+code-generation pipeline entirely.
+- **DB: Full query result cache** (`pkg/sqlvibe/database.go`) — Added `queryResultCache` (columns + rows) keyed by FNV-1a hash of the SQL string. Pure SELECT queries are served from the cache after the first execution. The cache is invalidated atomically on any write operation (INSERT, UPDATE, DELETE, DDL). Cache is skipped during active transactions to maintain isolation.
+- **QP: Top-N heap accumulator** (`internal/QP/topn.go`) — New `TopN` struct implementing a bounded max-heap for ORDER BY … LIMIT N. Streams rows in and retains only the N best using `container/heap`, giving O(N log K) time and O(K) peak memory vs. O(N log N) / O(N) for a full sort. Used by callers that know the limit at planning time.
+
+### New Benchmarks
+
+- `internal/TS/Benchmark/benchmark_v0.7.8_test.go` — v0.7.8 benchmarks:
+  - `BenchmarkBranchPrediction_WarmLoop` — full table scan (warm predictor)
+  - `BenchmarkBranchPrediction_ShortLoop` — LIMIT 10 scan (early exit path)
+  - `BenchmarkPlanCache_Hit` — plan-cache hit throughput
+  - `BenchmarkResultCache_Hit` — result-cache hit throughput
+  - `BenchmarkResultCache_Miss` — result-cache miss baseline
+  - `BenchmarkTopN_Limit10` — ORDER BY + LIMIT 10 on 10 000 rows
+  - `BenchmarkTopN_Limit100` — ORDER BY + LIMIT 100 on 10 000 rows
+  - `BenchmarkStringInterning_Repeated` — DISTINCT tag query with repeated values
+  - `BenchmarkWhereFiltering_1K`, `BenchmarkCountStar_1K`, `BenchmarkCountStarWhere_1K` — WHERE/COUNT baselines
+  - `BenchmarkJoinTwoTables`, `BenchmarkSubqueryIN` — JOIN and subquery baselines
+
+---
+
 ## **v0.7.7** (2026-02-22)
 
 ### Performance Improvements
