@@ -704,7 +704,6 @@ internal/
 - [ ] Implement mmap-based random access
 - [ ] Implement WAL (Write-Ahead Logging) for durability
 - [ ] Implement checkpoint/compact operation
-- [ ] Migration tools: SQLite import, SQLVIBE export
 
 ### Phase 5: Testing & Validation
 - [x] Run full SQL:1999 test suite (100% pass rate — no regressions)
