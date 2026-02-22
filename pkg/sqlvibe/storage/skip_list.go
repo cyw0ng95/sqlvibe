@@ -192,3 +192,23 @@ func (sl *SkipList) Max() (Value, bool) {
 	}
 	return cur.key, true
 }
+
+// SkipPair holds a single (key, rowIdx) association from a SkipList.
+type SkipPair struct {
+	Key    Value
+	RowIdx uint32
+}
+
+// Pairs returns all (key, rowIdx) pairs in ascending key order.
+// Each unique key may appear multiple times if it maps to multiple row indices.
+func (sl *SkipList) Pairs() []SkipPair {
+	var out []SkipPair
+	cur := sl.head.forward[0]
+	for cur != nil {
+		for _, idx := range cur.rowIdxs {
+			out = append(out, SkipPair{Key: cur.key, RowIdx: idx})
+		}
+		cur = cur.forward[0]
+	}
+	return out
+}

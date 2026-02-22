@@ -99,3 +99,42 @@ func (ie *IndexEngine) LookupRange(colName string, lo, hi Value, inclusive bool)
 	}
 	return nil // no index
 }
+
+// BitmapColumns returns the names of all columns that have a bitmap index.
+func (ie *IndexEngine) BitmapColumns() []string {
+	cols := make([]string, 0, len(ie.hasBitmap))
+	for col := range ie.hasBitmap {
+		cols = append(cols, col)
+	}
+	return cols
+}
+
+// BitmapMap returns the full value→bitmap map for colName.
+// Returns nil if no bitmap index exists for that column.
+func (ie *IndexEngine) BitmapMap(colName string) map[string]*RoaringBitmap {
+	return ie.bitmaps[colName]
+}
+
+// SetBitmap replaces (or inserts) the bitmap for colName[key].
+// Useful for deserializing persisted indexes.
+func (ie *IndexEngine) SetBitmap(colName, key string, rb *RoaringBitmap) {
+	if ie.bitmaps[colName] == nil {
+		ie.bitmaps[colName] = make(map[string]*RoaringBitmap)
+		ie.hasBitmap[colName] = true
+	}
+	ie.bitmaps[colName][key] = rb
+}
+
+// SkipListColumns returns the names of all columns that have a skip-list index.
+func (ie *IndexEngine) SkipListColumns() []string {
+	cols := make([]string, 0, len(ie.hasSkip))
+	for col := range ie.hasSkip {
+		cols = append(cols, col)
+	}
+	return cols
+}
+
+// SkipList returns the SkipList for colName, or nil if none exists.
+func (ie *IndexEngine) SkipList(colName string) *SkipList {
+	return ie.skipLists[colName]
+}

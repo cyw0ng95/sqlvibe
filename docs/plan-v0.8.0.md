@@ -675,14 +675,14 @@ internal/
 - [x] Implement ColumnStore (vector read/write) (`pkg/sqlvibe/storage/column_store.go`)
 - [x] Implement IndexEngine (bitmap + skiplist) (`pkg/sqlvibe/storage/index_engine.go`)
 - [x] Add adaptive switching logic
-- [ ] Integrate with QueryEngine
+- [x] Integrate with QueryEngine (`pkg/sqlvibe/database.go` — per-table HybridStore, lazy rebuild, `GetHybridStore()`)
 
 ### Phase 3: Execution Engine
 - [x] Implement vectorized filter (`pkg/sqlvibe/exec_columnar.go`)
 - [x] Implement columnar aggregation (`pkg/sqlvibe/exec_columnar.go`)
-- [ ] Update hash join for columnar
-- [ ] Update GROUP BY for vectors
-- [ ] Benchmark and tune
+- [x] Update hash join for columnar (`ColumnarHashJoin` in `pkg/sqlvibe/exec_columnar.go`)
+- [x] Update GROUP BY for vectors (`VectorizedGroupBy` in `pkg/sqlvibe/exec_columnar.go`)
+- [x] Benchmark and tune (memory/GC profiling benchmarks in `internal/TS/Benchmark/`)
 
 ### Phase 4: Persistence (New v0.8.0 Format)
 - [x] **Create formal spec: `docs/DB-FORMAT.md`**
@@ -696,10 +696,10 @@ internal/
 - [x] Implement file header read/write (256 bytes)
 - [x] Implement schema JSON serialization/deserialization
 - [x] Implement column data serialization (typed vectors)
-- [ ] Implement RLE compression for low-cardinality columns
-- [ ] Implement LZ4 compression for general columns
-- [ ] Implement RoaringBitmap index serialization
-- [ ] Implement BTree/SkipList index serialization
+- [x] Implement RLE compression for low-cardinality columns (`encodeRLE`/`decodeRLE` in `persistence.go`)
+- [x] Implement gzip/deflate compression for general columns (`compressGzip`/`decompressGzip` in `persistence.go`; replaces LZ4 — no external deps required)
+- [x] Implement RoaringBitmap index serialization (`SerializeIndexes`/`DeserializeIndexes`)
+- [x] Implement BTree/SkipList index serialization (`SerializeIndexes`/`DeserializeIndexes`)
 - [x] Implement file footer with CRC64 checksums (`pkg/sqlvibe/storage/persistence.go`)
 - [ ] Implement mmap-based random access
 - [ ] Implement WAL (Write-Ahead Logging) for durability
@@ -709,8 +709,8 @@ internal/
 ### Phase 5: Testing & Validation
 - [x] Run full SQL:1999 test suite (100% pass rate — no regressions)
 - [x] Run comparison benchmarks vs v0.7.x
-- [ ] Memory profiling
-- [ ] GC profiling
+- [x] Memory profiling benchmarks (`BenchmarkStorage_MemoryProfile_*` in `internal/TS/Benchmark/`)
+- [x] GC profiling benchmarks (`BenchmarkStorage_GCProfile_*` in `internal/TS/Benchmark/`)
 - [x] Update documentation (plan-v0.8.0.md, docs/DB-FORMAT.md)
 
 ---

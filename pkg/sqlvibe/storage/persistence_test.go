@@ -308,3 +308,119 @@ func TestPersistence_ExtraSchema(t *testing.T) {
 		t.Errorf("extra schema field lost: version = %v", schema2["version"])
 	}
 }
+
+// ---- Compression round-trip tests ----
+
+func TestPersistence_RLE_RoundTrip(t *testing.T) {
+path := tmpFile(t)
+hs, cols, types := makeStore(t)
+schema := makeSchema(cols, types)
+
+if err := WriteDatabaseOpts(path, hs, schema, CompressionRLE); err != nil {
+t.Fatalf("WriteDatabaseOpts(RLE): %v", err)
+}
+
+hs2, _, err := ReadDatabase(path)
+if err != nil {
+t.Fatalf("ReadDatabase(RLE): %v", err)
+}
+if hs2.LiveCount() != hs.LiveCount() {
+t.Fatalf("row count mismatch: got %d, want %d", hs2.LiveCount(), hs.LiveCount())
+}
+}
+
+func TestPersistence_Gzip_RoundTrip(t *testing.T) {
+path := tmpFile(t)
+hs, cols, types := makeStore(t)
+schema := makeSchema(cols, types)
+
+if err := WriteDatabaseOpts(path, hs, schema, CompressionGzip); err != nil {
+t.Fatalf("WriteDatabaseOpts(Gzip): %v", err)
+}
+
+hs2, _, err := ReadDatabase(path)
+if err != nil {
+t.Fatalf("ReadDatabase(Gzip): %v", err)
+}
+rows2 := hs2.Scan()
+rows1 := hs.Scan()
+if len(rows2) != len(rows1) {
+t.Fatalf("row count mismatch: got %d, want %d", len(rows2), len(rows1))
+}
+// Spot-check first row's first column.
+if !rows2[0][0].Equal(rows1[0][0]) {
+t.Errorf("first cell mismatch: got %v, want %v", rows2[0][0], rows1[0][0])
+}
+}
+
+// ---- RLE encode/decode unit tests ----
+
+func TestRLE_EncodeDecode(t *testing.T) {
+cases := [][]byte{
+{},
+{0x41},
+{0x41, 0x41, 0x41, 0x42, 0x42},
+make([]byte, 300), // 300 zeros – tests run > 256
+}
+for _, tc := range cases {
+encoded := encodeRLE(tc)
+decoded, err := decodeRLE(encoded)
+if err != nil {
+t.Errorf("decodeRLE error for input len %d: %v", len(tc), err)
+continue
+}
+if len(decoded) != len(tc) {
+t.Errorf("len mismatch: got %d, want %d", len(decoded), len(tc))
+continue
+}
+for i := range tc {
+if decoded[i] != tc[i] {
+t.Errorf("byte %d: got %x, want %x", i, decoded[i], tc[i])
+}
+}
+}
+}
+
+// ---- Index serialization round-trip ----
+
+func TestIndexSerialization_RoundTrip(t *testing.T) {
+ie := NewIndexEngine()
+ie.AddBitmapIndex("status")
+ie.AddSkipListIndex("score")
+
+// Populate
+ie.IndexRow(0, "status", StringValue("active"))
+ie.IndexRow(1, "status", StringValue("inactive"))
+ie.IndexRow(2, "status", StringValue("active"))
+ie.IndexRow(0, "score", IntValue(90))
+ie.IndexRow(1, "score", IntValue(75))
+ie.IndexRow(2, "score", IntValue(88))
+
+data := SerializeIndexes(ie)
+if len(data) == 0 {
+t.Fatal("SerializeIndexes returned empty data")
+}
+
+ie2 := NewIndexEngine()
+if err := DeserializeIndexes(data, ie2); err != nil {
+t.Fatalf("DeserializeIndexes: %v", err)
+}
+
+// Verify bitmap index.
+rb := ie2.LookupEqual("status", StringValue("active"))
+if rb == nil {
+t.Fatal("bitmap lookup returned nil")
+}
+if rb.Cardinality() != 2 {
+t.Errorf("bitmap cardinality: got %d, want 2", rb.Cardinality())
+}
+
+// Verify skip-list index.
+rbRange := ie2.LookupRange("score", IntValue(80), IntValue(100), true)
+if rbRange == nil {
+t.Fatal("skip-list range lookup returned nil")
+}
+if rbRange.Cardinality() != 2 {
+t.Errorf("skip-list range cardinality: got %d, want 2", rbRange.Cardinality())
+}
+}

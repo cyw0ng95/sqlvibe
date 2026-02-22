@@ -1,6 +1,8 @@
 package sqlvibe
 
 import (
+	"strings"
+
 	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe/storage"
 )
 
@@ -210,4 +212,163 @@ func ColumnarGroupBy(keyCol, valCol *storage.ColumnVector, agg string) map[strin
 		}
 	}
 	return result
+}
+
+// ColumnarHashJoin performs an inner join between left and right stores on a single
+// column pair (leftCol = rightCol).  The result is a slice of merged value rows
+// where the first len(left.Columns()) values are from the left row and the
+// remaining values are from the right row.
+func ColumnarHashJoin(left, right *storage.HybridStore, leftCol, rightCol string) [][]storage.Value {
+	lci := left.ColIndex(leftCol)
+	rci := right.ColIndex(rightCol)
+	if lci < 0 || rci < 0 {
+		return nil
+	}
+
+	// Build hash table from the smaller side (right).
+	hash := make(map[string][][]storage.Value)
+	for _, rRow := range right.Scan() {
+		key := rRow[rci].String()
+		hash[key] = append(hash[key], rRow)
+	}
+
+	// Probe with left side.
+	var out [][]storage.Value
+	lCols := len(left.Columns())
+	rCols := len(right.Columns())
+	for _, lRow := range left.Scan() {
+		key := lRow[lci].String()
+		matches, ok := hash[key]
+		if !ok {
+			continue
+		}
+		for _, rRow := range matches {
+			merged := make([]storage.Value, lCols+rCols)
+			copy(merged[:lCols], lRow)
+			copy(merged[lCols:], rRow)
+			out = append(out, merged)
+		}
+	}
+	return out
+}
+
+// VectorizedGroupBy groups the rows in hs by the values of groupCols and computes
+// aggregate functions on aggCol.  agg may be "sum", "count", "min", "max", or "avg".
+// Each returned row contains the group-key values (in the order of groupCols)
+// followed by the aggregate result.
+func VectorizedGroupBy(hs *storage.HybridStore, groupCols []string, aggCol, agg string) [][]storage.Value {
+	colIdx := make([]int, len(groupCols))
+	for i, c := range groupCols {
+		colIdx[i] = hs.ColIndex(c)
+	}
+	aggCI := hs.ColIndex(aggCol)
+
+	type aggState struct {
+		keyVals []storage.Value // representative key values for this group
+		sum     float64
+		count   int64
+		min     storage.Value
+		max     storage.Value
+		hasVal  bool
+	}
+
+	groups := make(map[string]*aggState)
+	keyOrder := make([]string, 0)
+
+	for _, row := range hs.Scan() {
+		// Build composite group key.
+		var kb strings.Builder
+		for i, ci := range colIdx {
+			if ci >= 0 && ci < len(row) {
+				kb.WriteString(row[ci].String())
+			}
+			if i < len(colIdx)-1 {
+				kb.WriteByte(0) // null separator
+			}
+		}
+		key := kb.String()
+
+		gs, ok := groups[key]
+		if !ok {
+			// Store representative key values from the first row in this group.
+			keyVals := make([]storage.Value, len(groupCols))
+			for i, ci := range colIdx {
+				if ci >= 0 && ci < len(row) {
+					keyVals[i] = row[ci]
+				}
+			}
+			gs = &aggState{keyVals: keyVals}
+			groups[key] = gs
+			keyOrder = append(keyOrder, key)
+		}
+
+		if agg == "count" {
+			gs.count++
+			continue
+		}
+
+		var v storage.Value
+		if aggCI >= 0 && aggCI < len(row) {
+			v = row[aggCI]
+		}
+		if v.IsNull() {
+			continue
+		}
+		gs.count++
+		switch v.Type {
+		case storage.TypeInt:
+			gs.sum += float64(v.Int)
+		case storage.TypeFloat:
+			gs.sum += v.Float
+		}
+		if !gs.hasVal {
+			gs.min = v
+			gs.max = v
+			gs.hasVal = true
+		} else {
+			if storage.Compare(v, gs.min) < 0 {
+				gs.min = v
+			}
+			if storage.Compare(v, gs.max) > 0 {
+				gs.max = v
+			}
+		}
+	}
+
+	out := make([][]storage.Value, 0, len(keyOrder))
+	for _, key := range keyOrder {
+		gs := groups[key]
+
+		var aggVal storage.Value
+		switch agg {
+		case "sum":
+			aggVal = storage.FloatValue(gs.sum)
+		case "count":
+			aggVal = storage.IntValue(gs.count)
+		case "min":
+			if gs.hasVal {
+				aggVal = gs.min
+			} else {
+				aggVal = storage.NullValue()
+			}
+		case "max":
+			if gs.hasVal {
+				aggVal = gs.max
+			} else {
+				aggVal = storage.NullValue()
+			}
+		case "avg":
+			if gs.count == 0 {
+				aggVal = storage.NullValue()
+			} else {
+				aggVal = storage.FloatValue(gs.sum / float64(gs.count))
+			}
+		default:
+			aggVal = storage.NullValue()
+		}
+
+		row := append(gs.keyVals, aggVal)
+		out = append(out, row)
+	}
+	return out
 }

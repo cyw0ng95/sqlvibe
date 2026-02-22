@@ -2,13 +2,22 @@ package storage
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"hash/crc64"
+	"io"
 	"math"
 	"os"
 	"time"
+)
+
+// Compression type constants stored in the file header CompressionType field.
+const (
+	CompressionNone  = uint32(0) // no compression
+	CompressionRLE   = uint32(1) // run-length encoding
+	CompressionGzip  = uint32(2) // gzip (deflate)
 )
 
 // File format constants.
@@ -324,6 +333,282 @@ func decodeValue(data []byte, typ ValueType) (Value, int, error) {
 	return NullValue(), 0, fmt.Errorf("unknown type %d", typ)
 }
 
+// encodeRLE applies byte-level run-length encoding.
+// Each run is encoded as: [value byte] [count-1 byte] where count is in [1, 256].
+// Input bytes are encoded one run at a time; the output is always an even number of bytes.
+func encodeRLE(data []byte) []byte {
+	if len(data) == 0 {
+		return nil
+	}
+	out := make([]byte, 0, len(data))
+	i := 0
+	for i < len(data) {
+		b := data[i]
+		count := 1
+		for i+count < len(data) && data[i+count] == b && count < 256 {
+			count++
+		}
+		out = append(out, b, byte(count-1))
+		i += count
+	}
+	return out
+}
+
+// decodeRLE reverses byte-level run-length encoding produced by encodeRLE.
+func decodeRLE(data []byte) ([]byte, error) {
+	if len(data)%2 != 0 {
+		return nil, fmt.Errorf("RLE data has odd length %d", len(data))
+	}
+	out := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i += 2 {
+		b := data[i]
+		count := int(data[i+1]) + 1
+		for j := 0; j < count; j++ {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
+// compressGzip compresses data using gzip (default compression level).
+func compressGzip(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write(data); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// decompressGzip decompresses gzip-compressed data.
+func decompressGzip(data []byte) ([]byte, error) {
+	r, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	return io.ReadAll(r)
+}
+
+// compressColumnData encodes and optionally compresses column data.
+// compressionType: CompressionNone, CompressionRLE, or CompressionGzip.
+// Returns (payload, actualCompressionType, error).
+func compressColumnData(raw []byte, compressionType uint32) ([]byte, uint32, error) {
+	switch compressionType {
+	case CompressionRLE:
+		return encodeRLE(raw), CompressionRLE, nil
+	case CompressionGzip:
+		compressed, err := compressGzip(raw)
+		if err != nil {
+			return raw, CompressionNone, err
+		}
+		return compressed, CompressionGzip, nil
+	default:
+		return raw, CompressionNone, nil
+	}
+}
+
+// decompressColumnData reverses compressColumnData.
+func decompressColumnData(data []byte, compressionType uint32) ([]byte, error) {
+	switch compressionType {
+	case CompressionRLE:
+		return decodeRLE(data)
+	case CompressionGzip:
+		return decompressGzip(data)
+	default:
+		return data, nil
+	}
+}
+
+// ─── Index serialization ─────────────────────────────────────────────────────
+//
+// BitmapIndexes are serialized column-by-column.  For each indexed column the
+// layout is:
+//
+//   [colNameLen uint16] [colName bytes]
+//   [valueCount uint32]
+//   For each unique value:
+//     [keyLen uint16] [key bytes]
+//     [bitCount uint32]  -- number of set bits in the bitmap
+//     [bit0 uint32] [bit1 uint32] ...
+//
+// SkipList indexes are serialized as sorted key→rowIdx pairs:
+//
+//   [colNameLen uint16] [colName bytes]
+//   [pairCount uint32]
+//   For each (key, rowIdx) pair:
+//     [valueType uint8] [encoded value] [rowIdx uint32]
+//
+// Both sections are prefixed with a count:
+//   [bitmapColCount uint32] ... [skipListColCount uint32] ...
+
+// SerializeIndexes serializes all bitmap and skip-list indexes from ie into a
+// compact binary representation.
+func SerializeIndexes(ie *IndexEngine) []byte {
+	var buf bytes.Buffer
+
+	// --- Bitmap indexes ---
+	bitmapCols := ie.BitmapColumns()
+	binary.Write(&buf, binary.LittleEndian, uint32(len(bitmapCols)))
+	for _, col := range bitmapCols {
+		bm := ie.BitmapMap(col) // map[string]*RoaringBitmap
+		writeString16(&buf, col)
+		binary.Write(&buf, binary.LittleEndian, uint32(len(bm)))
+		for key, rb := range bm {
+			writeString16(&buf, key)
+			idxs := rb.ToSlice()
+			binary.Write(&buf, binary.LittleEndian, uint32(len(idxs)))
+			for _, idx := range idxs {
+				binary.Write(&buf, binary.LittleEndian, idx)
+			}
+		}
+	}
+
+	// --- SkipList indexes ---
+	skipCols := ie.SkipListColumns()
+	binary.Write(&buf, binary.LittleEndian, uint32(len(skipCols)))
+	for _, col := range skipCols {
+		sl := ie.SkipList(col)
+		writeString16(&buf, col)
+		pairs := sl.Pairs() // []SkipPair
+		binary.Write(&buf, binary.LittleEndian, uint32(len(pairs)))
+		for _, p := range pairs {
+			binary.Write(&buf, binary.LittleEndian, uint8(p.Key.Type))
+			buf.Write(encodeValue(p.Key, p.Key.Type))
+			binary.Write(&buf, binary.LittleEndian, p.RowIdx)
+		}
+	}
+
+	return buf.Bytes()
+}
+
+// DeserializeIndexes restores bitmap and skip-list indexes into ie from data
+// produced by SerializeIndexes.
+func DeserializeIndexes(data []byte, ie *IndexEngine) error {
+	if len(data) == 0 {
+		return nil
+	}
+	r := bytes.NewReader(data)
+
+	// --- Bitmap indexes ---
+	var bitmapColCount uint32
+	if err := binary.Read(r, binary.LittleEndian, &bitmapColCount); err != nil {
+		return fmt.Errorf("read bitmap col count: %w", err)
+	}
+	for ci := uint32(0); ci < bitmapColCount; ci++ {
+		col, err := readString16(r)
+		if err != nil {
+			return fmt.Errorf("read bitmap col name: %w", err)
+		}
+		ie.AddBitmapIndex(col)
+		var valueCount uint32
+		if err := binary.Read(r, binary.LittleEndian, &valueCount); err != nil {
+			return fmt.Errorf("read bitmap value count: %w", err)
+		}
+		for vi := uint32(0); vi < valueCount; vi++ {
+			key, err := readString16(r)
+			if err != nil {
+				return fmt.Errorf("read bitmap key: %w", err)
+			}
+			var bitCount uint32
+			if err := binary.Read(r, binary.LittleEndian, &bitCount); err != nil {
+				return fmt.Errorf("read bit count: %w", err)
+			}
+			rb := NewRoaringBitmap()
+			for bi := uint32(0); bi < bitCount; bi++ {
+				var idx uint32
+				if err := binary.Read(r, binary.LittleEndian, &idx); err != nil {
+					return fmt.Errorf("read bitmap idx: %w", err)
+				}
+				rb.Add(idx)
+			}
+			ie.SetBitmap(col, key, rb)
+		}
+	}
+
+	// --- SkipList indexes ---
+	var skipColCount uint32
+	if err := binary.Read(r, binary.LittleEndian, &skipColCount); err != nil {
+		return fmt.Errorf("read skiplist col count: %w", err)
+	}
+	for ci := uint32(0); ci < skipColCount; ci++ {
+		col, err := readString16(r)
+		if err != nil {
+			return fmt.Errorf("read skiplist col name: %w", err)
+		}
+		ie.AddSkipListIndex(col)
+		var pairCount uint32
+		if err := binary.Read(r, binary.LittleEndian, &pairCount); err != nil {
+			return fmt.Errorf("read pair count: %w", err)
+		}
+		for pi := uint32(0); pi < pairCount; pi++ {
+			var vt uint8
+			if err := binary.Read(r, binary.LittleEndian, &vt); err != nil {
+				return fmt.Errorf("read value type: %w", err)
+			}
+			v, err := readValueFromReader(r, ValueType(vt))
+			if err != nil {
+				return fmt.Errorf("decode skip value: %w", err)
+			}
+			var rowIdx uint32
+			if err := binary.Read(r, binary.LittleEndian, &rowIdx); err != nil {
+				return fmt.Errorf("read skip rowIdx: %w", err)
+			}
+			ie.SkipList(col).Insert(v, rowIdx)
+		}
+	}
+	return nil
+}
+
+func writeString16(buf *bytes.Buffer, s string) {
+	b := []byte(s)
+	binary.Write(buf, binary.LittleEndian, uint16(len(b)))
+	buf.Write(b)
+}
+
+func readString16(r *bytes.Reader) (string, error) {
+	var l uint16
+	if err := binary.Read(r, binary.LittleEndian, &l); err != nil {
+		return "", err
+	}
+	b := make([]byte, l)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// readValueFromReader reads one encoded value of type vt from r.
+func readValueFromReader(r *bytes.Reader, vt ValueType) (Value, error) {
+	switch vt {
+	case TypeInt, TypeFloat, TypeBool:
+		b := make([]byte, 8)
+		if _, err := io.ReadFull(r, b); err != nil {
+			return NullValue(), err
+		}
+		v, _, err := decodeValue(b, vt)
+		return v, err
+	case TypeString, TypeBytes:
+		var l uint32
+		if err := binary.Read(r, binary.LittleEndian, &l); err != nil {
+			return NullValue(), err
+		}
+		body := make([]byte, l)
+		if _, err := io.ReadFull(r, body); err != nil {
+			return NullValue(), err
+		}
+		if vt == TypeString {
+			return StringValue(string(body)), nil
+		}
+		return BytesValue(body), nil
+	default:
+		return NullValue(), fmt.Errorf("unknown value type %d", vt)
+	}
+}
+
 // extractColTypes reads column types from the schema map.
 // Falls back to TypeString for missing/unknown entries.
 func extractColTypes(schema map[string]interface{}, columns []string) []ValueType {
@@ -366,7 +651,7 @@ func extractColTypes(schema map[string]interface{}, columns []string) []ValueTyp
 	return colTypes
 }
 
-// WriteDatabase writes a SQLVIBE v1.0.0 binary database file.
+// WriteDatabase writes a SQLVIBE v1.0.0 binary database file with no compression.
 //
 // File layout:
 //   Header (256 bytes) | Schema JSON | Column data... | Footer (32 bytes)
@@ -374,15 +659,35 @@ func extractColTypes(schema map[string]interface{}, columns []string) []ValueTyp
 // The schema parameter should include "column_names" ([]string) and
 // "column_types" ([]int or []ValueType). Additional fields are preserved.
 func WriteDatabase(path string, hs *HybridStore, schema map[string]interface{}) error {
+	return WriteDatabaseOpts(path, hs, schema, CompressionNone)
+}
+
+// WriteDatabaseOpts writes a SQLVIBE database file with the specified column-level
+// compression.  compressionType must be one of CompressionNone, CompressionRLE,
+// or CompressionGzip.
+func WriteDatabaseOpts(path string, hs *HybridStore, schema map[string]interface{}, compressionType uint32) error {
 	columns := hs.Columns()
 	colTypes := extractColTypes(schema, columns)
 	rows := hs.Scan()
 	rowCount := len(rows)
 
-	// Encode each column to its binary representation.
+	// Encode each column to its binary representation, optionally compressed.
 	colData := make([][]byte, len(columns))
 	for ci := range columns {
-		colData[ci] = encodeColumnData(rows, ci, colTypes[ci], rowCount)
+		raw := encodeColumnData(rows, ci, colTypes[ci], rowCount)
+		if compressionType != CompressionNone {
+			compressed, _, err := compressColumnData(raw, compressionType)
+			if err != nil {
+				compressed = raw
+			}
+			// Prefix: [rawSize uint32][compressedSize uint32][compressed data]
+			hdrBuf := make([]byte, 8)
+			binary.LittleEndian.PutUint32(hdrBuf[0:4], uint32(len(raw)))
+			binary.LittleEndian.PutUint32(hdrBuf[4:8], uint32(len(compressed)))
+			colData[ci] = append(hdrBuf, compressed...)
+		} else {
+			colData[ci] = raw
+		}
 	}
 
 	// Build the schema JSON (always with canonical column metadata).
@@ -405,15 +710,16 @@ func WriteDatabase(path string, hs *HybridStore, schema map[string]interface{}) 
 	// Build header.
 	now := uint32(time.Now().Unix())
 	hdr := &FileHeader{
-		VersionMajor: FormatVersionMajor,
-		VersionMinor: FormatVersionMinor,
-		VersionPatch: FormatVersionPatch,
-		SchemaOffset: HeaderSize,
-		SchemaLength: uint32(len(schemaJSON)),
-		ColumnCount:  uint32(len(columns)),
-		RowCount:     uint32(rowCount),
-		CreatedAt:    now,
-		ModifiedAt:   now,
+		VersionMajor:    FormatVersionMajor,
+		VersionMinor:    FormatVersionMinor,
+		VersionPatch:    FormatVersionPatch,
+		SchemaOffset:    HeaderSize,
+		SchemaLength:    uint32(len(schemaJSON)),
+		ColumnCount:     uint32(len(columns)),
+		RowCount:        uint32(rowCount),
+		CreatedAt:       now,
+		ModifiedAt:      now,
+		CompressionType: compressionType,
 	}
 	copy(hdr.Magic[:], MagicBytes)
 
@@ -508,13 +814,42 @@ func ReadDatabase(path string) (*HybridStore, map[string]interface{}, error) {
 	// Decode column data sequentially.
 	pos := schemaEnd
 	colVectors := make([]*ColumnVector, len(columns))
+	compressionType := hdr.CompressionType
 	for ci, col := range columns {
-		cv, err := decodeColumnData(data[pos:], col, colTypes[ci], rowCount)
+		var rawData []byte
+		if compressionType != CompressionNone {
+			// Compressed columns are prefixed with [rawSize uint32][compressedSize uint32].
+			// rawSize holds the expected uncompressed byte count and is used to pre-allocate
+			// the decompression buffer; decompressColumnData validates the actual length.
+			if pos+8 > footerStart {
+				return nil, nil, fmt.Errorf("column %d: size header extends beyond data", ci)
+			}
+			rawSize := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
+			compressedSize := int(binary.LittleEndian.Uint32(data[pos+4 : pos+8]))
+			pos += 8
+			if pos+compressedSize > footerStart {
+				return nil, nil, fmt.Errorf("column %d: compressed data extends beyond data section", ci)
+			}
+			var decErr error
+			rawData, decErr = decompressColumnData(data[pos:pos+compressedSize], compressionType)
+			if decErr != nil {
+				return nil, nil, fmt.Errorf("decompress column %d (%s): %w", ci, col, decErr)
+			}
+			if rawSize > 0 && len(rawData) != rawSize {
+				return nil, nil, fmt.Errorf("column %d (%s): decompressed size %d != expected %d", ci, col, len(rawData), rawSize)
+			}
+			pos += compressedSize
+		} else {
+			// Uncompressed: consume exactly columnDataSize bytes.
+			size := columnDataSize(data[pos:], colTypes[ci], rowCount)
+			rawData = data[pos : pos+size]
+			pos += size
+		}
+		cv, err := decodeColumnData(rawData, col, colTypes[ci], rowCount)
 		if err != nil {
 			return nil, nil, fmt.Errorf("decode column %d (%s): %w", ci, col, err)
 		}
 		colVectors[ci] = cv
-		pos += columnDataSize(data[pos:], colTypes[ci], rowCount)
 	}
 
 	// Build HybridStore and insert rows.
@@ -558,3 +893,6 @@ func columnDataSize(data []byte, typ ValueType, rowCount int) int {
 	}
 	return pos
 }
+
+// BenchEncodeRLE is a public wrapper around encodeRLE for benchmark access.
+func BenchEncodeRLE(data []byte) []byte { return encodeRLE(data) }
