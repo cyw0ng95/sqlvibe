@@ -16,6 +16,7 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 	"github.com/sqlvibe/sqlvibe/internal/TM"
 	"github.com/sqlvibe/sqlvibe/internal/VM"
+	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe/storage"
 )
 
 // queryResultCache is a thread-safe in-process cache for full SELECT query results.
@@ -88,8 +89,10 @@ type Database struct {
 	wal            *TM.WAL                             // WAL instance when in WAL mode
 	pkHashSet      map[string]map[interface{}]struct{} // table name -> PK value -> exists (single-col PK only)
 	indexData      map[string]map[interface{}][]int    // index name -> col value -> []row indices
-	planCache      *CG.PlanCache                       // compiled query plan cache
-	queryCache     *queryResultCache                   // full query result cache (columns + rows)
+	planCache          *CG.PlanCache                       // compiled query plan cache
+	queryCache         *queryResultCache                   // full query result cache (columns + rows)
+	hybridStores       map[string]*storage.HybridStore     // table name -> columnar hybrid store (analytical fast path)
+	hybridStoresDirty  map[string]bool                     // table name -> needs rebuild on next access
 }
 
 type dbSnapshot struct {
@@ -344,8 +347,10 @@ func Open(path string) (*Database, error) {
 		wal:            nil,
 		pkHashSet:      make(map[string]map[interface{}]struct{}),
 		indexData:      make(map[string]map[interface{}][]int),
-		planCache:      CG.NewPlanCache(256),
-		queryCache:     newQueryResultCache(512),
+		planCache:          CG.NewPlanCache(256),
+		queryCache:         newQueryResultCache(512),
+		hybridStores:       make(map[string]*storage.HybridStore),
+		hybridStoresDirty:  make(map[string]bool),
 	}, nil
 }
 
@@ -533,6 +538,9 @@ func (db *Database) Exec(sql string) (Result, error) {
 		// Create BTree for table storage
 		bt := DS.NewBTree(db.pm, 0, true)
 		db.tableBTrees[stmt.Name] = bt
+		// Initialise an empty HybridStore for the new table.
+		db.hybridStores[stmt.Name] = db.buildHybridStore(stmt.Name)
+		db.hybridStoresDirty[stmt.Name] = false
 
 		return Result{}, nil
 	case "InsertStmt":
@@ -580,6 +588,8 @@ func (db *Database) Exec(sql string) (Result, error) {
 		delete(db.columnNotNull, stmt.Name)
 		delete(db.tableBTrees, stmt.Name)
 		delete(db.pkHashSet, stmt.Name)
+		delete(db.hybridStores, stmt.Name)
+		delete(db.hybridStoresDirty, stmt.Name)
 		// Drop all secondary indexes that cover this table.
 		for idxName, idx := range db.indexes {
 			if idx.Table == stmt.Name {
@@ -973,6 +983,10 @@ func (db *Database) invalidateWriteCaches() {
 	if db.queryCache != nil {
 		db.queryCache.Invalidate()
 	}
+	// Mark all hybrid stores as needing a rebuild on next access.
+	for tbl := range db.tables {
+		db.hybridStoresDirty[tbl] = true
+	}
 }
 
 // sqlQueryHash returns an FNV-1a hash of the SQL string for use as a cache key.
@@ -1359,6 +1373,145 @@ func (db *Database) rebuildAllIndexes() {
 	for idxName := range db.indexes {
 		db.buildIndexData(idxName)
 	}
+	// Mark all hybrid stores dirty after rollback.
+	for tbl := range db.tables {
+		db.hybridStoresDirty[tbl] = true
+	}
+}
+
+// sqlTypeToStorageType converts a SQL column type declaration to a storage.ValueType.
+func sqlTypeToStorageType(typStr string) storage.ValueType {
+	upper := strings.ToUpper(strings.TrimSpace(typStr))
+	switch {
+	case strings.Contains(upper, "INT"):
+		return storage.TypeInt
+	case strings.Contains(upper, "REAL"), strings.Contains(upper, "FLOAT"),
+		strings.Contains(upper, "DOUBLE"), strings.Contains(upper, "NUMERIC"),
+		strings.Contains(upper, "DECIMAL"):
+		return storage.TypeFloat
+	case strings.Contains(upper, "BOOL"):
+		return storage.TypeBool
+	case strings.Contains(upper, "BLOB"), strings.Contains(upper, "BYTES"):
+		return storage.TypeBytes
+	default:
+		return storage.TypeString
+	}
+}
+
+// interfaceToStorageValue converts a Go interface{} row value to a storage.Value.
+func interfaceToStorageValue(v interface{}, vt storage.ValueType) storage.Value {
+	if v == nil {
+		return storage.NullValue()
+	}
+	switch vt {
+	case storage.TypeInt:
+		switch n := v.(type) {
+		case int64:
+			return storage.IntValue(n)
+		case int:
+			return storage.IntValue(int64(n))
+		case float64:
+			return storage.IntValue(int64(n))
+		case bool:
+			if n {
+				return storage.IntValue(1)
+			}
+			return storage.IntValue(0)
+		case string:
+			if i, err := strconv.ParseInt(n, 10, 64); err == nil {
+				return storage.IntValue(i)
+			}
+		}
+	case storage.TypeFloat:
+		switch n := v.(type) {
+		case float64:
+			return storage.FloatValue(n)
+		case int64:
+			return storage.FloatValue(float64(n))
+		case int:
+			return storage.FloatValue(float64(n))
+		case string:
+			if f, err := strconv.ParseFloat(n, 64); err == nil {
+				return storage.FloatValue(f)
+			}
+		}
+	case storage.TypeBool:
+		switch n := v.(type) {
+		case bool:
+			return storage.BoolValue(n)
+		case int64:
+			return storage.BoolValue(n != 0)
+		case float64:
+			return storage.BoolValue(n != 0)
+		}
+	case storage.TypeBytes:
+		if b, ok := v.([]byte); ok {
+			return storage.BytesValue(b)
+		}
+	}
+	// Default: string representation.
+	return storage.StringValue(fmt.Sprintf("%v", v))
+}
+
+// rowToStorageValues converts a row map to an ordered []storage.Value for tableName.
+func (db *Database) rowToStorageValues(tableName string, row map[string]interface{}) []storage.Value {
+	cols := db.columnOrder[tableName]
+	if len(cols) == 0 {
+		return nil
+	}
+	colTypes := db.tables[tableName]
+	vals := make([]storage.Value, len(cols))
+	for i, col := range cols {
+		vt := sqlTypeToStorageType(colTypes[col])
+		vals[i] = interfaceToStorageValue(row[col], vt)
+	}
+	return vals
+}
+
+// buildHybridStore constructs a fresh HybridStore for tableName from db.data.
+func (db *Database) buildHybridStore(tableName string) *storage.HybridStore {
+	cols := db.columnOrder[tableName]
+	if len(cols) == 0 {
+		return nil
+	}
+	colTypeStrs := db.tables[tableName]
+	stTypes := make([]storage.ValueType, len(cols))
+	for i, col := range cols {
+		stTypes[i] = sqlTypeToStorageType(colTypeStrs[col])
+	}
+	hs := storage.NewHybridStore(cols, stTypes)
+	for _, row := range db.data[tableName] {
+		if row == nil {
+			continue
+		}
+		vals := make([]storage.Value, len(cols))
+		for i, col := range cols {
+			vals[i] = interfaceToStorageValue(row[col], stTypes[i])
+		}
+		hs.Insert(vals)
+	}
+	return hs
+}
+
+// markHybridDirty flags the HybridStore for tableName as needing a rebuild.
+func (db *Database) markHybridDirty(tableName string) {
+	if _, ok := db.tables[tableName]; ok {
+		db.hybridStoresDirty[tableName] = true
+	}
+}
+
+// GetHybridStore returns the HybridStore for tableName, rebuilding it when necessary.
+// Returns nil if the table does not exist.
+func (db *Database) GetHybridStore(tableName string) *storage.HybridStore {
+	tbl := db.resolveTableName(tableName)
+	if _, ok := db.tables[tbl]; !ok {
+		return nil
+	}
+	if db.hybridStoresDirty[tbl] || db.hybridStores[tbl] == nil {
+		db.hybridStores[tbl] = db.buildHybridStore(tbl)
+		db.hybridStoresDirty[tbl] = false
+	}
+	return db.hybridStores[tbl]
 }
 
 // compareIndexVals compares two index key values for ordering.
@@ -2459,6 +2612,9 @@ func (db *Database) execCreateTableAsSelect(stmt *QP.CreateTableStmt) (Result, e
 		}
 		db.data[stmt.Name] = append(db.data[stmt.Name], rowMap)
 	}
+	// Build HybridStore populated with the newly inserted rows.
+	db.hybridStores[stmt.Name] = db.buildHybridStore(stmt.Name)
+	db.hybridStoresDirty[stmt.Name] = false
 
 	return Result{}, nil
 }
@@ -2583,6 +2739,13 @@ func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 		delete(db.columnNotNull, stmt.Table)
 		delete(db.columnChecks, stmt.Table)
 		delete(db.tableBTrees, stmt.Table)
+		// Move hybrid store to new name.
+		if hs, ok := db.hybridStores[stmt.Table]; ok {
+			db.hybridStores[stmt.NewName] = hs
+			delete(db.hybridStores, stmt.Table)
+		}
+		db.hybridStoresDirty[stmt.NewName] = true
+		delete(db.hybridStoresDirty, stmt.Table)
 		return Result{}, nil
 	}
 	return Result{}, nil

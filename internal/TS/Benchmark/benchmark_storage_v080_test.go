@@ -203,3 +203,100 @@ func BenchmarkStorage_RoaringBitmap_AndFilter(b *testing.B) {
 		_ = rb1.And(rb2)
 	}
 }
+
+// -----------------------------------------------------------------
+// BenchmarkStorage_MemoryProfile_* – memory allocation profiles
+// These benchmarks measure allocations per operation, allowing
+// memory profiling via: go test -bench=MemoryProfile -memprofile=mem.prof
+// -----------------------------------------------------------------
+
+// BenchmarkStorage_MemoryProfile_HybridInsert measures allocations for batch inserts.
+func BenchmarkStorage_MemoryProfile_HybridInsert(b *testing.B) {
+b.ReportAllocs()
+for i := 0; i < b.N; i++ {
+hs := newHybridStore()
+for j := 0; j < 1000; j++ {
+hs.Insert(intRow(j, j))
+}
+}
+}
+
+// BenchmarkStorage_MemoryProfile_VectorFilter measures allocations for vectorized filter.
+func BenchmarkStorage_MemoryProfile_VectorFilter(b *testing.B) {
+hs := newHybridStore()
+for j := 0; j < 1000; j++ {
+hs.Insert(intRow(j, j%100))
+}
+col := hs.ColStore().GetColumn("val")
+target := storage.IntValue(42)
+b.ReportAllocs()
+b.ResetTimer()
+for i := 0; i < b.N; i++ {
+_ = sqlvibe.VectorizedFilter(col, "=", target)
+}
+}
+
+// BenchmarkStorage_MemoryProfile_ColumnarSum measures allocations for columnar sum.
+func BenchmarkStorage_MemoryProfile_ColumnarSum(b *testing.B) {
+hs := newHybridStore()
+for j := 0; j < 1000; j++ {
+hs.Insert(intRow(j, j))
+}
+col := hs.ColStore().GetColumn("val")
+b.ReportAllocs()
+b.ResetTimer()
+for i := 0; i < b.N; i++ {
+_ = sqlvibe.ColumnarSum(col)
+}
+}
+
+// BenchmarkStorage_MemoryProfile_ColumnarGroupBy measures allocations for columnar GROUP BY.
+func BenchmarkStorage_MemoryProfile_ColumnarGroupBy(b *testing.B) {
+hs := storage.NewHybridStore(
+[]string{"cat", "val"},
+[]storage.ValueType{storage.TypeString, storage.TypeInt},
+)
+cats := []string{"A", "B", "C", "D"}
+for j := 0; j < 1000; j++ {
+hs.Insert([]storage.Value{
+storage.StringValue(cats[j%len(cats)]),
+storage.IntValue(int64(j)),
+})
+}
+keyCol := hs.ColStore().GetColumn("cat")
+valCol := hs.ColStore().GetColumn("val")
+b.ReportAllocs()
+b.ResetTimer()
+for i := 0; i < b.N; i++ {
+_ = sqlvibe.ColumnarGroupBy(keyCol, valCol, "sum")
+}
+}
+
+// BenchmarkStorage_GCProfile_HybridScan measures GC pressure during a full scan.
+// Run with: go test -bench=GCProfile -gcflags="-m" to see escape analysis.
+func BenchmarkStorage_GCProfile_HybridScan(b *testing.B) {
+hs := newHybridStore()
+for j := 0; j < 5000; j++ {
+hs.Insert(intRow(j, j))
+}
+b.ReportAllocs()
+b.ResetTimer()
+for i := 0; i < b.N; i++ {
+rows := hs.Scan()
+_ = rows
+}
+}
+
+// BenchmarkStorage_Compression_RLE_Encode benchmarks RLE encoding throughput.
+func BenchmarkStorage_Compression_RLE_Encode(b *testing.B) {
+// Simulate a column with low cardinality (good for RLE).
+data := make([]byte, 1024)
+for i := range data {
+data[i] = byte(i / 100) // 11 distinct values, long runs
+}
+b.ReportAllocs()
+b.ResetTimer()
+for i := 0; i < b.N; i++ {
+_ = storage.BenchEncodeRLE(data)
+}
+}
