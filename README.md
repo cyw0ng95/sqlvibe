@@ -6,7 +6,6 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v0.9.0** | 2026-02-22 | Extension Framework (JSON, Math), BETWEEN pushdown, Fast Hash JOIN |
 | **v0.8.9** | 2026-02-22 | CLI tools (sv-cli, sv-check), Info APIs, Integrity check |
 
 ## Features
@@ -152,10 +151,40 @@ of sqlvibe's in-memory columnar engine.
 go build ./...
 go test ./...
 go test ./internal/TS/Benchmark/... -bench . -benchmem
+```
 
-# With extensions
-go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" ./...
-go test -tags "SVDB_EXT_JSON SVDB_EXT_MATH" ./...
+## Build Config Flags
+
+Configure extensions at build time using `-tags`:
+
+| Flag | Extensions | Description |
+|------|------------|-------------|
+| (none) | Core only | Basic math (+,-,*,/) only |
+| `SVDB_EXT_JSON` | JSON extension | SQLite JSON1 functions |
+| `SVDB_EXT_MATH` | Math extension | ABS, CEIL, FLOOR, ROUND, POWER, SQRT, MOD, EXP, LN, LOG, etc. |
+| `SVDB_EXT_JSON SVDB_EXT_MATH` | Both | JSON + Math functions |
+
+### Examples
+
+```bash
+# Default (no extensions)
+go build -o sqlvibe .
+
+# With JSON only
+go build -tags "SVDB_EXT_JSON" -o sqlvibe .
+
+# With Math only
+go build -tags "SVDB_EXT_MATH" -o sqlvibe .
+
+# With all extensions
+go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
+```
+
+### Checking Extensions
+
+```sql
+-- Query loaded extensions
+SELECT * FROM sqlvibe_extensions;
 ```
 
 ## License
