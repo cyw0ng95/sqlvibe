@@ -15,7 +15,7 @@ sqlvibe/
 ├── ext/                      # Extension packages (source root)
 │   ├── extension.go          # Core extension interface & registry
 │   ├── json/                 # JSON extension
-│   └── uuid/                 # UUID extension (future)
+│   └── 
 ├── pkg/sqlvibe/              # Core library
 └── cmd/                     # CLI tools
 ```
@@ -144,7 +144,7 @@ Extensions can be included via build tags:
 go build -tags "svdb_ext_json" -o sqlvibe .
 
 # Include multiple extensions
-go build -tags "svdb_ext_json svdb_ext_uuid" -o sqlvibe .
+go build -tags "svdb_ext_json" -o sqlvibe .
 
 # Include all extensions
 go build -tags "extensions" -o sqlvibe .
@@ -159,19 +159,12 @@ package ext
 
 import _ "github.com/cyw0ng95/sqlvibe/ext/json"
 
-// +build svdb_ext_uuid
-
-package ext
-
-import _ "github.com/cyw0ng95/sqlvibe/ext/uuid"
-
 // +build extensions
 
 package ext
 
 import (
     _ "github.com/cyw0ng95/sqlvibe/ext/json"
-    _ "github.com/cyw0ng95/sqlvibe/ext/uuid"
 )
 ```
 
@@ -180,7 +173,6 @@ import (
 | Tag | Extension |
 |-----|-----------|
 | `svdb_ext_json` | JSON extension |
-| `svdb_ext_uuid` | UUID extension |
 | `extensions` | All extensions |
 
 ### 1.4 Database Integration
@@ -549,7 +541,7 @@ go build -o sqlvibe .
 go build -tags "svdb_ext_json" -o sqlvibe .
 
 # Include multiple extensions
-go build -tags "svdb_ext_json svdb_ext_uuid" -o sqlvibe .
+go build -tags "svdb_ext_json" -o sqlvibe .
 
 # Include all extensions
 go build -tags "extensions" -o sqlvibe .
@@ -565,7 +557,6 @@ sqlvibe> SELECT json_extract('{"a":1}', '$.a');
 
 | Extension | Build Tag | Description |
 |-----------|-----------|-------------|
-| `uuid` | `svdb_ext_uuid` | UUID generation functions |
 | `math` | `svdb_ext_math` | Mathematical functions |
 | `regex` | `svdb_ext_regex` | Regular expression functions |
 | `csv` | `svdb_ext_csv` | CSV virtual table |
