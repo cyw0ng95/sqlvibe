@@ -4140,97 +4140,97 @@ func (vm *VM) compareVals(a, b interface{}) int {
 
 // ColumnarFilterSpec specifies a columnar filter predicate.
 type ColumnarFilterSpec struct {
-ColName string
-Op      string // "=", "!=", "<", "<=", ">", ">="
-DstReg  int    // destination register for filtered rows
+	ColName string
+	Op      string // "=", "!=", "<", "<=", ">", ">="
+	DstReg  int    // destination register for filtered rows
 }
 
 // ColumnarAggSpec specifies a columnar aggregation.
 type ColumnarAggSpec struct {
-ColName string
-DstReg  int // destination register for the aggregate result
+	ColName string
+	DstReg  int // destination register for the aggregate result
 }
 
 // columnarCompare compares a row value against a filter value using the given operator.
 func columnarCompare(rowVal, filterVal interface{}, op string) bool {
-cmp := compareVals(rowVal, filterVal)
-switch op {
-case "=":
-return cmp == 0
-case "!=":
-return cmp != 0
-case "<":
-return cmp < 0
-case "<=":
-return cmp <= 0
-case ">":
-return cmp > 0
-case ">=":
-return cmp >= 0
-}
-return false
+	cmp := compareVals(rowVal, filterVal)
+	switch op {
+	case "=":
+		return cmp == 0
+	case "!=":
+		return cmp != 0
+	case "<":
+		return cmp < 0
+	case "<=":
+		return cmp <= 0
+	case ">":
+		return cmp > 0
+	case ">=":
+		return cmp >= 0
+	}
+	return false
 }
 
 // columnarAggregate computes an aggregate over rows for a given column.
 // aggType: 0=COUNT, 1=SUM, 2=MIN, 3=MAX, 4=AVG
 func columnarAggregate(rows []map[string]interface{}, colName string, aggType int) interface{} {
-switch aggType {
-case 0: // COUNT
-return int64(len(rows))
-case 1: // SUM
-var sum float64
-for _, row := range rows {
-v := row[colName]
-switch n := v.(type) {
-case int64:
-sum += float64(n)
-case float64:
-sum += n
-}
-}
-return sum
-case 2: // MIN
-var minVal interface{}
-for _, row := range rows {
-v := row[colName]
-if v == nil {
-continue
-}
-if minVal == nil || compareVals(v, minVal) < 0 {
-minVal = v
-}
-}
-return minVal
-case 3: // MAX
-var maxVal interface{}
-for _, row := range rows {
-v := row[colName]
-if v == nil {
-continue
-}
-if maxVal == nil || compareVals(v, maxVal) > 0 {
-maxVal = v
-}
-}
-return maxVal
-case 4: // AVG
-var sum float64
-count := 0
-for _, row := range rows {
-v := row[colName]
-switch n := v.(type) {
-case int64:
-sum += float64(n)
-count++
-case float64:
-sum += n
-count++
-}
-}
-if count == 0 {
-return nil
-}
-return sum / float64(count)
-}
-return nil
+	switch aggType {
+	case 0: // COUNT
+		return int64(len(rows))
+	case 1: // SUM
+		var sum float64
+		for _, row := range rows {
+			v := row[colName]
+			switch n := v.(type) {
+			case int64:
+				sum += float64(n)
+			case float64:
+				sum += n
+			}
+		}
+		return sum
+	case 2: // MIN
+		var minVal interface{}
+		for _, row := range rows {
+			v := row[colName]
+			if v == nil {
+				continue
+			}
+			if minVal == nil || compareVals(v, minVal) < 0 {
+				minVal = v
+			}
+		}
+		return minVal
+	case 3: // MAX
+		var maxVal interface{}
+		for _, row := range rows {
+			v := row[colName]
+			if v == nil {
+				continue
+			}
+			if maxVal == nil || compareVals(v, maxVal) > 0 {
+				maxVal = v
+			}
+		}
+		return maxVal
+	case 4: // AVG
+		var sum float64
+		count := 0
+		for _, row := range rows {
+			v := row[colName]
+			switch n := v.(type) {
+			case int64:
+				sum += float64(n)
+				count++
+			case float64:
+				sum += n
+				count++
+			}
+		}
+		if count == 0 {
+			return nil
+		}
+		return sum / float64(count)
+	}
+	return nil
 }

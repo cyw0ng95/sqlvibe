@@ -1292,19 +1292,19 @@ func (c *Compiler) GetVMCompiler() *Compiler {
 // shouldUseColumnar returns true when the query would benefit from columnar execution.
 // Criteria: pure aggregates without joins, or full table scan without filter.
 func shouldUseColumnar(stmt *QP.SelectStmt) bool {
-if stmt == nil {
-return false
-}
-// Joins are not supported by columnar path
-if stmt.From != nil && stmt.From.Join != nil {
-return false
-}
-if hasAggregates(stmt) {
-return true
-}
-// Full scan without filter
-if stmt.Where == nil {
-return true
-}
-return false
+	if stmt == nil {
+		return false
+	}
+	// Joins are not supported by columnar path
+	if stmt.From != nil && stmt.From.Join != nil {
+		return false
+	}
+	if hasAggregates(stmt) {
+		return true
+	}
+	// Full scan without filter
+	if stmt.Where == nil {
+		return true
+	}
+	return false
 }

@@ -318,11 +318,11 @@ var OpCodeInfo = map[OpCode]string{
 	OpTrim:    "Trim",
 	OpLTrim:   "LTrim",
 	OpRTrim:   "RTrim",
-	OpReplace:  "Replace",
-	OpInstr:    "Instr",
-	OpLike:     "Like",
-	OpNotLike:  "NotLike",
-	OpGlob:     "Glob",
+	OpReplace: "Replace",
+	OpInstr:   "Instr",
+	OpLike:    "Like",
+	OpNotLike: "NotLike",
+	OpGlob:    "Glob",
 
 	// Aggregate functions
 	OpSum:   "Sum",

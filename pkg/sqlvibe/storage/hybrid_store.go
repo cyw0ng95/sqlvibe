@@ -268,79 +268,79 @@ func (hs *HybridStore) RecommendMode() Mode {
 // compareOp compares two Values using a relational operator string.
 // op can be "=", "!=", "<", "<=", ">", ">=".
 func compareOp(a, b Value, op string) bool {
-cmp := Compare(a, b)
-switch op {
-case "=":
-return cmp == 0
-case "!=":
-return cmp != 0
-case "<":
-return cmp < 0
-case "<=":
-return cmp <= 0
-case ">":
-return cmp > 0
-case ">=":
-return cmp >= 0
-}
-return false
+	cmp := Compare(a, b)
+	switch op {
+	case "=":
+		return cmp == 0
+	case "!=":
+		return cmp != 0
+	case "<":
+		return cmp < 0
+	case "<=":
+		return cmp <= 0
+	case ">":
+		return cmp > 0
+	case ">=":
+		return cmp >= 0
+	}
+	return false
 }
 
 // MaxValue returns a sentinel Value used as a range upper bound sentinel in ScanRange.
 // Results are always post-filtered with compareOp to ensure strict/inclusive semantics.
 func MaxValue() Value {
-return Value{Type: TypeString, Str: "\U0010FFFF"}
+	return Value{Type: TypeString, Str: "\U0010FFFF"}
 }
 
 // MinValue returns a sentinel Value that compares less than all real values.
 func MinValue() Value {
-return Value{Type: TypeNull}
+	return Value{Type: TypeNull}
 }
 
 // ScanWithFilter returns rows matching the given predicate using vectorized evaluation.
 // op can be "=", "!=", "<", "<=", ">", ">=".
 func (hs *HybridStore) ScanWithFilter(colName string, op string, val Value) [][]Value {
-colIdx := hs.rowStore.ColIndex(colName)
-if colIdx < 0 {
-return nil
-}
-// For equality, try index first
-if op == "=" {
-return hs.ScanWhere(colName, val)
-}
-// For range ops, try skip list index
-if (op == "<" || op == "<=" || op == ">" || op == ">=") && hs.indexEngine.HasSkipListIndex(colName) {
-var lo, hi Value
-switch op {
-case ">", ">=":
-lo = val
-hi = MaxValue()
-case "<", "<=":
-lo = MinValue()
-hi = val
-}
-candidates := hs.ScanRange(colName, lo, hi)
-var out [][]Value
-for _, row := range candidates {
-v := row[colIdx]
-if compareOp(v, val, op) {
-out = append(out, row)
-}
-}
-return out
-}
-// Linear scan fallback
-var out [][]Value
-for _, i := range hs.rowStore.ScanIndices() {
-row := hs.rowStore.Get(i)
-v := row.Get(colIdx)
-if compareOp(v, val, op) {
-vals := make([]Value, len(hs.columns))
-for ci := range hs.columns {
-vals[ci] = row.Get(ci)
-}
-out = append(out, vals)
-}
-}
-return out
+	colIdx := hs.rowStore.ColIndex(colName)
+	if colIdx < 0 {
+		return nil
+	}
+	// For equality, try index first
+	if op == "=" {
+		return hs.ScanWhere(colName, val)
+	}
+	// For range ops, try skip list index
+	if (op == "<" || op == "<=" || op == ">" || op == ">=") && hs.indexEngine.HasSkipListIndex(colName) {
+		var lo, hi Value
+		switch op {
+		case ">", ">=":
+			lo = val
+			hi = MaxValue()
+		case "<", "<=":
+			lo = MinValue()
+			hi = val
+		}
+		candidates := hs.ScanRange(colName, lo, hi)
+		var out [][]Value
+		for _, row := range candidates {
+			v := row[colIdx]
+			if compareOp(v, val, op) {
+				out = append(out, row)
+			}
+		}
+		return out
+	}
+	// Linear scan fallback
+	var out [][]Value
+	for _, i := range hs.rowStore.ScanIndices() {
+		row := hs.rowStore.Get(i)
+		v := row.Get(colIdx)
+		if compareOp(v, val, op) {
+			vals := make([]Value, len(hs.columns))
+			for ci := range hs.columns {
+				vals[ci] = row.Get(ci)
+			}
+			out = append(out, vals)
+		}
+	}
+	return out
 }

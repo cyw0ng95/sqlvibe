@@ -6,7 +6,7 @@ import "strings"
 type ColumnType int
 
 const (
-	TypeAny   ColumnType = iota
+	TypeAny ColumnType = iota
 	TypeInt
 	TypeFloat
 	TypeText

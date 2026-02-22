@@ -6,7 +6,7 @@ import (
 )
 
 // queryNormalizer replaces string literals and number literals with "?" placeholder.
-// Handles SQL escaped single quotes (e.g., 'O''Brien') and floating-point numbers (e.g., 3.14).
+// Handles SQL escaped single quotes (e.g., 'O”Brien') and floating-point numbers (e.g., 3.14).
 var queryNormalizer = regexp.MustCompile(`'(?:[^']|'')*'|[0-9]+(?:\.[0-9]+)?`)
 
 // NormalizeQuery normalizes a SQL string for cache key generation.

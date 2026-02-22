@@ -675,45 +675,45 @@ func (o *Optimizer) peepholeOptimize(program *VM.Program) {
 // selectivity estimates how selective an expression is (higher = more selective = evaluate first).
 // Equality > Range > LIKE > others
 func selectivity(expr QP.Expr) int {
-switch e := expr.(type) {
-case *QP.BinaryExpr:
-switch e.Op {
-case QP.TokenEq:
-return 100
-case QP.TokenGt, QP.TokenLt, QP.TokenGe, QP.TokenLe:
-return 60
-case QP.TokenLike:
-return 30
-}
-}
-return 10
+	switch e := expr.(type) {
+	case *QP.BinaryExpr:
+		switch e.Op {
+		case QP.TokenEq:
+			return 100
+		case QP.TokenGt, QP.TokenLt, QP.TokenGe, QP.TokenLe:
+			return 60
+		case QP.TokenLike:
+			return 30
+		}
+	}
+	return 10
 }
 
 // ReorderPredicates sorts AND-connected predicates by descending selectivity.
 func ReorderPredicates(expr QP.Expr) QP.Expr {
-if expr == nil {
-return nil
-}
-var preds []QP.Expr
-collectAnds(expr, &preds)
-if len(preds) <= 1 {
-return expr
-}
-sort.Slice(preds, func(i, j int) bool {
-return selectivity(preds[i]) > selectivity(preds[j])
-})
-result := preds[0]
-for _, p := range preds[1:] {
-result = &QP.BinaryExpr{Op: QP.TokenAnd, Left: result, Right: p}
-}
-return result
+	if expr == nil {
+		return nil
+	}
+	var preds []QP.Expr
+	collectAnds(expr, &preds)
+	if len(preds) <= 1 {
+		return expr
+	}
+	sort.Slice(preds, func(i, j int) bool {
+		return selectivity(preds[i]) > selectivity(preds[j])
+	})
+	result := preds[0]
+	for _, p := range preds[1:] {
+		result = &QP.BinaryExpr{Op: QP.TokenAnd, Left: result, Right: p}
+	}
+	return result
 }
 
 func collectAnds(expr QP.Expr, out *[]QP.Expr) {
-if b, ok := expr.(*QP.BinaryExpr); ok && b.Op == QP.TokenAnd {
-collectAnds(b.Left, out)
-collectAnds(b.Right, out)
-} else {
-*out = append(*out, expr)
-}
+	if b, ok := expr.(*QP.BinaryExpr); ok && b.Op == QP.TokenAnd {
+		collectAnds(b.Left, out)
+		collectAnds(b.Right, out)
+	} else {
+		*out = append(*out, expr)
+	}
 }
