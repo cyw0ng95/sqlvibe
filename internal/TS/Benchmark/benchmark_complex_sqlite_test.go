@@ -28,14 +28,19 @@ func sqliteMustExec(b *testing.B, db *sql.DB, sql string) {
 	}
 }
 
-// sqliteMustQuery runs a SQL query and fails on error.
-func sqliteMustQuery(b *testing.B, db *sql.DB, sql string) *sql.Rows {
+// sqliteMustQuery runs a SQL query, iterates all rows, and fails on error.
+// Iterating all rows is required for a fair comparison with sqlvibe which
+// eagerly materialises every result row inside Query().
+func sqliteMustQuery(b *testing.B, db *sql.DB, query string) {
 	b.Helper()
-	rows, err := db.Query(sql)
+	rows, err := db.Query(query)
 	if err != nil {
-		b.Fatalf("Query(%q) failed: %v", sql, err)
+		b.Fatalf("Query(%q) failed: %v", query, err)
 	}
-	return rows
+	for rows.Next() {
+		// Drive the cursor to completion; no column values needed for timing.
+	}
+	rows.Close()
 }
 
 // -----------------------------------------------------------------
