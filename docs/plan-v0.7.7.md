@@ -269,22 +269,22 @@ internal/DS/
 ## Tasks
 
 ### Phase 1: QP Optimizations
-- [ ] Implement switch-based keyword lookup in tokenizer.go
-- [ ] Implement hex string lookup table in tokenizer.go
-- [ ] Add token slice pre-allocation in tokenizer.go
-- [ ] Create tokenizer benchmarks and verify improvement
+- [x] Implement switch-based keyword lookup in tokenizer.go
+- [x] Implement hex string lookup table in tokenizer.go
+- [x] Add token slice pre-allocation in tokenizer.go
+- [x] Create tokenizer benchmarks and verify improvement
 
 ### Phase 2: DS Optimizations
-- [ ] Optimize VarintLen with bit manipulation in encoding.go
-- [ ] Implement sync.Pool for record encoding in encoding.go
-- [ ] Implement worker pool prefetch in btree.go
-- [ ] Implement cell key caching in btree.go (if beneficial)
-- [ ] Create DS benchmarks and verify improvements
+- [x] Optimize VarintLen with bit manipulation in encoding.go
+- [x] Implement sync.Pool for record encoding in encoding.go
+- [x] Implement worker pool prefetch in btree.go
+- [x] Implement cell key caching in btree.go (findCell pre-decodes all keys)
+- [x] Create DS benchmarks and verify improvements
 
 ### Phase 3: Validation
-- [ ] Run full test suite
-- [ ] Run benchmarks and compare
-- [ ] Update HISTORY.md
+- [x] Run full test suite
+- [x] Run benchmarks and compare
+- [x] Update HISTORY.md
 
 ---
 

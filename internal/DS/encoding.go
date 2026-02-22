@@ -1,9 +1,12 @@
 package DS
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"math"
+	"math/bits"
+	"sync"
 
 	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 )
@@ -83,41 +86,27 @@ func GetVarint(buf []byte) (int64, int) {
 	return int64(v), n
 }
 
-// VarintLen returns the length of the varint encoding of v
+// VarintLen returns the number of bytes required to encode v as a varint.
 func VarintLen(v int64) int {
 	uv := uint64(v)
-
 	if uv < 0x80 {
 		return 1
 	}
+	// bits.Len64 returns the position of the highest set bit + 1.
+	// Each varint byte encodes 7 bits, so bytes = ceil(bitsNeeded / 7).
+	n := (bits.Len64(uv) + 6) / 7
+	if n > 9 {
+		return 9
+	}
+	return n
+}
 
-	// Use bit manipulation for faster computation
-	// Check how many bits are needed (each byte provides 7 bits)
-	// 0x80 = 128 = 2^7, so values < 128 need 1 byte
-	// 0x4000 = 16384 = 2^14, so values < 16384 need 2 bytes
-	// etc.
-	if uv < 0x4000 { // 14 bits (2 bytes max)
-		return 2
-	}
-	if uv < 0x200000 { // 21 bits (3 bytes max)
-		return 3
-	}
-	if uv < 0x10000000 { // 28 bits (4 bytes max)
-		return 4
-	}
-	if uv < 0x800000000 { // 35 bits (5 bytes max)
-		return 5
-	}
-	if uv < 0x40000000000 { // 42 bits (6 bytes max)
-		return 6
-	}
-	if uv < 0x2000000000000 { // 49 bits (7 bytes max)
-		return 7
-	}
-	if uv < 0x100000000000000 { // 56 bits (8 bytes max)
-		return 8
-	}
-	return 9 // 63 bits (9 bytes max)
+// recordBufferPool provides reusable bytes.Buffer instances for record encoding
+// to reduce heap allocations in hot-path scenarios.
+var recordBufferPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
 }
 
 // Serial type codes for record format
@@ -267,6 +256,47 @@ func EncodeRecord(values []interface{}) []byte {
 	}
 
 	return buf
+}
+
+// EncodeRecordPooled is a pool-backed variant of EncodeRecord that reuses an
+// intermediate bytes.Buffer for the encoding step, reducing the number of
+// heap allocations when called repeatedly.  The returned slice is always a
+// freshly allocated, caller-owned copy.
+func EncodeRecordPooled(values []interface{}) []byte {
+	scratch := recordBufferPool.Get().(*bytes.Buffer)
+	scratch.Reset()
+
+	// Calculate serial types and sizes
+	serialTypes := make([]int, len(values))
+	headerSize := 1
+	for i, v := range values {
+		st := GetSerialType(v)
+		serialTypes[i] = st
+		headerSize += VarintLen(int64(st))
+	}
+	dataSize := 0
+	for _, st := range serialTypes {
+		dataSize += SerialTypeLen(st)
+	}
+	totalSize := headerSize + dataSize
+
+	// Grow the scratch buffer to the required size in one call
+	scratch.Grow(totalSize)
+	buf := scratch.Bytes()[:totalSize]
+
+	pos := PutVarint(buf, int64(headerSize))
+	for _, st := range serialTypes {
+		pos += PutVarint(buf[pos:], int64(st))
+	}
+	for i, v := range values {
+		pos += encodeValue(buf[pos:], v, serialTypes[i])
+	}
+
+	// Copy to a fresh, caller-owned slice before returning the buffer to pool
+	result := make([]byte, totalSize)
+	copy(result, buf)
+	recordBufferPool.Put(scratch)
+	return result
 }
 
 func encodeValue(buf []byte, v interface{}, serialType int) int {
