@@ -622,9 +622,10 @@ ext/
 | 3 | Math Extension (Move from Core) | 10 |
 | 4 | sqlvibe_extensions Table | 4 |
 | 5 | CLI .ext Command | 2 |
-| 6 | Testing | 4 |
+| 6 | Performance Optimization | 25 |
+| 7 | Testing | 4 |
 
-**Total:** ~38 hours
+**Total:** ~63 hours
 
 ---
 
@@ -742,3 +743,175 @@ go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
 - Static linking - extensions compiled into binary
 - Test both with and without build tags
 - Use L2 temp files only for tests
+
+---
+
+## Performance Optimization (Post Math Extension)
+
+### Goal
+
+Beat SQLite in all benchmarks where currently slower:
+- COUNT(*) via index: Currently 2.8x slower
+- Full scan + filter: Currently 1.2x slower
+- JOIN: Currently 1.5x slower
+
+### Optimizations for 2-Core Machines
+
+All optimizations below work without multi-threading, suitable for 2-core systems.
+
+---
+
+### 1. Container Cardinality (P0 - Quick Win)
+
+**Problem**: COUNT(*) traverses entire bitmap - O(n)
+
+**Solution**: Maintain cardinality in container metadata - O(1)
+
+```go
+// Current: O(n)
+func (rb *RoaringBitmap) Count() int {
+    count := 0
+    rb.ForEach(func(doc uint32) bool { count++; return true })
+    return count
+}
+
+// Optimized: O(1) with metadata
+type Container struct {
+    array  []uint16
+    bitmap []uint64
+    n      int32  // Cardinality - ADD THIS
+}
+
+func (c *Container) Cardinality() int32 {
+    return c.n  // O(1)!
+}
+```
+
+**Impact**: COUNT(*) 10x faster
+
+**Tasks**:
+- [ ] Add cardinality field to Container struct
+- [ ] Update cardinality on Add/Remove operations
+- [ ] Fix container split/merge
+- [ ] Test performance
+
+**Cost**: ~6h
+
+---
+
+### 2. Fast Hash JOIN (P1)
+
+**Problem**: String key allocation per lookup is slow
+
+**Current**:
+```go
+func (hj *HashJoin) build() {
+    for _, row := range hj.inner {
+        key := fmt.Sprintf("%v", row[hj.innerKey])  // Slow!
+        hj.hash[key] = row
+    }
+}
+```
+
+**Solution**: Integer hash
+```go
+func hashFast(v interface{}) uint64 {
+    switch x := v.(type) {
+    case int64:
+        return uint64(x) * 0x9e3779b97f4a7c15
+    case string:
+        return xxhash.Sum64String(x)
+    }
+}
+```
+
+**Impact**: JOIN 2x faster
+
+**Tasks**:
+- [ ] Implement fast hash function for int64, string
+- [ ] Update HashJoin to use fast hash
+- [ ] Handle hash collisions
+
+**Cost**: ~9h
+
+---
+
+### 3. Constant Folding (P2)
+
+**Problem**: `SELECT 1+2+3 FROM t` computes 1+2+3 for each row
+
+**Solution**: Fold constants at compile time
+
+```go
+// At parse/compile time
+func foldConstants(expr Expr) Expr {
+    switch e := expr.(type) {
+    case BinaryExpr:
+        left := foldConstants(e.Left)
+        right := foldConstants(e.Right)
+        if isConstant(left) && isConstant(right) {
+            return evalConstant(left, right, e.Op)  // Compute at compile time
+        }
+        return BinaryExpr{Left: left, Right: right, Op: e.Op}
+    }
+}
+```
+
+**Impact**: 5x faster for constant expressions
+
+**Tasks**:
+- [ ] Add isConstant() detection
+- [ ] Add foldConstants() to compiler
+- [ ] Test with various expressions
+
+**Cost**: ~6h
+
+---
+
+### 4. Range to >= AND <= Conversion (P2)
+
+**Problem**: `WHERE age BETWEEN 18 AND 65` not using index efficiently
+
+**Solution**: Convert to separate predicates
+
+```go
+func optimizeBetween(expr Expr) Expr {
+    if between, ok := expr.(BetweenExpr); ok {
+        return AndExpr{
+            GreaterEq{Column: between.Column, Value: between.Low},
+            LessEq{Column: between.Column, Value: between.High},
+        }
+    }
+}
+```
+
+**Impact**: Better index usage for range queries
+
+**Tasks**:
+- [ ] Add BETWEEN to >= AND = conversion in optimizer
+- [ ] Test with indexed columns
+
+**Cost**: ~4h
+
+---
+
+### Summary: Optimization Timeline
+
+| Optimization | Priority | Cost | Expected Speedup |
+|-------------|----------|------|------------------|
+| Container Cardinality | P0 | 6h | COUNT(*) 10x |
+| Fast Hash JOIN | P1 | 9h | JOIN 2x |
+| Constant Folding | P2 | 6h | 5x for const |
+| Range Optimization | P2 | 4h | 2x for BETWEEN |
+
+**Total for Performance**: ~25h
+
+---
+
+### Targets After Optimization
+
+| Operation | Before | Target |
+|-----------|--------|--------|
+| COUNT(*) via index | 84 µs | < 10 µs |
+| Full scan + filter | 1.87 ms | < 1 ms |
+| JOIN | 182 µs | < 100 µs |
