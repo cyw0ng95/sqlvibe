@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -1773,8 +1774,78 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			}
 		}
 		return nil
+	case "UNHEX":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			hexStr := fmt.Sprintf("%v", val)
+			if len(hexStr)%2 != 0 {
+				return nil
+			}
+			b := make([]byte, len(hexStr)/2)
+			for i := 0; i < len(hexStr); i += 2 {
+				hi := hexNibble(hexStr[i])
+				lo := hexNibble(hexStr[i+1])
+				if hi < 0 || lo < 0 {
+					return nil
+				}
+				b[i/2] = byte(hi<<4 | lo)
+			}
+			return b
+		}
+		return nil
+	case "RANDOM":
+		return int64(rand.Uint64())
+	case "RANDOMBLOB":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if n, ok := toInt64QE(val); ok && n > 0 {
+				b := make([]byte, n)
+				for i := range b {
+					b[i] = byte(rand.Intn(256))
+				}
+				return b
+			}
+		}
+		return []byte{}
+	case "ZEROBLOB":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if n, ok := toInt64QE(val); ok && n > 0 {
+				return make([]byte, n)
+			}
+		}
+		return []byte{}
+	case "IIF":
+		if len(fc.Args) >= 3 {
+			cond := qe.evalValue(row, fc.Args[0])
+			if isTruthyQE(cond) {
+				return qe.evalValue(row, fc.Args[1])
+			}
+			return qe.evalValue(row, fc.Args[2])
+		}
+		return nil
 	}
 	return nil
+}
+
+func isTruthyQE(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	switch x := v.(type) {
+	case int64:
+		return x != 0
+	case float64:
+		return x != 0
+	case bool:
+		return x
+	case string:
+		return x != "" && x != "0"
+	}
+	return true
 }
 
 func safeArgQE(args []QP.Expr, i int) QP.Expr {

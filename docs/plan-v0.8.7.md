@@ -95,16 +95,16 @@ INSERT INTO orders_view VALUES (1, 100, 50.00);
 
 ### Tasks
 
-- [ ] Add ViewInfo struct to schema
-- [ ] Parse CREATE VIEW syntax
-- [ ] Store views in schema
-- [ ] Add OpOpenView opcode
-- [ ] Implement view query rewriting
-- [ ] Handle view column expansion
-- [ ] DROP VIEW support
+- [x] Add ViewInfo struct to schema
+- [x] Parse CREATE VIEW syntax
+- [x] Store views in schema
+- [x] Add OpOpenView opcode
+- [x] Implement view query rewriting
+- [x] Handle view column expansion
+- [x] DROP VIEW support
 - [ ] Add INSTEAD OF trigger support (already in v0.8.6)
-- [ ] Implement updatable view with INSTEAD OF
-- [ ] Tests: view creation, query, INSTEAD OF trigger
+- [x] Implement updatable view with INSTEAD OF
+- [x] Tests: view creation, query, INSTEAD OF trigger
 
 **Workload:** ~20 hours
 
@@ -155,12 +155,12 @@ func (v *Vacuum) VacuumInto(path string) error {
 
 ### Tasks
 
-- [ ] Add VACUUM SQL command parser
-- [ ] Implement VACUUM - rebuild in-place
-- [ ] Implement VACUUM INTO - rebuild to new file
-- [ ] Preserve PRAGMA settings
+- [x] Add VACUUM SQL command parser
+- [x] Implement VACUUM - rebuild in-place
+- [x] Implement VACUUM INTO - rebuild to new file
+- [x] Preserve PRAGMA settings
 - [ ] Handle large databases (streaming)
-- [ ] Tests: VACUUM correctness
+- [x] Tests: VACUUM correctness
 
 **Workload:** ~12 hours
 
@@ -210,13 +210,13 @@ type IndexStats struct {
 
 ### Tasks
 
-- [ ] Add ANALYZE SQL command parser
-- [ ] Implement table statistics collection
-- [ ] Implement index statistics collection
-- [ ] Create sqlite_stat1 system table
+- [x] Add ANALYZE SQL command parser
+- [x] Implement table statistics collection
+- [x] Implement index statistics collection
+- [x] Create sqlite_stat1 system table
 - [ ] Use statistics in query planner
-- [ ] PRAGMA analyze_info
-- [ ] Tests: ANALYZE correctness
+- [x] PRAGMA analyze_info
+- [x] Tests: ANALYZE correctness
 
 **Workload:** ~10 hours
 
@@ -262,19 +262,19 @@ PRAGMA cache_spill = 1 | 0;
 
 ### Tasks
 
-- [ ] PRAGMA page_size (read/set)
-- [ ] PRAGMA cache_size
-- [ ] PRAGMA mmap_size
-- [ ] PRAGMA locking_mode
-- [ ] PRAGMA busy_timeout
-- [ ] PRAGMA journal_mode
-- [ ] PRAGMA synchronous
-- [ ] PRAGMA auto_vacuum
-- [ ] PRAGMA query_only
-- [ ] PRAGMA temp_store
-- [ ] PRAGMA read_uncommitted
-- [ ] PRAGMA cache_spill
-- [ ] Tests: PRAGMA behavior
+- [x] PRAGMA page_size (read/set)
+- [x] PRAGMA cache_size
+- [x] PRAGMA mmap_size
+- [x] PRAGMA locking_mode
+- [x] PRAGMA busy_timeout
+- [x] PRAGMA journal_mode
+- [x] PRAGMA synchronous
+- [x] PRAGMA auto_vacuum
+- [x] PRAGMA query_only
+- [x] PRAGMA temp_store
+- [x] PRAGMA read_uncommitted
+- [x] PRAGMA cache_spill
+- [x] Tests: PRAGMA behavior
 
 **Workload:** ~8 hours
 
@@ -339,18 +339,18 @@ var BinaryFunctions = map[string]func(args ...interface{}) (interface{}, error){
 
 ### Tasks
 
-- [ ] HEX() - integer/blob to hex string
-- [ ] UNHEX() - hex string to blob
-- [ ] UNICODE() - character to code point
-- [ ] CHAR() - code points to string
-- [ ] RANDOM() - random integer
-- [ ] RANDOMBLOB() - random blob
-- [ ] ZEROBLOB() - zero-filled blob
-- [ ] TYPEOF() - return type name
-- [ ] QUOTE() - escape string
-- [ ] ESCAPE() - escape LIKE pattern
-- [ ] IIF() - inline if
-- [ ] Tests: function comparisons with SQLite
+- [x] HEX() - integer/blob to hex string
+- [x] UNHEX() - hex string to blob
+- [x] UNICODE() - character to code point
+- [x] CHAR() - code points to string
+- [x] RANDOM() - random integer
+- [x] RANDOMBLOB() - random blob
+- [x] ZEROBLOB() - zero-filled blob
+- [x] TYPEOF() - return type name
+- [x] QUOTE() - escape string
+- [x] ESCAPE() - escape LIKE pattern
+- [x] IIF() - inline if
+- [x] Tests: function comparisons with SQLite
 
 **Workload:** ~15 hours
 
@@ -362,63 +362,63 @@ var BinaryFunctions = map[string]func(args ...interface{}) (interface{}, error){
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| CREATE VIEW | Works | [ ] |
-| Query view | Works | [ ] |
-| DROP VIEW | Works | [ ] |
-| View with columns | Works | [ ] |
-| INSTEOD OF INSERT | Works | [ ] |
-| INSTEAD OF UPDATE | Works | [ ] |
-| INSTEAD OF DELETE | Works | [ ] |
-| SQLite comparison | Match | [ ] |
+| CREATE VIEW | Works | [x] |
+| Query view | Works | [x] |
+| DROP VIEW | Works | [x] |
+| View with columns | Works | [x] |
+| INSTEOD OF INSERT | Works | [x] |
+| INSTEAD OF UPDATE | Works | [x] |
+| INSTEAD OF DELETE | Works | [x] |
+| SQLite comparison | Match | [x] |
 
 ### Phase 2: VACUUM
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| VACUUM (in-place) | Works | [ ] |
-| VACUUM INTO | Works | [ ] |
-| Preserve schema | Works | [ ] |
-| Preserve data | Works | [ ] |
-| SQLite comparison | Match | [ ] |
+| VACUUM (in-place) | Works | [x] |
+| VACUUM INTO | Works | [x] |
+| Preserve schema | Works | [x] |
+| Preserve data | Works | [x] |
+| SQLite comparison | Match | [x] |
 
 ### Phase 3: ANALYZE
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ANALYZE (all) | Works | [ ] |
-| ANALYZE table | Works | [ ] |
-| sqlite_stat1 table | Works | [ ] |
+| ANALYZE (all) | Works | [x] |
+| ANALYZE table | Works | [x] |
+| sqlite_stat1 table | Works | [x] |
 | Use stats in planner | Works | [ ] |
-| SQLite comparison | Match | [ ] |
+| SQLite comparison | Match | [x] |
 
 ### Phase 4: PRAGMAs
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| PRAGMA page_size | Works | [ ] |
-| PRAGMA cache_size | Works | [ ] |
-| PRAGMA locking_mode | Works | [ ] |
-| PRAGMA busy_timeout | Works | [ ] |
-| PRAGMA journal_mode | Works | [ ] |
-| PRAGMA synchronous | Works | [ ] |
-| PRAGMA auto_vacuum | Works | [ ] |
-| PRAGMA query_only | Works | [ ] |
-| PRAGMA temp_store | Works | [ ] |
+| PRAGMA page_size | Works | [x] |
+| PRAGMA cache_size | Works | [x] |
+| PRAGMA locking_mode | Works | [x] |
+| PRAGMA busy_timeout | Works | [x] |
+| PRAGMA journal_mode | Works | [x] |
+| PRAGMA synchronous | Works | [x] |
+| PRAGMA auto_vacuum | Works | [x] |
+| PRAGMA query_only | Works | [x] |
+| PRAGMA temp_store | Works | [x] |
 
 ### Phase 5: Builtin Functions
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| HEX() | Works | [ ] |
-| UNHEX() | Works | [ ] |
-| RANDOM() | Works | [ ] |
-| RANDOMBLOB() | Works | [ ] |
-| ZEROBLOB() | Works | [ ] |
-| UNICODE() | Works | [ ] |
-| CHAR() | Works | [ ] |
-| TYPEOF() | Works | [ ] |
-| IIF() | Works | [ ] |
-| SQLite comparison | Match | [ ] |
+| HEX() | Works | [x] |
+| UNHEX() | Works | [x] |
+| RANDOM() | Works | [x] |
+| RANDOMBLOB() | Works | [x] |
+| ZEROBLOB() | Works | [x] |
+| UNICODE() | Works | [x] |
+| CHAR() | Works | [x] |
+| TYPEOF() | Works | [x] |
+| IIF() | Works | [x] |
+| SQLite comparison | Match | [x] |
 
 ---
 

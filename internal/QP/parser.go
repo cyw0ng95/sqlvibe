@@ -261,6 +261,20 @@ type BackupStmt struct {
 
 func (b *BackupStmt) NodeType() string { return "BackupStmt" }
 
+// VacuumStmt represents VACUUM [INTO 'path']
+type VacuumStmt struct {
+	DestPath string // empty = in-place vacuum
+}
+
+func (v *VacuumStmt) NodeType() string { return "VacuumStmt" }
+
+// AnalyzeStmt represents ANALYZE [table_or_index]
+type AnalyzeStmt struct {
+	Target string // empty = all tables
+}
+
+func (a *AnalyzeStmt) NodeType() string { return "AnalyzeStmt" }
+
 type Expr interface {
 	exprNode()
 }
@@ -445,6 +459,10 @@ func (p *Parser) parseInternal() (ASTNode, error) {
 			return p.parseWithClause()
 		case "BACKUP":
 			return p.parseBackup()
+		case "VACUUM":
+			return p.parseVacuum()
+		case "ANALYZE":
+			return p.parseAnalyze()
 		}
 	case TokenExplain:
 		return p.parseExplain()
@@ -2731,6 +2749,35 @@ func (p *Parser) parseBackup() (ASTNode, error) {
 		return nil, fmt.Errorf("BACKUP: expected destination path, got %v", cur)
 	}
 
+	return stmt, nil
+}
+
+func (p *Parser) parseVacuum() (ASTNode, error) {
+	p.advance() // consume VACUUM
+	stmt := &VacuumStmt{}
+	cur := p.current()
+	if cur.Type == TokenKeyword && strings.ToUpper(cur.Literal) == "INTO" {
+		p.advance()
+		cur = p.current()
+		if cur.Type == TokenString {
+			stmt.DestPath = cur.Literal
+			p.advance()
+		} else if cur.Type == TokenIdentifier {
+			stmt.DestPath = cur.Literal
+			p.advance()
+		}
+	}
+	return stmt, nil
+}
+
+func (p *Parser) parseAnalyze() (ASTNode, error) {
+	p.advance() // consume ANALYZE
+	stmt := &AnalyzeStmt{}
+	cur := p.current()
+	if cur.Type == TokenIdentifier || cur.Type == TokenKeyword {
+		stmt.Target = cur.Literal
+		p.advance()
+	}
 	return stmt, nil
 }
 

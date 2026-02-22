@@ -212,6 +212,8 @@ var keywords = map[string]TokenType{
 	"OF":                TokenKeyword,
 	"AFTER":             TokenKeyword,
 	"BEFORE":            TokenKeyword,
+	"VACUUM":            TokenKeyword,
+	"ANALYZE":           TokenKeyword,
 }
 
 type Token struct {

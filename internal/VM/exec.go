@@ -3632,8 +3632,90 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 			}
 		}
 		return nil
+	case "UNHEX":
+		if len(e.Args) >= 1 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if val == nil {
+				return nil
+			}
+			hexStr := fmt.Sprintf("%v", val)
+			if len(hexStr)%2 != 0 {
+				return nil
+			}
+			b := make([]byte, len(hexStr)/2)
+			for i := 0; i < len(hexStr); i += 2 {
+				hi := hexNibble(hexStr[i])
+				lo := hexNibble(hexStr[i+1])
+				if hi < 0 || lo < 0 {
+					return nil
+				}
+				b[i/2] = byte(hi<<4 | lo)
+			}
+			return b
+		}
+		return nil
+	case "RANDOM":
+		return int64(rand.Uint64())
+	case "RANDOMBLOB":
+		if len(e.Args) >= 1 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if n, ok := toInt64ForVM(val); ok && n > 0 {
+				b := make([]byte, n)
+				for i := range b {
+					b[i] = byte(rand.Intn(256))
+				}
+				return b
+			}
+		}
+		return []byte{}
+	case "ZEROBLOB":
+		if len(e.Args) >= 1 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if n, ok := toInt64ForVM(val); ok && n > 0 {
+				return make([]byte, n)
+			}
+		}
+		return []byte{}
+	case "IIF":
+		if len(e.Args) >= 3 {
+			cond := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if isTruthyVM(cond) {
+				return vm.evaluateExprOnRow(row, columns, e.Args[1])
+			}
+			return vm.evaluateExprOnRow(row, columns, e.Args[2])
+		}
+		return nil
 	}
 	return nil
+}
+
+func hexNibble(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return -1
+}
+
+func isTruthyVM(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	switch x := v.(type) {
+	case int64:
+		return x != 0
+	case float64:
+		return x != 0
+	case bool:
+		return x
+	case string:
+		return x != "" && x != "0"
+	}
+	return true
 }
 
 func toInt64ForVM(v interface{}) (int64, bool) {

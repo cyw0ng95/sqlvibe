@@ -45,6 +45,78 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		}, nil
 	case "sqlite_sequence":
 		return db.pragmaSQLiteSequence()
+	case "page_size":
+		if stmt.Value != nil {
+			val := pragmaIntValue(stmt.Value)
+			db.pragmaSettings["page_size"] = val
+			return &Rows{Columns: []string{"page_size"}, Data: [][]interface{}{{val}}}, nil
+		}
+		v := db.getPragmaInt("page_size", 4096)
+		return &Rows{Columns: []string{"page_size"}, Data: [][]interface{}{{v}}}, nil
+	case "mmap_size":
+		if stmt.Value != nil {
+			val := pragmaIntValue(stmt.Value)
+			db.pragmaSettings["mmap_size"] = val
+			return &Rows{Columns: []string{"mmap_size"}, Data: [][]interface{}{{val}}}, nil
+		}
+		v := db.getPragmaInt("mmap_size", 0)
+		return &Rows{Columns: []string{"mmap_size"}, Data: [][]interface{}{{v}}}, nil
+	case "locking_mode":
+		if stmt.Value != nil {
+			val := strings.ToUpper(pragmaStrValue(stmt.Value))
+			db.pragmaSettings["locking_mode"] = val
+			return &Rows{Columns: []string{"locking_mode"}, Data: [][]interface{}{{strings.ToLower(val)}}}, nil
+		}
+		v := db.getPragmaStr("locking_mode", "normal")
+		return &Rows{Columns: []string{"locking_mode"}, Data: [][]interface{}{{strings.ToLower(v)}}}, nil
+	case "synchronous":
+		if stmt.Value != nil {
+			val := pragmaIntValue(stmt.Value)
+			db.pragmaSettings["synchronous"] = val
+			return &Rows{Columns: []string{"synchronous"}, Data: [][]interface{}{{val}}}, nil
+		}
+		v := db.getPragmaInt("synchronous", 2)
+		return &Rows{Columns: []string{"synchronous"}, Data: [][]interface{}{{v}}}, nil
+	case "auto_vacuum":
+		if stmt.Value != nil {
+			val := pragmaIntValue(stmt.Value)
+			db.pragmaSettings["auto_vacuum"] = val
+			return &Rows{Columns: []string{"auto_vacuum"}, Data: [][]interface{}{{val}}}, nil
+		}
+		v := db.getPragmaInt("auto_vacuum", 0)
+		return &Rows{Columns: []string{"auto_vacuum"}, Data: [][]interface{}{{v}}}, nil
+	case "query_only":
+		if stmt.Value != nil {
+			val := pragmaIntValue(stmt.Value)
+			db.pragmaSettings["query_only"] = val
+			return &Rows{Columns: []string{"query_only"}, Data: [][]interface{}{{val}}}, nil
+		}
+		v := db.getPragmaInt("query_only", 0)
+		return &Rows{Columns: []string{"query_only"}, Data: [][]interface{}{{v}}}, nil
+	case "temp_store":
+		if stmt.Value != nil {
+			val := pragmaIntValue(stmt.Value)
+			db.pragmaSettings["temp_store"] = val
+			return &Rows{Columns: []string{"temp_store"}, Data: [][]interface{}{{val}}}, nil
+		}
+		v := db.getPragmaInt("temp_store", 0)
+		return &Rows{Columns: []string{"temp_store"}, Data: [][]interface{}{{v}}}, nil
+	case "read_uncommitted":
+		if stmt.Value != nil {
+			val := pragmaIntValue(stmt.Value)
+			db.pragmaSettings["read_uncommitted"] = val
+			return &Rows{Columns: []string{"read_uncommitted"}, Data: [][]interface{}{{val}}}, nil
+		}
+		v := db.getPragmaInt("read_uncommitted", 0)
+		return &Rows{Columns: []string{"read_uncommitted"}, Data: [][]interface{}{{v}}}, nil
+	case "cache_spill":
+		if stmt.Value != nil {
+			val := pragmaIntValue(stmt.Value)
+			db.pragmaSettings["cache_spill"] = val
+			return &Rows{Columns: []string{"cache_spill"}, Data: [][]interface{}{{val}}}, nil
+		}
+		v := db.getPragmaInt("cache_spill", 1)
+		return &Rows{Columns: []string{"cache_spill"}, Data: [][]interface{}{{v}}}, nil
 	default:
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
@@ -455,4 +527,60 @@ for tableName, seq := range db.seqValues {
 data = append(data, []interface{}{tableName, seq})
 }
 return &Rows{Columns: columns, Data: data}, nil
+}
+
+func (db *Database) getPragmaInt(name string, defaultVal int64) int64 {
+	if v, ok := db.pragmaSettings[name]; ok {
+		if n, ok := v.(int64); ok {
+			return n
+		}
+	}
+	return defaultVal
+}
+
+func (db *Database) getPragmaStr(name string, defaultVal string) string {
+	if v, ok := db.pragmaSettings[name]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return defaultVal
+}
+
+func pragmaIntValue(expr QP.Expr) int64 {
+	switch v := expr.(type) {
+	case *QP.Literal:
+		if n, ok := v.Value.(int64); ok {
+			return n
+		}
+		if f, ok := v.Value.(float64); ok {
+			return int64(f)
+		}
+		if s, ok := v.Value.(string); ok {
+			switch strings.ToUpper(s) {
+			case "ON", "FULL", "EXCLUSIVE":
+				return 1
+			case "OFF", "NONE", "NORMAL":
+				return 0
+			}
+		}
+	case *QP.ColumnRef:
+		switch strings.ToUpper(v.Name) {
+		case "ON", "FULL", "EXCLUSIVE":
+			return 1
+		case "OFF", "NONE", "NORMAL":
+			return 0
+		}
+	}
+	return 0
+}
+
+func pragmaStrValue(expr QP.Expr) string {
+	switch v := expr.(type) {
+	case *QP.Literal:
+		return fmt.Sprintf("%v", v.Value)
+	case *QP.ColumnRef:
+		return v.Name
+	}
+	return ""
 }
