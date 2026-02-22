@@ -1,4 +1,4 @@
-module github.com/sqlvibe/sqlvibe
+module github.com/cyw0ng95/sqlvibe
 
 go 1.25.6
 

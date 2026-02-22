@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
+	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 var (

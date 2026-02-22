@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sqlvibe/sqlvibe/internal/DS"
-	"github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 // applyTypeAffinity coerces row values to match declared column type affinities.
@@ -208,8 +208,23 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		// Apply type affinity coercion based on declared column types
 		ctx.db.applyTypeAffinity(tableName, row)
 
-		// Auto-assign integer primary key if nil
-		ctx.db.autoAssignPK(tableName, row)
+		// AUTOINCREMENT takes priority over generic autoAssignPK
+		if _, hasAI := ctx.db.autoincrement[tableName]; hasAI {
+			ctx.db.autoAssignAutoincrement(tableName, row)
+		} else {
+			// Auto-assign integer primary key if nil
+			ctx.db.autoAssignPK(tableName, row)
+		}
+
+		// Fire BEFORE INSERT triggers
+		if err := ctx.db.fireTriggers(tableName, "INSERT", "BEFORE", nil, row, 0); err != nil {
+			return err
+		}
+
+		// Check FK constraints
+		if err := ctx.db.checkFKOnInsert(tableName, row); err != nil {
+			return err
+		}
 
 		// Check NOT NULL constraints
 		tableNotNull := ctx.db.columnNotNull[tableName]
@@ -259,6 +274,12 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		ctx.db.data[tableName] = append(ctx.db.data[tableName], row)
 		newIdx := len(ctx.db.data[tableName]) - 1
 		ctx.db.addToIndexes(tableName, row, newIdx)
+
+		// Fire AFTER INSERT triggers
+		if err := ctx.db.fireTriggers(tableName, "INSERT", "AFTER", nil, row, 0); err != nil {
+			return err
+		}
+
 		return nil
 	}
 
@@ -319,8 +340,29 @@ func (ctx *dsVmContext) UpdateRow(tableName string, rowIndex int, row map[string
 		return fmt.Errorf("row index out of bounds")
 	}
 	oldRow := ctx.db.data[tableName][rowIndex]
+
+	// Fire BEFORE UPDATE triggers
+	if err := ctx.db.fireTriggers(tableName, "UPDATE", "BEFORE", oldRow, row, 0); err != nil {
+		return err
+	}
+
+	// FK enforcement on UPDATE (check parent tables that we reference)
+	if err := ctx.db.checkFKOnInsert(tableName, row); err != nil {
+		return err
+	}
+	// FK enforcement on UPDATE (check child tables that reference us)
+	if err := ctx.db.checkFKOnUpdate(tableName, oldRow, row); err != nil {
+		return err
+	}
+
 	ctx.db.data[tableName][rowIndex] = row
 	ctx.db.updateIndexes(tableName, oldRow, row, rowIndex)
+
+	// Fire AFTER UPDATE triggers
+	if err := ctx.db.fireTriggers(tableName, "UPDATE", "AFTER", oldRow, row, 0); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -336,8 +378,25 @@ func (ctx *dsVmContext) DeleteRow(tableName string, rowIndex int) error {
 		return fmt.Errorf("row index out of bounds")
 	}
 	row := ctx.db.data[tableName][rowIndex]
+
+	// Fire BEFORE DELETE triggers
+	if err := ctx.db.fireTriggers(tableName, "DELETE", "BEFORE", row, nil, 0); err != nil {
+		return err
+	}
+
+	// FK enforcement on DELETE
+	if err := ctx.db.checkFKOnDelete(tableName, row); err != nil {
+		return err
+	}
+
 	ctx.db.removeFromIndexes(tableName, row, rowIndex)
 	ctx.db.data[tableName] = append(ctx.db.data[tableName][:rowIndex], ctx.db.data[tableName][rowIndex+1:]...)
+
+	// Fire AFTER DELETE triggers
+	if err := ctx.db.fireTriggers(tableName, "DELETE", "AFTER", row, nil, 0); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -385,8 +444,13 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		ctx.db.data[tableName] = make([]map[string]interface{}, 0)
 	}
 
-	// Auto-assign integer primary key if nil
-	ctx.db.autoAssignPK(tableName, row)
+	// AUTOINCREMENT takes priority over generic autoAssignPK
+	if _, hasAI := ctx.db.autoincrement[tableName]; hasAI {
+		ctx.db.autoAssignAutoincrement(tableName, row)
+	} else {
+		// Auto-assign integer primary key if nil
+		ctx.db.autoAssignPK(tableName, row)
+	}
 
 	// Apply defaults for missing columns and NULL values
 	tableDefaults := ctx.db.columnDefaults[tableName]
@@ -409,6 +473,16 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 				row[colName] = defaultVal
 			}
 		}
+	}
+
+	// Fire BEFORE INSERT triggers
+	if err := ctx.db.fireTriggers(tableName, "INSERT", "BEFORE", nil, row, 0); err != nil {
+		return err
+	}
+
+	// Check FK constraints
+	if err := ctx.db.checkFKOnInsert(tableName, row); err != nil {
+		return err
 	}
 
 	// Check NOT NULL constraints
@@ -468,6 +542,11 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 	rowID := int64(len(ctx.db.data[tableName]))
 	serialized := ctx.db.serializeRow(row)
 	ctx.db.engine.Insert(tableName, uint64(rowID), serialized)
+
+	// Fire AFTER INSERT triggers
+	if err := ctx.db.fireTriggers(tableName, "INSERT", "AFTER", nil, row, 0); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -655,8 +734,28 @@ func (ctx *dbVmContext) UpdateRow(tableName string, rowIndex int, row map[string
 		return fmt.Errorf("invalid row index for table %s", tableName)
 	}
 	oldRow := ctx.db.data[tableName][rowIndex]
+
+	// Fire BEFORE UPDATE triggers
+	if err := ctx.db.fireTriggers(tableName, "UPDATE", "BEFORE", oldRow, row, 0); err != nil {
+		return err
+	}
+
+	// FK enforcement
+	if err := ctx.db.checkFKOnInsert(tableName, row); err != nil {
+		return err
+	}
+	if err := ctx.db.checkFKOnUpdate(tableName, oldRow, row); err != nil {
+		return err
+	}
+
 	ctx.db.data[tableName][rowIndex] = row
 	ctx.db.updateIndexes(tableName, oldRow, row, rowIndex)
+
+	// Fire AFTER UPDATE triggers
+	if err := ctx.db.fireTriggers(tableName, "UPDATE", "AFTER", oldRow, row, 0); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -665,9 +764,26 @@ func (ctx *dbVmContext) DeleteRow(tableName string, rowIndex int) error {
 		return fmt.Errorf("invalid row index for table %s", tableName)
 	}
 	row := ctx.db.data[tableName][rowIndex]
+
+	// Fire BEFORE DELETE triggers
+	if err := ctx.db.fireTriggers(tableName, "DELETE", "BEFORE", row, nil, 0); err != nil {
+		return err
+	}
+
+	// FK enforcement
+	if err := ctx.db.checkFKOnDelete(tableName, row); err != nil {
+		return err
+	}
+
 	ctx.db.removeFromIndexes(tableName, row, rowIndex)
 	// Remove the row at the given index
 	ctx.db.data[tableName] = append(ctx.db.data[tableName][:rowIndex], ctx.db.data[tableName][rowIndex+1:]...)
+
+	// Fire AFTER DELETE triggers
+	if err := ctx.db.fireTriggers(tableName, "DELETE", "AFTER", row, nil, 0); err != nil {
+		return err
+	}
+
 	return nil
 }
 

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	_ "github.com/glebarez/go-sqlite"
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
+	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 func sqlvibeDB(t *testing.T, path string) *sqlvibe.Database {

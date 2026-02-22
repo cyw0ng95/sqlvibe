@@ -4,7 +4,7 @@ package benchdata
 import (
 	"fmt"
 
-	VM "github.com/sqlvibe/sqlvibe/internal/VM"
+	VM "github.com/cyw0ng95/sqlvibe/internal/VM"
 )
 
 // GenerateArithProgram builds a program that performs n arithmetic operations

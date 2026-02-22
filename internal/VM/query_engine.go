@@ -4,14 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/sqlvibe/sqlvibe/internal/DS"
-	"github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 var (
@@ -19,6 +20,10 @@ var (
 	ErrNoColumn     = errors.New("no such column")
 	ErrTypeMismatch = errors.New("type mismatch")
 )
+
+// julianDayUnixEpoch is the Julian Day Number for the Unix epoch (1970-01-01 00:00:00 UTC).
+// Used by julianday() and strftime('%J', ...) implementations.
+const julianDayUnixEpoch = 2440587.5
 
 type QueryEngine struct {
 	vm         *VM
@@ -1591,28 +1596,15 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			return nil
 		}
 		formatStr, _ := format.(string)
-		tsStr, _ := timestamp.(string)
-		var t time.Time
-		if strings.ToLower(tsStr) == "now" {
-			t = time.Now().UTC()
-		} else {
-			var err error
-			for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02", time.RFC3339} {
-				t, err = time.Parse(layout, tsStr)
-				if err == nil {
-					break
-				}
-			}
-			if err != nil {
-				return nil
-			}
+		t := parseQEDateTime(timestamp)
+		if t.IsZero() {
+			return nil
 		}
-		sqliteFormat := strings.NewReplacer(
-			"%Y", "2006", "%m", "01", "%d", "02",
-			"%H", "15", "%M", "04", "%S", "05",
-			"%j", "002", "%f", "05.000000",
-		).Replace(formatStr)
-		return t.Format(sqliteFormat)
+		for i := 2; i < len(fc.Args); i++ {
+			mod, _ := qe.evalValue(row, fc.Args[i]).(string)
+			t = qeApplyDateModifier(t, mod)
+		}
+		return applyStrftimeQE(formatStr, t)
 	case "NOW":
 		return time.Now().Format("2006-01-02 15:04:05")
 	case "YEAR", "YEAROF":
@@ -1719,8 +1711,415 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 		default:
 			return "unknown"
 		}
+	case "JULIANDAY":
+		tsVal := qe.evalValue(row, safeArgQE(fc.Args, 0))
+		t := parseQEDateTime(tsVal)
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		for i := 1; i < len(fc.Args); i++ {
+			mod, _ := qe.evalValue(row, fc.Args[i]).(string)
+			t = qeApplyDateModifier(t, mod)
+		}
+		return toJulianDayQE(t)
+	case "UNIXEPOCH":
+		tsVal := qe.evalValue(row, safeArgQE(fc.Args, 0))
+		t := parseQEDateTime(tsVal)
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		return t.Unix()
+	case "PRINTF", "FORMAT":
+		if len(fc.Args) < 1 {
+			return nil
+		}
+		fmtVal := qe.evalValue(row, fc.Args[0])
+		if fmtVal == nil {
+			return nil
+		}
+		formatStr := fmt.Sprintf("%v", fmtVal)
+		argVals := make([]interface{}, 0, len(fc.Args)-1)
+		for i := 1; i < len(fc.Args); i++ {
+			argVals = append(argVals, qe.evalValue(row, fc.Args[i]))
+		}
+		return sqlitePrintfQE(formatStr, argVals)
+	case "QUOTE":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			return sqliteQuoteQE(val)
+		}
+		return nil
+	case "HEX":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			return sqliteHexQE(val)
+		}
+		return nil
+	case "CHAR":
+		var sb strings.Builder
+		for _, arg := range fc.Args {
+			v := qe.evalValue(row, arg)
+			if n, ok := toInt64QE(v); ok {
+				sb.WriteRune(rune(n))
+			}
+		}
+		return sb.String()
+	case "UNICODE":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			s := fmt.Sprintf("%v", val)
+			if len(s) > 0 {
+				r, _ := utf8.DecodeRuneInString(s)
+				return int64(r)
+			}
+		}
+		return nil
+	case "UNHEX":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			hexStr := fmt.Sprintf("%v", val)
+			if len(hexStr)%2 != 0 {
+				return nil
+			}
+			b := make([]byte, len(hexStr)/2)
+			for i := 0; i < len(hexStr); i += 2 {
+				hi := hexNibble(hexStr[i])
+				lo := hexNibble(hexStr[i+1])
+				if hi < 0 || lo < 0 {
+					return nil
+				}
+				b[i/2] = byte(hi<<4 | lo)
+			}
+			return b
+		}
+		return nil
+	case "RANDOM":
+		return int64(rand.Uint64())
+	case "RANDOMBLOB":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if n, ok := toInt64QE(val); ok && n > 0 {
+				b := make([]byte, n)
+				for i := range b {
+					b[i] = byte(rand.Intn(256))
+				}
+				return b
+			}
+		}
+		return []byte{}
+	case "ZEROBLOB":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if n, ok := toInt64QE(val); ok && n > 0 {
+				return make([]byte, n)
+			}
+		}
+		return []byte{}
+	case "IIF":
+		if len(fc.Args) >= 3 {
+			cond := qe.evalValue(row, fc.Args[0])
+			if isTruthyQE(cond) {
+				return qe.evalValue(row, fc.Args[1])
+			}
+			return qe.evalValue(row, fc.Args[2])
+		}
+		return nil
 	}
 	return nil
+}
+
+func isTruthyQE(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	switch x := v.(type) {
+	case int64:
+		return x != 0
+	case float64:
+		return x != 0
+	case bool:
+		return x
+	case string:
+		return x != "" && x != "0"
+	}
+	return true
+}
+
+func safeArgQE(args []QP.Expr, i int) QP.Expr {
+	if i < len(args) {
+		return args[i]
+	}
+	return nil
+}
+
+func toInt64QE(v interface{}) (int64, bool) {
+	switch x := v.(type) {
+	case int64:
+		return x, true
+	case int:
+		return int64(x), true
+	case float64:
+		return int64(x), true
+	}
+	return 0, false
+}
+
+func parseQEDateTime(v interface{}) time.Time {
+	if v == nil {
+		return time.Time{}
+	}
+	switch val := v.(type) {
+	case string:
+		if strings.ToLower(val) == "now" {
+			return time.Now().UTC()
+		}
+		for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02", "15:04:05"} {
+			if t, err := time.Parse(layout, val); err == nil {
+				return t.UTC()
+			}
+		}
+	case int64:
+		return time.Unix(val, 0).UTC()
+	case float64:
+		sec := int64(val)
+		return time.Unix(sec, 0).UTC()
+	}
+	return time.Time{}
+}
+
+func qeApplyDateModifier(t time.Time, mod string) time.Time {
+	mod = strings.TrimSpace(strings.ToLower(mod))
+	if mod == "" {
+		return t
+	}
+	if mod == "start of month" {
+		return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+	}
+	if mod == "start of year" {
+		return time.Date(t.Year(), 1, 1, 0, 0, 0, 0, t.Location())
+	}
+	if mod == "start of day" {
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+	}
+	// +N days / -N months etc
+	var n int
+	var unit string
+	fmt.Sscanf(mod, "%d %s", &n, &unit)
+	switch strings.TrimSuffix(unit, "s") {
+	case "year":
+		return t.AddDate(n, 0, 0)
+	case "month":
+		return t.AddDate(0, n, 0)
+	case "day":
+		return t.AddDate(0, 0, n)
+	case "hour":
+		return t.Add(time.Duration(n) * time.Hour)
+	case "minute":
+		return t.Add(time.Duration(n) * time.Minute)
+	case "second":
+		return t.Add(time.Duration(n) * time.Second)
+	}
+	return t
+}
+
+func toJulianDayQE(t time.Time) float64 {
+	return julianDayUnixEpoch + float64(t.UnixNano())/float64(24*60*60*1e9)
+}
+
+func applyStrftimeQE(fmtStr string, t time.Time) string {
+	var sb strings.Builder
+	i := 0
+	for i < len(fmtStr) {
+		if fmtStr[i] == '%' && i+1 < len(fmtStr) {
+			i++
+			switch fmtStr[i] {
+			case 'Y':
+				fmt.Fprintf(&sb, "%04d", t.Year())
+			case 'm':
+				fmt.Fprintf(&sb, "%02d", int(t.Month()))
+			case 'd':
+				fmt.Fprintf(&sb, "%02d", t.Day())
+			case 'H':
+				fmt.Fprintf(&sb, "%02d", t.Hour())
+			case 'M':
+				fmt.Fprintf(&sb, "%02d", t.Minute())
+			case 'S':
+				fmt.Fprintf(&sb, "%02d", t.Second())
+			case 'j':
+				sb.WriteString(t.Format("002"))
+			case 'f':
+				fmt.Fprintf(&sb, "%02d.%06d", t.Second(), t.Nanosecond()/1000)
+			case 'W':
+				_, week := t.ISOWeek()
+				fmt.Fprintf(&sb, "%02d", week)
+			case 'w':
+				fmt.Fprintf(&sb, "%d", int(t.Weekday()))
+			case 's':
+				fmt.Fprintf(&sb, "%d", t.Unix())
+			case 'J':
+				fmt.Fprintf(&sb, "%.7f", toJulianDayQE(t))
+			case '%':
+				sb.WriteByte('%')
+			default:
+				sb.WriteByte('%')
+				sb.WriteByte(fmtStr[i])
+			}
+		} else {
+			sb.WriteByte(fmtStr[i])
+		}
+		i++
+	}
+	return sb.String()
+}
+
+func sqlitePrintfQE(format string, args []interface{}) string {
+	var sb strings.Builder
+	argIdx := 0
+	i := 0
+	for i < len(format) {
+		if format[i] != '%' {
+			sb.WriteByte(format[i])
+			i++
+			continue
+		}
+		i++
+		if i >= len(format) {
+			break
+		}
+		var flags strings.Builder
+		for i < len(format) && (format[i] == '-' || format[i] == '+' || format[i] == ' ' || format[i] == '0' || format[i] == '#') {
+			flags.WriteByte(format[i])
+			i++
+		}
+		var width strings.Builder
+		for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+			width.WriteByte(format[i])
+			i++
+		}
+		var prec strings.Builder
+		if i < len(format) && format[i] == '.' {
+			prec.WriteByte('.')
+			i++
+			for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+				prec.WriteByte(format[i])
+				i++
+			}
+		}
+		if i >= len(format) {
+			break
+		}
+		spec := format[i]
+		i++
+		goFmt := "%" + flags.String() + width.String() + prec.String()
+		var arg interface{}
+		if argIdx < len(args) {
+			arg = args[argIdx]
+			argIdx++
+		}
+		switch spec {
+		case 'd', 'i':
+			n, _ := toInt64QE(arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"d", n))
+		case 'f':
+			f := 0.0
+			if arg != nil {
+				switch v := arg.(type) {
+				case float64:
+					f = v
+				case int64:
+					f = float64(v)
+				}
+			}
+			sb.WriteString(fmt.Sprintf(goFmt+"f", f))
+		case 'e', 'E', 'g', 'G':
+			f := 0.0
+			if arg != nil {
+				switch v := arg.(type) {
+				case float64:
+					f = v
+				case int64:
+					f = float64(v)
+				}
+			}
+			sb.WriteString(fmt.Sprintf(goFmt+string(spec), f))
+		case 's':
+			s := fmt.Sprintf("%v", arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"s", s))
+		case 'q':
+			s := fmt.Sprintf("%v", arg)
+			sb.WriteString("'" + strings.ReplaceAll(s, "'", "''") + "'")
+		case 'x':
+			n, _ := toInt64QE(arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"x", n))
+		case 'X':
+			n, _ := toInt64QE(arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"X", n))
+		case 'o':
+			n, _ := toInt64QE(arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"o", n))
+		case 'c':
+			if arg != nil {
+				n, _ := toInt64QE(arg)
+				if n > 0 {
+					sb.WriteRune(rune(n))
+				} else {
+					s := fmt.Sprintf("%v", arg)
+					if len(s) > 0 {
+						sb.WriteByte(s[0])
+					}
+				}
+			}
+		case '%':
+			sb.WriteByte('%')
+		}
+	}
+	return sb.String()
+}
+
+func sqliteQuoteQE(v interface{}) interface{} {
+	if v == nil {
+		return "NULL"
+	}
+	switch val := v.(type) {
+	case string:
+		return "'" + strings.ReplaceAll(val, "'", "''") + "'"
+	case int64:
+		return fmt.Sprintf("%d", val)
+	case float64:
+		return fmt.Sprintf("%g", val)
+	default:
+		s := fmt.Sprintf("%v", val)
+		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	}
+}
+
+func sqliteHexQE(v interface{}) interface{} {
+	if v == nil {
+		return nil
+	}
+	const hexChars = "0123456789ABCDEF"
+	switch val := v.(type) {
+	case string:
+		hex := make([]byte, len(val)*2)
+		for i := 0; i < len(val); i++ {
+			b := val[i]
+			hex[i*2] = hexChars[b>>4]
+			hex[i*2+1] = hexChars[b&0xf]
+		}
+		return string(hex)
+	case []byte:
+		hex := make([]byte, len(val)*2)
+		for i, b := range val {
+			hex[i*2] = hexChars[b>>4]
+			hex[i*2+1] = hexChars[b&0xf]
+		}
+		return string(hex)
+	default:
+		return fmt.Sprintf("%X", val)
+	}
 }
 
 func (qe *QueryEngine) hasNullColumn(row map[string]interface{}, expr QP.Expr) bool {

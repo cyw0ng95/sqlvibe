@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/internal/PB"
+	"github.com/cyw0ng95/sqlvibe/internal/PB"
 )
 
 // newBenchPageManager creates a temp-file-backed PageManager for benchmarks.

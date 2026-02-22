@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	QP "github.com/sqlvibe/sqlvibe/internal/QP"
+	QP "github.com/cyw0ng95/sqlvibe/internal/QP"
 )
 
 // subqueryResultCache caches non-correlated subquery results for a single VM execution.

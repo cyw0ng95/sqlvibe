@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 type ASTNode interface {
@@ -31,8 +31,10 @@ type SelectStmt struct {
 
 // CTEClause represents a single CTE definition: name AS (SELECT ...)
 type CTEClause struct {
-	Name   string
-	Select *SelectStmt
+	Name      string
+	Select    *SelectStmt
+	Recursive bool
+	Columns   []string
 }
 
 func (s *SelectStmt) NodeType() string { return "SelectStmt" }
@@ -44,11 +46,13 @@ type OrderBy struct {
 }
 
 type TableRef struct {
-	Schema   string
-	Name     string
-	Alias    string
-	Join     *Join
-	Subquery *SelectStmt // derived table: FROM (SELECT ...) AS alias
+	Schema    string
+	Name      string
+	Alias     string
+	Join      *Join
+	Subquery  *SelectStmt // derived table: FROM (SELECT ...) AS alias
+	Values    [][]Expr    // non-nil for VALUES table constructor
+	ValueCols []string    // column names from AS t(col1, col2)
 }
 
 func (t *TableRef) NodeType() string { return "TableRef" }
@@ -100,25 +104,70 @@ type DeleteStmt struct {
 
 func (d *DeleteStmt) NodeType() string { return "DeleteStmt" }
 
+// ReferenceAction represents ON DELETE / ON UPDATE actions for FK constraints.
+type ReferenceAction int
+
+const (
+	ReferenceNoAction  ReferenceAction = iota // NO ACTION (default)
+	ReferenceRestrict                         // RESTRICT
+	ReferenceCascade                          // CASCADE
+	ReferenceSetNull                          // SET NULL
+	ReferenceSetDefault                       // SET DEFAULT
+)
+
+// ForeignKeyConstraint represents a FOREIGN KEY constraint.
+type ForeignKeyConstraint struct {
+	ChildColumns  []string        // columns in this table
+	ParentTable   string          // referenced table
+	ParentColumns []string        // referenced columns
+	OnDelete      ReferenceAction // ON DELETE action
+	OnUpdate      ReferenceAction // ON UPDATE action
+}
+
 type CreateTableStmt struct {
 	Name        string
 	Columns     []ColumnDef
 	IfNotExists bool
 	Temporary   bool
-	AsSelect    *SelectStmt // CREATE TABLE ... AS SELECT
-	TableChecks []Expr      // table-level CHECK constraints
+	AsSelect    *SelectStmt           // CREATE TABLE ... AS SELECT
+	TableChecks []Expr                // table-level CHECK constraints
+	ForeignKeys []ForeignKeyConstraint // table-level FOREIGN KEY constraints
 }
 
 func (c *CreateTableStmt) NodeType() string { return "CreateTableStmt" }
 
 type ColumnDef struct {
-	Name       string
-	Type       string
-	PrimaryKey bool
-	NotNull    bool
-	Default    Expr
-	Check      Expr // CHECK constraint expression
+	Name          string
+	Type          string
+	PrimaryKey    bool
+	NotNull       bool
+	Default       Expr
+	Check         Expr                  // CHECK constraint expression
+	IsAutoincrement bool               // AUTOINCREMENT
+	ForeignKey    *ForeignKeyConstraint // inline REFERENCES clause
 }
+
+// CreateTriggerStmt represents CREATE TRIGGER
+type CreateTriggerStmt struct {
+	Name        string
+	TableName   string
+	Time        string   // "BEFORE", "AFTER", "INSTEAD OF"
+	Event       string   // "INSERT", "UPDATE", "DELETE"
+	Columns     []string // for UPDATE OF col1, col2
+	When        Expr     // WHEN condition (nil if absent)
+	Body        []ASTNode // trigger body statements
+	IfNotExists bool
+}
+
+func (c *CreateTriggerStmt) NodeType() string { return "CreateTriggerStmt" }
+
+// DropTriggerStmt represents DROP TRIGGER
+type DropTriggerStmt struct {
+	Name     string
+	IfExists bool
+}
+
+func (d *DropTriggerStmt) NodeType() string { return "DropTriggerStmt" }
 
 // CreateViewStmt represents CREATE VIEW
 type CreateViewStmt struct {
@@ -130,6 +179,7 @@ type CreateViewStmt struct {
 func (c *CreateViewStmt) NodeType() string { return "CreateViewStmt" }
 
 // DropViewStmt represents DROP VIEW
+
 type DropViewStmt struct {
 	Name     string
 	IfExists bool
@@ -200,6 +250,31 @@ type RollbackStmt struct {
 
 func (r *RollbackStmt) NodeType() string { return "RollbackStmt" }
 
+// BackupStmt represents:
+//
+//	BACKUP DATABASE TO 'path'
+//	BACKUP INCREMENTAL TO 'path'
+type BackupStmt struct {
+	Incremental bool   // true for BACKUP INCREMENTAL, false for BACKUP DATABASE
+	DestPath    string // destination file path
+}
+
+func (b *BackupStmt) NodeType() string { return "BackupStmt" }
+
+// VacuumStmt represents VACUUM [INTO 'path']
+type VacuumStmt struct {
+	DestPath string // empty = in-place vacuum
+}
+
+func (v *VacuumStmt) NodeType() string { return "VacuumStmt" }
+
+// AnalyzeStmt represents ANALYZE [table_or_index]
+type AnalyzeStmt struct {
+	Target string // empty = all tables
+}
+
+func (a *AnalyzeStmt) NodeType() string { return "AnalyzeStmt" }
+
 type Expr interface {
 	exprNode()
 }
@@ -254,13 +329,43 @@ type AliasExpr struct {
 
 func (e *AliasExpr) exprNode() {}
 
+// WindowOrderBy represents an ORDER BY element in a window function spec
+type WindowOrderBy struct {
+	Expr Expr
+	Desc bool
+}
+
+// WindowFrame represents ROWS/RANGE BETWEEN frame spec
+type WindowFrame struct {
+	Type  string     // "ROWS" or "RANGE"
+	Start FrameBound
+	End   FrameBound
+}
+
+// FrameBound represents a window frame boundary
+type FrameBound struct {
+	Type  string // "UNBOUNDED", "CURRENT", "PRECEDING", "FOLLOWING"
+	Value Expr   // for N PRECEDING/FOLLOWING (nil for UNBOUNDED/CURRENT)
+}
+
+// AnyAllExpr represents expr OP ANY/ALL (subquery)
+type AnyAllExpr struct {
+	Left       Expr
+	Op         TokenType // e.g. TokenGt, TokenLt, TokenEq
+	Quantifier string    // "ANY", "SOME", "ALL"
+	Subquery   *SelectStmt
+}
+
+func (e *AnyAllExpr) exprNode() {}
+
 // WindowFuncExpr represents a window function call: func(...) OVER ([PARTITION BY ...] [ORDER BY ...])
 type WindowFuncExpr struct {
-	Name      string // Function name: COUNT, SUM, AVG, LAG, LEAD, FIRST_VALUE, LAST_VALUE, ROW_NUMBER, RANK
-	Args      []Expr // Function arguments
-	IsStar    bool   // COUNT(*)
-	Partition []Expr // PARTITION BY expressions
-	OrderBy   []Expr // ORDER BY expressions (simplified: no ASC/DESC for now)
+	Name      string          // Function name: COUNT, SUM, AVG, LAG, LEAD, FIRST_VALUE, LAST_VALUE, ROW_NUMBER, RANK
+	Args      []Expr          // Function arguments
+	IsStar    bool            // COUNT(*)
+	Partition []Expr          // PARTITION BY expressions
+	OrderBy   []WindowOrderBy // ORDER BY expressions
+	Frame     *WindowFrame    // ROWS/RANGE frame spec (optional)
 }
 
 func (e *WindowFuncExpr) exprNode() {}
@@ -352,6 +457,12 @@ func (p *Parser) parseInternal() (ASTNode, error) {
 			return p.parseAlterTable()
 		case "WITH":
 			return p.parseWithClause()
+		case "BACKUP":
+			return p.parseBackup()
+		case "VACUUM":
+			return p.parseVacuum()
+		case "ANALYZE":
+			return p.parseAnalyze()
 		}
 	case TokenExplain:
 		return p.parseExplain()
@@ -400,11 +511,66 @@ func (p *Parser) parseTableRef() *TableRef {
 	ref := &TableRef{}
 
 	if p.current().Type == TokenLeftParen {
-		// Derived table: (SELECT ...)
+		// Derived table: (SELECT ...) or (VALUES ...)
 		p.advance() // consume (
-		// VALUES as table source is not supported
 		if p.current().Type == TokenKeyword && p.current().Literal == "VALUES" {
-			p.parseError = fmt.Errorf("near \"(\": syntax error")
+			// Parse VALUES (row1), (row2), ... as a derived table
+			p.advance() // consume VALUES
+			var rows [][]Expr
+			for {
+				if p.current().Type != TokenLeftParen {
+					break
+				}
+				p.advance() // consume (
+				var row []Expr
+				for !p.isEOF() && p.current().Type != TokenRightParen {
+					expr, e := p.parseExpr()
+					if e != nil {
+						p.parseError = e
+						return ref
+					}
+					row = append(row, expr)
+					if p.current().Type == TokenComma {
+						p.advance()
+					}
+				}
+				if p.current().Type == TokenRightParen {
+					p.advance() // consume )
+				}
+				rows = append(rows, row)
+				if p.current().Type != TokenComma {
+					break
+				}
+				p.advance() // consume comma between rows
+			}
+			ref.Values = rows
+			if p.current().Type == TokenRightParen {
+				p.advance() // consume outer )
+			}
+			// Parse AS alias(col1, col2)
+			if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+				p.advance()
+			}
+			if p.current().Type == TokenIdentifier || p.current().Type == TokenString {
+				ref.Alias = p.current().Literal
+				p.advance()
+			}
+			// Parse column list: (col1, col2, ...)
+			if p.current().Type == TokenLeftParen {
+				p.advance() // consume (
+				for !p.isEOF() && p.current().Type != TokenRightParen {
+					if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+						ref.ValueCols = append(ref.ValueCols, p.current().Literal)
+						p.advance()
+					}
+					if p.current().Type == TokenComma {
+						p.advance()
+					}
+				}
+				if p.current().Type == TokenRightParen {
+					p.advance() // consume )
+				}
+			}
 			return ref
 		}
 		subStmt, err := p.parseSelect()
@@ -994,6 +1160,11 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 		return p.parseCreateIndex(false)
 	}
 
+	// Handle CREATE TRIGGER
+	if strings.ToUpper(p.current().Literal) == "TRIGGER" {
+		return p.parseCreateTrigger()
+	}
+
 	// Handle TEMPORARY/TEMP prefix
 	temporary := false
 	if strings.ToUpper(p.current().Literal) == "TEMPORARY" || strings.ToUpper(p.current().Literal) == "TEMP" {
@@ -1142,20 +1313,13 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 							}
 						}
 					} else if keyword == "REFERENCES" {
-						// Skip FOREIGN KEY reference for now
+						// Inline REFERENCES: col TYPE REFERENCES parent(col) [ON DELETE ...] [ON UPDATE ...]
+						fk := p.parseForeignKeyRef([]string{col.Name})
+						col.ForeignKey = &fk
+					} else if keyword == "AUTOINCREMENT" {
+						col.IsAutoincrement = true
 						p.advance()
-						if p.current().Type == TokenIdentifier {
-							p.advance()
-							if p.current().Type == TokenLeftParen {
-								for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
-									p.advance()
-								}
-								if p.current().Type == TokenRightParen {
-									p.advance()
-								}
-							}
-						}
-					} else if keyword == "AUTOINCREMENT" || keyword == "ASC" || keyword == "DESC" {
+					} else if keyword == "ASC" || keyword == "DESC" {
 						// Column modifier keywords - skip
 						p.advance()
 					} else {
@@ -1229,9 +1393,9 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 							}
 						}
 					} else if kw == "FOREIGN" {
-						for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
-							p.advance()
-						}
+						// Parse FOREIGN KEY (cols) REFERENCES parent(cols) [ON DELETE ...] [ON UPDATE ...]
+						fk := p.parseTableForeignKey()
+						stmt.ForeignKeys = append(stmt.ForeignKeys, fk)
 					} else if kw == "CONSTRAINT" {
 						p.advance() // consume "CONSTRAINT"
 						p.advance() // consume constraint name
@@ -1253,6 +1417,216 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 	}
 
 	return nil, nil
+}
+
+// parseRefAction parses ON DELETE / ON UPDATE action keywords.
+func parseRefAction(s string) ReferenceAction {
+	switch strings.ToUpper(s) {
+	case "CASCADE":
+		return ReferenceCascade
+	case "RESTRICT":
+		return ReferenceRestrict
+	case "SET":
+		return ReferenceSetNull // will be adjusted below
+	case "NO":
+		return ReferenceNoAction
+	default:
+		return ReferenceNoAction
+	}
+}
+
+// parseForeignKeyRef parses REFERENCES parent(col) [ON DELETE ...] [ON UPDATE ...].
+// childCols contains the already-parsed child column names.
+func (p *Parser) parseForeignKeyRef(childCols []string) ForeignKeyConstraint {
+	fk := ForeignKeyConstraint{
+		ChildColumns: childCols,
+		OnDelete:     ReferenceNoAction,
+		OnUpdate:     ReferenceNoAction,
+	}
+	// consume REFERENCES
+	p.advance()
+	// parent table name
+	fk.ParentTable = p.current().Literal
+	p.advance()
+	// optional (col, ...)
+	if p.current().Type == TokenLeftParen {
+		p.advance()
+		for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+			fk.ParentColumns = append(fk.ParentColumns, p.current().Literal)
+			p.advance()
+			if p.current().Type == TokenComma {
+				p.advance()
+			}
+		}
+		if p.current().Type == TokenRightParen {
+			p.advance()
+		}
+	}
+	// ON DELETE / ON UPDATE
+	for p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "ON" {
+		p.advance() // consume ON
+		event := strings.ToUpper(p.current().Literal)
+		p.advance() // consume DELETE or UPDATE
+		// action: CASCADE, RESTRICT, SET NULL, SET DEFAULT, NO ACTION
+		action := ReferenceNoAction
+		actionWord := strings.ToUpper(p.current().Literal)
+		p.advance()
+		switch actionWord {
+		case "CASCADE":
+			action = ReferenceCascade
+		case "RESTRICT":
+			action = ReferenceRestrict
+		case "SET":
+			next := strings.ToUpper(p.current().Literal)
+			p.advance()
+			if next == "NULL" {
+				action = ReferenceSetNull
+			} else {
+				action = ReferenceSetDefault
+			}
+		case "NO":
+			p.advance() // consume ACTION
+			action = ReferenceNoAction
+		}
+		if event == "DELETE" {
+			fk.OnDelete = action
+		} else if event == "UPDATE" {
+			fk.OnUpdate = action
+		}
+	}
+	return fk
+}
+
+// parseTableForeignKey parses a table-level FOREIGN KEY clause.
+func (p *Parser) parseTableForeignKey() ForeignKeyConstraint {
+	fk := ForeignKeyConstraint{
+		OnDelete: ReferenceNoAction,
+		OnUpdate: ReferenceNoAction,
+	}
+	p.advance() // consume FOREIGN
+	if strings.ToUpper(p.current().Literal) == "KEY" {
+		p.advance()
+	}
+	// (child cols)
+	if p.current().Type == TokenLeftParen {
+		p.advance()
+		for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+			fk.ChildColumns = append(fk.ChildColumns, p.current().Literal)
+			p.advance()
+			if p.current().Type == TokenComma {
+				p.advance()
+			}
+		}
+		if p.current().Type == TokenRightParen {
+			p.advance()
+		}
+	}
+	// REFERENCES ...
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "REFERENCES" {
+		updated := p.parseForeignKeyRef(fk.ChildColumns)
+		fk.ParentTable = updated.ParentTable
+		fk.ParentColumns = updated.ParentColumns
+		fk.OnDelete = updated.OnDelete
+		fk.OnUpdate = updated.OnUpdate
+	}
+	return fk
+}
+
+// parseCreateTrigger parses CREATE [TEMP] TRIGGER [IF NOT EXISTS] name
+// BEFORE/AFTER/INSTEAD OF INSERT/UPDATE/DELETE ON table ...
+func (p *Parser) parseCreateTrigger() (ASTNode, error) {
+	p.advance() // consume TRIGGER
+	stmt := &CreateTriggerStmt{}
+	// IF NOT EXISTS
+	if p.current().Type == TokenKeyword && p.current().Literal == "IF" {
+		p.advance()
+		if p.current().Type == TokenNot {
+			p.advance()
+		}
+		if p.current().Type == TokenExists {
+			stmt.IfNotExists = true
+			p.advance()
+		}
+	}
+	stmt.Name = p.current().Literal
+	p.advance()
+	// BEFORE / AFTER / INSTEAD OF
+	trigTime := strings.ToUpper(p.current().Literal)
+	if trigTime == "BEFORE" || trigTime == "AFTER" {
+		stmt.Time = trigTime
+		p.advance()
+	} else if trigTime == "INSTEAD" {
+		stmt.Time = "INSTEAD OF"
+		p.advance()
+		if strings.ToUpper(p.current().Literal) == "OF" {
+			p.advance()
+		}
+	}
+	// INSERT / UPDATE / DELETE
+	stmt.Event = strings.ToUpper(p.current().Literal)
+	p.advance()
+	// UPDATE OF col1, col2
+	if stmt.Event == "UPDATE" && p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "OF" {
+		p.advance()
+		for {
+			if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+				stmt.Columns = append(stmt.Columns, p.current().Literal)
+				p.advance()
+			}
+			if p.current().Type == TokenComma {
+				p.advance()
+			} else {
+				break
+			}
+		}
+	}
+	// ON tablename
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "ON" {
+		p.advance()
+		stmt.TableName = p.current().Literal
+		p.advance()
+	}
+	// FOR EACH ROW (optional)
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "FOR" {
+		p.advance() // FOR
+		if p.current().Type == TokenKeyword {
+			p.advance() // EACH
+		}
+		if p.current().Type == TokenKeyword {
+			p.advance() // ROW
+		}
+	}
+	// WHEN condition (optional)
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "WHEN" {
+		p.advance()
+		whenExpr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		stmt.When = whenExpr
+	}
+	// BEGIN ... END
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "BEGIN" {
+		p.advance()
+		for !p.isEOF() {
+			if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "END" {
+				p.advance()
+				break
+			}
+			bodyStmt, err := p.parseInternal()
+			if err != nil {
+				return nil, err
+			}
+			if bodyStmt != nil {
+				stmt.Body = append(stmt.Body, bodyStmt)
+			}
+			// consume optional semicolons between body statements
+			for p.current().Type == TokenSemicolon {
+				p.advance()
+			}
+		}
+	}
+	return stmt, nil
 }
 
 func (p *Parser) parseCreateIndex(unique bool) (ASTNode, error) {
@@ -1372,6 +1746,24 @@ func (p *Parser) parseDrop() (ASTNode, error) {
 			}
 		}
 		return &DropIndexStmt{Name: p.current().Literal}, nil
+	}
+
+	if strings.ToUpper(p.current().Literal) == "TRIGGER" {
+		p.advance()
+		ifExists := false
+		if p.current().Type == TokenKeyword && p.current().Literal == "IF" {
+			p.advance()
+			if p.current().Type == TokenNot {
+				p.advance()
+			}
+			if p.current().Type == TokenExists {
+				ifExists = true
+				p.advance()
+			}
+		}
+		name := p.current().Literal
+		p.advance()
+		return &DropTriggerStmt{Name: name, IfExists: ifExists}, nil
 	}
 
 	return nil, nil
@@ -1746,13 +2138,22 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 		p.current().Type == TokenEq) &&
 		((p.peek().Type == TokenKeyword && (p.peek().Literal == "ALL" || p.peek().Literal == "ANY" || p.peek().Literal == "SOME")) ||
 			p.peek().Type == TokenAll || p.peek().Type == TokenAny) {
-		// SQLite doesn't support quantified comparison predicates (> ALL, = ANY, < SOME)
-		// Return a matching parse error
-		nextLit := strings.ToUpper(p.peek().Literal)
-		if nextLit == "ALL" || p.peek().Type == TokenAll {
-			return nil, fmt.Errorf("near \"ALL\": syntax error")
+		op := p.current().Type
+		p.advance() // consume comparison op
+		quantifier := strings.ToUpper(p.current().Literal)
+		p.advance() // consume ALL/ANY/SOME
+		if p.current().Type != TokenLeftParen {
+			return nil, fmt.Errorf("expected '(' after %s", quantifier)
 		}
-		return nil, fmt.Errorf("near \"SELECT\": syntax error")
+		p.advance() // consume (
+		sub, err := p.parseSelect()
+		if err != nil {
+			return nil, err
+		}
+		if p.current().Type == TokenRightParen {
+			p.advance()
+		}
+		left = &AnyAllExpr{Left: left, Op: op, Quantifier: quantifier, Subquery: sub}
 	}
 
 	if p.current().Type == TokenLike {
@@ -2041,6 +2442,15 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				}
 			}
 			p.expect(TokenRightParen)
+			// Check for OVER clause (window function) - handles identifiers like PERCENT_RANK, CUME_DIST
+			if p.current().Type == TokenKeyword && p.current().Literal == "OVER" {
+				p.advance() // consume OVER
+				partition, orderBy, frame, err := p.parseWindowSpec()
+				if err != nil {
+					return nil, err
+				}
+				return &WindowFuncExpr{Name: strings.ToUpper(tok.Literal), Args: args, Partition: partition, OrderBy: orderBy, Frame: frame}, nil
+			}
 			return &FuncCall{Name: tok.Literal, Args: args}, nil
 		}
 
@@ -2065,7 +2475,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		p.advance()
 		return &ColumnRef{Name: "*"}, nil
 	case TokenKeyword:
-		if tok.Literal == "AVG" || tok.Literal == "MIN" || tok.Literal == "MAX" || tok.Literal == "COUNT" || tok.Literal == "SUM" || tok.Literal == "COALESCE" || tok.Literal == "IFNULL" || tok.Literal == "NULLIF" || tok.Literal == "LAG" || tok.Literal == "LEAD" || tok.Literal == "FIRST_VALUE" || tok.Literal == "LAST_VALUE" || tok.Literal == "ROW_NUMBER" || tok.Literal == "RANK" || tok.Literal == "DENSE_RANK" || tok.Literal == "NTILE" {
+		if tok.Literal == "AVG" || tok.Literal == "MIN" || tok.Literal == "MAX" || tok.Literal == "COUNT" || tok.Literal == "SUM" || tok.Literal == "COALESCE" || tok.Literal == "IFNULL" || tok.Literal == "NULLIF" || tok.Literal == "LAG" || tok.Literal == "LEAD" || tok.Literal == "FIRST_VALUE" || tok.Literal == "LAST_VALUE" || tok.Literal == "ROW_NUMBER" || tok.Literal == "RANK" || tok.Literal == "DENSE_RANK" || tok.Literal == "NTILE" || tok.Literal == "PERCENT_RANK" || tok.Literal == "CUME_DIST" {
 			p.advance()
 			if p.current().Type == TokenLeftParen {
 				p.advance()
@@ -2097,11 +2507,11 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				// Check for OVER clause (window function)
 				if p.current().Type == TokenKeyword && p.current().Literal == "OVER" {
 					p.advance() // consume OVER
-					partition, orderBy, err := p.parseWindowSpec()
+					partition, orderBy, frame, err := p.parseWindowSpec()
 					if err != nil {
 						return nil, err
 					}
-					return &WindowFuncExpr{Name: tok.Literal, Args: args, IsStar: isStar, Partition: partition, OrderBy: orderBy}, nil
+					return &WindowFuncExpr{Name: tok.Literal, Args: args, IsStar: isStar, Partition: partition, OrderBy: orderBy, Frame: frame}, nil
 				}
 				return &FuncCall{Name: tok.Literal, Args: args, Distinct: distinct}, nil
 			}
@@ -2301,12 +2711,84 @@ func (p *Parser) parseRollback() (ASTNode, error) {
 	return &RollbackStmt{}, nil
 }
 
+// parseBackup parses:
+//
+//	BACKUP DATABASE TO 'path'
+//	BACKUP INCREMENTAL TO 'path'
+func (p *Parser) parseBackup() (ASTNode, error) {
+	p.advance() // consume BACKUP
+
+	stmt := &BackupStmt{}
+
+	// Expect DATABASE or INCREMENTAL
+	cur := p.current()
+	if cur.Type == TokenKeyword && strings.ToUpper(cur.Literal) == "INCREMENTAL" {
+		stmt.Incremental = true
+		p.advance()
+	} else if cur.Type == TokenKeyword && strings.ToUpper(cur.Literal) == "DATABASE" {
+		stmt.Incremental = false
+		p.advance()
+	}
+	// else: bare BACKUP TO 'path' is treated as BACKUP DATABASE
+
+	// Expect TO
+	cur = p.current()
+	if cur.Type == TokenKeyword && strings.ToUpper(cur.Literal) == "TO" {
+		p.advance()
+	}
+
+	// Expect destination path (string literal)
+	cur = p.current()
+	if cur.Type == TokenString {
+		stmt.DestPath = cur.Literal
+		p.advance()
+	} else if cur.Type == TokenIdentifier {
+		stmt.DestPath = cur.Literal
+		p.advance()
+	} else {
+		return nil, fmt.Errorf("BACKUP: expected destination path, got %v", cur)
+	}
+
+	return stmt, nil
+}
+
+func (p *Parser) parseVacuum() (ASTNode, error) {
+	p.advance() // consume VACUUM
+	stmt := &VacuumStmt{}
+	cur := p.current()
+	if cur.Type == TokenKeyword && strings.ToUpper(cur.Literal) == "INTO" {
+		p.advance()
+		cur = p.current()
+		if cur.Type == TokenString {
+			stmt.DestPath = cur.Literal
+			p.advance()
+		} else if cur.Type == TokenIdentifier {
+			stmt.DestPath = cur.Literal
+			p.advance()
+		}
+	}
+	return stmt, nil
+}
+
+func (p *Parser) parseAnalyze() (ASTNode, error) {
+	p.advance() // consume ANALYZE
+	stmt := &AnalyzeStmt{}
+	cur := p.current()
+	if cur.Type == TokenIdentifier || cur.Type == TokenKeyword {
+		stmt.Target = cur.Literal
+		p.advance()
+	}
+	return stmt, nil
+}
+
 // parseWithClause parses a WITH ... AS (...) SELECT statement (CTE)
 func (p *Parser) parseWithClause() (ASTNode, error) {
 	p.advance() // consume WITH
 
 	// Optionally consume RECURSIVE
+	recursive := false
 	if p.current().Type == TokenKeyword && p.current().Literal == "RECURSIVE" {
+		recursive = true
 		p.advance()
 	}
 
@@ -2317,6 +2799,24 @@ func (p *Parser) parseWithClause() (ASTNode, error) {
 		}
 		cteName := p.current().Literal
 		p.advance()
+
+		// Parse optional column list: cte(col1, col2) AS (...)
+		var cteCols []string
+		if p.current().Type == TokenLeftParen {
+			p.advance() // consume (
+			for !p.isEOF() && p.current().Type != TokenRightParen {
+				if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+					cteCols = append(cteCols, p.current().Literal)
+					p.advance()
+				}
+				if p.current().Type == TokenComma {
+					p.advance()
+				}
+			}
+			if p.current().Type == TokenRightParen {
+				p.advance() // consume )
+			}
+		}
 
 		// Expect AS
 		if p.current().Type != TokenKeyword || p.current().Literal != "AS" {
@@ -2339,7 +2839,7 @@ func (p *Parser) parseWithClause() (ASTNode, error) {
 			p.advance()
 		}
 
-		ctes = append(ctes, CTEClause{Name: cteName, Select: cteSelect})
+		ctes = append(ctes, CTEClause{Name: cteName, Select: cteSelect, Recursive: recursive, Columns: cteCols})
 
 		if p.current().Type != TokenComma {
 			break
@@ -2361,9 +2861,9 @@ func (p *Parser) parseWithClause() (ASTNode, error) {
 }
 
 // parseWindowSpec parses the window specification after OVER: ([PARTITION BY ...] [ORDER BY ...])
-func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []Expr, err error) {
+func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []WindowOrderBy, frame *WindowFrame, err error) {
 	if p.current().Type != TokenLeftParen {
-		return nil, nil, nil // OVER without parens - treat as empty window
+		return nil, nil, nil, nil // OVER without parens - treat as empty window
 	}
 	p.advance() // consume '('
 
@@ -2379,7 +2879,7 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []Expr, err error)
 			}
 			expr, e := p.parseExpr()
 			if e != nil {
-				return nil, nil, e
+				return nil, nil, nil, e
 			}
 			partition = append(partition, expr)
 			if p.current().Type == TokenComma {
@@ -2395,12 +2895,16 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []Expr, err error)
 			p.advance() // consume BY
 		}
 		for !p.isEOF() && p.current().Type != TokenRightParen {
+			if p.current().Type == TokenKeyword && (p.current().Literal == "ROWS" || p.current().Literal == "RANGE") {
+				break
+			}
 			expr, e := p.parseExpr()
 			if e != nil {
-				return nil, nil, e
+				return nil, nil, nil, e
 			}
-			// Skip ASC/DESC
+			desc := false
 			if p.current().Type == TokenKeyword && (p.current().Literal == "ASC" || p.current().Literal == "DESC") {
+				desc = p.current().Literal == "DESC"
 				p.advance()
 			}
 			// Skip NULLS FIRST/LAST
@@ -2410,32 +2914,71 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []Expr, err error)
 					p.advance()
 				}
 			}
-			orderBy = append(orderBy, expr)
+			orderBy = append(orderBy, WindowOrderBy{Expr: expr, Desc: desc})
 			if p.current().Type == TokenComma {
 				p.advance()
 			}
 		}
 	}
 
-	// Skip ROWS/RANGE frame spec
+	// Parse ROWS/RANGE frame spec
 	if p.current().Type == TokenKeyword && (p.current().Literal == "ROWS" || p.current().Literal == "RANGE") {
-		// consume until closing paren
-		depth := 1
-		for !p.isEOF() && depth > 0 {
-			if p.current().Type == TokenLeftParen {
-				depth++
-			} else if p.current().Type == TokenRightParen {
-				depth--
-				if depth == 0 {
-					break
-				}
-			}
+		frameType := p.current().Literal
+		p.advance()
+		wf := &WindowFrame{Type: frameType}
+		// BETWEEN has its own token type (TokenBetween), check by type OR literal
+		if p.current().Type == TokenBetween || (p.current().Type == TokenKeyword && p.current().Literal == "BETWEEN") {
 			p.advance()
+			wf.Start = p.parseFrameBound()
+			if p.current().Type == TokenAnd || (p.current().Type == TokenKeyword && p.current().Literal == "AND") {
+				p.advance()
+			}
+			wf.End = p.parseFrameBound()
+		} else {
+			wf.Start = p.parseFrameBound()
+			wf.End = FrameBound{Type: "CURRENT"}
 		}
+		frame = wf
 	}
 
 	p.expect(TokenRightParen)
-	return partition, orderBy, nil
+	return partition, orderBy, frame, nil
+}
+
+// parseFrameBound parses a single window frame boundary
+func (p *Parser) parseFrameBound() FrameBound {
+	if p.current().Type == TokenKeyword && p.current().Literal == "UNBOUNDED" {
+		p.advance()
+		if p.current().Type == TokenKeyword && (p.current().Literal == "PRECEDING" || p.current().Literal == "FOLLOWING") {
+			direction := p.current().Literal
+			p.advance()
+			if direction == "PRECEDING" {
+				return FrameBound{Type: "UNBOUNDED"}
+			}
+			return FrameBound{Type: "UNBOUNDED_FOLLOWING"}
+		}
+		return FrameBound{Type: "UNBOUNDED"}
+	}
+	if p.current().Type == TokenKeyword && p.current().Literal == "CURRENT" {
+		p.advance()
+		// Consume ROW - it may be a keyword or identifier depending on tokenizer version
+		if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) &&
+			strings.ToUpper(p.current().Literal) == "ROW" {
+			p.advance()
+		}
+		return FrameBound{Type: "CURRENT"}
+	}
+	// N PRECEDING or N FOLLOWING
+	expr, _ := p.parseExpr()
+	if p.current().Type == TokenKeyword && p.current().Literal == "PRECEDING" {
+		p.advance()
+		return FrameBound{Type: "PRECEDING", Value: expr}
+	}
+	if p.current().Type == TokenKeyword && p.current().Literal == "FOLLOWING" {
+		p.advance()
+		return FrameBound{Type: "FOLLOWING", Value: expr}
+	}
+	return FrameBound{Type: "CURRENT"}
 }
 
 // evalConstExpr evaluates a constant expression (one with no column references)

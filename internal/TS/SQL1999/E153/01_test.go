@@ -4,8 +4,8 @@ import (
 "database/sql"
 "testing"
 
-"github.com/sqlvibe/sqlvibe/internal/TS/SQL1999"
-"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
+"github.com/cyw0ng95/sqlvibe/internal/TS/SQL1999"
+"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_E153_01_L1 tests updatable queries with subqueries

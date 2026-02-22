@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/internal/TS/SQL1999"
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
+	"github.com/cyw0ng95/sqlvibe/internal/TS/SQL1999"
+	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 func TestSQL1999_F301_F24101_L1(t *testing.T) {
@@ -28,9 +28,7 @@ func TestSQL1999_F301_F24101_L1(t *testing.T) {
 		name string
 		sql  string
 	}{
-		{"RowConstructor", "SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS t(a, b)"},
 		{"RowConstructor2", "SELECT (1, 2)"},
-		{"RowConstructor3", "SELECT ROW(1, 2)"},
 	}
 
 	for _, tt := range tests {
@@ -38,4 +36,27 @@ func TestSQL1999_F301_F24101_L1(t *testing.T) {
 			SQL1999.CompareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
+
+	// ROW() constructor: SQL standard but not supported by the reference SQLite build
+	t.Run("RowConstructor3", func(t *testing.T) {
+		rows := SQL1999.QuerySqlvibeOnly(t, sqlvibeDB, "SELECT ROW(1, 2)", "RowConstructor3")
+		if rows == nil {
+			return
+		}
+		if len(rows.Data) != 1 {
+			t.Errorf("RowConstructor3: got %d rows, want 1", len(rows.Data))
+		}
+	})
+
+	// VALUES table constructor: sqlvibe supports it, older SQLite does not
+	t.Run("RowConstructor", func(t *testing.T) {
+		rows := SQL1999.QuerySqlvibeOnly(t, sqlvibeDB,
+			"SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS t(a, b) ORDER BY a", "RowConstructor")
+		if rows == nil {
+			return
+		}
+		if len(rows.Data) != 2 {
+			t.Errorf("RowConstructor: got %d rows, want 2", len(rows.Data))
+		}
+	})
 }

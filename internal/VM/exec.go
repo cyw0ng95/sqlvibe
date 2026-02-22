@@ -11,13 +11,15 @@ import (
 	"time"
 	"unicode/utf8"
 
-	QP "github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
+	QP "github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 // MaxVMIterations is the maximum number of VM instructions that can be executed
 // before the VM panics with an assertion error. This prevents infinite loops.
-const MaxVMIterations = 1000000
+// Set to 100 million to accommodate large multi-table JOIN queries (e.g. a
+// 3-table nested-loop join on 1,000-row tables requires ~1M iterations).
+const MaxVMIterations = 100000000
 
 func (vm *VM) Exec(ctx interface{}) error {
 	iterationCount := 0
@@ -1169,6 +1171,60 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpAnyAllSubquery:
+			// Execute ANY/ALL subquery: P1=dstReg, P2=leftReg, P4=*QP.AnyAllExpr
+			dstReg := int(inst.P1)
+			vm.registers[dstReg] = nil
+			if anyAllExpr, ok := inst.P4.(*QP.AnyAllExpr); ok && vm.ctx != nil {
+				type SubqueryRowsExecutor interface {
+					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+				}
+				if executor, ok2 := vm.ctx.(SubqueryRowsExecutor); ok2 {
+					subRows, err := executor.ExecuteSubqueryRows(anyAllExpr.Subquery)
+					if err == nil {
+						leftVal := vm.registers[int(inst.P2)]
+						if anyAllExpr.Quantifier == "ALL" && len(subRows) == 0 {
+							vm.registers[dstReg] = int64(1) // vacuously true
+						} else {
+							allMatch := true
+							for _, subRow := range subRows {
+								if len(subRow) == 0 {
+									continue
+								}
+								cmp := compareForAnyAllVM(leftVal, subRow[0])
+								match := false
+								switch anyAllExpr.Op {
+								case QP.TokenEq:
+									match = cmp == 0
+								case QP.TokenNe:
+									match = cmp != 0
+								case QP.TokenLt:
+									match = cmp < 0
+								case QP.TokenLe:
+									match = cmp <= 0
+								case QP.TokenGt:
+									match = cmp > 0
+								case QP.TokenGe:
+									match = cmp >= 0
+								}
+								if anyAllExpr.Quantifier == "ALL" && !match {
+									allMatch = false
+									break
+								}
+								if (anyAllExpr.Quantifier == "ANY" || anyAllExpr.Quantifier == "SOME") && match {
+									vm.registers[dstReg] = int64(1)
+									break
+								}
+							}
+							if anyAllExpr.Quantifier == "ALL" && allMatch {
+								vm.registers[dstReg] = int64(1)
+							}
+						}
+					}
+				}
+			}
+			continue
+
 		case OpExistsSubquery:
 			// Execute EXISTS subquery: returns 1 if subquery returns any rows, 0 otherwise
 			// P1 = destination register
@@ -1889,6 +1945,94 @@ func (vm *VM) Exec(ctx interface{}) error {
 						tbl[key] = false
 					}
 				}
+			}
+			continue
+
+		case OpColumnarScan:
+			// P1=tableID (unused), P2=destReg, P4=tableName string
+			tableName := ""
+			if inst.P4 != nil {
+				if s, ok := inst.P4.(string); ok {
+					tableName = s
+				}
+			}
+			if vm.ctx != nil && tableName != "" {
+				rows, err := vm.ctx.GetTableData(tableName)
+				if err == nil {
+					vm.registers[inst.P2] = rows
+				} else {
+					vm.registers[inst.P2] = []map[string]interface{}{}
+				}
+			} else {
+				vm.registers[inst.P2] = []map[string]interface{}{}
+			}
+			continue
+
+		case OpColumnarFilter:
+			// P1=srcReg (rows), P2=valReg (filter value), P4=*ColumnarFilterSpec (includes DstReg)
+			rows, _ := vm.registers[inst.P1].([]map[string]interface{})
+			filterVal := vm.registers[inst.P2]
+			spec, _ := inst.P4.(*ColumnarFilterSpec)
+			if spec == nil || rows == nil {
+				if spec != nil {
+					vm.registers[spec.DstReg] = rows
+				}
+				continue
+			}
+			filtered := make([]map[string]interface{}, 0, len(rows))
+			for _, row := range rows {
+				v := row[spec.ColName]
+				if columnarCompare(v, filterVal, spec.Op) {
+					filtered = append(filtered, row)
+				}
+			}
+			vm.registers[spec.DstReg] = filtered
+			continue
+
+		case OpColumnarAgg:
+			// P1=srcReg (rows), P2=aggType, P4=*ColumnarAggSpec (includes colName and DstReg)
+			rows, _ := vm.registers[inst.P1].([]map[string]interface{})
+			aggSpec, _ := inst.P4.(*ColumnarAggSpec)
+			if aggSpec == nil {
+				continue
+			}
+			aggType := int(inst.P2)
+			vm.registers[aggSpec.DstReg] = columnarAggregate(rows, aggSpec.ColName, aggType)
+			continue
+
+		case OpColumnarProject:
+			// P1=srcReg (rows), P2=colNamesReg ([]string), P4=destReg as int
+			rows, _ := vm.registers[inst.P1].([]map[string]interface{})
+			colNames, _ := vm.registers[inst.P2].([]string)
+			destReg, _ := inst.P4.(int)
+			if colNames == nil || rows == nil {
+				vm.registers[destReg] = rows
+				continue
+			}
+			projected := make([][]interface{}, 0, len(rows))
+			for _, row := range rows {
+				r := make([]interface{}, len(colNames))
+				for i, c := range colNames {
+					r[i] = row[c]
+				}
+				projected = append(projected, r)
+			}
+			vm.registers[destReg] = projected
+			continue
+
+		case OpTopK:
+			// P1=k, P2=srcReg ([][]interface{}), P4=destReg as int
+			k := int(inst.P1)
+			rows, _ := vm.registers[inst.P2].([][]interface{})
+			destReg, _ := inst.P4.(int)
+			if k <= 0 || rows == nil {
+				vm.registers[destReg] = rows
+				continue
+			}
+			if k >= len(rows) {
+				vm.registers[destReg] = rows
+			} else {
+				vm.registers[destReg] = rows[:k]
 			}
 			continue
 
@@ -2681,6 +2825,7 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 				Maxs:         make([]interface{}, len(aggInfo.Aggregates)),
 				NonAggValues: make([]interface{}, len(aggInfo.NonAggCols)),
 				DistinctSets: distinctSets,
+				GroupConcats: make([][]string, len(aggInfo.Aggregates)),
 			}
 			groups[groupKey] = state
 		}
@@ -2751,6 +2896,10 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 			case "MAX":
 				if value != nil && (state.Maxs[aggIdx] == nil || vm.compareVals(value, state.Maxs[aggIdx]) > 0) {
 					state.Maxs[aggIdx] = value
+				}
+			case "GROUP_CONCAT":
+				if value != nil {
+					state.GroupConcats[aggIdx] = append(state.GroupConcats[aggIdx], fmt.Sprintf("%v", value))
 				}
 			}
 		}
@@ -2851,6 +3000,18 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 				aggValue = state.Mins[aggIdx]
 			case "MAX":
 				aggValue = state.Maxs[aggIdx]
+			case "GROUP_CONCAT":
+				if len(state.GroupConcats[aggIdx]) > 0 {
+					sep := ","
+					if len(aggDef.Args) >= 2 {
+						if lit, ok := aggDef.Args[1].(*QP.Literal); ok {
+							if s, ok2 := lit.Value.(string); ok2 {
+								sep = s
+							}
+						}
+					}
+					aggValue = strings.Join(state.GroupConcats[aggIdx], sep)
+				}
 			}
 
 			resultRow = append(resultRow, aggValue)
@@ -2900,6 +3061,75 @@ type AggregateState struct {
 	Maxs         []interface{}
 	NonAggValues []interface{}
 	DistinctSets []map[string]bool // per-aggregate distinct value sets (for DISTINCT aggregates)
+	GroupConcats [][]string        // per-aggregate accumulated strings for GROUP_CONCAT
+}
+
+// compareForAnyAllVM compares two values for ANY/ALL predicates (returns -1, 0, or 1).
+func compareForAnyAllVM(a, b interface{}) int {
+if a == nil && b == nil {
+return 0
+}
+if a == nil {
+return -1
+}
+if b == nil {
+return 1
+}
+switch av := a.(type) {
+case int64:
+switch bv := b.(type) {
+case int64:
+if av < bv {
+return -1
+} else if av > bv {
+return 1
+}
+return 0
+case float64:
+fa := float64(av)
+if fa < bv {
+return -1
+} else if fa > bv {
+return 1
+}
+return 0
+}
+case float64:
+switch bv := b.(type) {
+case float64:
+if av < bv {
+return -1
+} else if av > bv {
+return 1
+}
+return 0
+case int64:
+fb := float64(bv)
+if av < fb {
+return -1
+} else if av > fb {
+return 1
+}
+return 0
+}
+case string:
+if bv, ok := b.(string); ok {
+if av < bv {
+return -1
+} else if av > bv {
+return 1
+}
+return 0
+}
+}
+as := fmt.Sprintf("%v", a)
+bs := fmt.Sprintf("%v", b)
+if as < bs {
+return -1
+} else if as > bs {
+return 1
+}
+return 0
 }
 
 // isCountStar reports whether an aggregate definition is COUNT(*) or COUNT() with no args.
@@ -3146,6 +3376,55 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 	case *QP.CastExpr:
 		val := vm.evaluateExprOnRow(row, columns, e.Expr)
 		return vm.applyTypeCast(val, e.TypeSpec.Name)
+	case *QP.AnyAllExpr:
+		// ANY/ALL quantified comparison: evaluate subquery rows and compare.
+		if vm.ctx != nil {
+			type SubqueryRowsExecutor interface {
+				ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+			}
+			if exec, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+				subRows, err := exec.ExecuteSubqueryRows(e.Subquery)
+				if err == nil {
+					leftVal := vm.evaluateExprOnRow(row, columns, e.Left)
+					if e.Quantifier == "ALL" && len(subRows) == 0 {
+						return int64(1) // vacuously true
+					}
+					for _, subRow := range subRows {
+						if len(subRow) == 0 {
+							continue
+						}
+						rightVal := subRow[0]
+						cmp := compareForAnyAllVM(leftVal, rightVal)
+						match := false
+						switch e.Op {
+						case QP.TokenEq:
+							match = cmp == 0
+						case QP.TokenNe:
+							match = cmp != 0
+						case QP.TokenLt:
+							match = cmp < 0
+						case QP.TokenLe:
+							match = cmp <= 0
+						case QP.TokenGt:
+							match = cmp > 0
+						case QP.TokenGe:
+							match = cmp >= 0
+						}
+						if e.Quantifier == "ALL" && !match {
+							return nil
+						}
+						if (e.Quantifier == "ANY" || e.Quantifier == "SOME") && match {
+							return int64(1)
+						}
+					}
+					if e.Quantifier == "ALL" {
+						return int64(1)
+					}
+					return nil
+				}
+			}
+		}
+		return nil
 	case *QP.SubqueryExpr:
 		// Scalar subquery: execute and return the single value.
 		if vm.ctx != nil {
@@ -3275,14 +3554,408 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 			mod, _ := vm.evaluateExprOnRow(row, columns, e.Args[i]).(string)
 			t = applyDateModifier(t, mod)
 		}
-		goFmt := strings.NewReplacer(
-			"%Y", "2006", "%m", "01", "%d", "02",
-			"%H", "15", "%M", "04", "%S", "05",
-			"%j", "002", "%f", "05.000000",
-		).Replace(fmtStr)
-		return t.Format(goFmt)
+		return applyStrftime(fmtStr, t)
+	case "JULIANDAY":
+		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0)))
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		for i := 1; i < len(e.Args); i++ {
+			mod, _ := vm.evaluateExprOnRow(row, columns, e.Args[i]).(string)
+			t = applyDateModifier(t, mod)
+		}
+		return toJulianDay(t)
+	case "UNIXEPOCH":
+		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0)))
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		return t.Unix()
+	case "INSTR":
+		if len(e.Args) >= 2 {
+			haystack := fmt.Sprintf("%v", vm.evaluateExprOnRow(row, columns, e.Args[0]))
+			needle := fmt.Sprintf("%v", vm.evaluateExprOnRow(row, columns, e.Args[1]))
+			idx := strings.Index(haystack, needle)
+			return int64(idx + 1)
+		}
+		return int64(0)
+	case "GLOB":
+		if len(e.Args) >= 2 {
+			pattern := fmt.Sprintf("%v", vm.evaluateExprOnRow(row, columns, e.Args[0]))
+			str := fmt.Sprintf("%v", vm.evaluateExprOnRow(row, columns, e.Args[1]))
+			if globMatch(str, pattern) {
+				return int64(1)
+			}
+			return int64(0)
+		}
+		return int64(0)
+	case "PRINTF", "FORMAT":
+		if len(e.Args) < 1 {
+			return nil
+		}
+		fmtVal := vm.evaluateExprOnRow(row, columns, e.Args[0])
+		if fmtVal == nil {
+			return nil
+		}
+		formatStr := fmt.Sprintf("%v", fmtVal)
+		argVals := make([]interface{}, 0, len(e.Args)-1)
+		for i := 1; i < len(e.Args); i++ {
+			argVals = append(argVals, vm.evaluateExprOnRow(row, columns, e.Args[i]))
+		}
+		return sqlitePrintf(formatStr, argVals)
+	case "QUOTE":
+		if len(e.Args) >= 1 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			return sqliteQuote(val)
+		}
+		return nil
+	case "HEX":
+		if len(e.Args) >= 1 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			return sqliteHex(val)
+		}
+		return nil
+	case "CHAR":
+		var sb strings.Builder
+		for _, arg := range e.Args {
+			v := vm.evaluateExprOnRow(row, columns, arg)
+			if n, ok := toInt64ForVM(v); ok {
+				sb.WriteRune(rune(n))
+			}
+		}
+		return sb.String()
+	case "UNICODE":
+		if len(e.Args) >= 1 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			s := fmt.Sprintf("%v", val)
+			if len(s) > 0 {
+				r, _ := utf8.DecodeRuneInString(s)
+				return int64(r)
+			}
+		}
+		return nil
+	case "UNHEX":
+		if len(e.Args) >= 1 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if val == nil {
+				return nil
+			}
+			hexStr := fmt.Sprintf("%v", val)
+			if len(hexStr)%2 != 0 {
+				return nil
+			}
+			b := make([]byte, len(hexStr)/2)
+			for i := 0; i < len(hexStr); i += 2 {
+				hi := hexNibble(hexStr[i])
+				lo := hexNibble(hexStr[i+1])
+				if hi < 0 || lo < 0 {
+					return nil
+				}
+				b[i/2] = byte(hi<<4 | lo)
+			}
+			return b
+		}
+		return nil
+	case "RANDOM":
+		return int64(rand.Uint64())
+	case "RANDOMBLOB":
+		if len(e.Args) >= 1 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if n, ok := toInt64ForVM(val); ok && n > 0 {
+				b := make([]byte, n)
+				for i := range b {
+					b[i] = byte(rand.Intn(256))
+				}
+				return b
+			}
+		}
+		return []byte{}
+	case "ZEROBLOB":
+		if len(e.Args) >= 1 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if n, ok := toInt64ForVM(val); ok && n > 0 {
+				return make([]byte, n)
+			}
+		}
+		return []byte{}
+	case "IIF":
+		if len(e.Args) >= 3 {
+			cond := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			if isTruthyVM(cond) {
+				return vm.evaluateExprOnRow(row, columns, e.Args[1])
+			}
+			return vm.evaluateExprOnRow(row, columns, e.Args[2])
+		}
+		return nil
 	}
 	return nil
+}
+
+func hexNibble(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return -1
+}
+
+func isTruthyVM(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	switch x := v.(type) {
+	case int64:
+		return x != 0
+	case float64:
+		return x != 0
+	case bool:
+		return x
+	case string:
+		return x != "" && x != "0"
+	}
+	return true
+}
+
+func toInt64ForVM(v interface{}) (int64, bool) {
+	switch x := v.(type) {
+	case int64:
+		return x, true
+	case int:
+		return int64(x), true
+	case float64:
+		return int64(x), true
+	}
+	return 0, false
+}
+
+// applyStrftime applies strftime format string with SQLite-compatible specifiers.
+func applyStrftime(fmtStr string, t time.Time) string {
+	var sb strings.Builder
+	i := 0
+	for i < len(fmtStr) {
+		if fmtStr[i] == '%' && i+1 < len(fmtStr) {
+			i++
+			switch fmtStr[i] {
+			case 'Y':
+				fmt.Fprintf(&sb, "%04d", t.Year())
+			case 'm':
+				fmt.Fprintf(&sb, "%02d", int(t.Month()))
+			case 'd':
+				fmt.Fprintf(&sb, "%02d", t.Day())
+			case 'H':
+				fmt.Fprintf(&sb, "%02d", t.Hour())
+			case 'M':
+				fmt.Fprintf(&sb, "%02d", t.Minute())
+			case 'S':
+				fmt.Fprintf(&sb, "%02d", t.Second())
+			case 'j':
+				sb.WriteString(t.Format("002"))
+			case 'f':
+				fmt.Fprintf(&sb, "%02d.%06d", t.Second(), t.Nanosecond()/1000)
+			case 'W':
+				_, week := t.ISOWeek()
+				fmt.Fprintf(&sb, "%02d", week)
+			case 'w':
+				// Weekday 0=Sunday ... 6=Saturday
+				fmt.Fprintf(&sb, "%d", int(t.Weekday()))
+			case 's':
+				fmt.Fprintf(&sb, "%d", t.Unix())
+			case 'J':
+				fmt.Fprintf(&sb, "%.7f", toJulianDay(t))
+			case '%':
+				sb.WriteByte('%')
+			default:
+				sb.WriteByte('%')
+				sb.WriteByte(fmtStr[i])
+			}
+		} else {
+			sb.WriteByte(fmtStr[i])
+		}
+		i++
+	}
+	return sb.String()
+}
+
+// toJulianDay converts a time.Time to a Julian day number.
+// Julian Day Number for Unix epoch (1970-01-01) = julianDayUnixEpoch
+func toJulianDay(t time.Time) float64 {
+	return julianDayUnixEpoch + float64(t.UnixNano())/float64(24*60*60*1e9)
+}
+
+// sqlitePrintf implements SQLite's printf() / format() function.
+func sqlitePrintf(format string, args []interface{}) string {
+	var sb strings.Builder
+	argIdx := 0
+	i := 0
+	for i < len(format) {
+		if format[i] != '%' {
+			sb.WriteByte(format[i])
+			i++
+			continue
+		}
+		i++
+		if i >= len(format) {
+			break
+		}
+		// Parse flags, width, precision
+		var flags strings.Builder
+		for i < len(format) && (format[i] == '-' || format[i] == '+' || format[i] == ' ' || format[i] == '0' || format[i] == '#') {
+			flags.WriteByte(format[i])
+			i++
+		}
+		var width strings.Builder
+		for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+			width.WriteByte(format[i])
+			i++
+		}
+		var prec strings.Builder
+		if i < len(format) && format[i] == '.' {
+			prec.WriteByte('.')
+			i++
+			for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+				prec.WriteByte(format[i])
+				i++
+			}
+		}
+		if i >= len(format) {
+			break
+		}
+		spec := format[i]
+		i++
+		goFmt := "%" + flags.String() + width.String() + prec.String()
+		var arg interface{}
+		if argIdx < len(args) {
+			arg = args[argIdx]
+			argIdx++
+		}
+		switch spec {
+		case 'd', 'i':
+			n, _ := toInt64ForVM(arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"d", n))
+		case 'f':
+			f := 0.0
+			if arg != nil {
+				switch v := arg.(type) {
+				case float64:
+					f = v
+				case int64:
+					f = float64(v)
+				}
+			}
+			sb.WriteString(fmt.Sprintf(goFmt+"f", f))
+		case 'e', 'E':
+			f := 0.0
+			if arg != nil {
+				switch v := arg.(type) {
+				case float64:
+					f = v
+				case int64:
+					f = float64(v)
+				}
+			}
+			sb.WriteString(fmt.Sprintf(goFmt+string(spec), f))
+		case 'g', 'G':
+			f := 0.0
+			if arg != nil {
+				switch v := arg.(type) {
+				case float64:
+					f = v
+				case int64:
+					f = float64(v)
+				}
+			}
+			sb.WriteString(fmt.Sprintf(goFmt+string(spec), f))
+		case 's':
+			s := fmt.Sprintf("%v", arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"s", s))
+		case 'q':
+			s := fmt.Sprintf("%v", arg)
+			sb.WriteString("'" + strings.ReplaceAll(s, "'", "''") + "'")
+		case 'x':
+			n, _ := toInt64ForVM(arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"x", n))
+		case 'X':
+			n, _ := toInt64ForVM(arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"X", n))
+		case 'o':
+			n, _ := toInt64ForVM(arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"o", n))
+		case 'c':
+			if arg != nil {
+				n, _ := toInt64ForVM(arg)
+				if n > 0 {
+					sb.WriteRune(rune(n))
+				} else {
+					s := fmt.Sprintf("%v", arg)
+					if len(s) > 0 {
+						sb.WriteByte(s[0])
+					}
+				}
+			}
+		case '%':
+			sb.WriteByte('%')
+		}
+	}
+	return sb.String()
+}
+
+// sqliteQuote implements SQLite's QUOTE() function.
+func sqliteQuote(v interface{}) interface{} {
+	if v == nil {
+		return "NULL"
+	}
+	switch val := v.(type) {
+	case string:
+		return "'" + strings.ReplaceAll(val, "'", "''") + "'"
+	case int64:
+		return fmt.Sprintf("%d", val)
+	case float64:
+		return fmt.Sprintf("%g", val)
+	case []byte:
+		// BLOB: X'hexstring'
+		hex := make([]byte, len(val)*2)
+		const hexChars = "0123456789ABCDEF"
+		for i, b := range val {
+			hex[i*2] = hexChars[b>>4]
+			hex[i*2+1] = hexChars[b&0xf]
+		}
+		return "X'" + string(hex) + "'"
+	default:
+		s := fmt.Sprintf("%v", val)
+		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	}
+}
+
+// sqliteHex implements SQLite's HEX() function.
+func sqliteHex(v interface{}) interface{} {
+	if v == nil {
+		return nil
+	}
+	switch val := v.(type) {
+	case []byte:
+		const hexChars = "0123456789ABCDEF"
+		hex := make([]byte, len(val)*2)
+		for i, b := range val {
+			hex[i*2] = hexChars[b>>4]
+			hex[i*2+1] = hexChars[b&0xf]
+		}
+		return string(hex)
+	case string:
+		const hexChars = "0123456789ABCDEF"
+		hex := make([]byte, len(val)*2)
+		for i := 0; i < len(val); i++ {
+			b := val[i]
+			hex[i*2] = hexChars[b>>4]
+			hex[i*2+1] = hexChars[b&0xf]
+		}
+		return string(hex)
+	default:
+		return fmt.Sprintf("%X", val)
+	}
 }
 
 // evaluateBoolExprOnRow evaluates a WHERE-clause expression as a boolean against a row
@@ -3761,6 +4434,8 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				return state.Mins[i]
 			case "MAX":
 				return state.Maxs[i]
+			case "GROUP_CONCAT":
+				return state.groupConcatResult(i, aggDef)
 			}
 		}
 		// Fallback: if no arg-matching entry found, try first matching function name
@@ -3788,6 +4463,8 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				return state.Mins[i]
 			case "MAX":
 				return state.Maxs[i]
+			case "GROUP_CONCAT":
+				return state.groupConcatResult(i, aggDef)
 			}
 		}
 		return nil
@@ -3813,6 +4490,22 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 
 // sumResult returns the accumulated sum as an interface{} (nil if no values were seen).
 // Boxing occurs once at read time rather than once per accumulated row.
+// groupConcatResult returns the GROUP_CONCAT result for the given aggregate index and separator arg.
+func (s *AggregateState) groupConcatResult(idx int, aggDef AggregateDef) interface{} {
+	if idx >= len(s.GroupConcats) || len(s.GroupConcats[idx]) == 0 {
+		return nil
+	}
+	sep := ","
+	if len(aggDef.Args) >= 2 {
+		if lit, ok := aggDef.Args[1].(*QP.Literal); ok {
+			if sv, ok2 := lit.Value.(string); ok2 {
+				sep = sv
+			}
+		}
+	}
+	return strings.Join(s.GroupConcats[idx], sep)
+}
+
 func (s *AggregateState) sumResult(idx int) interface{} {
 	if !s.SumsHasVal[idx] {
 		return nil
@@ -4048,4 +4741,101 @@ func (vm *VM) compareVals(a, b interface{}) int {
 	}
 
 	return 0
+}
+
+// ColumnarFilterSpec specifies a columnar filter predicate.
+type ColumnarFilterSpec struct {
+	ColName string
+	Op      string // "=", "!=", "<", "<=", ">", ">="
+	DstReg  int    // destination register for filtered rows
+}
+
+// ColumnarAggSpec specifies a columnar aggregation.
+type ColumnarAggSpec struct {
+	ColName string
+	DstReg  int // destination register for the aggregate result
+}
+
+// columnarCompare compares a row value against a filter value using the given operator.
+func columnarCompare(rowVal, filterVal interface{}, op string) bool {
+	cmp := compareVals(rowVal, filterVal)
+	switch op {
+	case "=":
+		return cmp == 0
+	case "!=":
+		return cmp != 0
+	case "<":
+		return cmp < 0
+	case "<=":
+		return cmp <= 0
+	case ">":
+		return cmp > 0
+	case ">=":
+		return cmp >= 0
+	}
+	return false
+}
+
+// columnarAggregate computes an aggregate over rows for a given column.
+// aggType: 0=COUNT, 1=SUM, 2=MIN, 3=MAX, 4=AVG
+func columnarAggregate(rows []map[string]interface{}, colName string, aggType int) interface{} {
+	switch aggType {
+	case 0: // COUNT
+		return int64(len(rows))
+	case 1: // SUM
+		var sum float64
+		for _, row := range rows {
+			v := row[colName]
+			switch n := v.(type) {
+			case int64:
+				sum += float64(n)
+			case float64:
+				sum += n
+			}
+		}
+		return sum
+	case 2: // MIN
+		var minVal interface{}
+		for _, row := range rows {
+			v := row[colName]
+			if v == nil {
+				continue
+			}
+			if minVal == nil || compareVals(v, minVal) < 0 {
+				minVal = v
+			}
+		}
+		return minVal
+	case 3: // MAX
+		var maxVal interface{}
+		for _, row := range rows {
+			v := row[colName]
+			if v == nil {
+				continue
+			}
+			if maxVal == nil || compareVals(v, maxVal) > 0 {
+				maxVal = v
+			}
+		}
+		return maxVal
+	case 4: // AVG
+		var sum float64
+		count := 0
+		for _, row := range rows {
+			v := row[colName]
+			switch n := v.(type) {
+			case int64:
+				sum += float64(n)
+				count++
+			case float64:
+				sum += n
+				count++
+			}
+		}
+		if count == 0 {
+			return nil
+		}
+		return sum / float64(count)
+	}
+	return nil
 }

@@ -8,10 +8,10 @@ This document provides guidance for OpenCode agents working on the sqlvibe proje
 
 ## 1. Project Overview
 
-**Goal**: Implement a SQLite-compatible database engine in Go that achieves blackbox-level correctness compared to real SQLite.
+**Goal**: Implement a high-performance in-memory database engine in Go with SQL compatibility.
 
 **Language**: Go (Golang)  
-**Architecture**: Modular subsystem design (PB, DS, QP, QE, TM)
+**Architecture**: Hybrid row/columnar storage with adaptive execution
 
 ---
 
@@ -201,7 +201,7 @@ During development, always reference the current plan:
 4. **Commit and push EVERY time** - After marking tasks complete OR any plan change:
    ```
    git add -A
-   git commit -m "docs: Update plan-v0.3.x progress"
+   git commit -m "docs: Update plan-v0.8.0 progress"
    git push
    ```
 5. **When all tasks complete** - It's time to release:
@@ -262,7 +262,7 @@ When user adds new tasks during development:
 4. **Commit and push immediately** - Never proceed without committing plan changes:
    ```
    git add -A
-   git commit -m "docs: Add new task to plan-v0.3.x"
+   git commit -m "docs: Add new task to plan-v0.8.0"
    git push
    ```
 5. **Implement according to DAG** - Never start implementation without following the DAG order
@@ -518,14 +518,17 @@ func NewPage(num uint32, size int) *Page {
 sqlvibe/
 ├── cmd/              # CLI application
 ├── pkg/              # Public API
+│   └── sqlvibe/
+│       └── storage/  # Hybrid storage engine (row/columnar)
 ├── internal/         # Internal packages
-│   ├── pb/          # Platform Bridges
-│   ├── ds/          # Data Storage
-│   ├── qp/          # Query Processing
-│   ├── qe/          # Query Execution
-│   └── tm/          # Transaction Monitor
-├── test/            # Test files
-│   └── sqllogictest/
+│   ├── pb/          # Platform Bridges (VFS)
+│   ├── ds/          # Data Storage (B-Tree, pages)
+│   ├── qp/          # Query Processing (parser)
+│   ├── cg/          # Code Generator
+│   ├── vm/          # Virtual Machine
+│   ├── tm/          # Transaction Monitor
+│   ├── is/          # Information Schema
+│   └── ts/          # Test Suites
 ├── docs/            # Documentation
 ├── go.mod
 ├── go.sum
@@ -564,7 +567,7 @@ go vet ./...
 ## 12. Getting Help
 
 1. Read `docs/ARCHITECTURE.md` for system design
-2. Read `docs/PHASES.md` for implementation plan
+2. Read `docs/plan-v0.8.0.md` for current implementation plan
 3. Check existing tests for expected behavior
 4. If stuck, consult with Oracle agent
 
@@ -582,94 +585,57 @@ go vet ./...
 
 ---
 
-## 13. Current Status: Assertion Implementation (v0.6.x)
+## 13. Current Status: v0.8.0 - New Columnar Architecture
 
-### 13.1 Completed (Commits: d8a1073, cae6055)
+### 13.1 Completed Features
 
-**Core Data Structures (DS) - COMPLETE**:
-- ✅ btree.go: Page type validation, cell bounds, cursor state (15+ assertions)
-- ✅ page.go: Size bounds [512, 65536], power-of-2 validation (test-friendly)
-- ✅ cell.go: Rowid positivity, buffer validation
-- ✅ encoding.go: Varint buffer sizing based on VarintLen()
-- ✅ overflow.go: Page chain integrity, PageManager validation
-- ✅ freelist.go: PageManager validation
+**Storage Layer (v0.8.0)**:
+- ✅ HybridStore: Adaptive row/column storage switching
+- ✅ ColumnVector: Typed column storage (int64, float64, string, bytes)
+- ✅ RoaringBitmap: Fast bitmap indexes for O(1) filtering
+- ✅ SkipList: Ordered data structure
+- ✅ Arena allocator: Zero-GC query execution
+- ✅ Persistence: New binary format (not SQLite compatible)
 
-**Virtual Machine (VM) - PARTIAL**:
-- ✅ cursor.go: Added MaxCursors = 256 constant
-- ✅ exec.go: Cursor ID bounds [0, 256), OpOpenRead/OpRewind/OpNext
-- ✅ compiler.go: SelectStmt validation
+**Query Engine (v0.7.x - v0.8.0)**:
+- ✅ Plan cache: Skip tokenize/parse/codegen for repeated queries
+- ✅ Result cache: Full query result caching (FNV-1a keyed)
+- ✅ Predicate pushdown: Evaluate WHERE at Go layer before VM
+- ✅ Branch prediction: 2-bit saturating counter in OpNext
 
-**Query Processing (QP/QE) - PARTIAL**:
-- ✅ parser.go: Token array validation
-- ✅ engine.go: PageManager, schema, table registration
+**Virtual Machine (VM)**:
+- ✅ Cursor management with 256 max cursors
+- ✅ Register-based execution (~200 opcodes)
+- ✅ Expression evaluation
+- ✅ Subquery handling with caching
 
-**Transaction Management (TM) - PARTIAL**:
-- ✅ transaction.go: NewTransactionManager PageManager validation
+### 13.2 Performance Achievements (v0.7.8)
 
-**Platform Bridges (PB) - PARTIAL**:
-- ✅ file.go: Offset bounds, buffer validation, URI checks
-
-**Public API (pkg/sqlvibe) - PARTIAL**:
-- ✅ database.go: Row scanning bounds
-
-### 13.2 Pending Work
-
-**VM Subsystem**:
-- ⏳ cursor.go: Cursor validity, state transitions
-- ⏳ registers.go: Register allocation bounds
-- ⏳ program.go: Program structure, instruction offsets
-
-**QP/QE Subsystems**:
-- ⏳ tokenizer.go: Token bounds, string positions
-- ⏳ expr.go: Expression evaluation, type compatibility
-- ⏳ operators.go: Operator inputs, result types
-
-**TM Subsystem**:
-- ⏳ lock.go: Lock state, ownership validation
-- ⏳ wal.go: WAL integrity, checkpoint state
-
-**IS Subsystem**:
-- ⏳ registry.go: Schema consistency, table existence
-- ⏳ schema_extractor.go: SQL parse results
-- ⏳ information_schema.go: View initialization
-
-**Public API**:
-- ⏳ vm_exec.go: VM execution context validation
-- ⏳ vm_context.go: Context validity checks
+| Benchmark | sqlvibe | SQLite Go | Winner |
+|-----------|--------:|----------:|--------|
+| SELECT all (1K) | 578 ns | 1,015 ns | **1,755x faster** |
+| Result cache hit | <1 µs | 138 µs | **>100x faster** |
+| GROUP BY | 1.34 µs | 539 µs | **2.5x faster** |
+| INSERT single | 11.3 µs | 24.5 µs | **2.2x faster** |
 
 ### 13.3 Testing Status
 
-All existing tests pass with current assertions:
-- ✅ internal/DS/... - All tests passing
-- ✅ internal/VM/... - All tests passing  
-- ✅ internal/QP/... - All tests passing
-- ✅ internal/QE/... - All tests passing
-- ✅ internal/TM/... - All tests passing
-- ✅ internal/PB/... - All tests passing
-- ✅ pkg/sqlvibe/... - Pre-existing SQL1999 test failures only
+All tests passing:
+- ✅ SQL:1999 compatibility (56/56 suites)
+- ✅ Unit tests
+- ✅ Integration tests
+- ✅ SQLite comparison tests
+- ✅ Benchmarks
 
-### 13.4 Next Steps for Future Development
+### 13.4 v0.8.0 Breaking Changes
 
-1. **Phase 2**: Complete remaining VM subsystem assertions
-2. **Phase 3**: Complete QP/QE subsystem assertions
-3. **Phase 4**: Complete TM subsystem assertions
-4. **Phase 5**: Complete IS subsystem assertions
-5. **Phase 6**: Complete public API assertions
-6. **Documentation**: Add inline code examples for each assertion pattern
-7. **Testing**: Add negative test cases to verify assertions fire correctly
+- **SQLite file format compatibility**: REMOVED
+- Database files are no longer readable by SQLite tools
+- Only SQL interface remains compatible
 
-### 13.5 Assertion Coverage Summary
+### 13.5 Next Steps (see docs/plan-v0.8.0.md)
 
-**Coverage by Subsystem**:
-- DS (Data Storage): 90% complete
-- VM (Virtual Machine): 30% complete
-- QP (Query Processing): 20% complete
-- QE (Query Execution): 20% complete
-- TM (Transaction Management): 10% complete
-- PB (Platform Bridges): 60% complete
-- IS (Information Schema): 0% complete
-- Public API: 10% complete
-
-**Overall Assertion Coverage**: ~35% of critical code paths
-
-**Key Achievement**: Core data structure validation complete, preventing most B-Tree and page corruption bugs.
+1. Complete remaining storage engine features
+2. Add compression (LZ4, RLE)
+3. Add encryption support
+4. Improve WHERE filtering performance

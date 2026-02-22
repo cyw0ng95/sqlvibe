@@ -3,8 +3,8 @@ package VM
 import (
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/internal/DS"
-	"github.com/sqlvibe/sqlvibe/internal/PB"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/PB"
 )
 
 func TestVMCreate(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
-	"github.com/sqlvibe/sqlvibe/internal/SF/vfs"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/vfs"
 )
 
 var (

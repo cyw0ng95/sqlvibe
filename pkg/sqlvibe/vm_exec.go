@@ -6,10 +6,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sqlvibe/sqlvibe/internal/CG"
-	"github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
-	"github.com/sqlvibe/sqlvibe/internal/VM"
+	"github.com/cyw0ng95/sqlvibe/internal/CG"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
+	"github.com/cyw0ng95/sqlvibe/internal/VM"
+
 )
 
 func (db *Database) ExecVM(sql string) (*Rows, error) {
@@ -188,8 +190,11 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 
 	compiler := CG.NewCompiler()
-	// Build column index map
-	colIndices := make(map[string]int)
+	// Build column index map using a pooled map to reduce allocations.
+	colIndices := schemaMapPool.Get().(map[string]int)
+	for k := range colIndices {
+		delete(colIndices, k)
+	}
 	for i, colName := range tableCols {
 		colIndices[colName] = i
 	}
@@ -201,7 +206,10 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	origColumns := stmt.Columns
 	var extraOrderByCols []string
 	if len(stmt.OrderBy) > 0 {
-		selectColSet := make(map[string]bool)
+		selectColSet := colSetPool.Get().(map[string]bool)
+		for k := range selectColSet {
+			delete(selectColSet, k)
+		}
 		for _, col := range stmt.Columns {
 			if cr, ok := col.(*QP.ColumnRef); ok {
 				selectColSet[cr.Name] = true
@@ -223,9 +231,11 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 				}
 			}
 		}
+		colSetPool.Put(selectColSet)
 	}
 
 	program := compiler.CompileSelect(stmt)
+	schemaMapPool.Put(colIndices)
 	stmt.Columns = origColumns // restore immediately after compilation
 
 	// Create context with outer row
@@ -396,6 +406,12 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		}
 	}
 
+	// Fast path: simple aggregate (COUNT(*), SUM, MIN, MAX) without JOIN/GROUP BY.
+	// Routes directly to HybridStore vectorized aggregates, bypassing VM.
+	if rows := db.tryAggregateFastPath(stmt); rows != nil {
+		return rows, nil
+	}
+
 	// Get table column order for proper column mapping
 	// For JOINs, combine columns from both tables
 	var tableCols []string
@@ -530,8 +546,12 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		}
 		cg.TableColSources = sources
 	} else {
-		// Single table query - set TableColIndices normally
-		cg.SetTableSchema(make(map[string]int), tableCols)
+		// Single table query - set TableColIndices using a pooled map.
+		singleSchema := schemaMapPool.Get().(map[string]int)
+		for k := range singleSchema {
+			delete(singleSchema, k)
+		}
+		cg.SetTableSchema(singleSchema, tableCols)
 		for i, col := range tableCols {
 			cg.TableColIndices[col] = i
 		}
@@ -541,7 +561,10 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	// This allows ORDER BY col that isn't in the SELECT list to still sort correctly
 	var extraOrderByCols []string
 	if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
-		selectColNames := make(map[string]bool)
+		selectColNames := colSetPool.Get().(map[string]bool)
+		for k := range selectColNames {
+			delete(selectColNames, k)
+		}
 		for _, col := range stmt.Columns {
 			if cr, ok := col.(*QP.ColumnRef); ok {
 				selectColNames[cr.Name] = true
@@ -565,9 +588,14 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 				}
 			}
 		}
+		colSetPool.Put(selectColNames)
 	}
 
 	program := cg.CompileSelect(stmt)
+	// Return pooled schema map now that compilation is complete.
+	if cg.TableColIndices != nil && len(cg.TableColSources) == 0 {
+		schemaMapPool.Put(cg.TableColIndices)
+	}
 
 	// Remove extra ORDER BY columns from stmt after compilation
 	if len(extraOrderByCols) > 0 {
@@ -865,6 +893,132 @@ func isSimpleSelectStar(stmt *QP.SelectStmt) bool {
 	}
 	cr, ok := stmt.Columns[0].(*QP.ColumnRef)
 	return ok && cr.Name == "*" && cr.Table == ""
+}
+
+// isSimpleAggregate reports whether stmt is a simple single-aggregate query
+// (COUNT(*), SUM(col), MIN(col), MAX(col)) with no JOIN, GROUP BY, HAVING,
+// DISTINCT, or subquery in FROM.  Returns the aggregate name and column name.
+func isSimpleAggregate(stmt *QP.SelectStmt) (funcName string, colName string, ok bool) {
+	if stmt == nil || stmt.From == nil {
+		return
+	}
+	if stmt.From.Join != nil || stmt.From.Subquery != nil {
+		return
+	}
+	if stmt.GroupBy != nil || stmt.Having != nil || stmt.Distinct {
+		return
+	}
+	if stmt.Where != nil {
+		return
+	}
+	if len(stmt.Columns) != 1 {
+		return
+	}
+	fc, isFc := stmt.Columns[0].(*QP.FuncCall)
+	if !isFc || fc.Distinct {
+		return
+	}
+	upper := strings.ToUpper(fc.Name)
+	switch upper {
+	case "COUNT":
+		// Only fast-path COUNT(*) — COUNT(col) must skip NULLs, handled by VM.
+		if len(fc.Args) == 0 {
+			return "COUNT", "*", true
+		}
+		if len(fc.Args) == 1 {
+			if cr, ok2 := fc.Args[0].(*QP.ColumnRef); ok2 && cr.Name == "*" {
+				return "COUNT", "*", true
+			}
+		}
+	case "SUM", "MIN", "MAX":
+		if len(fc.Args) == 1 {
+			if cr, ok2 := fc.Args[0].(*QP.ColumnRef); ok2 {
+				return upper, cr.Name, true
+			}
+		}
+	}
+	return
+}
+
+// tryAggregateFastPath handles simple COUNT(*)/SUM/MIN/MAX queries by routing
+// directly to HybridStore, bypassing VM compilation.  Returns nil when the
+// fast path does not apply (caller should fall through to the VM).
+func (db *Database) tryAggregateFastPath(stmt *QP.SelectStmt) *Rows {
+	funcName, colName, ok := isSimpleAggregate(stmt)
+	if !ok {
+		return nil
+	}
+	tableName := stmt.From.Name
+	if tableName == "" {
+		return nil
+	}
+	hs := db.GetHybridStore(tableName)
+	if hs == nil {
+		return nil
+	}
+	colLabel := funcName + "(" + colName + ")"
+	if colName == "*" {
+		colLabel = "COUNT(*)"
+	}
+	switch funcName {
+	case "COUNT":
+		count := hs.ParallelCount()
+		return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{count}}}
+	case "SUM":
+		colType := hs.ColType(colName)
+		// Only fast-path known numeric types; TEXT columns may hold numbers but
+		// their registered type is TEXT (e.g. materialised derived tables).
+		if colType == DS.TypeFloat {
+			sum, hasV := hs.ParallelSumFloat64(colName)
+			if !hasV {
+				return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
+			}
+			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{sum}}}
+		}
+		if colType != DS.TypeInt {
+			return nil // Fall through to VM for TEXT/NULL columns.
+		}
+		sum, hasV := hs.ParallelSumInt(colName)
+		if !hasV {
+			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
+		}
+		return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{sum}}}
+	case "MIN":
+		colType := hs.ColType(colName)
+		if colType == DS.TypeFloat {
+			v, hasV := hs.ParallelMinFloat64(colName)
+			if !hasV {
+				return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
+			}
+			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
+		}
+		if colType != DS.TypeInt {
+			return nil
+		}
+		v, hasV := hs.ParallelMinInt(colName)
+		if !hasV {
+			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
+		}
+		return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
+	case "MAX":
+		colType := hs.ColType(colName)
+		if colType == DS.TypeFloat {
+			v, hasV := hs.ParallelMaxFloat64(colName)
+			if !hasV {
+				return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
+			}
+			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
+		}
+		if colType != DS.TypeInt {
+			return nil
+		}
+		v, hasV := hs.ParallelMaxInt(colName)
+		if !hasV {
+			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
+		}
+		return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
+	}
+	return nil
 }
 
 // execSelectStarFast materialises all rows of a single table without running

@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/internal/TS/SQL1999"
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
+	"github.com/cyw0ng95/sqlvibe/internal/TS/SQL1999"
+	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 func TestSQL1999_F301_E06109_L1(t *testing.T) {
@@ -224,21 +224,32 @@ func TestSQL1999_F301_E06112_L1(t *testing.T) {
 		})
 	}
 
-	quantifiedTests := []struct {
-		name string
-		sql  string
-	}{
-		{"AllGreater", "SELECT * FROM t1 WHERE a > ALL (SELECT x FROM t2)"},
-		{"AllLess", "SELECT * FROM t1 WHERE a < ALL (SELECT x FROM t2)"},
-		{"AnyEqual", "SELECT * FROM t1 WHERE a = ANY (SELECT x FROM t2)"},
-		{"AnyGreater", "SELECT * FROM t1 WHERE a > ANY (SELECT x FROM t2)"},
-		{"SomeLess", "SELECT * FROM t1 WHERE a < SOME (SELECT x FROM t2)"},
-		{"AllWithNull", "SELECT * FROM t1 WHERE a > ALL (SELECT x FROM t2 WHERE x IS NOT NULL)"},
+	// sqlvibe now supports quantified comparisons (> ALL, = ANY, < SOME)
+	// SQLite does not support this syntax, so we test sqlvibe directly
+	type qtestE06112 struct {
+		name     string
+		sql      string
+		wantRows int
+	}
+	quantifiedTests := []qtestE06112{
+		{"AllGreater", "SELECT * FROM t1 WHERE a > ALL (SELECT x FROM t2)", 1},
+		{"AllLess", "SELECT * FROM t1 WHERE a < ALL (SELECT x FROM t2)", 0},
+		{"AnyEqual", "SELECT * FROM t1 WHERE a = ANY (SELECT x FROM t2)", 3},
+		{"AnyGreater", "SELECT * FROM t1 WHERE a > ANY (SELECT x FROM t2)", 3},
+		{"SomeLess", "SELECT * FROM t1 WHERE a < SOME (SELECT x FROM t2)", 2},
+		{"AllWithNull", "SELECT * FROM t1 WHERE a > ALL (SELECT x FROM t2 WHERE x IS NOT NULL)", 1},
 	}
 
 	for _, tt := range quantifiedTests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			SQL1999.CompareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
+			rows := SQL1999.QuerySqlvibeOnly(t, sqlvibeDB, tt.sql, tt.name)
+			if rows == nil {
+				return
+			}
+			if len(rows.Data) != tt.wantRows {
+				t.Errorf("%s: got %d rows, want %d", tt.name, len(rows.Data), tt.wantRows)
+			}
 		})
 	}
 }

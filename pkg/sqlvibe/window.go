@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	QP "github.com/sqlvibe/sqlvibe/internal/QP"
+	QP "github.com/cyw0ng95/sqlvibe/internal/QP"
 )
 
 // windowFuncInfo tracks a window function column position and its definition.
@@ -55,8 +55,8 @@ func extractWindowFunctions(stmt *QP.SelectStmt) ([]windowFuncInfo, int) {
 				extraAdded++
 			}
 		}
-		for _, oExpr := range wf.expr.OrderBy {
-			if cr, ok := oExpr.(*QP.ColumnRef); ok && !existingCols[cr.Name] {
+		for _, ob := range wf.expr.OrderBy {
+			if cr, ok := ob.Expr.(*QP.ColumnRef); ok && !existingCols[cr.Name] {
 				stmt.Columns = append(stmt.Columns, &QP.ColumnRef{Table: cr.Table, Name: cr.Name})
 				existingCols[cr.Name] = true
 				extraAdded++
@@ -199,6 +199,30 @@ func applyWindowFunctionsToRows(rows *Rows, funcs []windowFuncInfo, extraCols in
 		case "DENSE_RANK":
 			values = computeRankValues(rows, wf.expr, true)
 
+		case "NTILE":
+			values = computeOrderedWindowValues(rows, wf.expr, func(sortedIndices []int, posInPartition int) interface{} {
+				n := int64(1)
+				if len(wf.expr.Args) > 0 {
+					if lit, ok := wf.expr.Args[0].(*QP.Literal); ok {
+						if iv, ok2 := lit.Value.(int64); ok2 && iv > 0 {
+							n = iv
+						}
+					}
+				}
+				total := int64(len(sortedIndices))
+				if total == 0 || n <= 0 {
+					return int64(0)
+				}
+				bucket := (int64(posInPartition)*n)/total + 1
+				return bucket
+			})
+
+		case "PERCENT_RANK":
+			values = computeRankValuesFloat(rows, wf.expr)
+
+		case "CUME_DIST":
+			values = computeCumeDist(rows, wf.expr)
+
 		case "LAG":
 			offset := getLagLeadOffset(wf.expr)
 			values = computeOrderedWindowValues(rows, wf.expr, func(sortedIndices []int, posInPartition int) interface{} {
@@ -330,11 +354,33 @@ func computePartitionValues(rows *Rows, wf *QP.WindowFuncExpr, compute func(part
 }
 
 // computeWindowAgg computes a window aggregate for each row.
+// If wf has a Frame spec, uses frame-based per-row computation; otherwise full-partition agg.
 func computeWindowAgg(rows *Rows, wf *QP.WindowFuncExpr, agg func(rowIndices []int) interface{}) []interface{} {
 	n := len(rows.Data)
 	result := make([]interface{}, n)
 	partGroups := buildPartitionGroups(rows, wf.Partition)
 
+	// If there are ORDER BY expressions or a frame spec, compute per-row frame values
+	if len(wf.OrderBy) > 0 || wf.Frame != nil {
+		for _, group := range partGroups {
+			sortedGroup := sortRowIndices(rows, group, wf.OrderBy)
+			total := len(sortedGroup)
+			// Build reverse map: original row index → position in sorted group
+			posMap := make(map[int]int, total)
+			for pos, ri := range sortedGroup {
+				posMap[ri] = pos
+			}
+			for _, ri := range group {
+				pos := posMap[ri]
+				start, end := resolveFrameBounds(wf.Frame, pos, total)
+				frameIndices := sortedGroup[start : end+1]
+				result[ri] = agg(frameIndices)
+			}
+		}
+		return result
+	}
+
+	// No ORDER BY / frame: aggregate over full partition
 	for _, group := range partGroups {
 		val := agg(group)
 		for _, ri := range group {
@@ -342,6 +388,74 @@ func computeWindowAgg(rows *Rows, wf *QP.WindowFuncExpr, agg func(rowIndices []i
 		}
 	}
 	return result
+}
+
+// resolveFrameBounds returns the [start, end] (inclusive) positions within a sorted partition
+// for the given frame spec and current position. Default frame when no spec:
+//   - With ORDER BY: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+//   - Without ORDER BY (handled by caller): full partition
+func resolveFrameBounds(frame *QP.WindowFrame, pos, total int) (start, end int) {
+	if total == 0 {
+		return 0, 0
+	}
+	if frame == nil {
+		// Default with ORDER BY: from beginning to current row
+		return 0, pos
+	}
+	start = resolveFramePos(frame.Start, pos, total, true)
+	end = resolveFramePos(frame.End, pos, total, false)
+	// Clamp
+	if start < 0 {
+		start = 0
+	}
+	if end >= total {
+		end = total - 1
+	}
+	if start > end {
+		start = end
+	}
+	return start, end
+}
+
+// resolveFramePos resolves a FrameBound to an absolute position.
+// isStart indicates whether this is the start bound (for FOLLOWING, use pos+offset).
+func resolveFramePos(fb QP.FrameBound, pos, total int, isStart bool) int {
+	switch fb.Type {
+	case "UNBOUNDED":
+		if isStart {
+			return 0
+		}
+		return total - 1
+	case "CURRENT":
+		return pos
+	case "PRECEDING":
+		offset := frameBoundOffset(fb.Value)
+		return pos - offset
+	case "FOLLOWING":
+		offset := frameBoundOffset(fb.Value)
+		return pos + offset
+	default:
+		if isStart {
+			return 0
+		}
+		return total - 1
+	}
+}
+
+// frameBoundOffset extracts the integer offset from a FrameBound value expression.
+func frameBoundOffset(expr QP.Expr) int {
+	if expr == nil {
+		return 0
+	}
+	if lit, ok := expr.(*QP.Literal); ok {
+		switch v := lit.Value.(type) {
+		case int64:
+			return int(v)
+		case float64:
+			return int(v)
+		}
+	}
+	return 0
 }
 
 // computeOrderedWindowValues computes per-row values based on position within ordered partition.
@@ -397,6 +511,58 @@ func computeRankValues(rows *Rows, wf *QP.WindowFuncExpr, dense bool) []interfac
 	return result
 }
 
+func computeRankValuesFloat(rows *Rows, wf *QP.WindowFuncExpr) []interface{} {
+	n := len(rows.Data)
+	result := make([]interface{}, n)
+	partGroups := buildPartitionGroups(rows, wf.Partition)
+
+	for _, group := range partGroups {
+		sortedGroup := sortRowIndices(rows, group, wf.OrderBy)
+		total := len(sortedGroup)
+		if total <= 1 {
+			for _, ri := range sortedGroup {
+				result[ri] = float64(0)
+			}
+			continue
+		}
+		rank := 1
+		for pos, ri := range sortedGroup {
+			if pos > 0 {
+				prevRi := sortedGroup[pos-1]
+				if !sameOrderKey(rows, prevRi, ri, wf.OrderBy) {
+					rank = pos + 1
+				}
+			}
+			result[ri] = float64(rank-1) / float64(total-1)
+		}
+	}
+	return result
+}
+
+func computeCumeDist(rows *Rows, wf *QP.WindowFuncExpr) []interface{} {
+	n := len(rows.Data)
+	result := make([]interface{}, n)
+	partGroups := buildPartitionGroups(rows, wf.Partition)
+
+	for _, group := range partGroups {
+		sortedGroup := sortRowIndices(rows, group, wf.OrderBy)
+		total := len(sortedGroup)
+		pos := 0
+		for pos < len(sortedGroup) {
+			end := pos + 1
+			for end < len(sortedGroup) && sameOrderKey(rows, sortedGroup[pos], sortedGroup[end], wf.OrderBy) {
+				end++
+			}
+			cumeDist := float64(end) / float64(total)
+			for i := pos; i < end; i++ {
+				result[sortedGroup[i]] = cumeDist
+			}
+			pos = end
+		}
+	}
+	return result
+}
+
 // buildPartitionGroups groups row indices by PARTITION BY key.
 func buildPartitionGroups(rows *Rows, partExprs []QP.Expr) [][]int {
 	if len(partExprs) == 0 {
@@ -428,7 +594,7 @@ func buildPartitionGroups(rows *Rows, partExprs []QP.Expr) [][]int {
 }
 
 // sortRowIndices sorts a slice of row indices by the ORDER BY expressions.
-func sortRowIndices(rows *Rows, indices []int, orderExprs []QP.Expr) []int {
+func sortRowIndices(rows *Rows, indices []int, orderExprs []QP.WindowOrderBy) []int {
 	if len(orderExprs) == 0 {
 		return indices
 	}
@@ -437,11 +603,14 @@ func sortRowIndices(rows *Rows, indices []int, orderExprs []QP.Expr) []int {
 	sort.SliceStable(sorted, func(a, b int) bool {
 		ra := makeRowMap(rows.Columns, rows.Data[sorted[a]])
 		rb := makeRowMap(rows.Columns, rows.Data[sorted[b]])
-		for _, expr := range orderExprs {
-			va := evalWindowExprOnRow(ra, rows.Columns, expr)
-			vb := evalWindowExprOnRow(rb, rows.Columns, expr)
+		for _, ob := range orderExprs {
+			va := evalWindowExprOnRow(ra, rows.Columns, ob.Expr)
+			vb := evalWindowExprOnRow(rb, rows.Columns, ob.Expr)
 			cmp := compareWindowVals(va, vb)
 			if cmp != 0 {
+				if ob.Desc {
+					return cmp > 0
+				}
 				return cmp < 0
 			}
 		}
@@ -451,12 +620,12 @@ func sortRowIndices(rows *Rows, indices []int, orderExprs []QP.Expr) []int {
 }
 
 // sameOrderKey returns true if two rows have the same ORDER BY key values.
-func sameOrderKey(rows *Rows, ri, rj int, orderExprs []QP.Expr) bool {
+func sameOrderKey(rows *Rows, ri, rj int, orderExprs []QP.WindowOrderBy) bool {
 	ra := makeRowMap(rows.Columns, rows.Data[ri])
 	rb := makeRowMap(rows.Columns, rows.Data[rj])
-	for _, expr := range orderExprs {
-		va := evalWindowExprOnRow(ra, rows.Columns, expr)
-		vb := evalWindowExprOnRow(rb, rows.Columns, expr)
+	for _, ob := range orderExprs {
+		va := evalWindowExprOnRow(ra, rows.Columns, ob.Expr)
+		vb := evalWindowExprOnRow(rb, rows.Columns, ob.Expr)
 		if compareWindowVals(va, vb) != 0 {
 			return false
 		}

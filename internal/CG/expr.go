@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	QP "github.com/sqlvibe/sqlvibe/internal/QP"
-	VM "github.com/sqlvibe/sqlvibe/internal/VM"
+	QP "github.com/cyw0ng95/sqlvibe/internal/QP"
+	VM "github.com/cyw0ng95/sqlvibe/internal/VM"
 )
 
 func (c *Compiler) compileExpr(expr QP.Expr) int {
@@ -37,6 +37,9 @@ func (c *Compiler) compileExpr(expr QP.Expr) int {
 
 	case *QP.SubqueryExpr:
 		return c.compileSubqueryExpr(e)
+
+	case *QP.AnyAllExpr:
+		return c.compileAnyAllExpr(e)
 
 	case *QP.AliasExpr:
 		// Alias expression: just compile the inner expression (alias is handled by column naming)
@@ -739,4 +742,19 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 	}
 
 	return expanded
+}
+
+func (c *Compiler) compileAnyAllExpr(e *QP.AnyAllExpr) int {
+// Compile the left side into a register
+leftReg := c.compileExpr(e.Left)
+// Allocate result register
+dstReg := c.ra.Alloc()
+// Emit OpAnyAllSubquery: P1=dstReg, P2=leftReg, P4=AnyAllExpr
+c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+Op: VM.OpAnyAllSubquery,
+P1: int32(dstReg),
+P2: int32(leftReg),
+P4: e,
+})
+return dstReg
 }

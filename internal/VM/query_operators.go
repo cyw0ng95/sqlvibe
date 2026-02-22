@@ -4,7 +4,7 @@ import (
 	"container/heap"
 	"sort"
 
-	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/QP"
 )
 
 type ResultSet struct {

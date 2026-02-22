@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sqlvibe/sqlvibe/internal/DS"
-	"github.com/sqlvibe/sqlvibe/internal/PB"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/PB"
 )
 
 func TestTransactionManager_Basic(t *testing.T) {

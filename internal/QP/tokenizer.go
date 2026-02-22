@@ -166,6 +166,10 @@ var keywords = map[string]TokenType{
 	"BEGIN":             TokenKeyword,
 	"COMMIT":            TokenKeyword,
 	"ROLLBACK":          TokenKeyword,
+	"BACKUP":            TokenKeyword,
+	"DATABASE":          TokenKeyword,
+	"INCREMENTAL":       TokenKeyword,
+	"TO":                TokenKeyword,
 	"TRANSACTION":       TokenKeyword,
 	"PRAGMA":            TokenKeyword,
 	"IF":                TokenKeyword,
@@ -194,6 +198,22 @@ var keywords = map[string]TokenType{
 	"PRECEDING":         TokenKeyword,
 	"FOLLOWING":         TokenKeyword,
 	"CURRENT":           TokenKeyword,
+	"ROWS":              TokenKeyword,
+	"RANGE":             TokenKeyword,
+	"PERCENT_RANK":      TokenKeyword,
+	"CUME_DIST":         TokenKeyword,
+	"TRIGGER":           TokenKeyword,
+	"FOR":               TokenKeyword,
+	"EACH":              TokenKeyword,
+	"ROW":               TokenKeyword,
+	"NEW":               TokenKeyword,
+	"OLD":               TokenKeyword,
+	"INSTEAD":           TokenKeyword,
+	"OF":                TokenKeyword,
+	"AFTER":             TokenKeyword,
+	"BEFORE":            TokenKeyword,
+	"VACUUM":            TokenKeyword,
+	"ANALYZE":           TokenKeyword,
 }
 
 type Token struct {
@@ -330,6 +350,8 @@ func lookupKeyword(s string) (TokenType, bool) {
 			return TokenKeyword, true
 		case "OVER":
 			return TokenKeyword, true
+		case "ROWS":
+			return TokenKeyword, true
 		}
 	case 5:
 		switch s {
@@ -362,6 +384,8 @@ func lookupKeyword(s string) (TokenType, bool) {
 		case "ROWID":
 			return TokenKeyword, true
 		case "FALSE":
+			return TokenKeyword, true
+		case "RANGE":
 			return TokenKeyword, true
 		}
 	case 6:

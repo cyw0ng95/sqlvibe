@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	VM "github.com/sqlvibe/sqlvibe/internal/VM"
+	VM "github.com/cyw0ng95/sqlvibe/internal/VM"
 )
 
 // PlanCache is a thread-safe LRU-style cache for compiled VM programs.

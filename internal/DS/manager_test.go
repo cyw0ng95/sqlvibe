@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/internal/PB"
+	"github.com/cyw0ng95/sqlvibe/internal/PB"
 )
 
 func TestPageManagerCreate(t *testing.T) {

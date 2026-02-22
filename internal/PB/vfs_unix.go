@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sqlvibe/sqlvibe/internal/SF/vfs"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/vfs"
 )
 
 // UnixVFS implements a Unix/POSIX file system VFS

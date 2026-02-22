@@ -8,14 +8,15 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sqlvibe/sqlvibe/internal/CG"
-	"github.com/sqlvibe/sqlvibe/internal/DS"
-	"github.com/sqlvibe/sqlvibe/internal/IS"
-	"github.com/sqlvibe/sqlvibe/internal/PB"
-	"github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
-	"github.com/sqlvibe/sqlvibe/internal/TM"
-	"github.com/sqlvibe/sqlvibe/internal/VM"
+	"github.com/cyw0ng95/sqlvibe/internal/CG"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/IS"
+	"github.com/cyw0ng95/sqlvibe/internal/PB"
+	"github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
+	"github.com/cyw0ng95/sqlvibe/internal/TM"
+	"github.com/cyw0ng95/sqlvibe/internal/VM"
+
 )
 
 // queryResultCache is a thread-safe in-process cache for full SELECT query results.
@@ -88,8 +89,22 @@ type Database struct {
 	wal            *TM.WAL                             // WAL instance when in WAL mode
 	pkHashSet      map[string]map[interface{}]struct{} // table name -> PK value -> exists (single-col PK only)
 	indexData      map[string]map[interface{}][]int    // index name -> col value -> []row indices
-	planCache      *CG.PlanCache                       // compiled query plan cache
-	queryCache     *queryResultCache                   // full query result cache (columns + rows)
+	planCache          *CG.PlanCache                       // compiled query plan cache
+	queryCache         *queryResultCache                   // full query result cache (columns + rows)
+	schemaCache        *IS.SchemaCache                     // information_schema result cache (DDL-invalidated)
+	hybridStores       map[string]*DS.HybridStore     // table name -> columnar hybrid store (analytical fast path)
+	hybridStoresDirty  map[string]bool                     // table name -> needs rebuild on next access
+	isolationConfig    *TM.IsolationConfig                 // isolation level and busy_timeout settings
+	compressionName    string                              // active compression algorithm (NONE/RLE/LZ4/ZSTD/GZIP)
+	// v0.8.6 additions
+	foreignKeys       map[string][]QP.ForeignKeyConstraint // table name -> FK constraints
+	triggers          map[string][]*QP.CreateTriggerStmt   // table name -> triggers list
+	autoincrement     map[string]string                    // table name -> pk col name (if AUTOINCREMENT)
+	seqValues         map[string]int64                     // table name -> last used autoincrement value
+	foreignKeysEnabled bool                               // PRAGMA foreign_keys = ON/OFF
+	pragmaSettings     map[string]interface{}             // PRAGMA setting storage
+	tableStats         map[string]int64                   // table name -> row count (for ANALYZE)
+	queryMu            sync.RWMutex                       // guards concurrent read queries
 }
 
 type dbSnapshot struct {
@@ -344,8 +359,20 @@ func Open(path string) (*Database, error) {
 		wal:            nil,
 		pkHashSet:      make(map[string]map[interface{}]struct{}),
 		indexData:      make(map[string]map[interface{}][]int),
-		planCache:      CG.NewPlanCache(256),
-		queryCache:     newQueryResultCache(512),
+		planCache:          CG.NewPlanCache(256),
+		queryCache:         newQueryResultCache(512),
+		schemaCache:        IS.NewSchemaCache(),
+		hybridStores:       make(map[string]*DS.HybridStore),
+		hybridStoresDirty:  make(map[string]bool),
+		isolationConfig:    TM.NewIsolationConfig(),
+		compressionName:    "NONE",
+		foreignKeys:        make(map[string][]QP.ForeignKeyConstraint),
+		triggers:           make(map[string][]*QP.CreateTriggerStmt),
+		autoincrement:      make(map[string]string),
+		seqValues:          make(map[string]int64),
+		foreignKeysEnabled: false,
+		pragmaSettings:     make(map[string]interface{}),
+		tableStats:         make(map[string]int64),
 	}, nil
 }
 
@@ -514,6 +541,20 @@ func (db *Database) Exec(sql string) (Result, error) {
 		for i, tableCheck := range stmt.TableChecks {
 			db.columnChecks[stmt.Name][fmt.Sprintf("__table_check_%d__", i)] = tableCheck
 		}
+		// Store FK constraints
+		allFKs := make([]QP.ForeignKeyConstraint, 0)
+		for _, col := range stmt.Columns {
+			if col.ForeignKey != nil {
+				allFKs = append(allFKs, *col.ForeignKey)
+			}
+			if col.IsAutoincrement && col.PrimaryKey {
+				db.autoincrement[stmt.Name] = col.Name
+			}
+		}
+		allFKs = append(allFKs, stmt.ForeignKeys...)
+		if len(allFKs) > 0 {
+			db.foreignKeys[stmt.Name] = allFKs
+		}
 		db.engine.RegisterTable(stmt.Name, schema)
 		db.tables[stmt.Name] = colTypes
 		var colOrder []string
@@ -533,6 +574,12 @@ func (db *Database) Exec(sql string) (Result, error) {
 		// Create BTree for table storage
 		bt := DS.NewBTree(db.pm, 0, true)
 		db.tableBTrees[stmt.Name] = bt
+		// Initialise an empty HybridStore for the new table.
+		db.hybridStores[stmt.Name] = db.buildHybridStore(stmt.Name)
+		db.hybridStoresDirty[stmt.Name] = false
+		if db.schemaCache != nil {
+			db.schemaCache.Invalidate()
+		}
 
 		return Result{}, nil
 	case "InsertStmt":
@@ -543,6 +590,8 @@ func (db *Database) Exec(sql string) (Result, error) {
 			result, err = db.execInsertSelect(stmt)
 		} else if stmt.OnConflict != nil {
 			result, err = db.execInsertOnConflict(stmt)
+		} else if res, batchErr, handled := db.execInsertBatch(stmt); handled {
+			result, err = res, batchErr
 		} else {
 			result, err = db.execVMDML(sql, stmt.Table)
 		}
@@ -580,6 +629,8 @@ func (db *Database) Exec(sql string) (Result, error) {
 		delete(db.columnNotNull, stmt.Name)
 		delete(db.tableBTrees, stmt.Name)
 		delete(db.pkHashSet, stmt.Name)
+		delete(db.hybridStores, stmt.Name)
+		delete(db.hybridStoresDirty, stmt.Name)
 		// Drop all secondary indexes that cover this table.
 		for idxName, idx := range db.indexes {
 			if idx.Table == stmt.Name {
@@ -587,10 +638,14 @@ func (db *Database) Exec(sql string) (Result, error) {
 				delete(db.indexData, idxName)
 			}
 		}
-		db.invalidateWriteCaches()
+		db.invalidateSchemaCaches()
 		return Result{}, nil
 	case "CreateViewStmt":
-		return db.execCreateView(ast.(*QP.CreateViewStmt), sql)
+		result, err := db.execCreateView(ast.(*QP.CreateViewStmt), sql)
+		if err == nil && db.schemaCache != nil {
+			db.schemaCache.Invalidate()
+		}
+		return result, err
 	case "DropViewStmt":
 		stmt := ast.(*QP.DropViewStmt)
 		if _, exists := db.views[stmt.Name]; !exists {
@@ -599,9 +654,16 @@ func (db *Database) Exec(sql string) (Result, error) {
 			}
 		}
 		delete(db.views, stmt.Name)
+		if db.schemaCache != nil {
+			db.schemaCache.Invalidate()
+		}
 		return Result{}, nil
 	case "AlterTableStmt":
-		return db.execAlterTable(ast.(*QP.AlterTableStmt))
+		result, err := db.execAlterTable(ast.(*QP.AlterTableStmt))
+		if err == nil && db.schemaCache != nil {
+			db.schemaCache.Invalidate()
+		}
+		return result, err
 	case "CreateIndexStmt":
 		stmt := ast.(*QP.CreateIndexStmt)
 		if _, exists := db.indexes[stmt.Name]; exists {
@@ -621,11 +683,50 @@ func (db *Database) Exec(sql string) (Result, error) {
 		}
 		// Build hash index immediately from existing table data.
 		db.buildIndexData(stmt.Name)
+		db.schemaCache.Invalidate()
 		return Result{}, nil
 	case "DropIndexStmt":
 		stmt := ast.(*QP.DropIndexStmt)
 		delete(db.indexes, stmt.Name)
 		delete(db.indexData, stmt.Name)
+		db.schemaCache.Invalidate()
+		return Result{}, nil
+	case "CreateTriggerStmt":
+		stmt := ast.(*QP.CreateTriggerStmt)
+		if _, exists := db.triggers[stmt.TableName]; !exists {
+			db.triggers[stmt.TableName] = nil
+		}
+		// Check if trigger already exists
+		for _, t := range db.triggers[stmt.TableName] {
+			if t.Name == stmt.Name {
+				if stmt.IfNotExists {
+					return Result{}, nil
+				}
+				return Result{}, fmt.Errorf("trigger %s already exists", stmt.Name)
+			}
+		}
+		db.triggers[stmt.TableName] = append(db.triggers[stmt.TableName], stmt)
+		db.invalidateSchemaCaches()
+		return Result{}, nil
+	case "DropTriggerStmt":
+		stmt := ast.(*QP.DropTriggerStmt)
+		dropped := false
+		for tbl, trigs := range db.triggers {
+			for i, t := range trigs {
+				if t.Name == stmt.Name {
+					db.triggers[tbl] = append(trigs[:i], trigs[i+1:]...)
+					dropped = true
+					break
+				}
+			}
+			if dropped {
+				break
+			}
+		}
+		if !dropped && !stmt.IfExists {
+			return Result{}, fmt.Errorf("no such trigger: %s", stmt.Name)
+		}
+		db.invalidateSchemaCaches()
 		return Result{}, nil
 	case "BeginStmt":
 		stmt := ast.(*QP.BeginStmt)
@@ -671,6 +772,20 @@ func (db *Database) Exec(sql string) (Result, error) {
 		// activeTx is cleared after snapshot restore so the engine sees clean state
 		db.activeTx = nil
 		return Result{}, nil
+	case "PragmaStmt":
+		// PRAGMAs like PRAGMA foreign_keys = ON need to work via Exec too
+		rows, err := db.handlePragma(ast.(*QP.PragmaStmt))
+		if err != nil {
+			return Result{}, err
+		}
+		_ = rows
+		return Result{}, nil
+	case "VacuumStmt":
+		_, err := db.handleVacuum(ast.(*QP.VacuumStmt))
+		return Result{}, err
+	case "AnalyzeStmt":
+		_, err := db.handleAnalyze(ast.(*QP.AnalyzeStmt))
+		return Result{}, err
 	}
 
 	return Result{}, nil
@@ -740,6 +855,18 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		return db.handlePragma(ast.(*QP.PragmaStmt))
 	}
 
+	if ast.NodeType() == "BackupStmt" {
+		return db.handleBackup(ast.(*QP.BackupStmt))
+	}
+
+	if ast.NodeType() == "VacuumStmt" {
+		return db.handleVacuum(ast.(*QP.VacuumStmt))
+	}
+
+	if ast.NodeType() == "AnalyzeStmt" {
+		return db.handleAnalyze(ast.(*QP.AnalyzeStmt))
+	}
+
 	if ast.NodeType() == "ExplainStmt" {
 		return db.handleExplain(ast.(*QP.ExplainStmt), sql)
 	}
@@ -751,23 +878,33 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		if len(stmt.CTEs) > 0 {
 			var cteNames []string
 			for _, cte := range stmt.CTEs {
-				cteRows, err := db.execSelectStmt(cte.Select)
+				var cteRows *Rows
+				var err error
+				if cte.Recursive {
+					cteRows, err = db.execRecursiveCTE(&cte)
+				} else {
+					cteRows, err = db.execSelectStmt(cte.Select)
+				}
 				if err != nil {
 					return nil, err
 				}
 				if cteRows == nil {
 					cteRows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
 				}
+				cols := cteRows.Columns
+				if len(cte.Columns) > 0 && len(cte.Columns) == len(cols) {
+					cols = cte.Columns
+				}
 				colTypes := make(map[string]string)
-				for _, col := range cteRows.Columns {
+				for _, col := range cols {
 					colTypes[col] = "TEXT"
 				}
 				db.tables[cte.Name] = colTypes
-				db.columnOrder[cte.Name] = cteRows.Columns
+				db.columnOrder[cte.Name] = cols
 				rowMaps := make([]map[string]interface{}, len(cteRows.Data))
 				for i, row := range cteRows.Data {
 					rm := make(map[string]interface{})
-					for j, col := range cteRows.Columns {
+					for j, col := range cols {
 						if j < len(row) {
 							rm[col] = row[j]
 						}
@@ -804,6 +941,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return db.execDerivedTableQuery(stmt)
 		}
 
+		// Handle VALUES table constructor: SELECT * FROM (VALUES (1,'a'), (2,'b')) AS t(x,y)
+		if stmt.From.Values != nil {
+			return db.execValuesTable(stmt)
+		}
+
 		var tableName string
 		var schemaName string
 		if stmt.From != nil {
@@ -821,6 +963,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		// Handle sqlite_master virtual table
 		if tableName == "sqlite_master" {
 			return db.querySqliteMaster(stmt)
+		}
+
+		// Handle sqlite_stat1 virtual table
+		if tableName == "sqlite_stat1" {
+			return db.querySqliteStat1()
 		}
 
 		// Handle views by substituting the view SQL (case-insensitive)
@@ -972,6 +1119,20 @@ func (db *Database) Close() error {
 func (db *Database) invalidateWriteCaches() {
 	if db.queryCache != nil {
 		db.queryCache.Invalidate()
+	}
+	// Mark all hybrid stores as needing a rebuild on next access.
+	for tbl := range db.tables {
+		db.hybridStoresDirty[tbl] = true
+	}
+}
+
+// invalidateSchemaCaches clears caches that depend on schema structure.
+// Call this after DDL operations (CREATE/DROP/ALTER TABLE, CREATE/DROP INDEX)
+// so information_schema queries are re-evaluated with the updated schema.
+func (db *Database) invalidateSchemaCaches() {
+	db.invalidateWriteCaches()
+	if db.schemaCache != nil {
+		db.schemaCache.Invalidate()
 	}
 }
 
@@ -1359,6 +1520,145 @@ func (db *Database) rebuildAllIndexes() {
 	for idxName := range db.indexes {
 		db.buildIndexData(idxName)
 	}
+	// Mark all hybrid stores dirty after rollback.
+	for tbl := range db.tables {
+		db.hybridStoresDirty[tbl] = true
+	}
+}
+
+// sqlTypeToStorageType converts a SQL column type declaration to a DS.ValueType.
+func sqlTypeToStorageType(typStr string) DS.ValueType {
+	upper := strings.ToUpper(strings.TrimSpace(typStr))
+	switch {
+	case strings.Contains(upper, "INT"):
+		return DS.TypeInt
+	case strings.Contains(upper, "REAL"), strings.Contains(upper, "FLOAT"),
+		strings.Contains(upper, "DOUBLE"), strings.Contains(upper, "NUMERIC"),
+		strings.Contains(upper, "DECIMAL"):
+		return DS.TypeFloat
+	case strings.Contains(upper, "BOOL"):
+		return DS.TypeBool
+	case strings.Contains(upper, "BLOB"), strings.Contains(upper, "BYTES"):
+		return DS.TypeBytes
+	default:
+		return DS.TypeString
+	}
+}
+
+// interfaceToStorageValue converts a Go interface{} row value to a DS.Value.
+func interfaceToStorageValue(v interface{}, vt DS.ValueType) DS.Value {
+	if v == nil {
+		return DS.NullValue()
+	}
+	switch vt {
+	case DS.TypeInt:
+		switch n := v.(type) {
+		case int64:
+			return DS.IntValue(n)
+		case int:
+			return DS.IntValue(int64(n))
+		case float64:
+			return DS.IntValue(int64(n))
+		case bool:
+			if n {
+				return DS.IntValue(1)
+			}
+			return DS.IntValue(0)
+		case string:
+			if i, err := strconv.ParseInt(n, 10, 64); err == nil {
+				return DS.IntValue(i)
+			}
+		}
+	case DS.TypeFloat:
+		switch n := v.(type) {
+		case float64:
+			return DS.FloatValue(n)
+		case int64:
+			return DS.FloatValue(float64(n))
+		case int:
+			return DS.FloatValue(float64(n))
+		case string:
+			if f, err := strconv.ParseFloat(n, 64); err == nil {
+				return DS.FloatValue(f)
+			}
+		}
+	case DS.TypeBool:
+		switch n := v.(type) {
+		case bool:
+			return DS.BoolValue(n)
+		case int64:
+			return DS.BoolValue(n != 0)
+		case float64:
+			return DS.BoolValue(n != 0)
+		}
+	case DS.TypeBytes:
+		if b, ok := v.([]byte); ok {
+			return DS.BytesValue(b)
+		}
+	}
+	// Default: string representation.
+	return DS.StringValue(fmt.Sprintf("%v", v))
+}
+
+// rowToStorageValues converts a row map to an ordered []DS.Value for tableName.
+func (db *Database) rowToStorageValues(tableName string, row map[string]interface{}) []DS.Value {
+	cols := db.columnOrder[tableName]
+	if len(cols) == 0 {
+		return nil
+	}
+	colTypes := db.tables[tableName]
+	vals := make([]DS.Value, len(cols))
+	for i, col := range cols {
+		vt := sqlTypeToStorageType(colTypes[col])
+		vals[i] = interfaceToStorageValue(row[col], vt)
+	}
+	return vals
+}
+
+// buildHybridStore constructs a fresh HybridStore for tableName from db.data.
+func (db *Database) buildHybridStore(tableName string) *DS.HybridStore {
+	cols := db.columnOrder[tableName]
+	if len(cols) == 0 {
+		return nil
+	}
+	colTypeStrs := db.tables[tableName]
+	stTypes := make([]DS.ValueType, len(cols))
+	for i, col := range cols {
+		stTypes[i] = sqlTypeToStorageType(colTypeStrs[col])
+	}
+	hs := DS.NewHybridStore(cols, stTypes)
+	for _, row := range db.data[tableName] {
+		if row == nil {
+			continue
+		}
+		vals := make([]DS.Value, len(cols))
+		for i, col := range cols {
+			vals[i] = interfaceToStorageValue(row[col], stTypes[i])
+		}
+		hs.Insert(vals)
+	}
+	return hs
+}
+
+// markHybridDirty flags the HybridStore for tableName as needing a rebuild.
+func (db *Database) markHybridDirty(tableName string) {
+	if _, ok := db.tables[tableName]; ok {
+		db.hybridStoresDirty[tableName] = true
+	}
+}
+
+// GetHybridStore returns the HybridStore for tableName, rebuilding it when necessary.
+// Returns nil if the table does not exist.
+func (db *Database) GetHybridStore(tableName string) *DS.HybridStore {
+	tbl := db.resolveTableName(tableName)
+	if _, ok := db.tables[tbl]; !ok {
+		return nil
+	}
+	if db.hybridStoresDirty[tbl] || db.hybridStores[tbl] == nil {
+		db.hybridStores[tbl] = db.buildHybridStore(tbl)
+		db.hybridStoresDirty[tbl] = false
+	}
+	return db.hybridStores[tbl]
 }
 
 // compareIndexVals compares two index key values for ordering.
@@ -1848,11 +2148,20 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 	}
 	viewName := strings.ToLower(parts[1])
 
-	// Generate data based on view type
+	// Check schema cache for pre-built view data.
+	// The cache is invalidated on DDL; DML never changes the schema.
 	var allResults [][]interface{}
 	var columnNames []string
+	if db.schemaCache != nil {
+		if cachedCols, cachedRows, ok := db.schemaCache.Get(viewName); ok {
+			columnNames = cachedCols
+			allResults = cachedRows
+		}
+	}
 
-	switch viewName {
+	if allResults == nil {
+		// Generate data based on view type
+		switch viewName {
 	case "columns":
 		columnNames = []string{"column_name", "table_name", "table_schema", "data_type", "is_nullable", "column_default"}
 		// Extract columns from in-memory schema
@@ -1938,6 +2247,11 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 	default:
 		return nil, fmt.Errorf("unknown information_schema view: %s", viewName)
 	}
+		// Store built results in schema cache for subsequent calls.
+		if db.schemaCache != nil {
+			db.schemaCache.Set(viewName, columnNames, allResults)
+		}
+	} // end if allResults == nil
 
 	// Filter based on WHERE clause (simple support)
 	filtered := allResults
@@ -2109,6 +2423,113 @@ func (db *Database) execCreateView(stmt *QP.CreateViewStmt, origSQL string) (Res
 
 // execDerivedTableQuery materializes a derived table (subquery in FROM) and executes the outer query.
 // SELECT ... FROM (SELECT ...) AS alias ...
+func (db *Database) execValuesTable(stmt *QP.SelectStmt) (*Rows, error) {
+	fromRef := stmt.From
+	cols := fromRef.ValueCols
+	if len(cols) == 0 && len(fromRef.Values) > 0 {
+		cols = make([]string, len(fromRef.Values[0]))
+		for i := range cols {
+			cols[i] = fmt.Sprintf("column%d", i+1)
+		}
+	}
+
+	alias := fromRef.Alias
+	if alias == "" {
+		alias = "__values__"
+	}
+
+	colTypes := make(map[string]string)
+	for _, col := range cols {
+		colTypes[col] = "TEXT"
+	}
+	db.tables[alias] = colTypes
+	db.columnOrder[alias] = cols
+	db.data[alias] = make([]map[string]interface{}, len(fromRef.Values))
+	for i, row := range fromRef.Values {
+		rm := make(map[string]interface{})
+		for j, col := range cols {
+			if j < len(row) {
+				rm[col] = evalLiteralExpr(row[j])
+			}
+		}
+		db.data[alias][i] = rm
+	}
+
+	origFrom := stmt.From
+	stmt.From = &QP.TableRef{Name: alias, Alias: alias}
+	rows, err := db.execSelectStmt(stmt)
+	stmt.From = origFrom
+
+	delete(db.tables, alias)
+	delete(db.columnOrder, alias)
+	delete(db.data, alias)
+
+	return rows, err
+}
+
+func (db *Database) execRecursiveCTE(cte *QP.CTEClause) (*Rows, error) {
+	sel := cte.Select
+	if sel.SetOp != "UNION" && sel.SetOp != "UNION ALL" {
+		return db.execSelectStmt(sel)
+	}
+
+	// Execute anchor (left side)
+	anchorStmt := *sel
+	anchorStmt.SetOp = ""
+	anchorStmt.SetOpAll = false
+	anchorStmt.SetOpRight = nil
+	anchorRows, err := db.execSelectStmt(&anchorStmt)
+	if err != nil {
+		return nil, err
+	}
+	if anchorRows == nil {
+		anchorRows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
+	}
+
+	cols := anchorRows.Columns
+	if len(cte.Columns) > 0 && len(cte.Columns) == len(cols) {
+		cols = cte.Columns
+	}
+
+	allRows := make([][]interface{}, len(anchorRows.Data))
+	copy(allRows, anchorRows.Data)
+
+	maxIter := 1000
+	current := anchorRows
+	for i := 0; i < maxIter; i++ {
+		db.tables[cte.Name] = make(map[string]string)
+		db.columnOrder[cte.Name] = cols
+		db.data[cte.Name] = make([]map[string]interface{}, len(current.Data))
+		for _, col := range cols {
+			db.tables[cte.Name][col] = "TEXT"
+		}
+		for j, row := range current.Data {
+			rm := make(map[string]interface{})
+			for k, col := range cols {
+				if k < len(row) {
+					rm[col] = row[k]
+				}
+			}
+			db.data[cte.Name][j] = rm
+		}
+
+		recursiveRows, rerr := db.execSelectStmt(sel.SetOpRight)
+
+		delete(db.tables, cte.Name)
+		delete(db.columnOrder, cte.Name)
+		delete(db.data, cte.Name)
+
+		if rerr != nil || recursiveRows == nil || len(recursiveRows.Data) == 0 {
+			break
+		}
+
+		allRows = append(allRows, recursiveRows.Data...)
+		current = recursiveRows
+	}
+
+	return &Rows{Columns: cols, Data: allRows}, nil
+}
+
 func (db *Database) execDerivedTableQuery(stmt *QP.SelectStmt) (*Rows, error) {
 	subq := stmt.From.Subquery
 	alias := stmt.From.Alias
@@ -2412,8 +2833,123 @@ func (db *Database) evalExprOnMap(expr QP.Expr, row map[string]interface{}) inte
 			return row[e.Name[idx+1:]]
 		}
 		return nil
+	case *QP.AnyAllExpr:
+		subRows, err := db.execSelectStmt(e.Subquery)
+		if err != nil || subRows == nil || len(subRows.Data) == 0 {
+			if e.Quantifier == "ALL" {
+				return int64(1) // vacuously true
+			}
+			return nil
+		}
+		leftVal := db.evalExprOnMap(e.Left, row)
+		for _, subRow := range subRows.Data {
+			if len(subRow) == 0 {
+				continue
+			}
+			rightVal := subRow[0]
+			cmp := compareForAnyAll(leftVal, rightVal)
+			match := false
+			switch e.Op {
+			case QP.TokenEq:
+				match = cmp == 0
+			case QP.TokenNe:
+				match = cmp != 0
+			case QP.TokenLt:
+				match = cmp < 0
+			case QP.TokenLe:
+				match = cmp <= 0
+			case QP.TokenGt:
+				match = cmp > 0
+			case QP.TokenGe:
+				match = cmp >= 0
+			}
+			if e.Quantifier == "ALL" && !match {
+				return nil
+			}
+			if (e.Quantifier == "ANY" || e.Quantifier == "SOME") && match {
+				return int64(1)
+			}
+		}
+		if e.Quantifier == "ALL" {
+			return int64(1)
+		}
+		return nil
 	}
 	return nil
+}
+
+// compareForAnyAll compares two values for ANY/ALL predicates.
+func compareForAnyAll(a, b interface{}) int {
+if a == nil && b == nil {
+return 0
+}
+if a == nil {
+return -1
+}
+if b == nil {
+return 1
+}
+switch av := a.(type) {
+case int64:
+switch bv := b.(type) {
+case int64:
+if av < bv {
+return -1
+}
+if av > bv {
+return 1
+}
+return 0
+case float64:
+fa := float64(av)
+if fa < bv {
+return -1
+}
+if fa > bv {
+return 1
+}
+return 0
+}
+case float64:
+switch bv := b.(type) {
+case float64:
+if av < bv {
+return -1
+}
+if av > bv {
+return 1
+}
+return 0
+case int64:
+fb := float64(bv)
+if av < fb {
+return -1
+}
+if av > fb {
+return 1
+}
+return 0
+}
+case string:
+if bv, ok := b.(string); ok {
+if av < bv {
+return -1
+}
+if av > bv {
+return 1
+}
+return 0
+}
+}
+as := fmt.Sprintf("%v", a)
+bs := fmt.Sprintf("%v", b)
+if as < bs {
+return -1
+}
+if as > bs {
+return 1
+}
+return 0
 }
 
 // execCreateTableAsSelect handles CREATE TABLE ... AS SELECT
@@ -2459,6 +2995,9 @@ func (db *Database) execCreateTableAsSelect(stmt *QP.CreateTableStmt) (Result, e
 		}
 		db.data[stmt.Name] = append(db.data[stmt.Name], rowMap)
 	}
+	// Build HybridStore populated with the newly inserted rows.
+	db.hybridStores[stmt.Name] = db.buildHybridStore(stmt.Name)
+	db.hybridStoresDirty[stmt.Name] = false
 
 	return Result{}, nil
 }
@@ -2583,6 +3122,13 @@ func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 		delete(db.columnNotNull, stmt.Table)
 		delete(db.columnChecks, stmt.Table)
 		delete(db.tableBTrees, stmt.Table)
+		// Move hybrid store to new name.
+		if hs, ok := db.hybridStores[stmt.Table]; ok {
+			db.hybridStores[stmt.NewName] = hs
+			delete(db.hybridStores, stmt.Table)
+		}
+		db.hybridStoresDirty[stmt.NewName] = true
+		delete(db.hybridStoresDirty, stmt.Table)
 		return Result{}, nil
 	}
 	return Result{}, nil
@@ -2605,6 +3151,165 @@ func (db *Database) evalConstExpr(expr QP.Expr) interface{} {
 		return lit.Value
 	}
 	return nil
+}
+
+// isAllLiteralValues reports whether all values in a multi-row INSERT are constant
+// literals (no column refs, function calls, or subqueries).  Only *QP.Literal and
+// negated-literal *QP.UnaryExpr nodes are accepted.
+func isAllLiteralValues(stmt *QP.InsertStmt) bool {
+	if len(stmt.Values) == 0 {
+		return false
+	}
+	for _, row := range stmt.Values {
+		for _, val := range row {
+			if !isLiteralExpr(val) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isLiteralExpr reports whether expr is a constant literal safe to evaluate
+// without the VM (covers *QP.Literal and negated literals like -5 or -3.14).
+func isLiteralExpr(expr QP.Expr) bool {
+	switch e := expr.(type) {
+	case *QP.Literal:
+		return true
+	case *QP.UnaryExpr:
+		if e.Op == QP.TokenMinus {
+			_, ok := e.Expr.(*QP.Literal)
+			return ok
+		}
+	case nil:
+		return true
+	}
+	return false
+}
+
+// evalLiteralExpr evaluates a constant literal expression to its Go value.
+// Handles *QP.Literal and negated literals (*QP.UnaryExpr with TokenMinus).
+func evalLiteralExpr(expr QP.Expr) interface{} {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *QP.Literal:
+		return e.Value
+	case *QP.UnaryExpr:
+		if e.Op == QP.TokenMinus {
+			if lit, ok := e.Expr.(*QP.Literal); ok {
+				switch v := lit.Value.(type) {
+				case int64:
+					return -v
+				case float64:
+					return -v
+				case int:
+					return -int64(v)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// execInsertBatch is a fast-path for simple INSERT statements whose VALUES rows
+// all contain constant literals.  It bypasses tokenize/compile/VM and directly
+// calls InsertRow for each row, reducing overhead for bulk inserts.
+// Returns (result, error, true) when handled; (Result{}, nil, false) to fall through.
+func (db *Database) execInsertBatch(stmt *QP.InsertStmt) (Result, error, bool) {
+	util.AssertNotNil(stmt, "InsertStmt")
+	// Only handle simple literal-value inserts (no SELECT, ON CONFLICT, DEFAULT VALUES).
+	if stmt.SelectQuery != nil || stmt.OnConflict != nil || stmt.UseDefaults {
+		return Result{}, nil, false
+	}
+	if !isAllLiteralValues(stmt) {
+		return Result{}, nil, false
+	}
+
+	tableName := db.resolveTableName(stmt.Table)
+	tableCols := db.columnOrder[tableName]
+	if _, exists := db.tables[tableName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName), true
+	}
+
+	// Validate that explicitly specified columns exist in the table.
+	if len(stmt.Columns) > 0 {
+		validCols := make(map[string]bool, len(tableCols))
+		for _, col := range tableCols {
+			validCols[strings.ToLower(col)] = true
+		}
+		for _, col := range stmt.Columns {
+			if !validCols[strings.ToLower(col)] {
+				return Result{}, fmt.Errorf("table %s has no column named %s", tableName, col), true
+			}
+		}
+		// Validate row value counts.
+		for _, row := range stmt.Values {
+			if len(row) != len(stmt.Columns) {
+				return Result{}, fmt.Errorf("%d values for %d columns", len(row), len(stmt.Columns)), true
+			}
+		}
+	} else if len(tableCols) > 0 {
+		for _, row := range stmt.Values {
+			if len(row) != len(tableCols) {
+				return Result{}, fmt.Errorf("table %s has %d columns but %d values were supplied",
+					tableName, len(tableCols), len(row)), true
+			}
+		}
+	}
+
+	// Check whether any non-literal default needs applying (e.g. DEFAULT (1+1)).
+	// If so, fall through to VM which can evaluate arbitrary expressions.
+	tableDefaults := db.columnDefaults[tableName]
+	if len(stmt.Columns) > 0 && len(tableDefaults) > 0 {
+		specifiedCols := make(map[string]bool, len(stmt.Columns))
+		for _, col := range stmt.Columns {
+			specifiedCols[strings.ToLower(col)] = true
+		}
+		for colName, defaultVal := range tableDefaults {
+			if specifiedCols[strings.ToLower(colName)] {
+				continue // column explicitly provided — default not needed
+			}
+			// Default needed for this column. Only accept literal defaults.
+			if _, isLit := defaultVal.(*QP.Literal); !isLit {
+				return Result{}, nil, false // non-literal default — fall through to VM
+			}
+		}
+	}
+
+	ctx := newDsVmContext(db)
+	var rowsAffected int64
+	for _, rowVals := range stmt.Values {
+		row := make(map[string]interface{}, len(tableCols))
+		if len(stmt.Columns) > 0 {
+			for i, val := range rowVals {
+				if i < len(stmt.Columns) {
+					row[stmt.Columns[i]] = evalLiteralExpr(val)
+				}
+			}
+		} else {
+			for i, val := range rowVals {
+				if i < len(tableCols) {
+					row[tableCols[i]] = evalLiteralExpr(val)
+				}
+			}
+		}
+		// Apply literal defaults only for columns that are entirely absent from the row.
+		// Explicit NULLs (column present but nil) are left as-is.
+		for colName, defaultVal := range tableDefaults {
+			if _, exists := row[colName]; !exists {
+				if lit, ok := defaultVal.(*QP.Literal); ok {
+					row[colName] = lit.Value
+				}
+			}
+		}
+		if err := ctx.InsertRow(tableName, row); err != nil {
+			return Result{}, err, true
+		}
+		rowsAffected++
+	}
+	return Result{RowsAffected: rowsAffected}, nil, true
 }
 
 // execInsertSelect handles INSERT INTO table SELECT ...
