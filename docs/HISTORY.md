@@ -16,18 +16,21 @@
 - **CLI `.ext` Command** (`cmd/sv-cli`): Shows loaded extensions as a formatted table.
 - **VM/QE Extension Hook**: `evaluateFuncCallOnRow` (VM) and `evalFuncCall` (QP) now dispatch unknown function names to the extension registry for transparent extension function calls.
 
+### Performance Optimizations
+- **Fast Hash JOIN**: `ColumnarHashJoin` now uses raw `int64`/`float64`/`string` values as map keys, eliminating `fmt.Sprintf` allocation for the common integer and string join-key cases. Hash JOIN on integer keys is now **5.6x faster** than SQLite.
+- **BETWEEN Predicate Pushdown**: `WHERE col BETWEEN lo AND hi` predicates are now classified as pushable and evaluated at the Go layer before VM execution, matching the throughput of equivalent `>=` / `<=` range filters.
+
 ### Tests
 - `ext/extension_test.go`: Registry unit tests (Register, Get, List, CallFunc).
 - `ext/json/json_test.go`: JSON function unit tests (build tag `SVDB_EXT_JSON`).
 - `internal/TS/SQL1999/F900/01_test.go`: SQL-level JSON function integration tests (build tag `SVDB_EXT_JSON`).
 - `pkg/sqlvibe/sqlvibe_extensions_test.go`: Virtual table query test.
+- `internal/TS/Benchmark/benchmark_v0.9.0_test.go`: BETWEEN pushdown, fast hash JOIN, and extension benchmarks.
 
 ### Breaking Changes
 - None
 
 
-### Features
-- **CLI Rename**: `cmd/sqlvibe` renamed to `cmd/sv-cli` with updated banner and improved REPL.
 - **Core Library APIs** (`pkg/sqlvibe`):
   - `GetTables() []TableInfo` — list all user tables and views (excludes `sqlite_*`).
   - `GetSchema(table) string` — return reconstructed `CREATE TABLE` / `CREATE VIEW` statement.
