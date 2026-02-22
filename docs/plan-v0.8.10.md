@@ -10,27 +10,22 @@ Design and implement an extension framework for sqlvibe. Extensions add function
 - Use build tags to include extensions at compile time
 - Virtual table `sqlitevibe_extensions` shows loaded extensions
 - CLI command `.ext` shows extensions in sv-cli
+- **JSON extension aligns with SQLite JSON1**: https://sqlite.org/json1.html
 
 **Directory Structure**:
 ```
 sqlvibe/
 ├── ext/                      # Extension packages (source root)
 │   ├── ext.go               # Entry (build tags controlled)
-│   └── json/                # JSON extension
-│       ├── json.go         # Extension init
-│       ├── json_funcs.go   # JSON functions
-│       ├── vm_ops.go       # JSON VM ops (+build SVDB_EXT_JSON)
-│       └── cg_funcs.go     # JSON codegen (+build SVDB_EXT_JSON)
-├── pkg/sqlvibe/            # Core library
-├── internal/
-│   ├── VM/                 # VM operations
-│   │   ├── ops.go          # Base ops
-│   │   └── ops_json.go     # JSON ops (+build SVDB_EXT_JSON)
-│   └── CG/                 # Code generator
-│       ├── codegen.go      # Base codegen
-│       └── codegen_json.go # JSON codegen (+build SVDB_EXT_JSON)
+│   ├── extension.go         # Extension interface + Opcode struct
+│   ├── registry.go         # Unified registry
+│   └── json/               # JSON extension
+│       └── json.go         # Extension with Opcodes + Functions
+├── pkg/sqlvibe/            # Core library (auto-registers extensions)
 └── cmd/                   # CLI tools
 ```
+
+No separate ops_*.go or cg_*.go files needed - extensions declare Opcodes/Functions directly.
 
 ### sqlitevibe_extensions Virtual Table
 
@@ -41,16 +36,14 @@ A read-only virtual table that lists all loaded extensions.
 SELECT * FROM sqlitevibe_extensions;
 
 -- Result example:
--- name    | version | description       | functions
--- json    | 1.0.0   | JSON extension    | json_extract,json_array,json_object,json_valid
--- fts5    | 1.0.0   | Full-text search| fts5,match,snippet
+-- name    | description       | functions
+-- json    | JSON extension    | json,json_array,json_extract,json_invalid,json_isvalid,json_length,json_object,json_quote,json_remove,json_replace,json_set,json_type,json_update
 ```
 
 **Table Schema**:
 | Column | Type | Description |
 |--------|------|-------------|
 | name | TEXT | Extension name |
-| version | TEXT | Extension version |
 | description | TEXT | Extension description |
 | functions | TEXT | Comma-separated list of functions |
 
@@ -61,7 +54,7 @@ SELECT * FROM sqlitevibe_extensions;
 type sqlitevibeExtensionsTable struct{}
 
 func (t *sqlitevibeExtensionsTable) Columns() []string {
-    return []string{"name", "version", "description", "functions"}
+    return []string{"name", "description", "functions"}
 }
 
 func (t *sqlitevibeExtensionsTable) Next() ([]interface{}, error) {
@@ -73,7 +66,6 @@ func (t *sqlitevibeExtensionsTable) Next() ([]interface{}, error) {
     // Return extension info
     return []interface{}{
         ext.Name(),
-        ext.Version(),
         ext.Description(),
         strings.Join(ext.Functions(), ","),
     }, nil
@@ -92,9 +84,9 @@ func init() {
 
 ```bash
 sqlvibe> .ext
-name    | version | description    | functions
---------+---------+---------------+-------------------------
-json    | 1.0.0  | JSON extension | json_extract,json_array,json_object,json_valid
+name    | description    | functions
+--------+---------------+----------------------------------
+json    | JSON extension | json,json_array,json_extract,json_invalid,json_isvalid,json_length,json_object,json_quote,json_remove,json_replace,json_set,json_type,json_update
 ```
 
 **Implementation**:
@@ -132,23 +124,11 @@ func showExtensions() {
 
 ### Overview
 
-Create core extension infrastructure with Build Tags pattern.
+Create core extension infrastructure with unified registration pattern.
 
-### 1.1 Build Tags Structure
+### 1.1 Extension Interface
 
-```go
-// ext/ext.go
-
-// +build SVDB_EXT_JSON
-
-package ext
-
-import (
-    _ "github.com/cyw0ng95/sqlvibe/ext/json"
-)
-```
-
-### 1.2 Extension Interface
+Extensions declare themselves with Opcodes and Functions included:
 
 ```go
 // ext/extension.go
@@ -157,17 +137,25 @@ package ext
 
 import "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 
+type Opcode struct {
+    Name    string
+    Code    int
+    Handler func(*VM, *Instruction) error
+}
+
 type Extension interface {
     Name() string
-    Version() string
-    Description() string      // Description for sqlitevibe_extensions
-    Functions() []string     // List of functions for sqlitevibe_extensions
+    Description() string
+    Functions() []string
+    Opcodes() []Opcode
     Register(db *sqlvibe.Database) error
     Close() error
 }
 ```
 
-### 1.3 Registry Pattern
+### 1.2 Registry Pattern
+
+Single registration point - extensions declare themselves, core auto-discovers:
 
 ```go
 // ext/registry.go
@@ -175,113 +163,118 @@ type Extension interface {
 package ext
 
 import (
-    "fmt"
     "sync"
 )
 
 var (
-    registry = make(map[string]func() Extension)
-    mu       sync.RWMutex
-    loaded   = make(map[string]Extension)
+    extensions = make(map[string]Extension)
+    mu         sync.RWMutex
 )
 
-func Register(name string, fn func() Extension) {
+func Register(name string, ext Extension) {
     mu.Lock()
     defer mu.Unlock()
-    if _, ok := registry[name]; ok {
-        panic(fmt.Sprintf("extension %q already registered", name))
-    }
-    registry[name] = fn
+    extensions[name] = ext
 }
 
 func Get(name string) (Extension, bool) {
     mu.RLock()
     defer mu.RUnlock()
-    fn, ok := registry[name]
-    if !ok {
-        return nil, false
-    }
-    return fn(), true
+    ext, ok := extensions[name]
+    return ext, ok
 }
 
-func LoadAll(db *sqlvibe.Database) error {
+func List() []Extension {
     mu.RLock()
     defer mu.RUnlock()
-    for name, fn := range registry {
-        ext := fn()
-        if err := ext.Register(db); err != nil {
-            return fmt.Errorf("failed to register %s: %w", name, err)
+    list := make([]Extension, 0, len(extensions))
+    for _, ext := range extensions {
+        list = append(list, ext)
+    }
+    return list
+}
+
+func AllOpcodes() []Opcode {
+    var ops []Opcode
+    for _, ext := range List() {
+        ops = append(ops, ext.Opcodes()...)
+    }
+    return ops
+}
+
+func AllFunctions() []string {
+    var funcs []string
+    for _, ext := range List() {
+        funcs = append(funcs, ext.Functions()...)
+    }
+    return funcs
+}
+```
+
+### 1.3 Build Tags Entry Point
+
+Only the entry point uses build tags:
+
+```go
+// ext/ext.go
+
+// +build SVDB_EXT_JSON
+
+package ext
+
+import _ "github.com/cyw0ng95/sqlvibe/ext/json"
+```
+
+### 1.4 Auto-Registration
+
+Database automatically registers all extensions:
+
+```go
+// pkg/sqlvibe/database.go additions
+
+func init() {
+    // Auto-register all extensions
+    for _, ext := range ext.List() {
+        // Register functions
+        for _, fn := range ext.Functions() {
+            db.RegisterFunction(fn, getFuncHandler(ext.Name(), fn))
         }
-        loaded[name] = ext
+        
+        // Register VM opcodes
+        for _, op := range ext.Opcodes() {
+            vm.RegisterOp(op.Code, op.Handler)
+        }
+        
+        // Call extension init
+        ext.Register(db)
     }
-    return nil
-}
-
-func List() []string {
-    mu.RLock()
-    defer mu.RUnlock()
-    names := make([]string, 0, len(registry))
-    for name := range registry {
-        names = append(names, name)
-    }
-    return names
 }
 ```
 
-### 1.4 VM Extension Support
+### 1.5 sqlitevibe_extensions Virtual Table
+
+Uses the registry directly:
 
 ```go
-// internal/VM/ops.go
-
-var opHandlers = make(map[OpCode]func(*VM, Instruction) error)
-
-func registerOp(code OpCode, handler func(*VM, Instruction) error) {
-    opHandlers[code] = handler
-}
-
-// +build SVDB_EXT_JSON
-
-package vm
-
-func init() {
-    registerOp(OpJSONExtract, evalJSONExtract)
-    registerOp(OpJSONArray, evalJSONArray)
-    registerOp(OpJSONObject, evalJSONObject)
-}
-```
-
-### 1.5 CG Extension Support
-
-```go
-// internal/CG/codegen.go
-
-var funcCompilers = make(map[string]func(*Expr, *Program) error)
-
-func registerFunc(name string, compiler func(*Expr, *Program) error) {
-    funcCompilers[name] = compiler
-}
-
-// +build SVDB_EXT_JSON
-
-package cg
-
-func init() {
-    registerFunc("json_extract", compileJSONExtract)
-    registerFunc("json_array", compileJSONArray)
-    registerFunc("json_object", compileJSONObject)
+func (t *sqlitevibeExtensionsTable) Next() ([]interface{}, error) {
+    for _, ext := range ext.List() {
+        return []interface{}{
+            ext.Name(),
+            ext.Description(),
+            strings.Join(ext.Functions(), ","),
+        }, nil
+    }
+    return nil, io.EOF
 }
 ```
 
 ### Tasks
 
-- [ ] Create `ext/ext.go` with build tags
-- [ ] Create `ext/extension.go` with interface
-- [ ] Create `ext/registry.go` with registry pattern
-- [ ] Add VM extension support (ops registration)
-- [ ] Add CG extension support (func registration)
-- [ ] Test build with/without extensions
-
-**Workload:** ~8 hours
+- [ ] Create `ext/extension.go` with Opcode struct and interface
+- [ ] Create `ext/registry.go` with unified registry
+- [ ] Create `ext/ext.go` build tags entry
+- [ ] Add auto-registration to Database
+- [ ] Create sqlitevibe_extensions virtual table
 
 ---
 
@@ -289,28 +282,80 @@ func init() {
 
 ### Overview
 
-Implement JSON extension with VM operations and code generation.
+Implement JSON extension with unified registration - no separate VM/CG files needed.
 
 ### Directory
 
 ```
 ext/json/
-├── json.go           # Extension init
-├── json_funcs.go     # JSON functions
-├── vm_ops.go         # VM operations (+build SVDB_EXT_JSON)
-└── cg_funcs.go      # Code generation (+build SVDB_EXT_JSON)
+├── json.go     # Extension init with Opcodes and Functions
+└── json_test.go
 ```
 
-### Functions
+### Implementation (Unified Registration)
+
+```go
+// ext/json/json.go
+
+package json
+
+import (
+    "github.com/cyw0ng95/sqlvibe/ext"
+    "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
+)
+
+type JSONExtension struct{}
+
+func (e *JSONExtension) Name() string    { return "json" }
+func (e *JSONExtension) Description() string { return "JSON extension" }
+
+func (e *JSONExtension) Functions() []string {
+    return []string{
+        "json", "json_array", "json_extract", "json_invalid",
+        "json_isvalid", "json_length", "json_object", "json_quote",
+        "json_remove", "json_replace", "json_set", "json_type", "json_update",
+    }
+}
+
+func (e *JSONExtension) Opcodes() []ext.Opcode {
+    return []ext.Opcode{
+        {Name: "JSONExtract", Code: 256, Handler: evalJSONExtract},
+        {Name: "JSONArray", Code: 257, Handler: evalJSONArray},
+        {Name: "JSONObject", Code: 258, Handler: evalJSONObject},
+        // ...
+    }
+}
+
+func (e *JSONExtension) Register(db *sqlvibe.Database) error {
+    return nil
+}
+
+func (e *JSONExtension) Close() error { return nil }
+
+func init() {
+    ext.Register("json", &JSONExtension{})
+}
+```
+
+### Functions (Aligned with SQLite JSON1)
+
+Reference: https://sqlite.org/json1.html
 
 | Function | Description |
 |----------|-------------|
-| `json_extract(json, path)` | Extract value from JSON |
-| `json_array(args...)` | Create JSON array |
-| `json_object(args...)` | Create JSON object |
-| `json_valid(json)` | Validate JSON |
-| `json_type(json, path)` | Get JSON type |
-| `json_quote(value)` | Quote as JSON string |
+| `json(JSON)` | Validate and return JSON |
+| `json_array(VALUE...)` | Create JSON array |
+| `json_extract(JSON, PATH...)` | Extract value(s) from JSON |
+| `json_invalid(JSON)` | Return JSON with invalid UTF-16 replaced |
+| `json_isvalid(JSON)` | Return 1 if valid JSON |
+| `json_length(JSON, PATH?)` | Return number of elements |
+| `json_object(VALUE...)` | Create JSON object |
+| `json_quote(VALUE)` | Quote value as JSON |
+| `json_remove(JSON, PATH...)` | Remove elements from JSON |
+| `json_replace(JSON, PATH, VALUE...)` | Replace values in JSON |
+| `json_set(JSON, PATH, VALUE...)` | Set values in JSON |
+| `json_type(JSON, PATH?)` | Return type of value |
+| `json_update(JSON, PATH, VALUE)` | Alias for json_set |
 
 ### Implementation
 
@@ -327,7 +372,7 @@ import (
 type JSONExtension struct{}
 
 func (e *JSONExtension) Name() string    { return "json" }
-func (e *JSONExtension) Version() string { return "1.0.0" }
+func (e *JSONExtension) Description() string { return "JSON extension" }
 
 func (e *JSONExtension) Register(db *sqlvibe.Database) error {
     return nil
@@ -467,22 +512,30 @@ go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Build tags structure | Works | [ ] |
-| Extension interface | Works | [ ] |
-| Registry pattern | Works | [ ] |
-| VM ops registration | Works | [ ] |
-| CG func registration | Works | [ ] |
+| Extension interface with Opcode | Works | [ ] |
+| Unified registry | Works | [ ] |
+| Build tags entry | Works | [ ] |
+| Auto-registration in DB | Works | [ ] |
+| sqlitevibe_extensions table | Works | [ ] |
 
 ### Phase 2: JSON Extension
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| json_extract | Works | [ ] |
+| json | Works | [ ] |
 | json_array | Works | [ ] |
+| json_extract | Works | [ ] |
+| json_invalid | Works | [ ] |
+| json_isvalid | Works | [ ] |
+| json_length | Works | [ ] |
 | json_object | Works | [ ] |
-| json_valid | Works | [ ] |
-| VM integration | Works | [ ] |
-| CG integration | Works | [ ] |
+| json_quote | Works | [ ] |
+| json_remove | Works | [ ] |
+| json_replace | Works | [ ] |
+| json_set | Works | [ ] |
+| json_type | Works | [ ] |
+| json_update | Works | [ ] |
+| SQLite JSON1 compatibility | Works | [ ] |
 
 ### Phase 3: sqlitevibe_extensions Table
 
@@ -521,8 +574,11 @@ go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
 
 ## Notes
 
-- Build tags enable conditional compilation (like C #ifdef)
-- Extensions can modify VM, CG, and other internals
+- **Unified registration**: Extensions declare Opcodes/Functions in one place
+- No separate ops_*.go or cg_*.go files needed
+- Build tags only for entry point (ext/ext.go)
+- Auto-discovery: Database finds all extensions at init
+- Easy to add new extensions (just add ext/json/, ext/yaml/, etc.)
 - Static linking - extensions compiled into binary
 - Test both with and without build tags
 - Use L2 temp files only for tests
