@@ -159,24 +159,19 @@ Configure extensions at build time using `-tags`:
 
 | Flag | Extensions | Description |
 |------|------------|-------------|
-| (none) | Core only | Basic math (+,-,*,/) only |
 | `SVDB_EXT_JSON` | JSON extension | SQLite JSON1 functions |
-| `SVDB_EXT_MATH` | Math extension | ABS, CEIL, FLOOR, ROUND, POWER, SQRT, MOD, EXP, LN, LOG, etc. |
-| `SVDB_EXT_JSON SVDB_EXT_MATH` | Both | JSON + Math functions |
+| `SVDB_EXT_MATH` | Math extension | ABS, CEIl, FLOOR, ROUND, POWER, SQRT, MOD, EXP, LN, LOG, etc. |
 
 ### Examples
 
 ```bash
-# Default (no extensions)
-go build -o sqlvibe .
-
-# With JSON only
+# With JSON extension
 go build -tags "SVDB_EXT_JSON" -o sqlvibe .
 
-# With Math only
+# With Math extension
 go build -tags "SVDB_EXT_MATH" -o sqlvibe .
 
-# With all extensions
+# With multiple extensions
 go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
 ```
 
