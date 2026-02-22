@@ -119,6 +119,172 @@ func (hs *HybridStore) seqSum(colName string, indices []int) int64 {
 	return s
 }
 
+// ParallelSumInt sums integer values in the named column and returns (sum, hasValue).
+// hasValue is false when there are no non-NULL rows (SQL NULL semantics: SUM of empty = NULL).
+func (hs *HybridStore) ParallelSumInt(colName string) (int64, bool) {
+	indices := hs.rowStore.ScanIndices()
+	colIdx := hs.rowStore.ColIndex(colName)
+	if colIdx < 0 || len(indices) == 0 {
+		return 0, false
+	}
+	hasValue := false
+	var s int64
+	for _, i := range indices {
+		row := hs.rowStore.Get(i)
+		v := row.Get(colIdx)
+		switch v.Type {
+		case TypeInt:
+			s += v.Int
+			hasValue = true
+		case TypeFloat:
+			s += int64(v.Float)
+			hasValue = true
+		}
+	}
+	return s, hasValue
+}
+
+// ParallelSumFloat64 sums numeric values in the named column, returning float64.
+// This handles both integer and floating-point columns correctly.
+func (hs *HybridStore) ParallelSumFloat64(colName string) (float64, bool) {
+	indices := hs.rowStore.ScanIndices()
+	colIdx := hs.rowStore.ColIndex(colName)
+	if colIdx < 0 || len(indices) == 0 {
+		return 0, false
+	}
+	hasValue := false
+	var sum float64
+	for _, i := range indices {
+		row := hs.rowStore.Get(i)
+		v := row.Get(colIdx)
+		switch v.Type {
+		case TypeInt:
+			sum += float64(v.Int)
+			hasValue = true
+		case TypeFloat:
+			sum += v.Float
+			hasValue = true
+		}
+	}
+	return sum, hasValue
+}
+
+// ParallelMinFloat64 returns the minimum numeric value in the named column as float64.
+func (hs *HybridStore) ParallelMinFloat64(colName string) (float64, bool) {
+	indices := hs.rowStore.ScanIndices()
+	colIdx := hs.rowStore.ColIndex(colName)
+	if colIdx < 0 || len(indices) == 0 {
+		return 0, false
+	}
+	hasValue := false
+	var minVal float64
+	for _, i := range indices {
+		row := hs.rowStore.Get(i)
+		v := row.Get(colIdx)
+		var cur float64
+		switch v.Type {
+		case TypeInt:
+			cur = float64(v.Int)
+		case TypeFloat:
+			cur = v.Float
+		default:
+			continue
+		}
+		if !hasValue || cur < minVal {
+			minVal = cur
+			hasValue = true
+		}
+	}
+	return minVal, hasValue
+}
+
+// ParallelMaxFloat64 returns the maximum numeric value in the named column as float64.
+func (hs *HybridStore) ParallelMaxFloat64(colName string) (float64, bool) {
+	indices := hs.rowStore.ScanIndices()
+	colIdx := hs.rowStore.ColIndex(colName)
+	if colIdx < 0 || len(indices) == 0 {
+		return 0, false
+	}
+	hasValue := false
+	var maxVal float64
+	for _, i := range indices {
+		row := hs.rowStore.Get(i)
+		v := row.Get(colIdx)
+		var cur float64
+		switch v.Type {
+		case TypeInt:
+			cur = float64(v.Int)
+		case TypeFloat:
+			cur = v.Float
+		default:
+			continue
+		}
+		if !hasValue || cur > maxVal {
+			maxVal = cur
+			hasValue = true
+		}
+	}
+	return maxVal, hasValue
+}
+
+// ParallelMinInt returns the minimum int64 value in the named column, or (0, false) when the column is empty.
+func (hs *HybridStore) ParallelMinInt(colName string) (int64, bool) {
+	indices := hs.rowStore.ScanIndices()
+	colIdx := hs.rowStore.ColIndex(colName)
+	if colIdx < 0 || len(indices) == 0 {
+		return 0, false
+	}
+	hasValue := false
+	var minVal int64
+	for _, i := range indices {
+		row := hs.rowStore.Get(i)
+		v := row.Get(colIdx)
+		var cur int64
+		switch v.Type {
+		case TypeInt:
+			cur = v.Int
+		case TypeFloat:
+			cur = int64(v.Float)
+		default:
+			continue
+		}
+		if !hasValue || cur < minVal {
+			minVal = cur
+			hasValue = true
+		}
+	}
+	return minVal, hasValue
+}
+
+// ParallelMaxInt returns the maximum int64 value in the named column, or (0, false) when the column is empty.
+func (hs *HybridStore) ParallelMaxInt(colName string) (int64, bool) {
+	indices := hs.rowStore.ScanIndices()
+	colIdx := hs.rowStore.ColIndex(colName)
+	if colIdx < 0 || len(indices) == 0 {
+		return 0, false
+	}
+	hasValue := false
+	var maxVal int64
+	for _, i := range indices {
+		row := hs.rowStore.Get(i)
+		v := row.Get(colIdx)
+		var cur int64
+		switch v.Type {
+		case TypeInt:
+			cur = v.Int
+		case TypeFloat:
+			cur = int64(v.Float)
+		default:
+			continue
+		}
+		if !hasValue || cur > maxVal {
+			maxVal = cur
+			hasValue = true
+		}
+	}
+	return maxVal, hasValue
+}
+
 // ParallelScan returns all live rows using parallel goroutines for large datasets.
 func (hs *HybridStore) ParallelScan() [][]Value {
 	indices := hs.rowStore.ScanIndices()

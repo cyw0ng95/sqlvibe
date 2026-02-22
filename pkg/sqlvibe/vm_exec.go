@@ -10,6 +10,7 @@ import (
 	"github.com/sqlvibe/sqlvibe/internal/QP"
 	"github.com/sqlvibe/sqlvibe/internal/SF/util"
 	"github.com/sqlvibe/sqlvibe/internal/VM"
+	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe/storage"
 )
 
 func (db *Database) ExecVM(sql string) (*Rows, error) {
@@ -394,6 +395,12 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		if len(starCols) > 0 {
 			return db.execSelectStarFast(db.data[tableName], starCols), nil
 		}
+	}
+
+	// Fast path: simple aggregate (COUNT(*), SUM, MIN, MAX) without JOIN/GROUP BY.
+	// Routes directly to HybridStore vectorized aggregates, bypassing VM.
+	if rows := db.tryAggregateFastPath(stmt); rows != nil {
+		return rows, nil
 	}
 
 	// Get table column order for proper column mapping
@@ -865,6 +872,132 @@ func isSimpleSelectStar(stmt *QP.SelectStmt) bool {
 	}
 	cr, ok := stmt.Columns[0].(*QP.ColumnRef)
 	return ok && cr.Name == "*" && cr.Table == ""
+}
+
+// isSimpleAggregate reports whether stmt is a simple single-aggregate query
+// (COUNT(*), SUM(col), MIN(col), MAX(col)) with no JOIN, GROUP BY, HAVING,
+// DISTINCT, or subquery in FROM.  Returns the aggregate name and column name.
+func isSimpleAggregate(stmt *QP.SelectStmt) (funcName string, colName string, ok bool) {
+	if stmt == nil || stmt.From == nil {
+		return
+	}
+	if stmt.From.Join != nil || stmt.From.Subquery != nil {
+		return
+	}
+	if stmt.GroupBy != nil || stmt.Having != nil || stmt.Distinct {
+		return
+	}
+	if stmt.Where != nil {
+		return
+	}
+	if len(stmt.Columns) != 1 {
+		return
+	}
+	fc, isFc := stmt.Columns[0].(*QP.FuncCall)
+	if !isFc || fc.Distinct {
+		return
+	}
+	upper := strings.ToUpper(fc.Name)
+	switch upper {
+	case "COUNT":
+		// Only fast-path COUNT(*) — COUNT(col) must skip NULLs, handled by VM.
+		if len(fc.Args) == 0 {
+			return "COUNT", "*", true
+		}
+		if len(fc.Args) == 1 {
+			if cr, ok2 := fc.Args[0].(*QP.ColumnRef); ok2 && cr.Name == "*" {
+				return "COUNT", "*", true
+			}
+		}
+	case "SUM", "MIN", "MAX":
+		if len(fc.Args) == 1 {
+			if cr, ok2 := fc.Args[0].(*QP.ColumnRef); ok2 {
+				return upper, cr.Name, true
+			}
+		}
+	}
+	return
+}
+
+// tryAggregateFastPath handles simple COUNT(*)/SUM/MIN/MAX queries by routing
+// directly to HybridStore, bypassing VM compilation.  Returns nil when the
+// fast path does not apply (caller should fall through to the VM).
+func (db *Database) tryAggregateFastPath(stmt *QP.SelectStmt) *Rows {
+	funcName, colName, ok := isSimpleAggregate(stmt)
+	if !ok {
+		return nil
+	}
+	tableName := stmt.From.Name
+	if tableName == "" {
+		return nil
+	}
+	hs := db.GetHybridStore(tableName)
+	if hs == nil {
+		return nil
+	}
+	colLabel := funcName + "(" + colName + ")"
+	if colName == "*" {
+		colLabel = "COUNT(*)"
+	}
+	switch funcName {
+	case "COUNT":
+		count := hs.ParallelCount()
+		return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{count}}}
+	case "SUM":
+		colType := hs.ColType(colName)
+		// Only fast-path known numeric types; TEXT columns may hold numbers but
+		// their registered type is TEXT (e.g. materialised derived tables).
+		if colType == storage.TypeFloat {
+			sum, hasV := hs.ParallelSumFloat64(colName)
+			if !hasV {
+				return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
+			}
+			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{sum}}}
+		}
+		if colType != storage.TypeInt {
+			return nil // Fall through to VM for TEXT/NULL columns.
+		}
+		sum, hasV := hs.ParallelSumInt(colName)
+		if !hasV {
+			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
+		}
+		return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{sum}}}
+	case "MIN":
+		colType := hs.ColType(colName)
+		if colType == storage.TypeFloat {
+			v, hasV := hs.ParallelMinFloat64(colName)
+			if !hasV {
+				return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
+			}
+			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
+		}
+		if colType != storage.TypeInt {
+			return nil
+		}
+		v, hasV := hs.ParallelMinInt(colName)
+		if !hasV {
+			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
+		}
+		return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
+	case "MAX":
+		colType := hs.ColType(colName)
+		if colType == storage.TypeFloat {
+			v, hasV := hs.ParallelMaxFloat64(colName)
+			if !hasV {
+				return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
+			}
+			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
+		}
+		if colType != storage.TypeInt {
+			return nil
+		}
+		v, hasV := hs.ParallelMaxInt(colName)
+		if !hasV {
+			return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{nil}}}
+		}
+		return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
+	}
+	return nil
 }
 
 // execSelectStarFast materialises all rows of a single table without running
