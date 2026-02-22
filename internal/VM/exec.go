@@ -17,7 +17,9 @@ import (
 
 // MaxVMIterations is the maximum number of VM instructions that can be executed
 // before the VM panics with an assertion error. This prevents infinite loops.
-const MaxVMIterations = 1000000
+// Set to 100 million to accommodate large multi-table JOIN queries (e.g. a
+// 3-table nested-loop join on 1,000-row tables requires ~1M iterations).
+const MaxVMIterations = 100000000
 
 func (vm *VM) Exec(ctx interface{}) error {
 	iterationCount := 0

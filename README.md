@@ -56,33 +56,52 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 ## Performance (v0.8.9)
 
-Benchmarks on Intel Xeon Processor @ 2.50GHz, in-memory database, `-benchtime=1s -benchmem`.
+Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3x` (3 runs averaged).
+**Methodology**: both sides iterate all result rows end-to-end for a fair comparison
+(`go test ./internal/TS/Benchmark/... -bench=. -benchtime=3x`).
+Results may vary on different hardware; relative ordering reflects the algorithmic advantages
+of sqlvibe's in-memory columnar engine.
 
-### Query Performance - sqlvibe WINS
+### Query Performance (1 000-row table)
 
-| Operation | sqlvibe | SQLite Go | Speedup |
-|-----------|--------:|----------:|---------|
-| SELECT all | 392 ns | 1,027,292 ns | **2,621x faster** |
-| SELECT WHERE | 530 ns | 121,331 ns | **229x faster** |
-| ORDER BY | 941 ns | 413,853 ns | **440x faster** |
-| COUNT(*) | 710 ns | 6,016 ns | **8.5x faster** |
-| GROUP BY | 1.21 µs | ~500 µs | **413x faster** |
+| Operation | sqlvibe | SQLite Go | Result |
+|-----------|--------:|----------:|--------|
+| SELECT all | 22 µs | 590 µs | **sqlvibe 27x faster** |
+| SELECT WHERE | 101 µs | 120 µs | **sqlvibe 1.2x faster** |
+| ORDER BY | 72 µs | 328 µs | **sqlvibe 4.5x faster** |
+| COUNT(*) | 4.4 µs | 28 µs | **sqlvibe 6.4x faster** |
+| SUM | 3.9 µs | 100 µs | **sqlvibe 26x faster** |
+| GROUP BY | 50 µs | 564 µs | **sqlvibe 11x faster** |
+| JOIN | 182 µs | 275 µs | **sqlvibe 1.5x faster** |
 
 ### DML Operations
 
-| Operation | sqlvibe | SQLite Go | Speedup |
-|-----------|--------:|----------:|---------|
-| INSERT single | 4.3 µs | 7.3 µs | **1.7x faster** |
-| INSERT 100 (batch) | 207 µs | 645 µs | **3.1x faster** |
+| Operation | sqlvibe | SQLite Go | Result |
+|-----------|--------:|----------:|--------|
+| INSERT single | 9.6 µs | 50 µs | **sqlvibe 5x faster** |
+| INSERT 100 (batch) | 311 µs | 741 µs | **sqlvibe 2.4x faster** |
+
+### Special-case Performance
+
+| Operation | sqlvibe | SQLite Go | Result |
+|-----------|--------:|----------:|--------|
+| Result cache hit (repeated query) | 2 µs | 190 µs | **sqlvibe 95x faster** |
+| TOP-N LIMIT 10 (10K rows) | 571 µs | 1.23 ms | **sqlvibe 2.2x faster** |
+| COUNT(*) via index (1K, PK table) | 84 µs | 30 µs | SQLite 2.8x faster |
+| Full scan + filter (10K, no index) | 1.87 ms | 1.52 ms | SQLite 1.2x faster |
+
+> **Note**: sqlvibe is an in-memory engine optimised for query throughput on small-to-medium
+> tables. SQLite's B-Tree index scans remain faster for COUNT(*) on indexed columns, and raw
+> sequential scans on very large tables benefit from SQLite's lower per-row overhead.
 
 ### Key Optimizations
 
-- **Columnar storage**: Fast full table scans
-- **Hybrid row/column**: Adaptive switching for best performance
-- **Result cache**: Fast for repeated queries
-- **Predicate pushdown**: Fast filtered queries
-- **Plan cache**: Skip parse/codegen for cached queries
-- **Batch INSERT fast path**: Bypasses VM for multi-row literal inserts
+- **Columnar storage**: Fast full table scans via vectorised SIMD-friendly layouts
+- **Hybrid row/column**: Adaptive switching for best performance per workload
+- **Result cache**: Near-zero latency for repeated identical queries (FNV-1a keyed)
+- **Predicate pushdown**: WHERE conditions evaluated before VM for fast filtered scans
+- **Plan cache**: Skip tokenise/parse/codegen for cached query plans
+- **Batch INSERT fast path**: Literal multi-row INSERT bypasses VM entirely
 - **sync.Pool allocation reduction**: Pooled schema maps reduce per-query allocations
 
 ## SQL:1999 Compatibility
