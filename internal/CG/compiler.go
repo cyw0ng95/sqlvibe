@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	QP "github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
-	VM "github.com/sqlvibe/sqlvibe/internal/VM"
+	QP "github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
+	VM "github.com/cyw0ng95/sqlvibe/internal/VM"
 )
 
 type Compiler struct {

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sqlvibe/sqlvibe/internal/SF/vfs"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/vfs"
 )
 
 // MemoryVFS implements an in-memory VFS for testing and :memory: databases

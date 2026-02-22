@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sqlvibe/sqlvibe/internal/CG"
-	"github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/VM"
+	"github.com/cyw0ng95/sqlvibe/internal/CG"
+	"github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/VM"
 )
 
 func (db *Database) handleExplain(stmt *QP.ExplainStmt, sql string) (*Rows, error) {

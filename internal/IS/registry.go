@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sqlvibe/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
 )
 
 // Registry manages all information_schema views

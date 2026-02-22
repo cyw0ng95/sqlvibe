@@ -3,7 +3,7 @@ package sqlvibe
 import (
 	"strings"
 
-	"github.com/sqlvibe/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
 )
 
 // VectorizedFilter applies op against val across all non-null rows of col and

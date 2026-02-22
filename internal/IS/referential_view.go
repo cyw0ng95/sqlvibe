@@ -3,7 +3,7 @@ package IS
 import (
 	"database/sql"
 
-	"github.com/sqlvibe/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
 )
 
 // REFERENTIALView provides information_schema.referential_constraints virtual table

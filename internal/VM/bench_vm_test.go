@@ -3,8 +3,8 @@ package VM_test
 import (
 	"testing"
 
-	VM "github.com/sqlvibe/sqlvibe/internal/VM"
-	"github.com/sqlvibe/sqlvibe/internal/VM/benchdata"
+	VM "github.com/cyw0ng95/sqlvibe/internal/VM"
+	"github.com/cyw0ng95/sqlvibe/internal/VM/benchdata"
 )
 
 // BenchmarkVM_ArithmeticOps measures basic arithmetic instruction throughput.

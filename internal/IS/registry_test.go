@@ -3,7 +3,7 @@ package IS
 import (
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
 )
 
 func TestRegistry_Creation(t *testing.T) {

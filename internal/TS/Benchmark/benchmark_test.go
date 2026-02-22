@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
+	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // openDB opens an in-memory sqlvibe database for benchmarking.

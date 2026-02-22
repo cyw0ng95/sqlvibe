@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sqlvibe/sqlvibe/internal/QP"
-	"github.com/sqlvibe/sqlvibe/internal/TM"
+	"github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/TM"
 )
 
 func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
-	"github.com/sqlvibe/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
 )
 
 // -----------------------------------------------------------------

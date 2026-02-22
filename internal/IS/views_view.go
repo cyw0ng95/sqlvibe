@@ -3,7 +3,7 @@ package IS
 import (
 	"database/sql"
 
-	"github.com/sqlvibe/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
 )
 
 // VIEWSView provides the information_schema.views virtual table

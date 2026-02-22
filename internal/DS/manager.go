@@ -1,7 +1,7 @@
 package DS
 
 import (
-	"github.com/sqlvibe/sqlvibe/internal/PB"
+	"github.com/cyw0ng95/sqlvibe/internal/PB"
 )
 
 type PageManager struct {

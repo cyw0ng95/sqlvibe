@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/QP"
 )
 
 // mergedRowPool is a pool of map[string]interface{} objects used as scratch

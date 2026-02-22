@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 // prefetchWorkerPool is a shared worker pool used for async page prefetching.

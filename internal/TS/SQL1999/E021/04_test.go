@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/internal/TS/SQL1999"
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
+	"github.com/cyw0ng95/sqlvibe/internal/TS/SQL1999"
+	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 func TestSQL1999_F301_E02104_L1(t *testing.T) {

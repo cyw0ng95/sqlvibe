@@ -3,7 +3,7 @@ package sqlvibe
 import (
 	"fmt"
 
-	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/QP"
 )
 
 func (db *Database) applySetOp(left, right [][]interface{}, op string, all bool) [][]interface{} {

@@ -3,8 +3,8 @@ package CG
 import (
 	"sort"
 
-	QP "github.com/sqlvibe/sqlvibe/internal/QP"
-	VM "github.com/sqlvibe/sqlvibe/internal/VM"
+	QP "github.com/cyw0ng95/sqlvibe/internal/QP"
+	VM "github.com/cyw0ng95/sqlvibe/internal/VM"
 )
 
 type Optimizer struct{}

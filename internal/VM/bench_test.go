@@ -3,8 +3,8 @@ package VM_test
 import (
 	"testing"
 
-	CG "github.com/sqlvibe/sqlvibe/internal/CG"
-	VM "github.com/sqlvibe/sqlvibe/internal/VM"
+	CG "github.com/cyw0ng95/sqlvibe/internal/CG"
+	VM "github.com/cyw0ng95/sqlvibe/internal/VM"
 )
 
 func BenchmarkCompileSelect(b *testing.B) {

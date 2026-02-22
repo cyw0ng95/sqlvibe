@@ -3,7 +3,7 @@ package IS
 import (
 	"fmt"
 	
-	"github.com/sqlvibe/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
 )
 
 // SchemaParser extracts schema metadata from sqlite_master table

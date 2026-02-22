@@ -30,7 +30,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sqlvibe/sqlvibe/pkg/sqlvibe"
+	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // record is a single parsed test record.

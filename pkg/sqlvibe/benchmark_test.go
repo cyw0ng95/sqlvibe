@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sqlvibe/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/QP"
 )
 
 func BenchmarkCreateTable(b *testing.B) {

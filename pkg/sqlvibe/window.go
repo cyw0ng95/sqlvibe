@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	QP "github.com/sqlvibe/sqlvibe/internal/QP"
+	QP "github.com/cyw0ng95/sqlvibe/internal/QP"
 )
 
 // windowFuncInfo tracks a window function column position and its definition.

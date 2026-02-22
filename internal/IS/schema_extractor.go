@@ -1,7 +1,7 @@
 package IS
 
 import (
-	"github.com/sqlvibe/sqlvibe/internal/DS"
+	"github.com/cyw0ng95/sqlvibe/internal/DS"
 )
 
 // SchemaExtractor extracts table and column metadata from BTree schema

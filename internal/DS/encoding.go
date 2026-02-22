@@ -8,7 +8,7 @@ import (
 	"math/bits"
 	"sync"
 
-	"github.com/sqlvibe/sqlvibe/internal/SF/util"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 // Varint encoding/decoding following SQLite format
