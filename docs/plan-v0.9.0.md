@@ -903,7 +903,37 @@ func IsPushableExpr(expr Expr) bool {
 | Constant Folding | P2 | 6h | VM-level: arithmetic on consts folded |
 | BETWEEN Pushdown | P2 | 4h | Pre-VM BETWEEN evaluation |
 
-**Total for Performance**: ~25h
+---
+
+### Additional Optimizations
+
+| # | Optimization | Difficulty | Expected Impact |
+|---|-------------|------------|-----------------|
+| 1 | Container Cardinality | Medium | 10x for COUNT(*) |
+| 2 | Constant Folding | Easy | 5x for constant expressions |
+| 3 | Expression Memoization | Medium | 30% for complex WHERE |
+| 4 | Batch INSERT | Easy | 5x for bulk loads |
+| 5 | Early Termination | Easy | 50% for LIMIT queries |
+| 6 | Index Skip Scan | Medium | 50% for leading column skip |
+| 7 | Index Merge | Medium | 30% for OR conditions |
+| 8 | Partial Index | Medium | 50% smaller indexes |
+| 9 | Covering Index | Easy | 30% faster reads |
+| 10 | Composite Index Reorder | Easy | Better index usage |
+| 11 | Slab Allocator | Medium | 40% less GC |
+| 12 | Row Buffer Pool | Medium | 20% faster all queries |
+| 13 | String Interning | Medium | 40% less memory |
+| 14 | Column Projection | Easy | 60% less memory |
+| 15 | Bloom Filter JOIN | Medium | 50% for large JOINs |
+| 16 | Batch Key Access | Medium | 30% for indexed JOINs |
+| 17 | Join Reordering | Hard | 20% for multi-table JOINs |
+| 18 | Predicate Pushdown | Easy | 15% for subqueries |
+| 19 | Subquery Flattening | Medium | 30% for IN/EXISTS |
+| 20 | Materialization Cache | Easy | 20% for repeated CTEs |
+| 21 | Branch Prediction | Easy | 15% faster branches |
+| 22 | Pre-sized Slices | Easy | 30% less allocation |
+| 23 | Inline Functions | Easy | 15% faster execution |
+
+**Total for Performance**: ~25h + additional optimizations
 
 ---
 
