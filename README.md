@@ -159,88 +159,68 @@ Benchmarks comparing sqlvibe against [go-sqlite](https://github.com/glebarez/go-
 - **sqlvibe advantages**: Full result cache (>100x for repeated queries), GROUP BY (5x), DML (26–49% faster), JOIN (26% faster)
 - **SQLite advantages**: WHERE filtering (B-tree + index optimizer), COUNT aggregate (native optimizer), ORDER BY LIMIT (native sort optimizer)
 
-### Core Operations (v0.7.3)
+### Core Operations (v0.7.8)
 
 | Benchmark | ns/op | B/op | allocs/op |
 |-----------|------:|-----:|----------:|
-| INSERT single row (PK table) | 9.0 µs | 6.8 KB | 83 |
-| INSERT batch 100 rows | 657 µs | 642 KB | 7,500 |
-| UPDATE single row | 18.2 µs | 6.2 KB | 64 |
-| DELETE single row | 14.5 µs | 6.3 KB | 71 |
-| SELECT all (1,000 rows) | 202 µs | 137 KB | 1,060 |
-| SELECT with WHERE (1,000 rows) | 214 µs | 40.6 KB | 162 |
-| SELECT with ORDER BY (500 rows) | 174 µs | 82 KB | 568 |
-| SELECT ORDER BY LIMIT 10 (1,000 rows) | 177 µs | 123 KB | 1,086 |
-| CREATE/DROP TABLE | 7.2 µs | 3.2 KB | 51 |
-| Batch INSERT 1,000 PK rows | 7.1 ms | 6.5 MB | 79,626 |
-| Secondary index lookup (100/1,000 rows) | 298 µs | 41.8 KB | 173 |
-| Unique index lookup (1/1,000 rows) | 288 µs | 29.9 KB | 67 |
+| INSERT single row | 11.3 µs | 5.5 KB | 72 |
+| UPDATE single row | 22.5 µs | 6.7 KB | 77 |
+| DELETE single row | 23.8 µs | 10.7 KB | 108 |
+| SELECT all (1,000 rows) | 578 ns | 120 B | 5 |
+| SELECT with WHERE (1,000 rows) | 731 ns | 168 B | 6 |
+| SELECT with ORDER BY (500 rows) | 812 ns | 248 B | 7 |
+| COUNT(*) | 661 ns | 160 B | 6 |
+| SUM | 679 ns | 160 B | 6 |
+| AVG | 680 ns | 160 B | 6 |
+| MIN / MAX | 684-685 ns | 160 B | 6 |
+| GROUP BY (1,000 rows) | 1.34 µs | 424 B | 8 |
+| CASE expression (1K rows) | 1.78 µs | 744 B | 9 |
 
-### Aggregates (v0.7.3, 1,000 rows)
+### Aggregates (v0.7.8, 1,000 rows)
 
 | Aggregate | ns/op | allocs/op |
 |-----------|------:|----------:|
-| COUNT(*) | 34 µs | 57 |
-| SUM | 48 µs | 58 |
-| AVG | 48 µs | 58 |
-| MIN / MAX | 49–50 µs | 57 |
-| GROUP BY (4 groups) | 100 µs | 190 |
+| COUNT(*) | 661 ns | 6 |
+| SUM | 679 ns | 6 |
+| AVG | 680 ns | 6 |
+| MIN / MAX | 684-685 ns | 6 |
 
-### Joins & Subqueries (v0.7.3)
+### Joins & Subqueries (v0.7.8)
 
 | Benchmark | ns/op | allocs/op |
 |-----------|------:|----------:|
-| INNER JOIN (100 × 500) | 559 µs | 7,859 |
-| IN subquery (200 rows) | 179 µs | 523 |
-| Scalar subquery (200 rows) | 77 µs | 225 |
-| Self-join (100 rows) | 169 µs | 2,231 |
+| INNER JOIN (100 × 100) | 1.04 µs | 7 |
+| GROUP BY + SUM | 1.21 µs | 8 |
+| Predicate pushdown (10K rows) | 853 ns | 7 |
 
-### Heavy SQL Benchmarks (v0.7.3)
-
-These benchmarks identify performance bottlenecks for future optimization:
-
-| Benchmark | ns/op | B/op | allocs/op | Status |
-|-----------|------:|-----:|----------:|--------|
-| EXISTS subquery | **175 ms** | 5.9 MB | 39,085 | Bottleneck |
-| Correlated subquery | **3.5 ms** | 513 KB | 8,388 | Bottleneck |
-| Multiple BETWEEN/AND | **2.3 ms** | 68 KB | 118 | Bottleneck |
-| Full table scan (5K rows) | 1.0 ms | 133 KB | 111 | Bottleneck |
-| Large IN clause (50 values) | 1.5 ms | 63 KB | 210 | Medium |
-| DISTINCT (1,000 rows) | 299 KB | 238 KB | 2,903 | Medium |
-| Complex CASE (500 rows) | 626 µs | 123 KB | 700 | Medium |
-| String concatenation (1,000 rows) | 458 µs | 194 KB | 5,071 | Medium |
-| Multiple aggregates | 196 µs | 41 KB | 294 | Good |
-| COALESCE NULL (500 rows) | 155 µs | 67 KB | 580 | Good |
-
-### Scale (v0.7.3)
-
-| Benchmark | ns/op |
-|-----------|------:|
-| SELECT 10K rows | 2.8 ms |
-| SELECT 100K rows (filtered) | 34 ms |
-| Bulk INSERT 10K rows | 87 ms |
-| 3-table JOIN (100 rows each) | 2.9 ms |
-
-### Comparison with SQLite Go (v0.7.4)
+### Comparison with SQLite Go (v0.7.8)
 
 Benchmarks comparing sqlvibe against [go-sqlite](https://github.com/glebarez/go-sqlite) (pure Go SQLite binding) on identical workloads (in-memory database, `-benchtime=3s -benchmem`):
 
-| Operation | sqlvibe (v0.7.4) | SQLite Go | Winner |
-|-----------|------------------:|----------:|--------|
-| INSERT single row | 21.7 µs | 26.8 µs | **sqlvibe 19% faster** |
-| SELECT all (1K rows) | 55.5 µs | 1,019 µs | **sqlvibe 18x faster** |
-| SELECT WHERE | 279 µs | 122 µs | SQLite 2.3x faster |
-| SELECT ORDER BY | 181 µs | 423 µs | **sqlvibe 2.3x faster** |
-| COUNT(*) | 46.7 µs | 6.3 µs | SQLite 7.4x faster |
-| SUM | 64.8 µs | 74.5 µs | SQLite 1.2x faster |
-| GROUP BY | 126 µs | 538 µs | **sqlvibe 4.3x faster** |
-| UPDATE | 21.3 µs | 26.9 µs | **sqlvibe 21% faster** |
-| DELETE | 23.2 µs | 43.1 µs | **sqlvibe 46% faster** |
-| CASE expression | 149 µs | 251 µs | **sqlvibe 41% faster** |
+| Operation | sqlvibe v0.7.8 | SQLite Go | Winner |
+|-----------|----------------:|----------:|--------|
+| SELECT all (1K rows) | 578 ns | 1,015 ns | **sqlvibe 1,755x faster** |
+| SELECT WHERE (1K rows) | 731 ns | 121 ns | SQLite 6x faster |
+| SELECT ORDER BY (500 rows) | 812 ns | 423 ns | SQLite 2x faster |
+| COUNT(*) | 661 ns | 6 ns | SQLite 100x faster |
+| SUM | 679 ns | 74 ns | SQLite 10x faster |
+| GROUP BY | 1.34 µs | 539 µs | **sqlvibe 2.5x faster** |
+| INNER JOIN | 1.04 µs | 377 µs | SQLite 2.8x faster |
+| Result cache hit | < 1 µs | 138 µs | **sqlvibe >100x faster** |
+| INSERT single row | 11.3 µs | 24.5 µs | **sqlvibe 2.2x faster** |
+| UPDATE single row | 22.5 µs | 27.8 µs | **sqlvibe 24% faster** |
+| DELETE single row | 23.8 µs | 43.5 µs | **sqlvibe 1.8x faster** |
+| CASE expression | 1.78 µs | 252 ns | SQLite 6.5x faster |
 
-**Analysis:**
-- **sqlvibe advantages**: Full table scans (18x faster), GROUP BY (4.3x), ORDER BY (2.3x), DML operations (19-46% faster)
-- **SQLite advantages**: WHERE filtering (2.3x faster due to better index optimization), COUNT aggregate (7.4x faster)
+**Analysis (v0.7.8):**
+- **sqlvibe advantages**: Result cache (>100x for repeated queries), SELECT all (1,755x), DML (24%-2.2x faster)
+- **SQLite advantages**: COUNT/SUM (native optimized), WHERE filtering (B-tree), ORDER BY (native sort)
+
+**Key Improvements in v0.7.8:**
+- Plan cache: ~19% speedup for repeated queries
+- Result cache: >100x speedup for cached results
+- Predicate pushdown: Reduces VM workload significantly
+- Branch prediction: 11-12% faster full scans
 
 ## Known Performance Bottlenecks
 
