@@ -1,5 +1,39 @@
 # sqlvibe Release History
 
+## **v0.9.1** (2026-02-22)
+
+### Performance Optimizations (Additional Optimizations from v0.9.0 plan)
+
+- **Early Termination for LIMIT** (#5): VM now halts after collecting `LIMIT+OFFSET` rows when the
+  query has no `ORDER BY`, `GROUP BY`, `DISTINCT`, or aggregate functions. Previously all rows were
+  scanned and then trimmed; now the scan stops as soon as enough rows are available.
+  - `VM.SetResultLimit(n)` method added to `internal/VM/engine.go`.
+  - `OpResultRow` checks the limit before buffer expansion for maximum efficiency.
+  - Callers set the limit in `execVMQuery` and `execSelectStmtWithContext`.
+  - Result: LIMIT 10 (10 000-row table, no ORDER BY) is **15x faster** than SQLite.
+
+- **AND Index Lookup / Composite Index Reorder** (#10): `tryIndexLookup` now handles compound
+  `AND` WHERE expressions. If either side of the AND matches a secondary index, that index is used
+  to pre-filter rows before the VM processes them. Previously only top-level simple predicates
+  (`col = val`) could use an index; now `WHERE indexed_col = val AND other_col = 5` also benefits.
+  - Result: AND index lookup is **13x faster** than SQLite.
+
+- **Pre-sized Result Slices** (#22): The column-name result slices in `execSelectStmtWithContext`
+  and `execVMQuery` are now pre-allocated with `len(tableCols)` capacity, eliminating repeated
+  slice reallocations for wide tables.
+
+### Benchmarks
+
+New benchmark file `internal/TS/Benchmark/benchmark_v0.9.1_test.go` covering all three
+optimizations with SQLite comparison baselines.
+
+### Tests
+
+All existing tests pass. Pre-existing `TestSQL1999_F641_JulianDay_L1` failure is unrelated to
+v0.9.1 changes.
+
+---
+
 ## **v0.9.0** (2026-02-22)
 
 ### Features

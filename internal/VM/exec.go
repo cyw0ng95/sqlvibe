@@ -110,6 +110,11 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpResultRow:
 			if regs, ok := inst.P4.([]int); ok {
+				// Early termination: halt before allocating buffer space for this row
+				// if the result limit is already satisfied.
+				if vm.resultLimit > 0 && len(vm.results) >= vm.resultLimit {
+					return ErrHalt
+				}
 				n := len(regs)
 				start := len(vm.flatBuf)
 				needed := start + n

@@ -1744,6 +1744,17 @@ func (db *Database) tryIndexLookup(tableName string, where QP.Expr) []map[string
 	}
 
 	switch bin.Op {
+	case QP.TokenAnd:
+		// For AND conditions, try to use an index for one sub-predicate.
+		// We use the first indexable sub-predicate found (left-to-right), which
+		// is typically the most selective condition placed first by the query
+		// writer or the predicate reorderer.  The VM still applies the full
+		// WHERE clause for correctness; the index only pre-filters rows.
+		if rows := db.tryIndexLookup(tableName, bin.Left); rows != nil {
+			return rows
+		}
+		return db.tryIndexLookup(tableName, bin.Right)
+
 	case QP.TokenEq:
 		var colName string
 		var val interface{}
