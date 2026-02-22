@@ -246,7 +246,9 @@ func (cg *Compiler) reorderPredicates(exprs []Expr) []Expr {
 ```
 pkg/sqlvibe/
 ├── storage/
-│   └── column_store.go     # Update: vectorized filter
+│   ├── column_store.go     # Update: vectorized filter
+│   ├── parallel.go          # NEW: parallel scan/aggregate
+│   └── worker_pool.go      # NEW: thread pool
 ├── exec_columnar.go        # Update: new columnar execution
 └── vm_exec.go             # Update: integrate columnar path
 
@@ -297,7 +299,197 @@ internal/CG/
 - [ ] Reorder predicates in CG
 - [ ] Benchmark: Multi-predicate WHERE
 
-### Phase 6: Validation
+### Phase 6: Multi-Core Parallelization
+
+#### 6.1 Core Detection
+
+Detect available CPU cores at startup:
+
+```go
+import "runtime"
+
+var numCores int
+
+func init() {
+    numCores = runtime.GOMAXPROCS(0)
+}
+
+func GetNumCores() int {
+    return numCores
+}
+```
+
+#### 6.2 Adaptive Parallel Threshold
+
+Automatically use parallel processing when dataset > threshold:
+
+```go
+const (
+    ParallelThreshold = 10000  // Use parallel if > 10K rows
+    MinPartitionSize = 1000   // Minimum rows per partition
+)
+
+func shouldParallelize(rowCount int) bool {
+    return rowCount > ParallelThreshold && numCores > 1
+}
+
+func getNumWorkers(rowCount int) int {
+    if rowCount < ParallelThreshold {
+        return 1
+    }
+    maxWorkers := rowCount / MinPartitionSize
+    if maxWorkers > numCores {
+        maxWorkers = numCores
+    }
+    return maxWorkers
+}
+```
+
+#### 6.3 Parallel Column Aggregation
+
+```go
+func (hs *HybridStore) ParallelSum(col string) int64 {
+    numWorkers := getNumWorkers(hs.RowCount())
+    if numWorkers == 1 {
+        return hs.Sum(col) // Single-core fallback
+    }
+    
+    partitionSize := hs.RowCount() / numWorkers
+    partialSums := make(chan int64, numWorkers)
+    
+    var wg sync.WaitGroup
+    for i := 0; i < numWorkers; i++ {
+        wg.Add(1)
+        go func(workerID int) {
+            defer wg.Done()
+            start := workerID * partitionSize
+            end := start + partitionSize
+            if workerID == numWorkers-1 {
+                end = hs.RowCount() // Last partition gets remainder
+            }
+            partialSums <- hs.sumRange(col, start, end)
+        }(i)
+    }
+    
+    wg.Wait()
+    close(partialSums)
+    
+    var total int64
+    for sum := range partialSums {
+        total += sum
+    }
+    return total
+}
+```
+
+#### 6.4 Parallel Table Scan
+
+```go
+func (hs *HybridStore) ParallelScan() [][]interface{} {
+    numWorkers := getNumWorkers(hs.RowCount())
+    if numWorkers == 1 {
+        return hs.Scan()
+    }
+    
+    partitionSize := hs.RowCount() / numWorkers
+    results := make(chan [][]interface{}, numWorkers)
+    
+    var wg sync.WaitGroup
+    for i := 0; i < numWorkers; i++ {
+        wg.Add(1)
+        go func(workerID int) {
+            defer wg.Done()
+            start := workerID * partitionSize
+            end := start + partitionSize
+            if workerID == numWorkers-1 {
+                end = hs.RowCount()
+            }
+            results <- hs.scanRange(start, end)
+        }(i)
+    }
+    
+    wg.Wait()
+    close(results)
+    
+    // Merge results
+    var merged [][]interface{}
+    for partition := range results {
+        merged = append(merged, partition...)
+    }
+    return merged
+}
+```
+
+#### 6.5 Parallel Hash Join
+
+```go
+func ParallelHashJoin(a, b *HybridStore, key string) []Row {
+    numWorkers := getNumWorkers(a.RowCount() + b.RowCount())
+    if numWorkers == 1 {
+        return hashJoinSequential(a, b, key)
+    }
+    
+    // Partition by hash
+    aParts := partitionByHash(a, numWorkers)
+    bParts := partitionByHash(b, numWorkers)
+    
+    results := make(chan []Row, numWorkers)
+    var wg sync.WaitGroup
+    
+    for i := 0; i < numWorkers; i++ {
+        wg.Add(1)
+        go func(i int) {
+            defer wg.Done()
+            results <- hashJoinPartition(aParts[i], bParts[i], key)
+        }(i)
+    }
+    
+    wg.Wait()
+    close(results)
+    
+    // Merge
+    var merged []Row
+    for r := range results {
+        merged = append(merged, r...)
+    }
+    return merged
+}
+```
+
+#### 6.6 Work Stealing Thread Pool
+
+For concurrent query execution:
+
+```go
+type WorkerPool struct {
+    workers  int
+    tasks    chan func()
+    results  chan interface{}
+}
+
+func NewWorkerPool(workers int) *WorkerPool {
+    return &WorkerPool{
+        workers: workers,
+        tasks:   make(chan func(), 1000),
+        results: make(chan interface{}, 100),
+    }
+}
+
+func (wp *WorkerPool) Submit(task func()) {
+    wp.tasks <- task
+}
+```
+
+#### 6.7 Benchmark Requirements
+
+| Benchmark | Target | vs Single-Core |
+|-----------|--------|---------------|
+| Parallel COUNT 100K | < 5 ms | 4x faster |
+| Parallel SUM 100K | < 6 ms | 4x faster |
+| Parallel Scan 100K | < 10 ms | 4x faster |
+| Parallel JOIN | < 20 ms | 3x faster |
+
+### Phase 7: Validation
 - [ ] Run full SQL:1999 test suite
 - [ ] Run SQLite comparison tests
 - [ ] Benchmark vs v0.8.0
@@ -314,6 +506,7 @@ internal/CG/
 | SUM(col) | < 300 ns (2x faster) |
 | SELECT * (1K) | < 300 ns (2x faster) |
 | LIMIT 10 | < 300 ns (3x faster) |
+| Parallel COUNT 100K | < 5 ms (4x vs single-core) |
 | Allocations/query | < 5 |
 | No regressions | 0 |
 
@@ -343,9 +536,10 @@ go test ./... -bench=BenchmarkSelectAll -memprofile=mem.prof
 | 3 | Filter Pushdown | 15 |
 | 4 | Early Termination | 10 |
 | 5 | Predicate Reordering | 10 |
-| 6 | Validation | 10 |
+| 6 | Multi-Core Parallelization | 25 |
+| 7 | Validation | 10 |
 
-**Total**: ~80 hours
+**Total**: ~105 hours
 
 ---
 
