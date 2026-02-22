@@ -1,11 +1,13 @@
 package VM
 
 type Instruction struct {
-	Op OpCode
-	P1 int32
-	P2 int32
-	P3 string
-	P4 interface{}
+	Op     OpCode
+	P1     int32
+	P2     int32
+	P3     string
+	P4     interface{}
+	DstReg int  // pre-extracted destination register (valid when HasDst is true)
+	HasDst bool // true when P4 is an int destination register, cached to avoid type assertion
 }
 
 func NewInstruction(op OpCode) Instruction {

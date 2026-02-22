@@ -1,5 +1,23 @@
 # sqlvibe Release History
 
+## **v0.7.6** (2026-02-21)
+
+### Performance Improvements
+
+- **CG: Common Subexpression Elimination (CSE)** (`internal/CG/optimizer.go`) — Added `eliminateCommonSubexprs` pass. Within each basic-block segment, repeated arithmetic/concat expressions with the same source registers are replaced with a cheap `OpSCopy` from the first computed result, avoiding redundant recalculation.
+- **CG: Strength Reduction** (`internal/CG/optimizer.go`) — Added `reduceStrength` pass. Detects multiply/add/subtract against known compile-time constants and replaces with cheaper operations: `x * int(2) → x + x`, `x * int(1) → SCopy x`, `x * 0 → LoadConst 0`, `x + int(0) → SCopy x`, `x - int(0) → SCopy x`. Float-zero and float-one constants are intentionally excluded to preserve type-coercion semantics (e.g. `col + 0.0` promotes an integer column to float64).
+- **CG: Peephole Optimizations** (`internal/CG/optimizer.go`) — Added `peepholeOptimize` pass with two patterns: (1) `OpGoto` targeting the immediately following instruction → `OpNoop`; (2) `LoadConst(rx, v); Move/SCopy(rx→ry)` where `rx` is used only once → `LoadConst(ry, v)` + `OpNoop`, reducing register pressure.
+- **VM: Type Assertion Reduction** (`internal/VM/instruction.go`, `program.go`, `exec.go`) — Added `DstReg int` and `HasDst bool` fields to `Instruction`. All `EmitAdd`, `EmitSubtract`, `EmitMultiply`, `EmitDivide`, `EmitConcat`, and `EmitOpWithDst` now pre-fill these fields. The VM's hot-path `Exec` loop uses `inst.DstReg` directly (branch on bool) instead of `inst.P4.(int)` (interface type assertion) for arithmetic and concat opcodes. **BenchmarkVM_ArithmeticOps: 2 494 → 1 142 ns/op (−54%); BenchmarkVM_TypeAssertion: 20 308 → 11 119 ns/op (−45%).**
+- **VM: Reset() allocation reduction** (`internal/VM/engine.go`) — `Reset()` now reuses the `subReturn` slice (`[:0]` instead of `make`) and clears the `ephemeralTbls` map in-place (`delete` loop instead of `make`) to avoid per-execution heap allocations on the hot path.
+
+### New Benchmarks
+
+- `internal/VM/bench_cg_test.go` — CG compilation benchmarks: `BenchmarkCG_CSE`, `BenchmarkCG_Peephole`, `BenchmarkCG_CompileSelect`, `BenchmarkCG_CompileComplexExpr`, `BenchmarkCG_ConstFolding`, `BenchmarkCG_StrengthReduction`
+- `internal/VM/bench_vm_test.go` — VM execution benchmarks: `BenchmarkVM_ArithmeticOps`, `BenchmarkVM_ResultRow`, `BenchmarkVM_ResultRowNoPrealloc`, `BenchmarkVM_RegisterPrealloc`, `BenchmarkVM_TypeAssertion`, `BenchmarkVM_StringLike`, `BenchmarkVM_CursorScan`, `BenchmarkVM_SubqueryCache`, `BenchmarkVM_Aggregate`
+- `internal/VM/benchdata/testdata.go` — Reusable benchmark data generators (`GenerateArithProgram`, `GenerateResultRowProgram`, `MakeTableRows`, `MakeIntTableRows`)
+
+---
+
 ## **v0.7.5** (2026-02-21)
 
 ### New Features
