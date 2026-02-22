@@ -1,5 +1,21 @@
 package storage
 
+// Mode represents the recommended storage mode for a workload.
+type Mode int
+
+const (
+	ModeRow      Mode = iota // optimised for writes / point lookups
+	ModeColumnar             // optimised for filter-heavy analytical scans
+	ModeHybrid               // balanced mixed workload
+)
+
+// QueryStats tracks query-pattern counters used by RecommendMode.
+type QueryStats struct {
+	FilterQueries int64 // equality / range filter queries
+	ScanQueries   int64 // full-table scan queries
+	WriteQueries  int64 // insert / update / delete operations
+}
+
 // HybridStore combines RowStore, ColumnStore, IndexEngine and Arena into a single
 // unified storage interface. Writes go to both row and column stores; reads can
 // leverage indexes for fast path or fall back to linear scan.
@@ -10,6 +26,7 @@ type HybridStore struct {
 	arena       *Arena
 	columns     []string
 	colTypes    []ValueType
+	stats       QueryStats
 }
 
 // NewHybridStore creates a HybridStore with the given column definitions.
@@ -206,4 +223,36 @@ func (hs *HybridStore) collectRows(idxs []uint32) [][]Value {
 		out = append(out, vals)
 	}
 	return out
+}
+
+// ColStore returns the underlying ColumnStore (for vectorized operations).
+func (hs *HybridStore) ColStore() *ColumnStore { return hs.colStore }
+
+// RecordFilter increments the filter-query counter.
+func (hs *HybridStore) RecordFilter() { hs.stats.FilterQueries++ }
+
+// RecordScan increments the full-scan counter.
+func (hs *HybridStore) RecordScan() { hs.stats.ScanQueries++ }
+
+// RecordWrite increments the write counter.
+func (hs *HybridStore) RecordWrite() { hs.stats.WriteQueries++ }
+
+// Stats returns a copy of the current QueryStats.
+func (hs *HybridStore) Stats() QueryStats { return hs.stats }
+
+// RecommendMode returns the storage mode best suited to the observed workload.
+//
+// Heuristics:
+//   - FilterQueries > ScanQueries*2  → ModeColumnar (filter-heavy analytical)
+//   - WriteQueries > FilterQueries*3 → ModeRow      (write-heavy transactional)
+//   - otherwise                      → ModeHybrid
+func (hs *HybridStore) RecommendMode() Mode {
+	s := hs.stats
+	if s.FilterQueries > s.ScanQueries*2 {
+		return ModeColumnar
+	}
+	if s.WriteQueries > s.FilterQueries*3 {
+		return ModeRow
+	}
+	return ModeHybrid
 }

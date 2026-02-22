@@ -674,7 +674,7 @@ internal/
 - [x] Implement RowStore (insert/update/delete) (`pkg/sqlvibe/storage/row_store.go`)
 - [x] Implement ColumnStore (vector read/write) (`pkg/sqlvibe/storage/column_store.go`)
 - [x] Implement IndexEngine (bitmap + skiplist) (`pkg/sqlvibe/storage/index_engine.go`)
-- [ ] Add adaptive switching logic
+- [x] Add adaptive switching logic
 - [ ] Integrate with QueryEngine
 
 ### Phase 3: Execution Engine
@@ -708,7 +708,7 @@ internal/
 
 ### Phase 5: Testing & Validation
 - [x] Run full SQL:1999 test suite (100% pass rate — no regressions)
-- [ ] Run comparison benchmarks vs v0.7.x
+- [x] Run comparison benchmarks vs v0.7.x
 - [ ] Memory profiling
 - [ ] GC profiling
 - [x] Update documentation (plan-v0.8.0.md, docs/DB-FORMAT.md)
