@@ -556,6 +556,8 @@ func (db *Database) Exec(sql string) (Result, error) {
 			result, err = db.execInsertSelect(stmt)
 		} else if stmt.OnConflict != nil {
 			result, err = db.execInsertOnConflict(stmt)
+		} else if res, batchErr, handled := db.execInsertBatch(stmt); handled {
+			result, err = res, batchErr
 		} else {
 			result, err = db.execVMDML(sql, stmt.Table)
 		}
@@ -2810,6 +2812,165 @@ func (db *Database) evalConstExpr(expr QP.Expr) interface{} {
 		return lit.Value
 	}
 	return nil
+}
+
+// isAllLiteralValues reports whether all values in a multi-row INSERT are constant
+// literals (no column refs, function calls, or subqueries).  Only *QP.Literal and
+// negated-literal *QP.UnaryExpr nodes are accepted.
+func isAllLiteralValues(stmt *QP.InsertStmt) bool {
+	if len(stmt.Values) == 0 {
+		return false
+	}
+	for _, row := range stmt.Values {
+		for _, val := range row {
+			if !isLiteralExpr(val) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isLiteralExpr reports whether expr is a constant literal safe to evaluate
+// without the VM (covers *QP.Literal and negated literals like -5 or -3.14).
+func isLiteralExpr(expr QP.Expr) bool {
+	switch e := expr.(type) {
+	case *QP.Literal:
+		return true
+	case *QP.UnaryExpr:
+		if e.Op == QP.TokenMinus {
+			_, ok := e.Expr.(*QP.Literal)
+			return ok
+		}
+	case nil:
+		return true
+	}
+	return false
+}
+
+// evalLiteralExpr evaluates a constant literal expression to its Go value.
+// Handles *QP.Literal and negated literals (*QP.UnaryExpr with TokenMinus).
+func evalLiteralExpr(expr QP.Expr) interface{} {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *QP.Literal:
+		return e.Value
+	case *QP.UnaryExpr:
+		if e.Op == QP.TokenMinus {
+			if lit, ok := e.Expr.(*QP.Literal); ok {
+				switch v := lit.Value.(type) {
+				case int64:
+					return -v
+				case float64:
+					return -v
+				case int:
+					return -int64(v)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// execInsertBatch is a fast-path for simple INSERT statements whose VALUES rows
+// all contain constant literals.  It bypasses tokenize/compile/VM and directly
+// calls InsertRow for each row, reducing overhead for bulk inserts.
+// Returns (result, error, true) when handled; (Result{}, nil, false) to fall through.
+func (db *Database) execInsertBatch(stmt *QP.InsertStmt) (Result, error, bool) {
+	util.AssertNotNil(stmt, "InsertStmt")
+	// Only handle simple literal-value inserts (no SELECT, ON CONFLICT, DEFAULT VALUES).
+	if stmt.SelectQuery != nil || stmt.OnConflict != nil || stmt.UseDefaults {
+		return Result{}, nil, false
+	}
+	if !isAllLiteralValues(stmt) {
+		return Result{}, nil, false
+	}
+
+	tableName := db.resolveTableName(stmt.Table)
+	tableCols := db.columnOrder[tableName]
+	if _, exists := db.tables[tableName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName), true
+	}
+
+	// Validate that explicitly specified columns exist in the table.
+	if len(stmt.Columns) > 0 {
+		validCols := make(map[string]bool, len(tableCols))
+		for _, col := range tableCols {
+			validCols[strings.ToLower(col)] = true
+		}
+		for _, col := range stmt.Columns {
+			if !validCols[strings.ToLower(col)] {
+				return Result{}, fmt.Errorf("table %s has no column named %s", tableName, col), true
+			}
+		}
+		// Validate row value counts.
+		for _, row := range stmt.Values {
+			if len(row) != len(stmt.Columns) {
+				return Result{}, fmt.Errorf("%d values for %d columns", len(row), len(stmt.Columns)), true
+			}
+		}
+	} else if len(tableCols) > 0 {
+		for _, row := range stmt.Values {
+			if len(row) != len(tableCols) {
+				return Result{}, fmt.Errorf("table %s has %d columns but %d values were supplied",
+					tableName, len(tableCols), len(row)), true
+			}
+		}
+	}
+
+	// Check whether any non-literal default needs applying (e.g. DEFAULT (1+1)).
+	// If so, fall through to VM which can evaluate arbitrary expressions.
+	tableDefaults := db.columnDefaults[tableName]
+	if len(stmt.Columns) > 0 && len(tableDefaults) > 0 {
+		specifiedCols := make(map[string]bool, len(stmt.Columns))
+		for _, col := range stmt.Columns {
+			specifiedCols[strings.ToLower(col)] = true
+		}
+		for colName, defaultVal := range tableDefaults {
+			if specifiedCols[strings.ToLower(colName)] {
+				continue // column explicitly provided — default not needed
+			}
+			// Default needed for this column. Only accept literal defaults.
+			if _, isLit := defaultVal.(*QP.Literal); !isLit {
+				return Result{}, nil, false // non-literal default — fall through to VM
+			}
+		}
+	}
+
+	ctx := newDsVmContext(db)
+	var rowsAffected int64
+	for _, rowVals := range stmt.Values {
+		row := make(map[string]interface{}, len(tableCols))
+		if len(stmt.Columns) > 0 {
+			for i, val := range rowVals {
+				if i < len(stmt.Columns) {
+					row[stmt.Columns[i]] = evalLiteralExpr(val)
+				}
+			}
+		} else {
+			for i, val := range rowVals {
+				if i < len(tableCols) {
+					row[tableCols[i]] = evalLiteralExpr(val)
+				}
+			}
+		}
+		// Apply literal defaults only for columns that are entirely absent from the row.
+		// Explicit NULLs (column present but nil) are left as-is.
+		for colName, defaultVal := range tableDefaults {
+			if _, exists := row[colName]; !exists {
+				if lit, ok := defaultVal.(*QP.Literal); ok {
+					row[colName] = lit.Value
+				}
+			}
+		}
+		if err := ctx.InsertRow(tableName, row); err != nil {
+			return Result{}, err, true
+		}
+		rowsAffected++
+	}
+	return Result{RowsAffected: rowsAffected}, nil, true
 }
 
 // execInsertSelect handles INSERT INTO table SELECT ...

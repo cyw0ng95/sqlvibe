@@ -1,5 +1,20 @@
 # sqlvibe Release History
 
+## **v0.8.3** (2026-02-22)
+
+### Features
+- **Batch INSERT Fast Path**: New `execInsertBatch` bypasses VM compilation for multi-row `INSERT ... VALUES` statements with all-literal values. Validates column names, applies literal defaults for missing columns, and falls through to VM for complex defaults (e.g. `DEFAULT (1+1)`)
+- **sync.Pool Allocation Reduction**: Added `pools.go` with `rowPool`, `mapPool`, `schemaMapPool`, `colSetPool`. Hot SELECT paths (`execSelectStmtWithContext`, `execVMQuery`) now reuse pooled `map[string]int` and `map[string]bool` objects for schema and column-set lookups, reducing per-query allocations
+- **v0.8.3 Benchmark Suite**: New `benchmark_v0.8.3_test.go` — batch INSERT throughput (10/100/1000 rows), SELECT allocation benchmarks, COUNT(*) fast-path alloc report
+
+### Performance
+- Batch INSERT 100 rows: ~207 µs (compared to ~1 ms via full VM path)
+- Single INSERT: ~4 µs via batch fast path (bypasses parse+compile+VM)
+- `colIndices` and `selectColSet` maps are now pooled in the SELECT hot path
+
+### Bug Fixes
+- None
+
 ## **v0.8.2** (2026-02-22)
 
 ### Features
