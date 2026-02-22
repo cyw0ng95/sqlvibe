@@ -1,5 +1,25 @@
 # sqlvibe Release History
 
+## **v0.8.5** (2026-02-22)
+
+### Features
+- **WAL Enhancements**: Added `WAL.Recover()` for crash-recovery replay of committed WAL frames (with CRC validation) and `WAL.FrameCount()` for querying the current frame count without a checkpoint.
+- **MVCC (Multi-Version Concurrency Control)**: New `MVCCStore` in `internal/TM/mvcc.go`. Provides versioned key-value storage with `Snapshot` / `Get` / `Put` / `Delete` operations and `GC` for lazy cleanup of old versions.
+- **Transaction Isolation Levels**: New `IsolationConfig` / `IsolationLevel` types in `internal/TM/isolation.go`. Supports READ UNCOMMITTED, READ COMMITTED (default), and SERIALIZABLE. Exposed via `PRAGMA isolation_level`.
+- **Deadlock Detection & Busy Timeout**: `LockState.DetectDeadlock()` scans the wait-for graph and signals waiters on the victim resource. `LockState.SetTimeout()` configures the per-acquire deadline. Exposed via `PRAGMA busy_timeout`.
+- **Advanced Compression**: New `Compressor` interface in `internal/DS/compression.go` with five implementations: `NoneCompressor`, `RLECompressor`, `LZ4Compressor` (pure-Go block format), `ZSTDCompressor` (high-compression zlib), `GzipCompressor`. Factory: `DS.NewCompressor(name, level)`. Exposed via `PRAGMA compression`.
+- **Page-Level Compression**: `Page.Compress(Compressor)` and `Page.Decompress(Compressor)` methods; new `IsCompressed` and `UncompressedSize` fields on `Page`.
+- **Incremental Backup**: `IncrementalBackup` in `internal/DS/backup.go` tracks changed rows per commit ID. SQL interface: `BACKUP DATABASE TO 'path'` and `BACKUP INCREMENTAL TO 'path'`.
+- **Storage Metrics**: `StorageMetrics` struct and `CollectMetrics()` in `internal/DS/metrics.go`. Exposed via `PRAGMA storage_info` returning page_count, used_pages, free_pages, compression_ratio, wal_size, total_rows, total_tables.
+- **New PRAGMAs**: `wal_mode`, `isolation_level`, `busy_timeout`, `compression`, `storage_info`.
+- **BACKUP SQL Command**: Parser now recognises `BACKUP DATABASE TO` and `BACKUP INCREMENTAL TO` as first-class SQL statements.
+
+### Bug Fixes
+- None
+
+### Breaking Changes
+- None
+
 ## **v0.8.4** (2026-02-22)
 
 ### Features

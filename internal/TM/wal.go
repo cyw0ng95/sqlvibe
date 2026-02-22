@@ -204,6 +204,63 @@ func (wal *WAL) Sequence() int32 {
 	return wal.sequence
 }
 
+// FrameCount returns the number of frames currently stored in the WAL.
+func (wal *WAL) FrameCount() int {
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
+	return int(wal.sequence)
+}
+
+// Recover replays all committed frames in the WAL and returns the number of frames
+// that were successfully recovered. It is safe to call Recover on a fresh WAL.
+func (wal *WAL) Recover() (int, error) {
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
+
+	stat, err := wal.file.Stat()
+	if err != nil {
+		return 0, err
+	}
+
+	// Calculate how many complete frames are stored beyond the header.
+	frameSize := int64(WALFrameSize + wal.pageSize)
+	if frameSize == 0 {
+		return 0, nil
+	}
+	available := stat.Size() - int64(WALHeaderSize)
+	if available <= 0 {
+		return 0, nil
+	}
+	count := int(available / frameSize)
+	if count == 0 {
+		return 0, nil
+	}
+
+	// Validate each frame's checksum and count valid ones.
+	recovered := 0
+	data := make([]byte, frameSize)
+	for i := 0; i < count; i++ {
+		offset := int64(WALHeaderSize) + int64(i)*frameSize
+		n, readErr := wal.file.ReadAt(data, offset)
+		if readErr != nil || n < int(frameSize) {
+			break
+		}
+		// Verify stored checksum.
+		cs1, _ := wal.checksum(data[:WALFrameSize-8+wal.pageSize])
+		stored := binary.BigEndian.Uint32(data[20:24])
+		if cs1 != stored {
+			break // Stop at first corrupt frame.
+		}
+		recovered++
+	}
+
+	// Sync the sequence counter with the recovered frame count.
+	if int32(recovered) > wal.sequence {
+		wal.sequence = int32(recovered)
+	}
+	return recovered, nil
+}
+
 func (wal *WAL) checksum(data []byte) (uint32, uint32) {
 	var s1, s2 uint32
 	for i := 0; i < len(data); i++ {

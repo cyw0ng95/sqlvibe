@@ -89,13 +89,13 @@ func (wal *WAL) Recover() error
 
 #### Tasks
 
-- [ ] Add WAL struct and frame format
-- [ ] Implement WAL.Append() for log writes
-- [ ] Implement WAL.Checkpoint() to flush to main store
-- [ ] Implement WAL.Recover() for crash recovery
-- [ ] Add PRAGMA wal_mode
-- [ ] Integrate with Transaction Manager
-- [ ] Tests: WAL append, checkpoint, recovery
+- [x] Add WAL struct and frame format
+- [x] Implement WAL.Append() for log writes
+- [x] Implement WAL.Checkpoint() to flush to main store
+- [x] Implement WAL.Recover() for crash recovery
+- [x] Add PRAGMA wal_mode
+- [x] Integrate with Transaction Manager
+- [x] Tests: WAL append, checkpoint, recovery
 
 **Workload:** ~15 hours
 
@@ -164,13 +164,13 @@ func (mvcc *MVCCStore) GC(keepVersions int)
 
 #### Tasks
 
-- [ ] Add MVCCStore struct
-- [ ] Implement Get with snapshot visibility
-- [ ] Implement Put/Delete with versioning
-- [ ] Implement Commit/Rollback
-- [ ] Add GC for old version cleanup
-- [ ] Integrate with Database
-- [ ] Tests: concurrent reads, write visibility
+- [x] Add MVCCStore struct
+- [x] Implement Get with snapshot visibility
+- [x] Implement Put/Delete with versioning
+- [x] Implement Commit/Rollback
+- [x] Add GC for old version cleanup
+- [x] Integrate with Database
+- [x] Tests: concurrent reads, write visibility
 
 **Workload:** ~15 hours
 
@@ -213,11 +213,11 @@ type TransactionManager struct {
 
 #### Tasks
 
-- [ ] Add IsolationLevel type
-- [ ] Add PRAGMA isolation_level
-- [ ] Implement READ COMMITTED (default)
-- [ ] Implement SERIALIZABLE (pessimistic locking)
-- [ ] Tests: isolation level behavior
+- [x] Add IsolationLevel type
+- [x] Add PRAGMA isolation_level
+- [x] Implement READ COMMITTED (default)
+- [x] Implement SERIALIZABLE (pessimistic locking)
+- [x] Tests: isolation level behavior
 
 **Workload:** ~8 hours
 
@@ -257,11 +257,11 @@ func (lm *LockManager) DetectDeadlock() (deadlock bool, victim uint64)
 
 #### Tasks
 
-- [ ] Add LockManager
-- [ ] Implement table-level locking
-- [ ] Implement deadlock detection
-- [ ] Add busy_timeout PRAGMA
-- [ ] Tests: deadlock detection, timeout
+- [x] Add LockManager
+- [x] Implement table-level locking
+- [x] Implement deadlock detection
+- [x] Add busy_timeout PRAGMA
+- [x] Tests: deadlock detection, timeout
 
 **Workload:** ~7 hours
 
@@ -309,12 +309,12 @@ PRAGMA compression = 'ZSTD'; -- 'NONE', 'RLE', 'LZ4', 'ZSTD', 'GZIP'
 
 #### Tasks
 
-- [ ] Add Compressor interface
-- [ ] Implement ZSTD compressor (best ratio)
-- [ ] Implement LZ4 compressor (fast)
-- [ ] Add PRAGMA compression
-- [ ] Integrate with persistence layer
-- [ ] Tests: compression ratio benchmarks
+- [x] Add Compressor interface
+- [x] Implement ZSTD compressor (best ratio)
+- [x] Implement LZ4 compressor (fast)
+- [x] Add PRAGMA compression
+- [x] Integrate with persistence layer
+- [x] Tests: compression ratio benchmarks
 
 **Workload:** ~12 hours
 
@@ -363,11 +363,11 @@ BACKUP INCREMENTAL TO 'backup.db';
 
 #### Tasks
 
-- [ ] Add IncrementalBackup struct
-- [ ] Implement page-level change tracking
-- [ ] Implement incremental copy
-- [ ] Add BACKUP SQL command
-- [ ] Tests: full backup, incremental backup
+- [x] Add IncrementalBackup struct
+- [x] Implement page-level change tracking
+- [x] Implement incremental copy
+- [x] Add BACKUP SQL command
+- [x] Tests: full backup, incremental backup
 
 **Workload:** ~10 hours
 
@@ -399,10 +399,10 @@ func (p *Page) Decompress(compressor Compressor) error
 
 #### Tasks
 
-- [ ] Add page-level compression in Page struct
-- [ ] Compress on write, decompress on read
-- [ ] Track compression metadata in header
-- [ ] Tests: page compression ratio
+- [x] Add page-level compression in Page struct
+- [x] Compress on write, decompress on read
+- [x] Track compression metadata in header
+- [x] Tests: page compression ratio
 
 **Workload:** ~8 hours
 
@@ -442,10 +442,10 @@ func (db *Database) StorageInfo() (*StorageMetrics, error)
 
 #### Tasks
 
-- [ ] Add StorageMetrics struct
-- [ ] Implement storage_info PRAGMA
-- [ ] Add compression stats
-- [ ] Add WAL stats
+- [x] Add StorageMetrics struct
+- [x] Implement storage_info PRAGMA
+- [x] Add compression stats
+- [x] Add WAL stats
 
 **Workload:** ~5 hours
 
@@ -457,28 +457,28 @@ func (db *Database) StorageInfo() (*StorageMetrics, error)
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| WAL append | Works | [ ] |
-| WAL checkpoint | Works | [ ] |
-| WAL recovery | Works | [ ] |
-| MVCC reads | Works | [ ] |
-| MVCC writes | Works | [ ] |
-| READ COMMITTED | Works | [ ] |
-| SERIALIZABLE | Works | [ ] |
-| Deadlock detection | Works | [ ] |
-| busy_timeout | Works | [ ] |
-| Concurrent read/write | No corruption | [ ] |
+| WAL append | Works | [x] |
+| WAL checkpoint | Works | [x] |
+| WAL recovery | Works | [x] |
+| MVCC reads | Works | [x] |
+| MVCC writes | Works | [x] |
+| READ COMMITTED | Works | [x] |
+| SERIALIZABLE | Works | [x] |
+| Deadlock detection | Works | [x] |
+| busy_timeout | Works | [x] |
+| Concurrent read/write | No corruption | [x] |
 
 ### Part 2: Storage
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ZSTD compression | 3-10x ratio | [ ] |
-| LZ4 compression | 2-4x ratio | [ ] |
-| Page-level compression | Works | [ ] |
-| Full backup | Works | [ ] |
-| Incremental backup | Works | [ ] |
-| storage_info PRAGMA | Works | [ ] |
-| Compression ratio > 2x | Yes | [ ] |
+| ZSTD compression | 3-10x ratio | [x] |
+| LZ4 compression | 2-4x ratio | [x] |
+| Page-level compression | Works | [x] |
+| Full backup | Works | [x] |
+| Incremental backup | Works | [x] |
+| storage_info PRAGMA | Works | [x] |
+| Compression ratio > 2x | Yes | [x] |
 
 ---
 

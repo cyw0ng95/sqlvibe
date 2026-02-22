@@ -204,6 +204,17 @@ type RollbackStmt struct {
 
 func (r *RollbackStmt) NodeType() string { return "RollbackStmt" }
 
+// BackupStmt represents:
+//
+//	BACKUP DATABASE TO 'path'
+//	BACKUP INCREMENTAL TO 'path'
+type BackupStmt struct {
+	Incremental bool   // true for BACKUP INCREMENTAL, false for BACKUP DATABASE
+	DestPath    string // destination file path
+}
+
+func (b *BackupStmt) NodeType() string { return "BackupStmt" }
+
 type Expr interface {
 	exprNode()
 }
@@ -386,6 +397,8 @@ func (p *Parser) parseInternal() (ASTNode, error) {
 			return p.parseAlterTable()
 		case "WITH":
 			return p.parseWithClause()
+		case "BACKUP":
+			return p.parseBackup()
 		}
 	case TokenExplain:
 		return p.parseExplain()
@@ -2406,6 +2419,47 @@ func (p *Parser) parseRollback() (ASTNode, error) {
 	}
 
 	return &RollbackStmt{}, nil
+}
+
+// parseBackup parses:
+//
+//	BACKUP DATABASE TO 'path'
+//	BACKUP INCREMENTAL TO 'path'
+func (p *Parser) parseBackup() (ASTNode, error) {
+	p.advance() // consume BACKUP
+
+	stmt := &BackupStmt{}
+
+	// Expect DATABASE or INCREMENTAL
+	cur := p.current()
+	if cur.Type == TokenKeyword && strings.ToUpper(cur.Literal) == "INCREMENTAL" {
+		stmt.Incremental = true
+		p.advance()
+	} else if cur.Type == TokenKeyword && strings.ToUpper(cur.Literal) == "DATABASE" {
+		stmt.Incremental = false
+		p.advance()
+	}
+	// else: bare BACKUP TO 'path' is treated as BACKUP DATABASE
+
+	// Expect TO
+	cur = p.current()
+	if cur.Type == TokenKeyword && strings.ToUpper(cur.Literal) == "TO" {
+		p.advance()
+	}
+
+	// Expect destination path (string literal)
+	cur = p.current()
+	if cur.Type == TokenString {
+		stmt.DestPath = cur.Literal
+		p.advance()
+	} else if cur.Type == TokenIdentifier {
+		stmt.DestPath = cur.Literal
+		p.advance()
+	} else {
+		return nil, fmt.Errorf("BACKUP: expected destination path, got %v", cur)
+	}
+
+	return stmt, nil
 }
 
 // parseWithClause parses a WITH ... AS (...) SELECT statement (CTE)
