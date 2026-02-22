@@ -1,0 +1,221 @@
+package storage
+
+// HybridStore combines RowStore, ColumnStore, IndexEngine and Arena into a single
+// unified storage interface. Writes go to both row and column stores; reads can
+// leverage indexes for fast path or fall back to linear scan.
+type HybridStore struct {
+	rowStore    *RowStore
+	colStore    *ColumnStore
+	indexEngine *IndexEngine
+	arena       *Arena
+	columns     []string
+	colTypes    []ValueType
+}
+
+// NewHybridStore creates a HybridStore with the given column definitions.
+func NewHybridStore(columns []string, types []ValueType) *HybridStore {
+	return &HybridStore{
+		rowStore:    NewRowStore(columns, types),
+		colStore:    NewColumnStore(columns, types),
+		indexEngine: NewIndexEngine(),
+		arena:       NewArena(64 * 1024),
+		columns:     columns,
+		colTypes:    types,
+	}
+}
+
+// Insert appends a row and returns its row index.
+func (hs *HybridStore) Insert(vals []Value) int {
+	row := NewRow(vals)
+	idx := hs.rowStore.Insert(row)
+	hs.colStore.AppendRow(vals)
+
+	// Update indexes
+	for ci, col := range hs.columns {
+		val := NullValue()
+		if ci < len(vals) {
+			val = vals[ci]
+		}
+		if hs.indexEngine.HasBitmapIndex(col) || hs.indexEngine.HasSkipListIndex(col) {
+			hs.indexEngine.IndexRow(uint32(idx), col, val)
+		}
+	}
+	return idx
+}
+
+// Update replaces the values at rowIdx.
+func (hs *HybridStore) Update(rowIdx int, vals []Value) {
+	// Un-index old values
+	oldRow := hs.rowStore.Get(rowIdx)
+	for ci, col := range hs.columns {
+		if hs.indexEngine.HasBitmapIndex(col) || hs.indexEngine.HasSkipListIndex(col) {
+			hs.indexEngine.UnindexRow(uint32(rowIdx), col, oldRow.Get(ci))
+		}
+	}
+
+	newRow := NewRow(vals)
+	hs.rowStore.Update(rowIdx, newRow)
+
+	// Update column store by overwriting each column vector value
+	for ci, vec := range hs.colStore.vectors {
+		if ci < len(vals) {
+			// Overwrite in place by setting the underlying slot
+			if rowIdx >= 0 && rowIdx < vec.Len() {
+				v := vals[ci]
+				switch vec.Type {
+				case TypeInt, TypeBool:
+					vec.ints[rowIdx] = v.Int
+				case TypeFloat:
+					vec.floats[rowIdx] = v.Float
+				case TypeString:
+					vec.strings[rowIdx] = v.Str
+				case TypeBytes:
+					vec.bytes[rowIdx] = v.Bytes
+				}
+				vec.nulls[rowIdx] = v.IsNull()
+			}
+		}
+	}
+
+	// Re-index new values
+	for ci, col := range hs.columns {
+		if hs.indexEngine.HasBitmapIndex(col) || hs.indexEngine.HasSkipListIndex(col) {
+			val := NullValue()
+			if ci < len(vals) {
+				val = vals[ci]
+			}
+			hs.indexEngine.IndexRow(uint32(rowIdx), col, val)
+		}
+	}
+}
+
+// Delete removes a row from the store and all indexes.
+func (hs *HybridStore) Delete(rowIdx int) {
+	row := hs.rowStore.Get(rowIdx)
+	for ci, col := range hs.columns {
+		if hs.indexEngine.HasBitmapIndex(col) || hs.indexEngine.HasSkipListIndex(col) {
+			hs.indexEngine.UnindexRow(uint32(rowIdx), col, row.Get(ci))
+		}
+	}
+	hs.rowStore.Delete(rowIdx)
+	hs.colStore.DeleteRow(rowIdx)
+}
+
+// Scan returns all live rows as []Value slices.
+func (hs *HybridStore) Scan() [][]Value {
+	indices := hs.rowStore.ScanIndices()
+	out := make([][]Value, 0, len(indices))
+	for _, i := range indices {
+		row := hs.rowStore.Get(i)
+		vals := make([]Value, len(hs.columns))
+		for ci := range hs.columns {
+			vals[ci] = row.Get(ci)
+		}
+		out = append(out, vals)
+	}
+	return out
+}
+
+// ScanWhere returns rows where colName == val, using an index when available.
+func (hs *HybridStore) ScanWhere(colName string, val Value) [][]Value {
+	colIdx := hs.rowStore.ColIndex(colName)
+	if colIdx < 0 {
+		return nil
+	}
+
+	// Use index if available
+	if hs.indexEngine.HasBitmapIndex(colName) || hs.indexEngine.HasSkipListIndex(colName) {
+		rb := hs.indexEngine.LookupEqual(colName, val)
+		if rb != nil {
+			return hs.collectRows(rb.ToSlice())
+		}
+	}
+
+	// Linear scan fallback
+	var out [][]Value
+	for _, i := range hs.rowStore.ScanIndices() {
+		row := hs.rowStore.Get(i)
+		if row.Get(colIdx).Equal(val) {
+			vals := make([]Value, len(hs.columns))
+			for ci := range hs.columns {
+				vals[ci] = row.Get(ci)
+			}
+			out = append(out, vals)
+		}
+	}
+	return out
+}
+
+// ScanRange returns rows where colName is in [lo, hi], using a skip-list index when available.
+func (hs *HybridStore) ScanRange(colName string, lo, hi Value) [][]Value {
+	colIdx := hs.rowStore.ColIndex(colName)
+	if colIdx < 0 {
+		return nil
+	}
+
+	if hs.indexEngine.HasSkipListIndex(colName) {
+		rb := hs.indexEngine.LookupRange(colName, lo, hi, true)
+		if rb != nil {
+			return hs.collectRows(rb.ToSlice())
+		}
+	}
+
+	// Linear scan fallback
+	var out [][]Value
+	for _, i := range hs.rowStore.ScanIndices() {
+		row := hs.rowStore.Get(i)
+		v := row.Get(colIdx)
+		if Compare(v, lo) >= 0 && Compare(v, hi) <= 0 {
+			vals := make([]Value, len(hs.columns))
+			for ci := range hs.columns {
+				vals[ci] = row.Get(ci)
+			}
+			out = append(out, vals)
+		}
+	}
+	return out
+}
+
+// CreateIndex creates an index on the named column.
+func (hs *HybridStore) CreateIndex(colName string, useSkipList bool) {
+	if useSkipList {
+		hs.indexEngine.AddSkipListIndex(colName)
+	} else {
+		hs.indexEngine.AddBitmapIndex(colName)
+	}
+	// Back-fill existing rows
+	colIdx := hs.rowStore.ColIndex(colName)
+	if colIdx < 0 {
+		return
+	}
+	for _, i := range hs.rowStore.ScanIndices() {
+		row := hs.rowStore.Get(i)
+		hs.indexEngine.IndexRow(uint32(i), colName, row.Get(colIdx))
+	}
+}
+
+// RowCount returns the total number of rows including deleted.
+func (hs *HybridStore) RowCount() int { return hs.rowStore.RowCount() }
+
+// LiveCount returns the number of non-deleted rows.
+func (hs *HybridStore) LiveCount() int { return hs.rowStore.LiveCount() }
+
+// Columns returns the column names.
+func (hs *HybridStore) Columns() []string { return hs.columns }
+
+// ColIndex returns the zero-based index for a column name (-1 if not found).
+func (hs *HybridStore) ColIndex(name string) int { return hs.rowStore.ColIndex(name) }
+
+func (hs *HybridStore) collectRows(idxs []uint32) [][]Value {
+	out := make([][]Value, 0, len(idxs))
+	for _, ui := range idxs {
+		i := int(ui)
+		row := hs.rowStore.Get(i)
+		vals := make([]Value, len(hs.columns))
+		for ci := range hs.columns {
+			vals[ci] = row.Get(ci)
+		}
+		out = append(out, vals)
+	}
+	return out
+}
