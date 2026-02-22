@@ -1,6 +1,24 @@
 # sqlvibe Release History
 
-## **v0.8.3** (2026-02-22)
+## **v0.8.4** (2026-02-22)
+
+### Features
+- **Window Function Enhancements**: Added `WindowOrderBy` struct with `Desc bool` to properly track ASC/DESC in window ORDER BY. Added `WindowFrame` and `FrameBound` types for ROWS/RANGE BETWEEN frame specification. Added `PERCENT_RANK` and `CUME_DIST` window functions. Added `NTILE(n)` window function.
+- **ROWS/RANGE BETWEEN Frame Aggregates**: Frame-aware SUM/AVG/MIN/MAX over ROWS BETWEEN N PRECEDING AND CURRENT ROW, UNBOUNDED PRECEDING, etc. — per-row sliding window computation.
+- **GROUP_CONCAT Aggregate**: Implemented `GROUP_CONCAT(col)` and `GROUP_CONCAT(col, sep)` aggregate functions through the VM execution path.
+- **VALUES Table Constructor**: Parser now supports `(VALUES (r1), (r2)) AS t(col1, col2)` derived table syntax. Database layer materializes VALUES rows as a temporary table for query execution.
+- **Recursive CTE**: `WITH RECURSIVE name(col) AS (anchor UNION ALL recursive)` now executes correctly via iterative materialization with a 1000-iteration safety limit.
+- **CTE Column List**: `WITH cte(col1, col2) AS (...)` column list syntax is now parsed and applied to CTE result columns.
+- **ANY/ALL Subqueries**: `expr > ALL (SELECT ...)`, `expr = ANY (SELECT ...)`, `expr < SOME (SELECT ...)` quantified comparisons fully implemented.
+- **SQL:1999 F771 Test Suite**: New test suite in `internal/TS/SQL1999/F771/` with 8 test functions covering ROW_NUMBER, RANK/DENSE_RANK, LAG/LEAD, NTILE, GROUP_CONCAT, Recursive CTE, CTE column lists, and window frame parsing — all verified against SQLite.
+
+### Bug Fixes
+- Fixed window function ORDER BY direction (ASC/DESC was silently ignored; now properly respected in RANK, ROW_NUMBER, LAG/LEAD, etc.)
+- Fixed ROWS/RANGE BETWEEN frame parsing: ROWS/RANGE and BETWEEN/AND tokens now correctly recognized
+- Fixed `PERCENT_RANK()` and `CUME_DIST()` parsed as identifiers instead of window functions (missing OVER clause handling in TokenIdentifier path)
+
+### Breaking Changes
+- None
 
 ### Features
 - **Batch INSERT Fast Path**: New `execInsertBatch` bypasses VM compilation for multi-row `INSERT ... VALUES` statements with all-literal values. Validates column names, applies literal defaults for missing columns, and falls through to VM for complex defaults (e.g. `DEFAULT (1+1)`)

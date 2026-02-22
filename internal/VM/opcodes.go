@@ -187,6 +187,7 @@ const (
 	OpNotExistsSubquery
 	OpInSubquery
 	OpNotInSubquery
+	OpAnyAllSubquery
 
 	// Misc
 	OpSql
@@ -400,6 +401,7 @@ var OpCodeInfo = map[OpCode]string{
 	OpNotExistsSubquery: "NotExistsSubquery",
 	OpInSubquery:        "InSubquery",
 	OpNotInSubquery:     "NotInSubquery",
+	OpAnyAllSubquery:    "AnyAllSubquery",
 
 	// Misc
 	OpSql:        "Sql",

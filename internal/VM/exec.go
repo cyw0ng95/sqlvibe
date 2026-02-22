@@ -1169,6 +1169,60 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpAnyAllSubquery:
+			// Execute ANY/ALL subquery: P1=dstReg, P2=leftReg, P4=*QP.AnyAllExpr
+			dstReg := int(inst.P1)
+			vm.registers[dstReg] = nil
+			if anyAllExpr, ok := inst.P4.(*QP.AnyAllExpr); ok && vm.ctx != nil {
+				type SubqueryRowsExecutor interface {
+					ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+				}
+				if executor, ok2 := vm.ctx.(SubqueryRowsExecutor); ok2 {
+					subRows, err := executor.ExecuteSubqueryRows(anyAllExpr.Subquery)
+					if err == nil {
+						leftVal := vm.registers[int(inst.P2)]
+						if anyAllExpr.Quantifier == "ALL" && len(subRows) == 0 {
+							vm.registers[dstReg] = int64(1) // vacuously true
+						} else {
+							allMatch := true
+							for _, subRow := range subRows {
+								if len(subRow) == 0 {
+									continue
+								}
+								cmp := compareForAnyAllVM(leftVal, subRow[0])
+								match := false
+								switch anyAllExpr.Op {
+								case QP.TokenEq:
+									match = cmp == 0
+								case QP.TokenNe:
+									match = cmp != 0
+								case QP.TokenLt:
+									match = cmp < 0
+								case QP.TokenLe:
+									match = cmp <= 0
+								case QP.TokenGt:
+									match = cmp > 0
+								case QP.TokenGe:
+									match = cmp >= 0
+								}
+								if anyAllExpr.Quantifier == "ALL" && !match {
+									allMatch = false
+									break
+								}
+								if (anyAllExpr.Quantifier == "ANY" || anyAllExpr.Quantifier == "SOME") && match {
+									vm.registers[dstReg] = int64(1)
+									break
+								}
+							}
+							if anyAllExpr.Quantifier == "ALL" && allMatch {
+								vm.registers[dstReg] = int64(1)
+							}
+						}
+					}
+				}
+			}
+			continue
+
 		case OpExistsSubquery:
 			// Execute EXISTS subquery: returns 1 if subquery returns any rows, 0 otherwise
 			// P1 = destination register
@@ -2769,6 +2823,7 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 				Maxs:         make([]interface{}, len(aggInfo.Aggregates)),
 				NonAggValues: make([]interface{}, len(aggInfo.NonAggCols)),
 				DistinctSets: distinctSets,
+				GroupConcats: make([][]string, len(aggInfo.Aggregates)),
 			}
 			groups[groupKey] = state
 		}
@@ -2839,6 +2894,10 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 			case "MAX":
 				if value != nil && (state.Maxs[aggIdx] == nil || vm.compareVals(value, state.Maxs[aggIdx]) > 0) {
 					state.Maxs[aggIdx] = value
+				}
+			case "GROUP_CONCAT":
+				if value != nil {
+					state.GroupConcats[aggIdx] = append(state.GroupConcats[aggIdx], fmt.Sprintf("%v", value))
 				}
 			}
 		}
@@ -2939,6 +2998,18 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 				aggValue = state.Mins[aggIdx]
 			case "MAX":
 				aggValue = state.Maxs[aggIdx]
+			case "GROUP_CONCAT":
+				if len(state.GroupConcats[aggIdx]) > 0 {
+					sep := ","
+					if len(aggDef.Args) >= 2 {
+						if lit, ok := aggDef.Args[1].(*QP.Literal); ok {
+							if s, ok2 := lit.Value.(string); ok2 {
+								sep = s
+							}
+						}
+					}
+					aggValue = strings.Join(state.GroupConcats[aggIdx], sep)
+				}
 			}
 
 			resultRow = append(resultRow, aggValue)
@@ -2988,6 +3059,75 @@ type AggregateState struct {
 	Maxs         []interface{}
 	NonAggValues []interface{}
 	DistinctSets []map[string]bool // per-aggregate distinct value sets (for DISTINCT aggregates)
+	GroupConcats [][]string        // per-aggregate accumulated strings for GROUP_CONCAT
+}
+
+// compareForAnyAllVM compares two values for ANY/ALL predicates (returns -1, 0, or 1).
+func compareForAnyAllVM(a, b interface{}) int {
+if a == nil && b == nil {
+return 0
+}
+if a == nil {
+return -1
+}
+if b == nil {
+return 1
+}
+switch av := a.(type) {
+case int64:
+switch bv := b.(type) {
+case int64:
+if av < bv {
+return -1
+} else if av > bv {
+return 1
+}
+return 0
+case float64:
+fa := float64(av)
+if fa < bv {
+return -1
+} else if fa > bv {
+return 1
+}
+return 0
+}
+case float64:
+switch bv := b.(type) {
+case float64:
+if av < bv {
+return -1
+} else if av > bv {
+return 1
+}
+return 0
+case int64:
+fb := float64(bv)
+if av < fb {
+return -1
+} else if av > fb {
+return 1
+}
+return 0
+}
+case string:
+if bv, ok := b.(string); ok {
+if av < bv {
+return -1
+} else if av > bv {
+return 1
+}
+return 0
+}
+}
+as := fmt.Sprintf("%v", a)
+bs := fmt.Sprintf("%v", b)
+if as < bs {
+return -1
+} else if as > bs {
+return 1
+}
+return 0
 }
 
 // isCountStar reports whether an aggregate definition is COUNT(*) or COUNT() with no args.
@@ -3234,6 +3374,55 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 	case *QP.CastExpr:
 		val := vm.evaluateExprOnRow(row, columns, e.Expr)
 		return vm.applyTypeCast(val, e.TypeSpec.Name)
+	case *QP.AnyAllExpr:
+		// ANY/ALL quantified comparison: evaluate subquery rows and compare.
+		if vm.ctx != nil {
+			type SubqueryRowsExecutor interface {
+				ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+			}
+			if exec, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+				subRows, err := exec.ExecuteSubqueryRows(e.Subquery)
+				if err == nil {
+					leftVal := vm.evaluateExprOnRow(row, columns, e.Left)
+					if e.Quantifier == "ALL" && len(subRows) == 0 {
+						return int64(1) // vacuously true
+					}
+					for _, subRow := range subRows {
+						if len(subRow) == 0 {
+							continue
+						}
+						rightVal := subRow[0]
+						cmp := compareForAnyAllVM(leftVal, rightVal)
+						match := false
+						switch e.Op {
+						case QP.TokenEq:
+							match = cmp == 0
+						case QP.TokenNe:
+							match = cmp != 0
+						case QP.TokenLt:
+							match = cmp < 0
+						case QP.TokenLe:
+							match = cmp <= 0
+						case QP.TokenGt:
+							match = cmp > 0
+						case QP.TokenGe:
+							match = cmp >= 0
+						}
+						if e.Quantifier == "ALL" && !match {
+							return nil
+						}
+						if (e.Quantifier == "ANY" || e.Quantifier == "SOME") && match {
+							return int64(1)
+						}
+					}
+					if e.Quantifier == "ALL" {
+						return int64(1)
+					}
+					return nil
+				}
+			}
+		}
+		return nil
 	case *QP.SubqueryExpr:
 		// Scalar subquery: execute and return the single value.
 		if vm.ctx != nil {
@@ -3849,6 +4038,8 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				return state.Mins[i]
 			case "MAX":
 				return state.Maxs[i]
+			case "GROUP_CONCAT":
+				return state.groupConcatResult(i, aggDef)
 			}
 		}
 		// Fallback: if no arg-matching entry found, try first matching function name
@@ -3876,6 +4067,8 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				return state.Mins[i]
 			case "MAX":
 				return state.Maxs[i]
+			case "GROUP_CONCAT":
+				return state.groupConcatResult(i, aggDef)
 			}
 		}
 		return nil
@@ -3901,6 +4094,22 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 
 // sumResult returns the accumulated sum as an interface{} (nil if no values were seen).
 // Boxing occurs once at read time rather than once per accumulated row.
+// groupConcatResult returns the GROUP_CONCAT result for the given aggregate index and separator arg.
+func (s *AggregateState) groupConcatResult(idx int, aggDef AggregateDef) interface{} {
+	if idx >= len(s.GroupConcats) || len(s.GroupConcats[idx]) == 0 {
+		return nil
+	}
+	sep := ","
+	if len(aggDef.Args) >= 2 {
+		if lit, ok := aggDef.Args[1].(*QP.Literal); ok {
+			if sv, ok2 := lit.Value.(string); ok2 {
+				sep = sv
+			}
+		}
+	}
+	return strings.Join(s.GroupConcats[idx], sep)
+}
+
 func (s *AggregateState) sumResult(idx int) interface{} {
 	if !s.SumsHasVal[idx] {
 		return nil

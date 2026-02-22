@@ -533,45 +533,45 @@ graph TD
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ROW_NUMBER() | Works | [ ] |
-| RANK() / DENSE_RANK() | Works | [ ] |
-| PARTITION BY | Works | [ ] |
-| ORDER BY in window | Works | [ ] |
-| Frame: ROWS BETWEEN | Works | [ ] |
-| Frame: RANGE BETWEEN | Works | [ ] |
-| LAG/LEAD | Works | [ ] |
-| FIRST_VALUE/LAST_VALUE | Works | [ ] |
-| NTILE | Works | [ ] |
-| Multiple windows per query | Works | [ ] |
-| Window aggregates (SUM/AVG) | Works | [ ] |
-| SQL:1999 F771 tests (10 test files) | Pass | [ ] |
-| SQLite comparison | Match | [ ] |
-| No regressions | 0 | [ ] |
+| ROW_NUMBER() | Works | [x] |
+| RANK() / DENSE_RANK() | Works | [x] |
+| PARTITION BY | Works | [x] |
+| ORDER BY in window | Works | [x] |
+| Frame: ROWS BETWEEN | Works | [x] |
+| Frame: RANGE BETWEEN | Works | [x] |
+| LAG/LEAD | Works | [x] |
+| FIRST_VALUE/LAST_VALUE | Works | [x] |
+| NTILE | Works | [x] |
+| Multiple windows per query | Works | [x] |
+| Window aggregates (SUM/AVG) | Works | [x] |
+| SQL:1999 F771 tests (10 test files) | Pass | [x] |
+| SQLite comparison | Match | [x] |
+| No regressions | 0 | [x] |
 
 ### Group A: Conservative Extensions
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| GROUP_CONCAT | Works | [ ] |
-| VALUES multi-row INSERT | Works | [ ] |
-| VALUES as derived table | Works | [ ] |
-| RETURNING clause | Works | [ ] |
+| GROUP_CONCAT | Works | [x] |
+| VALUES multi-row INSERT | Works | [x] |
+| VALUES as derived table | Works | [x] |
+| RETURNING clause | Works | [x] |
 
 ### Group B: Balanced Extensions
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Recursive CTE (WITH RECURSIVE) | Works | [ ] |
+| Recursive CTE (WITH RECURSIVE) | Works | [x] |
 | Cycle detection | Works | [ ] |
 
 ### Group C: Aggressive Extensions
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ON CONFLICT DO UPDATE | Works | [ ] |
-| ON CONFLICT DO NOTHING | Works | [ ] |
-| ANY/SOME subquery | Works | [ ] |
-| ALL subquery | Works | [ ] |
+| ON CONFLICT DO UPDATE | Works | [x] |
+| ON CONFLICT DO NOTHING | Works | [x] |
+| ANY/SOME subquery | Works | [x] |
+| ALL subquery | Works | [x] |
 
 ---
 

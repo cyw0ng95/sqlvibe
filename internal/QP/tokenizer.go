@@ -194,6 +194,10 @@ var keywords = map[string]TokenType{
 	"PRECEDING":         TokenKeyword,
 	"FOLLOWING":         TokenKeyword,
 	"CURRENT":           TokenKeyword,
+	"ROWS":              TokenKeyword,
+	"RANGE":             TokenKeyword,
+	"PERCENT_RANK":      TokenKeyword,
+	"CUME_DIST":         TokenKeyword,
 }
 
 type Token struct {
@@ -330,6 +334,8 @@ func lookupKeyword(s string) (TokenType, bool) {
 			return TokenKeyword, true
 		case "OVER":
 			return TokenKeyword, true
+		case "ROWS":
+			return TokenKeyword, true
 		}
 	case 5:
 		switch s {
@@ -362,6 +368,8 @@ func lookupKeyword(s string) (TokenType, bool) {
 		case "ROWID":
 			return TokenKeyword, true
 		case "FALSE":
+			return TokenKeyword, true
+		case "RANGE":
 			return TokenKeyword, true
 		}
 	case 6:
