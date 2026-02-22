@@ -1,5 +1,22 @@
 # sqlvibe Release History
 
+## **v0.8.1** (2026-02-22)
+
+### Features
+- **Columnar VM Opcodes**: OpColumnarScan, OpColumnarFilter, OpColumnarAgg, OpColumnarProject, OpTopK
+- **CG Columnar Plan Generation**: shouldUseColumnar() detector for analytical queries
+- **Filter Pushdown**: ScanWithFilter in HybridStore with index acceleration
+- **Predicate Reordering**: ReorderPredicates in CG optimizer (equality > range > LIKE)
+- **QP Optimizations**: NormalizeQuery, InferExprType, ParseCached LRU cache
+- **Multi-Core Parallelization**: ParallelCount, ParallelSum, ParallelScan in HybridStore
+- **Worker Pool**: Reusable goroutine pool for concurrent task execution
+- **DAG Query Plan**: Concurrent DAG execution engine for parallel operator scheduling
+
+### Notes
+- Legacy DS format removal deferred (internal/DS still used by 16+ files)
+
+---
+
 ## **v0.8.0** (2026-02-22)
 
 ### New Features
