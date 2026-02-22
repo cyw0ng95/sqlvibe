@@ -174,6 +174,11 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 		return db.queryInformationSchema(stmt, fullName)
 	}
 
+	// Handle sqlvibe_extensions virtual table
+	if tableName == "sqlvibe_extensions" {
+		return db.querySqlvibeExtensions(stmt)
+	}
+
 	if tableName != "" {
 		// Resolve case-insensitive table name
 		tableName = db.resolveTableName(tableName)

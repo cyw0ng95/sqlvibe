@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/cyw0ng95/sqlvibe/ext"
 	QP "github.com/cyw0ng95/sqlvibe/internal/QP"
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
@@ -3687,6 +3688,14 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 			return vm.evaluateExprOnRow(row, columns, e.Args[2])
 		}
 		return nil
+	}
+	// Dispatch to registered extension functions.
+	evalArgs := make([]interface{}, len(e.Args))
+	for i, arg := range e.Args {
+		evalArgs[i] = vm.evaluateExprOnRow(row, columns, arg)
+	}
+	if result, ok := ext.CallFunc(funcName, evalArgs); ok {
+		return result
 	}
 	return nil
 }

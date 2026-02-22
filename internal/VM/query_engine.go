@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/cyw0ng95/sqlvibe/ext"
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
@@ -1827,6 +1828,16 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			return qe.evalValue(row, fc.Args[2])
 		}
 		return nil
+	}
+	// Dispatch to registered extension functions.
+	{
+		evalArgs := make([]interface{}, len(fc.Args))
+		for i, arg := range fc.Args {
+			evalArgs[i] = qe.evalValue(row, arg)
+		}
+		if result, ok := ext.CallFunc(strings.ToUpper(fc.Name), evalArgs); ok {
+			return result
+		}
 	}
 	return nil
 }

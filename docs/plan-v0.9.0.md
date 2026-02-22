@@ -277,11 +277,11 @@ func (t *sqlitevibeExtensionsTable) Next() ([]interface{}, error) {
 
 ### Tasks
 
-- [ ] Create `ext/extension.go` with Opcode struct and interface
-- [ ] Create `ext/registry.go` with unified registry
-- [ ] Create `ext/ext.go` build tags entry
-- [ ] Add auto-registration to Database
-- [ ] Create sqlvibe_extensions virtual table
+- [x] Create `ext/extension.go` with Opcode struct and interface
+- [x] Create `ext/registry.go` with unified registry
+- [x] Create `ext/ext.go` build tags entry
+- [x] Add auto-registration to Database
+- [x] Create sqlvibe_extensions virtual table
 
 ---
 
@@ -431,14 +431,14 @@ func compileJSONExtract(expr *Expr, prog *Program) error {
 
 ### Tasks
 
-- [ ] Create `ext/json/json.go`
-- [ ] Add JSON VM operations in `internal/VM/ops_json.go`
-- [ ] Add JSON code generation in `internal/CG/codegen_json.go`
-- [ ] Implement json_extract function
-- [ ] Implement json_array function
-- [ ] Implement json_object function
-- [ ] Implement json_valid function
-- [ ] Test with/without build tag
+- [x] Create `ext/json/json.go`
+- [x] Add JSON VM operations in `internal/VM/ops_json.go`
+- [x] Add JSON code generation in `internal/CG/codegen_json.go`
+- [x] Implement json_extract function
+- [x] Implement json_array function
+- [x] Implement json_object function
+- [x] Implement json_valid function
+- [x] Test with/without build tag
 
 **Workload:** ~10 hours
 
@@ -508,10 +508,10 @@ func init() {
 
 ### Tasks
 
-- [ ] Create `ext/math/math.go`
-- [ ] Move ABS, CEIL, FLOOR, ROUND from VM/query_engine.go
-- [ ] Add new math functions (POWER, SQRT, MOD)
-- [ ] Add build tag support for math extension
+- [x] Create `ext/math/math.go`
+- [x] Move ABS, CEIL, FLOOR, ROUND from VM/query_engine.go
+- [x] Add new math functions (POWER, SQRT, MOD)
+- [x] Add build tag support for math extension
 
 **Workload:** ~6 hours
 
@@ -540,10 +540,10 @@ ext/
 
 ### Tasks
 
-- [ ] Test extension registry
-- [ ] Test JSON functions
-- [ ] Test build with tags
-- [ ] Test build without tags
+- [x] Test extension registry
+- [x] Test JSON functions
+- [x] Test build with tags
+- [x] Test build without tags
 
 **Workload:** ~4 hours
 
@@ -593,67 +593,67 @@ go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Extension interface with Opcode | Works | [ ] |
-| Unified registry | Works | [ ] |
-| Build tags entry | Works | [ ] |
-| Auto-registration in DB | Works | [ ] |
-| sqlvibe_extensions table | Works | [ ] |
+| Extension interface with Opcode | Works | [x] |
+| Unified registry | Works | [x] |
+| Build tags entry | Works | [x] |
+| Auto-registration in DB | Works | [x] |
+| sqlvibe_extensions table | Works | [x] |
 
 ### Phase 2: JSON Extension
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| json | Works | [ ] |
-| json_array | Works | [ ] |
-| json_extract | Works | [ ] |
-| json_invalid | Works | [ ] |
-| json_isvalid | Works | [ ] |
-| json_length | Works | [ ] |
-| json_object | Works | [ ] |
-| json_quote | Works | [ ] |
-| json_remove | Works | [ ] |
-| json_replace | Works | [ ] |
-| json_set | Works | [ ] |
-| json_type | Works | [ ] |
-| json_update | Works | [ ] |
-| SQLite JSON1 compatibility | Works | [ ] |
+| json | Works | [x] |
+| json_array | Works | [x] |
+| json_extract | Works | [x] |
+| json_invalid | Works | [x] |
+| json_isvalid | Works | [x] |
+| json_length | Works | [x] |
+| json_object | Works | [x] |
+| json_quote | Works | [x] |
+| json_remove | Works | [x] |
+| json_replace | Works | [x] |
+| json_set | Works | [x] |
+| json_type | Works | [x] |
+| json_update | Works | [x] |
+| SQLite JSON1 compatibility | Works | [x] |
 
 ### Phase 3: Math Extension
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ABS function | Works | [ ] |
-| CEIL/CEILING | Works | [ ] |
-| FLOOR function | Works | [ ] |
-| ROUND function | Works | [ ] |
-| POWER function | Works | [ ] |
-| SQRT function | Works | [ ] |
-| MOD function | Works | [ ] |
-| RANDOM function | Works | [ ] |
-| Build tag SVDB_EXT_MATH | Works | [ ] |
+| ABS function | Works | (core) |
+| CEIL/CEILING | Works | (core) |
+| FLOOR function | Works | (core) |
+| ROUND function | Works | (core) |
+| POWER function | Works | [x] |
+| SQRT function | Works | [x] |
+| MOD function | Works | [x] |
+| RANDOM function | Works | (core) |
+| Build tag SVDB_EXT_MATH | Works | [x] |
 
 ### Phase 4: sqlvibe_extensions Table
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Virtual table | Works | [ ] |
-| Query returns extensions | Works | [ ] |
-| Columns correct | Works | [ ] |
+| Virtual table | Works | [x] |
+| Query returns extensions | Works | [x] |
+| Columns correct | Works | [x] |
 
 ### Phase 4: CLI .ext Command
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| .ext command | Works | [ ] |
-| Shows extensions | Works | [ ] |
+| .ext command | Works | [x] |
+| Shows extensions | Works | [x] |
 
 ### Phase 5: Testing
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Build with tags | Works | [ ] |
-| Build without tags | Works | [ ] |
-| All tests pass | 100% | [ ] |
+| Build with tags | Works | [x] |
+| Build without tags | Works | [x] |
+| All tests pass | 100% | [x] |
 
 ---
 

@@ -970,6 +970,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return db.querySqliteStat1()
 		}
 
+		// Handle sqlvibe_extensions virtual table
+		if tableName == "sqlvibe_extensions" {
+			return db.querySqlvibeExtensions(stmt)
+		}
+
 		// Handle views by substituting the view SQL (case-insensitive)
 		if viewSQL, isView := db.views[tableName]; isView {
 			return db.queryView(viewSQL, stmt, sql)
