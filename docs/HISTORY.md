@@ -1,5 +1,25 @@
 # sqlvibe Release History
 
+## **v0.8.7** (2026-02-22)
+
+### Features
+- **VACUUM Command**: Added `VACUUM` (in-place no-op for `:memory:`) and `VACUUM INTO 'path'` (saves snapshot to file via full backup). Parsed as `VacuumStmt` in QP layer and dispatched in both `Query()` and `Exec()`.
+- **ANALYZE Command**: Added `ANALYZE` (all tables) and `ANALYZE table_name` (specific table). Collects row counts into internal `tableStats` map. Results accessible via `SELECT * FROM sqlite_stat1`.
+- **sqlite_stat1 Virtual Table**: New read-only system table exposing ANALYZE statistics with columns `tbl`, `idx`, `stat`.
+- **New PRAGMAs**: `page_size`, `mmap_size`, `locking_mode`, `synchronous`, `auto_vacuum`, `query_only`, `temp_store`, `read_uncommitted`, `cache_spill`. All support get and set; values stored in `pragmaSettings` map.
+- **UNHEX() Function**: Decodes a hex string into a blob (`[]byte`). Returns NULL for invalid input.
+- **RANDOM() Function**: Returns a random signed 64-bit integer (full range).
+- **RANDOMBLOB(n) Function**: Returns n random bytes as `[]byte`.
+- **ZEROBLOB(n) Function**: Returns n zero bytes as `[]byte`.
+- **IIF(cond, true_val, false_val) Function**: Inline conditional — returns `true_val` if condition is truthy, else `false_val`.
+- **SQL1999 Test Suites**: Added F870 (VACUUM/ANALYZE/VIEW), F871 (PRAGMA extensions), F872 (Builtin Functions) — 20 new passing tests.
+
+### Bug Fixes
+- None
+
+### Breaking Changes
+- None
+
 ## **v0.8.6** (2026-02-22)
 
 ### Features

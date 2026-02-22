@@ -102,6 +102,8 @@ type Database struct {
 	autoincrement     map[string]string                    // table name -> pk col name (if AUTOINCREMENT)
 	seqValues         map[string]int64                     // table name -> last used autoincrement value
 	foreignKeysEnabled bool                               // PRAGMA foreign_keys = ON/OFF
+	pragmaSettings     map[string]interface{}             // PRAGMA setting storage
+	tableStats         map[string]int64                   // table name -> row count (for ANALYZE)
 }
 
 type dbSnapshot struct {
@@ -368,6 +370,8 @@ func Open(path string) (*Database, error) {
 		autoincrement:      make(map[string]string),
 		seqValues:          make(map[string]int64),
 		foreignKeysEnabled: false,
+		pragmaSettings:     make(map[string]interface{}),
+		tableStats:         make(map[string]int64),
 	}, nil
 }
 
@@ -775,6 +779,12 @@ func (db *Database) Exec(sql string) (Result, error) {
 		}
 		_ = rows
 		return Result{}, nil
+	case "VacuumStmt":
+		_, err := db.handleVacuum(ast.(*QP.VacuumStmt))
+		return Result{}, err
+	case "AnalyzeStmt":
+		_, err := db.handleAnalyze(ast.(*QP.AnalyzeStmt))
+		return Result{}, err
 	}
 
 	return Result{}, nil
@@ -846,6 +856,14 @@ func (db *Database) Query(sql string) (*Rows, error) {
 
 	if ast.NodeType() == "BackupStmt" {
 		return db.handleBackup(ast.(*QP.BackupStmt))
+	}
+
+	if ast.NodeType() == "VacuumStmt" {
+		return db.handleVacuum(ast.(*QP.VacuumStmt))
+	}
+
+	if ast.NodeType() == "AnalyzeStmt" {
+		return db.handleAnalyze(ast.(*QP.AnalyzeStmt))
 	}
 
 	if ast.NodeType() == "ExplainStmt" {
@@ -944,6 +962,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		// Handle sqlite_master virtual table
 		if tableName == "sqlite_master" {
 			return db.querySqliteMaster(stmt)
+		}
+
+		// Handle sqlite_stat1 virtual table
+		if tableName == "sqlite_stat1" {
+			return db.querySqliteStat1()
 		}
 
 		// Handle views by substituting the view SQL (case-insensitive)
