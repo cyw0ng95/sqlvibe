@@ -262,6 +262,12 @@ internal/CG/
 ├── compiler.go            # Update: detect analytical queries
 ├── plan_cache.go         # Update: cache columnar plans
 └── optimizer.go          # Update: predicate reordering
+
+internal/QP/
+├── tokenizer.go          # Update: add normalization
+├── parser.go             # Update: memoization, constant folding
+├── normalize.go          # NEW: query normalization
+└── type_infer.go         # NEW: type inference
 ```
 
 ---
@@ -299,7 +305,134 @@ internal/CG/
 - [ ] Reorder predicates in CG
 - [ ] Benchmark: Multi-predicate WHERE
 
-### Phase 6: Multi-Core Parallelization
+### Phase 6: QP (Query Processing) Optimizations
+
+#### 6.1 Query Normalization
+
+Normalize SQL for better cache hit:
+
+```go
+var queryNormalizer = regexp.MustCompile(`'[^']*'|[0-9]+`)
+
+func NormalizeQuery(sql string) string {
+    sql = strings.ToLower(sql)
+    sql = strings.TrimSpace(sql)
+    // Replace literals with placeholder
+    sql = queryNormalizer.ReplaceAllString(sql, "?")
+    return sql
+}
+
+// SELECT * FROM users WHERE id = 1
+// → select * from users where id = ?
+```
+
+#### 6.2 Parser Memoization
+
+Cache parsed ASTs for repeated queries:
+
+```go
+type LRUCache struct {
+    capacity int
+    items    map[string]*list.Element
+    list     *list.List
+}
+
+var parseCache = NewLRUCache(1000)
+
+func Parse(sql string) (*SelectStmt, error) {
+    normalized := NormalizeQuery(sql)
+    if cached, ok := parseCache.Get(normalized); ok {
+        return cached.(*SelectStmt), nil
+    }
+    result, err := doParse(sql)
+    if err == nil {
+        parseCache.Set(normalized, result)
+    }
+    return result, err
+}
+```
+
+#### 6.3 Constant Folding
+
+Fold constants at parse time:
+
+```go
+func FoldConstants(expr Expr) Expr {
+    switch e := expr.(type) {
+    case *BinaryExpr:
+        left := FoldConstants(e.Left)
+        right := FoldConstants(e.Right)
+        if isConstant(left) && isConstant(right) {
+            return &Literal{Value: evaluate(left, right)}
+        }
+        return &BinaryExpr{Op: e.Op, Left: left, Right: right}
+    case *UnaryExpr:
+        child := FoldConstants(e.Child)
+        if isConstant(child) {
+            return &Literal{Value: evaluateUnary(e.Op, child)}
+        }
+        return &UnaryExpr{Op: e.Op, Child: child}
+    }
+    return expr
+}
+
+// SELECT * FROM t WHERE id = 5 + 3
+// Parsed as: WHERE id = (5 + 3)
+// After fold: WHERE id = 8
+```
+
+#### 6.4 Type Inference
+
+Infer column types at parse time:
+
+```go
+func InferExprType(expr Expr, schema map[string]ColumnType) ColumnType {
+    switch e := expr.(type) {
+    case *ColumnRef:
+        return schema[e.Name]
+    case *Literal:
+        return inferFromValue(e.Value)
+    case *BinaryExpr:
+        left := InferExprType(e.Left, schema)
+        right := InferExprType(e.Right, schema)
+        return promoteTypes(left, right)
+    case *FuncCall:
+        return getFuncReturnType(e.Name)
+    }
+    return TypeAny
+}
+```
+
+#### 6.5 Streaming INSERT
+
+Parse and emit rows incrementally for large datasets:
+
+```go
+func (p *Parser) ParseInsertStream(table string, emit func([]interface{})) error {
+    for {
+        row, err := p.parseInsertRow()
+        if err == io.EOF {
+            break
+        }
+        if err != nil {
+            return err
+        }
+        emit(row) // Stream directly to storage
+    }
+    return nil
+}
+```
+
+#### 6.6 Benchmark Requirements
+
+| Benchmark | Target | vs v0.8.0 |
+|-----------|--------|------------|
+| Parse cached query | < 100 ns | 10x faster |
+| Parse normalized query | < 500 ns | Similar |
+| Constant folding | < 1 µs | Negligible overhead |
+| INSERT 1M rows stream | < 100 ms | 2x faster |
+
+### Phase 8: Multi-Core Parallelization
 
 #### 6.1 Core Detection
 
@@ -489,7 +622,7 @@ func (wp *WorkerPool) Submit(task func()) {
 | Parallel Scan 100K | < 10 ms | 4x faster |
 | Parallel JOIN | < 20 ms | 3x faster |
 
-### Phase 7: Validation
+### Phase 9: Validation
 - [ ] Run full SQL:1999 test suite
 - [ ] Run SQLite comparison tests
 - [ ] Benchmark vs v0.8.0
@@ -536,10 +669,11 @@ go test ./... -bench=BenchmarkSelectAll -memprofile=mem.prof
 | 3 | Filter Pushdown | 15 |
 | 4 | Early Termination | 10 |
 | 5 | Predicate Reordering | 10 |
-| 6 | Multi-Core Parallelization | 25 |
-| 7 | Validation | 10 |
+| 6 | QP Optimizations | 15 |
+| 7 | Multi-Core Parallelization | 25 |
+| 8 | Validation | 10 |
 
-**Total**: ~105 hours
+**Total**: ~120 hours
 
 ---
 
