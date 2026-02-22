@@ -271,3 +271,64 @@ func pdToStr(v interface{}) string {
 	}
 	return ""
 }
+
+// IndexMetaQP mirrors DS.IndexMeta but in the QP package to avoid circular deps.
+type IndexMetaQP struct {
+Name      string
+TableName string
+Columns   []string
+}
+
+// CoversColumns returns true if all required columns are present in this index.
+func (im *IndexMetaQP) CoversColumns(required []string) bool {
+colSet := make(map[string]bool, len(im.Columns))
+for _, c := range im.Columns {
+colSet[c] = true
+}
+for _, r := range required {
+if !colSet[r] {
+return false
+}
+}
+return true
+}
+
+// FindCoveringIndex returns the first index that covers all required columns, or nil.
+func FindCoveringIndex(indexes []*IndexMetaQP, required []string) *IndexMetaQP {
+for _, idx := range indexes {
+if idx.CoversColumns(required) {
+return idx
+}
+}
+return nil
+}
+
+// SelectBestIndex picks the best index for a query given a filter column and
+// required output columns.
+func SelectBestIndex(indexes []*IndexMetaQP, filterCol string, required []string) *IndexMetaQP {
+for _, idx := range indexes {
+if len(idx.Columns) > 0 && idx.Columns[0] == filterCol && idx.CoversColumns(required) {
+return idx
+}
+}
+for _, idx := range indexes {
+if len(idx.Columns) > 0 && idx.Columns[0] == filterCol {
+return idx
+}
+}
+return FindCoveringIndex(indexes, required)
+}
+
+// CanSkipScan returns true when a skip scan on index is cost-effective.
+func CanSkipScan(indexCols []string, filterCols []string, leadingCardinality, rowCount int) bool {
+if len(indexCols) <= len(filterCols) {
+return false
+}
+offset := len(indexCols) - len(filterCols)
+for i, fc := range filterCols {
+if indexCols[offset+i] != fc {
+return false
+}
+}
+return leadingCardinality < rowCount/10 || leadingCardinality < 100
+}
