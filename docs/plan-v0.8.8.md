@@ -1,20 +1,22 @@
-# Plan v0.8.8 - Production-Ready: Error System + Lock Optimization
+# Plan v0.8.8 - Production-Ready: Error System + CPU Pipeline Optimization
 
 ## Summary
 
 Design and implement:
 1. A unified error code system for sqlvibe based on SQLite error codes
-2. Lock optimizations for multicore performance
+2. CPU pipeline optimizations (prefetch, branch prediction, memory alignment)
+3. Lock optimizations for multicore performance
 
 **Previous**: v0.8.7 delivers Views, VACUUM, ANALYZE, PRAGMAs, builtin functions
 
-**v0.8.8 Scope**: ~38 hours total
+**v0.8.8 Scope**: ~44 hours total
 - Error Code Definitions: 8h
 - Error Struct & API: 6h
 - Error Mapping: 8h
 - Integration: 5h
 - Testing: 3h
-- **Lock Optimization: 8h**
+- Lock Optimization: 8h
+- **CPU Pipeline Optimization: 6h**
 
 ---
 
@@ -434,6 +436,15 @@ func TestErrorCodeOf(t *testing.T) {
 | Read throughput | 3x improvement | [ ] |
 | Lock contention | Reduced | [ ] |
 
+### Phase 7: CPU Pipeline Optimization
+
+| Criteria | Target | Status |
+|----------|--------|--------|
+| Prefetch in scans | Works | [ ] |
+| Branch predictor | Works | [ ] |
+| Memory alignment | Works | [ ] |
+| Scan performance | 1.5x improvement | [ ] |
+
 ---
 
 ## Phase 6: Lock Optimization (8h)
@@ -510,6 +521,118 @@ func (ac *AtomicCounter) Get() int64 {
 - [ ] Add lock metrics
 
 **Workload:** ~8 hours
+
+---
+
+## Phase 7: CPU Pipeline Optimization (6h)
+
+### Overview
+
+Optimize VM to take advantage of modern CPU pipeline techniques.
+
+### 1. Prefetching
+
+```go
+// Prefetch data before it's needed
+type Prefetcher struct {
+    depth int // Prefetch distance
+}
+
+func (p *Prefetcher) Prefetch(rows []Row, idx int) {
+    // Prefetch N rows ahead
+    target := idx + p.depth
+    if target < len(rows) {
+        cpu.PrefetchT0(rows[target].Data)
+    }
+}
+
+func (hs *HybridStore) ScanWithPrefetch() {
+    for i := 0; i < len(rows); i++ {
+        prefetcher.Prefetch(rows, i)
+        process(rows[i])
+    }
+}
+```
+
+### 2. Branch Prediction
+
+```go
+// 2-bit saturating counter for branch prediction
+type BranchPredictor struct {
+    counters map[uint64]*SatCounter
+}
+
+type SatCounter struct {
+    value int // 0-3: 0=strong not taken, 3=strong taken
+}
+
+func (sc *SatCounter) Predict() bool {
+    return sc.value >= 2
+}
+
+func (sc *SatCounter) Update(taken bool) {
+    if taken && sc.value < 3 {
+        sc.value++
+    } else if !taken && sc.value > 0 {
+        sc.value--
+    }
+}
+
+// Use in VM for conditional jumps
+func (vm *VM) execBranch(inst Instruction) {
+    if vm.branchPred.Predict(inst.Addr) {
+        vm.jump(inst.Target)
+    }
+}
+```
+
+### 3. Memory Alignment
+
+```go
+// Cache line alignment to reduce false sharing
+const CacheLineSize = 64
+
+type align64 [CacheLineSize]byte
+
+type AlignedCounter struct {
+    _    align64
+    val  int64
+    _    align64
+}
+
+// Use in hot paths
+type HybridStoreAligned struct {
+    mu           align64
+    counters     align64
+    data         map[string]*ColumnVector
+}
+```
+
+### Tasks
+
+- [ ] Add Prefetcher for sequential scans
+- [ ] Implement 2-bit branch predictor
+- [ ] Add prefetch to HybridStore scan
+- [ ] Align hot data structures to cache lines
+- [ ] Benchmark CPU pipeline improvements
+
+**Workload:** ~6 hours
+
+---
+
+## Timeline Estimate
+
+| Phase | Feature | Hours |
+|-------|---------|-------|
+| 1 | Error Code Definitions | 8 |
+| 2 | Error Struct & API | 6 |
+| 3 | Error Mapping | 8 |
+| 4 | Integration | 5 |
+| 5 | Testing | 3 |
+| 6 | Lock Optimization | 8 |
+| 7 | CPU Pipeline Optimization | 6 |
+
+**Total**: ~44 hours
 
 ---
 
