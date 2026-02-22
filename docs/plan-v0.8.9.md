@@ -57,8 +57,8 @@ mv cmd/sqlvibe cmd/sv-cli
 
 ### Tasks
 
-- [ ] Rename `cmd/sqlvibe` directory to `cmd/sv-cli`
-- [ ] Verify build passes
+- [x] Rename `cmd/sqlvibe` directory to `cmd/sv-cli`
+- [x] Verify build passes
 
 **Workload:** ~1 hour
 
@@ -170,14 +170,14 @@ func (db *Database) BackupToWithConfig(path string, cfg BackupConfig) error
 
 ### Tasks
 
-- [ ] Add `GetTables()` function
-- [ ] Add `GetSchema(table)` function
-- [ ] Add `GetIndexes(table)` function
-- [ ] Add `GetColumns(table)` function
-- [ ] Add `CheckIntegrity()` function
-- [ ] Add `GetDatabaseInfo()` function
-- [ ] Add `GetPageStats()` function
-- [ ] Add `BackupTo(path)` function
+- [x] Add `GetTables()` function
+- [x] Add `GetSchema(table)` function
+- [x] Add `GetIndexes(table)` function
+- [x] Add `GetColumns(table)` function
+- [x] Add `CheckIntegrity()` function
+- [x] Add `GetDatabaseInfo()` function
+- [x] Add `GetPageStats()` function
+- [x] Add `BackupTo(path)` function
 
 ### API Summary
 
@@ -248,11 +248,11 @@ func showSchema(db *sqlvibe.Database, tableName string) {
 
 ### Tasks
 
-- [ ] Implement `.tables` command using `db.GetTables()`
-- [ ] Implement `.schema` command using `db.GetSchema()`
-- [ ] Implement `.indexes` command using `db.GetIndexes()`
-- [ ] Implement `.headers` command (local state)
-- [ ] Add help text
+- [x] Implement `.tables` command using `db.GetTables()`
+- [x] Implement `.schema` command using `db.GetSchema()`
+- [x] Implement `.indexes` command using `db.GetIndexes()`
+- [x] Implement `.headers` command (local state)
+- [x] Add help text
 
 **Workload:** ~4 hours
 
@@ -318,13 +318,13 @@ func main() {
 
 ### Tasks
 
-- [ ] Create `cmd/sv-check/main.go`
-- [ ] Implement `--check` using `db.CheckIntegrity()`
-- [ ] Implement `--info` using `db.GetDatabaseInfo()`
-- [ ] Implement `--tables` using `db.GetTables()`
-- [ ] Implement `--schema` using `db.GetSchema()`
-- [ ] Implement `--indexes` using `db.GetIndexes()`
-- [ ] Implement `--pages` using `db.GetPageStats()`
+- [x] Create `cmd/sv-check/main.go`
+- [x] Implement `--check` using `db.CheckIntegrity()`
+- [x] Implement `--info` using `db.GetDatabaseInfo()`
+- [x] Implement `--tables` using `db.GetTables()`
+- [x] Implement `--schema` using `db.GetSchema()`
+- [x] Implement `--indexes` using `db.GetIndexes()`
+- [x] Implement `--pages` using `db.GetPageStats()`
 
 **Workload:** ~6 hours
 
@@ -434,12 +434,12 @@ func TestGetDatabaseInfo(t *testing.T) {
 
 ### Tasks
 
-- [ ] Test `GetTables()` - 4 test cases
-- [ ] Test `GetSchema()` - 3 test cases
-- [ ] Test `GetIndexes()` - 2 test cases
-- [ ] Test `CheckIntegrity()` - 2 test cases
-- [ ] Test `GetDatabaseInfo()` - 2 test cases
-- [ ] Test `GetPageStats()` - 1 test case
+- [x] Test `GetTables()` - 4 test cases
+- [x] Test `GetSchema()` - 3 test cases
+- [x] Test `GetIndexes()` - 2 test cases
+- [x] Test `CheckIntegrity()` - 2 test cases
+- [x] Test `GetDatabaseInfo()` - 2 test cases
+- [x] Test `GetPageStats()` - 1 test case
 
 **Workload:** ~4 hours
 
@@ -465,49 +465,49 @@ func TestGetDatabaseInfo(t *testing.T) {
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Directory renamed | cmd/sv-cli | [ ] |
-| Build passes | Yes | [ ] |
+| Directory renamed | cmd/sv-cli | [x] |
+| Build passes | Yes | [x] |
 
 ### Phase 2: Core APIs
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| `GetTables()` works | Returns tables | [ ] |
-| `GetSchema()` works | Returns CREATE | [ ] |
-| `GetIndexes()` works | Returns indexes | [ ] |
-| `GetColumns()` works | Returns columns | [ ] |
-| `CheckIntegrity()` works | Returns report | [ ] |
-| `GetDatabaseInfo()` works | Returns info | [ ] |
-| `GetPageStats()` works | Returns stats | [ ] |
-| `BackupTo()` works | Creates backup | [ ] |
+| `GetTables()` works | Returns tables | [x] |
+| `GetSchema()` works | Returns CREATE | [x] |
+| `GetIndexes()` works | Returns indexes | [x] |
+| `GetColumns()` works | Returns columns | [x] |
+| `CheckIntegrity()` works | Returns report | [x] |
+| `GetDatabaseInfo()` works | Returns info | [x] |
+| `GetPageStats()` works | Returns stats | [x] |
+| `BackupTo()` works | Creates backup | [x] |
 
 ### Phase 3: CLI Dot Commands
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| `.tables` works | Lists tables | [ ] |
-| `.schema` works | Shows CREATE | [ ] |
-| `.indexes` works | Shows indexes | [ ] |
-| `.headers` works | Toggles headers | [ ] |
+| `.tables` works | Lists tables | [x] |
+| `.schema` works | Shows CREATE | [x] |
+| `.indexes` works | Shows indexes | [x] |
+| `.headers` works | Toggles headers | [x] |
 
 ### Phase 4: sv-check
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| `--check` works | Validates DB | [ ] |
-| `--info` works | Shows metadata | [ ] |
-| `--tables` works | Lists tables | [ ] |
-| `--schema` works | Shows schema | [ ] |
-| `--indexes` works | Shows indexes | [ ] |
-| `--pages` works | Shows stats | [ ] |
+| `--check` works | Validates DB | [x] |
+| `--info` works | Shows metadata | [x] |
+| `--tables` works | Lists tables | [x] |
+| `--schema` works | Shows schema | [x] |
+| `--indexes` works | Shows indexes | [x] |
+| `--pages` works | Shows stats | [x] |
 
 ### Phase 5: Testing
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| API tests | 14 tests | [ ] |
-| All tests pass | 100% | [ ] |
-| Temp files only | L2 only | [ ] |
+| API tests | 14 tests | [x] |
+| All tests pass | 100% | [x] |
+| Temp files only | L2 only | [x] |
 
 ---
 

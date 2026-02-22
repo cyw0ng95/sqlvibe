@@ -1,5 +1,29 @@
 # sqlvibe Release History
 
+## **v0.8.9** (2026-02-22)
+
+### Features
+- **CLI Rename**: `cmd/sqlvibe` renamed to `cmd/sv-cli` with updated banner and improved REPL.
+- **Core Library APIs** (`pkg/sqlvibe`):
+  - `GetTables() []TableInfo` — list all user tables and views (excludes `sqlite_*`).
+  - `GetSchema(table) string` — return reconstructed `CREATE TABLE` / `CREATE VIEW` statement.
+  - `GetIndexes(table) []IndexInfo` — list indexes for a table (or all indexes if table is `""`).
+  - `GetColumns(table) []ColumnInfo` — column metadata with `NotNull`, `Default`, `PrimaryKey` flags.
+  - `CheckIntegrity() *IntegrityReport` — schema and row-data integrity validation.
+  - `GetDatabaseInfo() *DatabaseInfo` — file path, size, page size, WAL mode, encoding.
+  - `GetPageStats() *PageStats` — leaf / interior / overflow / total page counts.
+  - `BackupTo(path) error` and `BackupToWithConfig(path, BackupConfig) error` public backup helpers.
+- **CLI Dot Commands** (`cmd/sv-cli`): `.tables`, `.schema [table]`, `.indexes [table]`, `.headers on|off`, `.help`.
+- **sv-check Tool** (`cmd/sv-check`): `--check`, `--info`, `--tables`, `--schema`, `--indexes`, `--pages`, `--verbose` flags.
+- **New Tests** (`pkg/sqlvibe/info_test.go`): 17 tests covering all new APIs with temp-file backends (L2).
+- **SQL:1999 F241 Fix**: `RowConstructor3` (`SELECT ROW(1, 2)`) now runs as a sqlvibe-only test since the reference SQLite build does not support the `ROW()` constructor.
+
+### Bug Fixes
+- Fixed `TestSQL1999_F301_F24101_L1/RowConstructor3` failure caused by comparing `ROW()` (SQL:1999 row constructor) against a SQLite build that does not support it.
+
+### Breaking Changes
+- None
+
 ## **v0.8.8** (2026-02-22)
 
 ### Features

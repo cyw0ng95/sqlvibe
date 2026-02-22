@@ -96,3 +96,21 @@ func (db *Database) execIncrementalBackup(destPath string) (*Rows, error) {
 		Data:    [][]interface{}{{int64(totalCopied)}},
 	}, nil
 }
+
+// BackupConfig holds options for BackupToWithConfig.
+type BackupConfig struct {
+	Progress     bool
+	PagesPerStep int
+}
+
+// BackupTo creates a full backup of the database at the given path.
+func (db *Database) BackupTo(path string) error {
+	_, err := db.execFullBackup(path)
+	return err
+}
+
+// BackupToWithConfig creates a full backup with the given config options.
+// config is reserved for future use (e.g. progress callbacks, pages-per-step).
+func (db *Database) BackupToWithConfig(path string, _ BackupConfig) error {
+	return db.BackupTo(path)
+}

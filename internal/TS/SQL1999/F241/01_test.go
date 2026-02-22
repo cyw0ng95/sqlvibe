@@ -29,7 +29,6 @@ func TestSQL1999_F301_F24101_L1(t *testing.T) {
 		sql  string
 	}{
 		{"RowConstructor2", "SELECT (1, 2)"},
-		{"RowConstructor3", "SELECT ROW(1, 2)"},
 	}
 
 	for _, tt := range tests {
@@ -37,6 +36,17 @@ func TestSQL1999_F301_F24101_L1(t *testing.T) {
 			SQL1999.CompareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
+
+	// ROW() constructor: SQL standard but not supported by the reference SQLite build
+	t.Run("RowConstructor3", func(t *testing.T) {
+		rows := SQL1999.QuerySqlvibeOnly(t, sqlvibeDB, "SELECT ROW(1, 2)", "RowConstructor3")
+		if rows == nil {
+			return
+		}
+		if len(rows.Data) != 1 {
+			t.Errorf("RowConstructor3: got %d rows, want 1", len(rows.Data))
+		}
+	})
 
 	// VALUES table constructor: sqlvibe supports it, older SQLite does not
 	t.Run("RowConstructor", func(t *testing.T) {
