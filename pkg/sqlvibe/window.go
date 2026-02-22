@@ -55,8 +55,8 @@ func extractWindowFunctions(stmt *QP.SelectStmt) ([]windowFuncInfo, int) {
 				extraAdded++
 			}
 		}
-		for _, oExpr := range wf.expr.OrderBy {
-			if cr, ok := oExpr.(*QP.ColumnRef); ok && !existingCols[cr.Name] {
+		for _, ob := range wf.expr.OrderBy {
+			if cr, ok := ob.Expr.(*QP.ColumnRef); ok && !existingCols[cr.Name] {
 				stmt.Columns = append(stmt.Columns, &QP.ColumnRef{Table: cr.Table, Name: cr.Name})
 				existingCols[cr.Name] = true
 				extraAdded++
@@ -198,6 +198,30 @@ func applyWindowFunctionsToRows(rows *Rows, funcs []windowFuncInfo, extraCols in
 
 		case "DENSE_RANK":
 			values = computeRankValues(rows, wf.expr, true)
+
+		case "NTILE":
+			values = computeOrderedWindowValues(rows, wf.expr, func(sortedIndices []int, posInPartition int) interface{} {
+				n := int64(1)
+				if len(wf.expr.Args) > 0 {
+					if lit, ok := wf.expr.Args[0].(*QP.Literal); ok {
+						if iv, ok2 := lit.Value.(int64); ok2 && iv > 0 {
+							n = iv
+						}
+					}
+				}
+				total := int64(len(sortedIndices))
+				if total == 0 || n <= 0 {
+					return int64(0)
+				}
+				bucket := (int64(posInPartition)*n)/total + 1
+				return bucket
+			})
+
+		case "PERCENT_RANK":
+			values = computeRankValuesFloat(rows, wf.expr)
+
+		case "CUME_DIST":
+			values = computeCumeDist(rows, wf.expr)
 
 		case "LAG":
 			offset := getLagLeadOffset(wf.expr)
@@ -397,6 +421,58 @@ func computeRankValues(rows *Rows, wf *QP.WindowFuncExpr, dense bool) []interfac
 	return result
 }
 
+func computeRankValuesFloat(rows *Rows, wf *QP.WindowFuncExpr) []interface{} {
+	n := len(rows.Data)
+	result := make([]interface{}, n)
+	partGroups := buildPartitionGroups(rows, wf.Partition)
+
+	for _, group := range partGroups {
+		sortedGroup := sortRowIndices(rows, group, wf.OrderBy)
+		total := len(sortedGroup)
+		if total <= 1 {
+			for _, ri := range sortedGroup {
+				result[ri] = float64(0)
+			}
+			continue
+		}
+		rank := 1
+		for pos, ri := range sortedGroup {
+			if pos > 0 {
+				prevRi := sortedGroup[pos-1]
+				if !sameOrderKey(rows, prevRi, ri, wf.OrderBy) {
+					rank = pos + 1
+				}
+			}
+			result[ri] = float64(rank-1) / float64(total-1)
+		}
+	}
+	return result
+}
+
+func computeCumeDist(rows *Rows, wf *QP.WindowFuncExpr) []interface{} {
+	n := len(rows.Data)
+	result := make([]interface{}, n)
+	partGroups := buildPartitionGroups(rows, wf.Partition)
+
+	for _, group := range partGroups {
+		sortedGroup := sortRowIndices(rows, group, wf.OrderBy)
+		total := len(sortedGroup)
+		pos := 0
+		for pos < len(sortedGroup) {
+			end := pos + 1
+			for end < len(sortedGroup) && sameOrderKey(rows, sortedGroup[pos], sortedGroup[end], wf.OrderBy) {
+				end++
+			}
+			cumeDist := float64(end) / float64(total)
+			for i := pos; i < end; i++ {
+				result[sortedGroup[i]] = cumeDist
+			}
+			pos = end
+		}
+	}
+	return result
+}
+
 // buildPartitionGroups groups row indices by PARTITION BY key.
 func buildPartitionGroups(rows *Rows, partExprs []QP.Expr) [][]int {
 	if len(partExprs) == 0 {
@@ -428,7 +504,7 @@ func buildPartitionGroups(rows *Rows, partExprs []QP.Expr) [][]int {
 }
 
 // sortRowIndices sorts a slice of row indices by the ORDER BY expressions.
-func sortRowIndices(rows *Rows, indices []int, orderExprs []QP.Expr) []int {
+func sortRowIndices(rows *Rows, indices []int, orderExprs []QP.WindowOrderBy) []int {
 	if len(orderExprs) == 0 {
 		return indices
 	}
@@ -437,11 +513,14 @@ func sortRowIndices(rows *Rows, indices []int, orderExprs []QP.Expr) []int {
 	sort.SliceStable(sorted, func(a, b int) bool {
 		ra := makeRowMap(rows.Columns, rows.Data[sorted[a]])
 		rb := makeRowMap(rows.Columns, rows.Data[sorted[b]])
-		for _, expr := range orderExprs {
-			va := evalWindowExprOnRow(ra, rows.Columns, expr)
-			vb := evalWindowExprOnRow(rb, rows.Columns, expr)
+		for _, ob := range orderExprs {
+			va := evalWindowExprOnRow(ra, rows.Columns, ob.Expr)
+			vb := evalWindowExprOnRow(rb, rows.Columns, ob.Expr)
 			cmp := compareWindowVals(va, vb)
 			if cmp != 0 {
+				if ob.Desc {
+					return cmp > 0
+				}
 				return cmp < 0
 			}
 		}
@@ -451,12 +530,12 @@ func sortRowIndices(rows *Rows, indices []int, orderExprs []QP.Expr) []int {
 }
 
 // sameOrderKey returns true if two rows have the same ORDER BY key values.
-func sameOrderKey(rows *Rows, ri, rj int, orderExprs []QP.Expr) bool {
+func sameOrderKey(rows *Rows, ri, rj int, orderExprs []QP.WindowOrderBy) bool {
 	ra := makeRowMap(rows.Columns, rows.Data[ri])
 	rb := makeRowMap(rows.Columns, rows.Data[rj])
-	for _, expr := range orderExprs {
-		va := evalWindowExprOnRow(ra, rows.Columns, expr)
-		vb := evalWindowExprOnRow(rb, rows.Columns, expr)
+	for _, ob := range orderExprs {
+		va := evalWindowExprOnRow(ra, rows.Columns, ob.Expr)
+		vb := evalWindowExprOnRow(rb, rows.Columns, ob.Expr)
 		if compareWindowVals(va, vb) != 0 {
 			return false
 		}

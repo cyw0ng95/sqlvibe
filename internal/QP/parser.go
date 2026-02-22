@@ -31,8 +31,10 @@ type SelectStmt struct {
 
 // CTEClause represents a single CTE definition: name AS (SELECT ...)
 type CTEClause struct {
-	Name   string
-	Select *SelectStmt
+	Name      string
+	Select    *SelectStmt
+	Recursive bool
+	Columns   []string
 }
 
 func (s *SelectStmt) NodeType() string { return "SelectStmt" }
@@ -44,11 +46,13 @@ type OrderBy struct {
 }
 
 type TableRef struct {
-	Schema   string
-	Name     string
-	Alias    string
-	Join     *Join
-	Subquery *SelectStmt // derived table: FROM (SELECT ...) AS alias
+	Schema    string
+	Name      string
+	Alias     string
+	Join      *Join
+	Subquery  *SelectStmt // derived table: FROM (SELECT ...) AS alias
+	Values    [][]Expr    // non-nil for VALUES table constructor
+	ValueCols []string    // column names from AS t(col1, col2)
 }
 
 func (t *TableRef) NodeType() string { return "TableRef" }
@@ -254,13 +258,43 @@ type AliasExpr struct {
 
 func (e *AliasExpr) exprNode() {}
 
+// WindowOrderBy represents an ORDER BY element in a window function spec
+type WindowOrderBy struct {
+	Expr Expr
+	Desc bool
+}
+
+// WindowFrame represents ROWS/RANGE BETWEEN frame spec
+type WindowFrame struct {
+	Type  string     // "ROWS" or "RANGE"
+	Start FrameBound
+	End   FrameBound
+}
+
+// FrameBound represents a window frame boundary
+type FrameBound struct {
+	Type  string // "UNBOUNDED", "CURRENT", "PRECEDING", "FOLLOWING"
+	Value Expr   // for N PRECEDING/FOLLOWING (nil for UNBOUNDED/CURRENT)
+}
+
+// AnyAllExpr represents expr OP ANY/ALL (subquery)
+type AnyAllExpr struct {
+	Left       Expr
+	Op         TokenType // e.g. TokenGt, TokenLt, TokenEq
+	Quantifier string    // "ANY", "SOME", "ALL"
+	Subquery   *SelectStmt
+}
+
+func (e *AnyAllExpr) exprNode() {}
+
 // WindowFuncExpr represents a window function call: func(...) OVER ([PARTITION BY ...] [ORDER BY ...])
 type WindowFuncExpr struct {
-	Name      string // Function name: COUNT, SUM, AVG, LAG, LEAD, FIRST_VALUE, LAST_VALUE, ROW_NUMBER, RANK
-	Args      []Expr // Function arguments
-	IsStar    bool   // COUNT(*)
-	Partition []Expr // PARTITION BY expressions
-	OrderBy   []Expr // ORDER BY expressions (simplified: no ASC/DESC for now)
+	Name      string          // Function name: COUNT, SUM, AVG, LAG, LEAD, FIRST_VALUE, LAST_VALUE, ROW_NUMBER, RANK
+	Args      []Expr          // Function arguments
+	IsStar    bool            // COUNT(*)
+	Partition []Expr          // PARTITION BY expressions
+	OrderBy   []WindowOrderBy // ORDER BY expressions
+	Frame     *WindowFrame    // ROWS/RANGE frame spec (optional)
 }
 
 func (e *WindowFuncExpr) exprNode() {}
@@ -400,11 +434,66 @@ func (p *Parser) parseTableRef() *TableRef {
 	ref := &TableRef{}
 
 	if p.current().Type == TokenLeftParen {
-		// Derived table: (SELECT ...)
+		// Derived table: (SELECT ...) or (VALUES ...)
 		p.advance() // consume (
-		// VALUES as table source is not supported
 		if p.current().Type == TokenKeyword && p.current().Literal == "VALUES" {
-			p.parseError = fmt.Errorf("near \"(\": syntax error")
+			// Parse VALUES (row1), (row2), ... as a derived table
+			p.advance() // consume VALUES
+			var rows [][]Expr
+			for {
+				if p.current().Type != TokenLeftParen {
+					break
+				}
+				p.advance() // consume (
+				var row []Expr
+				for !p.isEOF() && p.current().Type != TokenRightParen {
+					expr, e := p.parseExpr()
+					if e != nil {
+						p.parseError = e
+						return ref
+					}
+					row = append(row, expr)
+					if p.current().Type == TokenComma {
+						p.advance()
+					}
+				}
+				if p.current().Type == TokenRightParen {
+					p.advance() // consume )
+				}
+				rows = append(rows, row)
+				if p.current().Type != TokenComma {
+					break
+				}
+				p.advance() // consume comma between rows
+			}
+			ref.Values = rows
+			if p.current().Type == TokenRightParen {
+				p.advance() // consume outer )
+			}
+			// Parse AS alias(col1, col2)
+			if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+				p.advance()
+			}
+			if p.current().Type == TokenIdentifier || p.current().Type == TokenString {
+				ref.Alias = p.current().Literal
+				p.advance()
+			}
+			// Parse column list: (col1, col2, ...)
+			if p.current().Type == TokenLeftParen {
+				p.advance() // consume (
+				for !p.isEOF() && p.current().Type != TokenRightParen {
+					if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+						ref.ValueCols = append(ref.ValueCols, p.current().Literal)
+						p.advance()
+					}
+					if p.current().Type == TokenComma {
+						p.advance()
+					}
+				}
+				if p.current().Type == TokenRightParen {
+					p.advance() // consume )
+				}
+			}
 			return ref
 		}
 		subStmt, err := p.parseSelect()
@@ -1746,13 +1835,22 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 		p.current().Type == TokenEq) &&
 		((p.peek().Type == TokenKeyword && (p.peek().Literal == "ALL" || p.peek().Literal == "ANY" || p.peek().Literal == "SOME")) ||
 			p.peek().Type == TokenAll || p.peek().Type == TokenAny) {
-		// SQLite doesn't support quantified comparison predicates (> ALL, = ANY, < SOME)
-		// Return a matching parse error
-		nextLit := strings.ToUpper(p.peek().Literal)
-		if nextLit == "ALL" || p.peek().Type == TokenAll {
-			return nil, fmt.Errorf("near \"ALL\": syntax error")
+		op := p.current().Type
+		p.advance() // consume comparison op
+		quantifier := strings.ToUpper(p.current().Literal)
+		p.advance() // consume ALL/ANY/SOME
+		if p.current().Type != TokenLeftParen {
+			return nil, fmt.Errorf("expected '(' after %s", quantifier)
 		}
-		return nil, fmt.Errorf("near \"SELECT\": syntax error")
+		p.advance() // consume (
+		sub, err := p.parseSelect()
+		if err != nil {
+			return nil, err
+		}
+		if p.current().Type == TokenRightParen {
+			p.advance()
+		}
+		left = &AnyAllExpr{Left: left, Op: op, Quantifier: quantifier, Subquery: sub}
 	}
 
 	if p.current().Type == TokenLike {
@@ -2065,7 +2163,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		p.advance()
 		return &ColumnRef{Name: "*"}, nil
 	case TokenKeyword:
-		if tok.Literal == "AVG" || tok.Literal == "MIN" || tok.Literal == "MAX" || tok.Literal == "COUNT" || tok.Literal == "SUM" || tok.Literal == "COALESCE" || tok.Literal == "IFNULL" || tok.Literal == "NULLIF" || tok.Literal == "LAG" || tok.Literal == "LEAD" || tok.Literal == "FIRST_VALUE" || tok.Literal == "LAST_VALUE" || tok.Literal == "ROW_NUMBER" || tok.Literal == "RANK" || tok.Literal == "DENSE_RANK" || tok.Literal == "NTILE" {
+		if tok.Literal == "AVG" || tok.Literal == "MIN" || tok.Literal == "MAX" || tok.Literal == "COUNT" || tok.Literal == "SUM" || tok.Literal == "COALESCE" || tok.Literal == "IFNULL" || tok.Literal == "NULLIF" || tok.Literal == "LAG" || tok.Literal == "LEAD" || tok.Literal == "FIRST_VALUE" || tok.Literal == "LAST_VALUE" || tok.Literal == "ROW_NUMBER" || tok.Literal == "RANK" || tok.Literal == "DENSE_RANK" || tok.Literal == "NTILE" || tok.Literal == "PERCENT_RANK" || tok.Literal == "CUME_DIST" {
 			p.advance()
 			if p.current().Type == TokenLeftParen {
 				p.advance()
@@ -2097,11 +2195,11 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				// Check for OVER clause (window function)
 				if p.current().Type == TokenKeyword && p.current().Literal == "OVER" {
 					p.advance() // consume OVER
-					partition, orderBy, err := p.parseWindowSpec()
+					partition, orderBy, frame, err := p.parseWindowSpec()
 					if err != nil {
 						return nil, err
 					}
-					return &WindowFuncExpr{Name: tok.Literal, Args: args, IsStar: isStar, Partition: partition, OrderBy: orderBy}, nil
+					return &WindowFuncExpr{Name: tok.Literal, Args: args, IsStar: isStar, Partition: partition, OrderBy: orderBy, Frame: frame}, nil
 				}
 				return &FuncCall{Name: tok.Literal, Args: args, Distinct: distinct}, nil
 			}
@@ -2306,7 +2404,9 @@ func (p *Parser) parseWithClause() (ASTNode, error) {
 	p.advance() // consume WITH
 
 	// Optionally consume RECURSIVE
+	recursive := false
 	if p.current().Type == TokenKeyword && p.current().Literal == "RECURSIVE" {
+		recursive = true
 		p.advance()
 	}
 
@@ -2317,6 +2417,24 @@ func (p *Parser) parseWithClause() (ASTNode, error) {
 		}
 		cteName := p.current().Literal
 		p.advance()
+
+		// Parse optional column list: cte(col1, col2) AS (...)
+		var cteCols []string
+		if p.current().Type == TokenLeftParen {
+			p.advance() // consume (
+			for !p.isEOF() && p.current().Type != TokenRightParen {
+				if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+					cteCols = append(cteCols, p.current().Literal)
+					p.advance()
+				}
+				if p.current().Type == TokenComma {
+					p.advance()
+				}
+			}
+			if p.current().Type == TokenRightParen {
+				p.advance() // consume )
+			}
+		}
 
 		// Expect AS
 		if p.current().Type != TokenKeyword || p.current().Literal != "AS" {
@@ -2339,7 +2457,7 @@ func (p *Parser) parseWithClause() (ASTNode, error) {
 			p.advance()
 		}
 
-		ctes = append(ctes, CTEClause{Name: cteName, Select: cteSelect})
+		ctes = append(ctes, CTEClause{Name: cteName, Select: cteSelect, Recursive: recursive, Columns: cteCols})
 
 		if p.current().Type != TokenComma {
 			break
@@ -2361,9 +2479,9 @@ func (p *Parser) parseWithClause() (ASTNode, error) {
 }
 
 // parseWindowSpec parses the window specification after OVER: ([PARTITION BY ...] [ORDER BY ...])
-func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []Expr, err error) {
+func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []WindowOrderBy, frame *WindowFrame, err error) {
 	if p.current().Type != TokenLeftParen {
-		return nil, nil, nil // OVER without parens - treat as empty window
+		return nil, nil, nil, nil // OVER without parens - treat as empty window
 	}
 	p.advance() // consume '('
 
@@ -2379,7 +2497,7 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []Expr, err error)
 			}
 			expr, e := p.parseExpr()
 			if e != nil {
-				return nil, nil, e
+				return nil, nil, nil, e
 			}
 			partition = append(partition, expr)
 			if p.current().Type == TokenComma {
@@ -2395,12 +2513,16 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []Expr, err error)
 			p.advance() // consume BY
 		}
 		for !p.isEOF() && p.current().Type != TokenRightParen {
+			if p.current().Type == TokenKeyword && (p.current().Literal == "ROWS" || p.current().Literal == "RANGE") {
+				break
+			}
 			expr, e := p.parseExpr()
 			if e != nil {
-				return nil, nil, e
+				return nil, nil, nil, e
 			}
-			// Skip ASC/DESC
+			desc := false
 			if p.current().Type == TokenKeyword && (p.current().Literal == "ASC" || p.current().Literal == "DESC") {
+				desc = p.current().Literal == "DESC"
 				p.advance()
 			}
 			// Skip NULLS FIRST/LAST
@@ -2410,32 +2532,68 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []Expr, err error)
 					p.advance()
 				}
 			}
-			orderBy = append(orderBy, expr)
+			orderBy = append(orderBy, WindowOrderBy{Expr: expr, Desc: desc})
 			if p.current().Type == TokenComma {
 				p.advance()
 			}
 		}
 	}
 
-	// Skip ROWS/RANGE frame spec
+	// Parse ROWS/RANGE frame spec
 	if p.current().Type == TokenKeyword && (p.current().Literal == "ROWS" || p.current().Literal == "RANGE") {
-		// consume until closing paren
-		depth := 1
-		for !p.isEOF() && depth > 0 {
-			if p.current().Type == TokenLeftParen {
-				depth++
-			} else if p.current().Type == TokenRightParen {
-				depth--
-				if depth == 0 {
-					break
-				}
-			}
+		frameType := p.current().Literal
+		p.advance()
+		wf := &WindowFrame{Type: frameType}
+		if p.current().Type == TokenKeyword && p.current().Literal == "BETWEEN" {
 			p.advance()
+			wf.Start = p.parseFrameBound()
+			if p.current().Type == TokenKeyword && p.current().Literal == "AND" {
+				p.advance()
+			}
+			wf.End = p.parseFrameBound()
+		} else {
+			wf.Start = p.parseFrameBound()
+			wf.End = FrameBound{Type: "CURRENT"}
 		}
+		frame = wf
 	}
 
 	p.expect(TokenRightParen)
-	return partition, orderBy, nil
+	return partition, orderBy, frame, nil
+}
+
+// parseFrameBound parses a single window frame boundary
+func (p *Parser) parseFrameBound() FrameBound {
+	if p.current().Type == TokenKeyword && p.current().Literal == "UNBOUNDED" {
+		p.advance()
+		if p.current().Type == TokenKeyword && (p.current().Literal == "PRECEDING" || p.current().Literal == "FOLLOWING") {
+			direction := p.current().Literal
+			p.advance()
+			if direction == "PRECEDING" {
+				return FrameBound{Type: "UNBOUNDED"}
+			}
+			return FrameBound{Type: "UNBOUNDED_FOLLOWING"}
+		}
+		return FrameBound{Type: "UNBOUNDED"}
+	}
+	if p.current().Type == TokenKeyword && p.current().Literal == "CURRENT" {
+		p.advance()
+		if p.current().Type == TokenKeyword && p.current().Literal == "ROW" {
+			p.advance()
+		}
+		return FrameBound{Type: "CURRENT"}
+	}
+	// N PRECEDING or N FOLLOWING
+	expr, _ := p.parseExpr()
+	if p.current().Type == TokenKeyword && p.current().Literal == "PRECEDING" {
+		p.advance()
+		return FrameBound{Type: "PRECEDING", Value: expr}
+	}
+	if p.current().Type == TokenKeyword && p.current().Literal == "FOLLOWING" {
+		p.advance()
+		return FrameBound{Type: "FOLLOWING", Value: expr}
+	}
+	return FrameBound{Type: "CURRENT"}
 }
 
 // evalConstExpr evaluates a constant expression (one with no column references)

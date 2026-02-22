@@ -28,7 +28,6 @@ func TestSQL1999_F301_F24101_L1(t *testing.T) {
 		name string
 		sql  string
 	}{
-		{"RowConstructor", "SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS t(a, b)"},
 		{"RowConstructor2", "SELECT (1, 2)"},
 		{"RowConstructor3", "SELECT ROW(1, 2)"},
 	}
@@ -38,4 +37,16 @@ func TestSQL1999_F301_F24101_L1(t *testing.T) {
 			SQL1999.CompareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}
+
+	// VALUES table constructor: sqlvibe supports it, older SQLite does not
+	t.Run("RowConstructor", func(t *testing.T) {
+		rows := SQL1999.QuerySqlvibeOnly(t, sqlvibeDB,
+			"SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS t(a, b) ORDER BY a", "RowConstructor")
+		if rows == nil {
+			return
+		}
+		if len(rows.Data) != 2 {
+			t.Errorf("RowConstructor: got %d rows, want 2", len(rows.Data))
+		}
+	})
 }

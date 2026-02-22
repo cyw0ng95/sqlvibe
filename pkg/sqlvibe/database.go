@@ -781,23 +781,33 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		if len(stmt.CTEs) > 0 {
 			var cteNames []string
 			for _, cte := range stmt.CTEs {
-				cteRows, err := db.execSelectStmt(cte.Select)
+				var cteRows *Rows
+				var err error
+				if cte.Recursive {
+					cteRows, err = db.execRecursiveCTE(&cte)
+				} else {
+					cteRows, err = db.execSelectStmt(cte.Select)
+				}
 				if err != nil {
 					return nil, err
 				}
 				if cteRows == nil {
 					cteRows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
 				}
+				cols := cteRows.Columns
+				if len(cte.Columns) > 0 && len(cte.Columns) == len(cols) {
+					cols = cte.Columns
+				}
 				colTypes := make(map[string]string)
-				for _, col := range cteRows.Columns {
+				for _, col := range cols {
 					colTypes[col] = "TEXT"
 				}
 				db.tables[cte.Name] = colTypes
-				db.columnOrder[cte.Name] = cteRows.Columns
+				db.columnOrder[cte.Name] = cols
 				rowMaps := make([]map[string]interface{}, len(cteRows.Data))
 				for i, row := range cteRows.Data {
 					rm := make(map[string]interface{})
-					for j, col := range cteRows.Columns {
+					for j, col := range cols {
 						if j < len(row) {
 							rm[col] = row[j]
 						}
@@ -832,6 +842,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		// Handle derived table in FROM clause: SELECT ... FROM (SELECT ...) AS alias
 		if stmt.From.Subquery != nil {
 			return db.execDerivedTableQuery(stmt)
+		}
+
+		// Handle VALUES table constructor: SELECT * FROM (VALUES (1,'a'), (2,'b')) AS t(x,y)
+		if stmt.From.Values != nil {
+			return db.execValuesTable(stmt)
 		}
 
 		var tableName string
@@ -2306,6 +2321,113 @@ func (db *Database) execCreateView(stmt *QP.CreateViewStmt, origSQL string) (Res
 
 // execDerivedTableQuery materializes a derived table (subquery in FROM) and executes the outer query.
 // SELECT ... FROM (SELECT ...) AS alias ...
+func (db *Database) execValuesTable(stmt *QP.SelectStmt) (*Rows, error) {
+	fromRef := stmt.From
+	cols := fromRef.ValueCols
+	if len(cols) == 0 && len(fromRef.Values) > 0 {
+		cols = make([]string, len(fromRef.Values[0]))
+		for i := range cols {
+			cols[i] = fmt.Sprintf("column%d", i+1)
+		}
+	}
+
+	alias := fromRef.Alias
+	if alias == "" {
+		alias = "__values__"
+	}
+
+	colTypes := make(map[string]string)
+	for _, col := range cols {
+		colTypes[col] = "TEXT"
+	}
+	db.tables[alias] = colTypes
+	db.columnOrder[alias] = cols
+	db.data[alias] = make([]map[string]interface{}, len(fromRef.Values))
+	for i, row := range fromRef.Values {
+		rm := make(map[string]interface{})
+		for j, col := range cols {
+			if j < len(row) {
+				rm[col] = evalLiteralExpr(row[j])
+			}
+		}
+		db.data[alias][i] = rm
+	}
+
+	origFrom := stmt.From
+	stmt.From = &QP.TableRef{Name: alias, Alias: alias}
+	rows, err := db.execSelectStmt(stmt)
+	stmt.From = origFrom
+
+	delete(db.tables, alias)
+	delete(db.columnOrder, alias)
+	delete(db.data, alias)
+
+	return rows, err
+}
+
+func (db *Database) execRecursiveCTE(cte *QP.CTEClause) (*Rows, error) {
+	sel := cte.Select
+	if sel.SetOp != "UNION" && sel.SetOp != "UNION ALL" {
+		return db.execSelectStmt(sel)
+	}
+
+	// Execute anchor (left side)
+	anchorStmt := *sel
+	anchorStmt.SetOp = ""
+	anchorStmt.SetOpAll = false
+	anchorStmt.SetOpRight = nil
+	anchorRows, err := db.execSelectStmt(&anchorStmt)
+	if err != nil {
+		return nil, err
+	}
+	if anchorRows == nil {
+		anchorRows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
+	}
+
+	cols := anchorRows.Columns
+	if len(cte.Columns) > 0 && len(cte.Columns) == len(cols) {
+		cols = cte.Columns
+	}
+
+	allRows := make([][]interface{}, len(anchorRows.Data))
+	copy(allRows, anchorRows.Data)
+
+	maxIter := 1000
+	current := anchorRows
+	for i := 0; i < maxIter; i++ {
+		db.tables[cte.Name] = make(map[string]string)
+		db.columnOrder[cte.Name] = cols
+		db.data[cte.Name] = make([]map[string]interface{}, len(current.Data))
+		for _, col := range cols {
+			db.tables[cte.Name][col] = "TEXT"
+		}
+		for j, row := range current.Data {
+			rm := make(map[string]interface{})
+			for k, col := range cols {
+				if k < len(row) {
+					rm[col] = row[k]
+				}
+			}
+			db.data[cte.Name][j] = rm
+		}
+
+		recursiveRows, rerr := db.execSelectStmt(sel.SetOpRight)
+
+		delete(db.tables, cte.Name)
+		delete(db.columnOrder, cte.Name)
+		delete(db.data, cte.Name)
+
+		if rerr != nil || recursiveRows == nil || len(recursiveRows.Data) == 0 {
+			break
+		}
+
+		allRows = append(allRows, recursiveRows.Data...)
+		current = recursiveRows
+	}
+
+	return &Rows{Columns: cols, Data: allRows}, nil
+}
+
 func (db *Database) execDerivedTableQuery(stmt *QP.SelectStmt) (*Rows, error) {
 	subq := stmt.From.Subquery
 	alias := stmt.From.Alias
@@ -2609,8 +2731,123 @@ func (db *Database) evalExprOnMap(expr QP.Expr, row map[string]interface{}) inte
 			return row[e.Name[idx+1:]]
 		}
 		return nil
+	case *QP.AnyAllExpr:
+		subRows, err := db.execSelectStmt(e.Subquery)
+		if err != nil || subRows == nil || len(subRows.Data) == 0 {
+			if e.Quantifier == "ALL" {
+				return int64(1) // vacuously true
+			}
+			return nil
+		}
+		leftVal := db.evalExprOnMap(e.Left, row)
+		for _, subRow := range subRows.Data {
+			if len(subRow) == 0 {
+				continue
+			}
+			rightVal := subRow[0]
+			cmp := compareForAnyAll(leftVal, rightVal)
+			match := false
+			switch e.Op {
+			case QP.TokenEq:
+				match = cmp == 0
+			case QP.TokenNe:
+				match = cmp != 0
+			case QP.TokenLt:
+				match = cmp < 0
+			case QP.TokenLe:
+				match = cmp <= 0
+			case QP.TokenGt:
+				match = cmp > 0
+			case QP.TokenGe:
+				match = cmp >= 0
+			}
+			if e.Quantifier == "ALL" && !match {
+				return nil
+			}
+			if (e.Quantifier == "ANY" || e.Quantifier == "SOME") && match {
+				return int64(1)
+			}
+		}
+		if e.Quantifier == "ALL" {
+			return int64(1)
+		}
+		return nil
 	}
 	return nil
+}
+
+// compareForAnyAll compares two values for ANY/ALL predicates.
+func compareForAnyAll(a, b interface{}) int {
+if a == nil && b == nil {
+return 0
+}
+if a == nil {
+return -1
+}
+if b == nil {
+return 1
+}
+switch av := a.(type) {
+case int64:
+switch bv := b.(type) {
+case int64:
+if av < bv {
+return -1
+}
+if av > bv {
+return 1
+}
+return 0
+case float64:
+fa := float64(av)
+if fa < bv {
+return -1
+}
+if fa > bv {
+return 1
+}
+return 0
+}
+case float64:
+switch bv := b.(type) {
+case float64:
+if av < bv {
+return -1
+}
+if av > bv {
+return 1
+}
+return 0
+case int64:
+fb := float64(bv)
+if av < fb {
+return -1
+}
+if av > fb {
+return 1
+}
+return 0
+}
+case string:
+if bv, ok := b.(string); ok {
+if av < bv {
+return -1
+}
+if av > bv {
+return 1
+}
+return 0
+}
+}
+as := fmt.Sprintf("%v", a)
+bs := fmt.Sprintf("%v", b)
+if as < bs {
+return -1
+}
+if as > bs {
+return 1
+}
+return 0
 }
 
 // execCreateTableAsSelect handles CREATE TABLE ... AS SELECT
