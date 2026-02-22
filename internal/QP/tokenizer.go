@@ -202,6 +202,16 @@ var keywords = map[string]TokenType{
 	"RANGE":             TokenKeyword,
 	"PERCENT_RANK":      TokenKeyword,
 	"CUME_DIST":         TokenKeyword,
+	"TRIGGER":           TokenKeyword,
+	"FOR":               TokenKeyword,
+	"EACH":              TokenKeyword,
+	"ROW":               TokenKeyword,
+	"NEW":               TokenKeyword,
+	"OLD":               TokenKeyword,
+	"INSTEAD":           TokenKeyword,
+	"OF":                TokenKeyword,
+	"AFTER":             TokenKeyword,
+	"BEFORE":            TokenKeyword,
 }
 
 type Token struct {

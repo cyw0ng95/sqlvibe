@@ -1,6 +1,30 @@
 # sqlvibe Release History
 
-## **v0.8.5** (2026-02-22)
+## **v0.8.6** (2026-02-22)
+
+### Features
+- **Foreign Key Enforcement**: Full FOREIGN KEY constraint parsing (inline `REFERENCES` and table-level `FOREIGN KEY (...) REFERENCES`) with `PRAGMA foreign_keys = ON/OFF`. Enforces referential integrity on INSERT/UPDATE/DELETE with support for `ON DELETE CASCADE`, `ON DELETE RESTRICT`, `ON DELETE SET NULL`, `ON UPDATE CASCADE`.
+- **TRIGGER Support**: Full `CREATE TRIGGER` / `DROP TRIGGER` support. Fires `BEFORE`/`AFTER` triggers for INSERT, UPDATE, DELETE events. Supports `WHEN` condition and `UPDATE OF column` filters. Prevents infinite recursion (depth limit 16).
+- **AUTOINCREMENT**: `INTEGER PRIMARY KEY AUTOINCREMENT` columns now generate monotonically increasing IDs that are never reused after DELETE. Backed by `seqValues` map. `PRAGMA sqlite_sequence` returns current sequence values.
+- **julianday() Function**: Returns the Julian Day Number as a floating-point value. Supported in both query engine and VM exec paths.
+- **unixepoch() Function**: Returns Unix timestamp for a datetime value.
+- **Extended strftime() Format Specifiers**: Added `%w` (weekday 0-6), `%W` (ISO week number), `%s` (Unix seconds), `%J` (Julian day).
+- **PRINTF() / FORMAT() Function**: SQLite-compatible formatted string output with `%d`, `%f`, `%e`, `%g`, `%s`, `%q`, `%x`, `%X`, `%o`, `%c` format specifiers.
+- **QUOTE() Function**: Returns SQL-quoted representation of a value (`'text'`, integer, `NULL`).
+- **HEX() Function**: Returns uppercase hex encoding of a string or blob.
+- **CHAR() Function**: Converts integer codepoints to a UTF-8 string.
+- **UNICODE() Function**: Returns the Unicode codepoint of the first character of a string.
+- **New PRAGMAs**: `foreign_keys`, `encoding` (returns 'UTF-8'), `collation_list` (BINARY/NOCASE/RTRIM), `sqlite_sequence`.
+- **PRAGMA in Exec path**: `PRAGMA foreign_keys = ON` and other setting PRAGMAs now work correctly when called via `db.Exec()`.
+- **SQL1999 Test Suites**: Added F561 (Foreign Keys), F621 (Triggers), F631 (AUTOINCREMENT), F641 (DateTime Functions), F651 (String Functions), F661 (PRAGMA Extensions) — 70 new passing tests.
+
+### Bug Fixes
+- None
+
+### Breaking Changes
+- None
+
+
 
 ### Features
 - **WAL Enhancements**: Added `WAL.Recover()` for crash-recovery replay of committed WAL frames (with CRC validation) and `WAL.FrameCount()` for querying the current frame count without a checkpoint.

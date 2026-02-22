@@ -34,6 +34,17 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		return db.pragmaCompression(stmt)
 	case "storage_info":
 		return db.pragmaStorageInfo()
+	case "foreign_keys":
+		return db.pragmaForeignKeys(stmt)
+	case "encoding":
+		return &Rows{Columns: []string{"encoding"}, Data: [][]interface{}{{"UTF-8"}}}, nil
+	case "collation_list":
+		return &Rows{
+			Columns: []string{"seq", "name"},
+			Data:    [][]interface{}{{int64(0), "BINARY"}, {int64(1), "NOCASE"}, {int64(2), "RTRIM"}},
+		}, nil
+	case "sqlite_sequence":
+		return db.pragmaSQLiteSequence()
 	default:
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
@@ -397,4 +408,51 @@ int64(m.TotalRows),
 int64(m.TotalTables),
 }
 return &Rows{Columns: columns, Data: [][]interface{}{row}}, nil
+}
+
+// pragmaForeignKeys handles PRAGMA foreign_keys and PRAGMA foreign_keys = ON/OFF.
+func (db *Database) pragmaForeignKeys(stmt *QP.PragmaStmt) (*Rows, error) {
+if stmt.Value == nil {
+val := int64(0)
+if db.foreignKeysEnabled {
+val = 1
+}
+return &Rows{
+Columns: []string{"foreign_keys"},
+Data:    [][]interface{}{{val}},
+}, nil
+}
+var enable bool
+switch v := stmt.Value.(type) {
+case *QP.Literal:
+switch val := v.Value.(type) {
+case int64:
+enable = val != 0
+case float64:
+enable = val != 0
+case bool:
+enable = val
+default:
+s := strings.ToUpper(fmt.Sprintf("%v", val))
+enable = s == "ON" || s == "1" || s == "TRUE"
+}
+case *QP.ColumnRef:
+s := strings.ToUpper(v.Name)
+enable = s == "ON" || s == "1" || s == "TRUE"
+default:
+return nil, fmt.Errorf("PRAGMA foreign_keys: unsupported value %T", stmt.Value)
+}
+db.foreignKeysEnabled = enable
+// SQLite returns no rows when setting a pragma value
+return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+}
+
+// pragmaSQLiteSequence returns the current autoincrement sequences.
+func (db *Database) pragmaSQLiteSequence() (*Rows, error) {
+columns := []string{"name", "seq"}
+data := make([][]interface{}, 0)
+for tableName, seq := range db.seqValues {
+data = append(data, []interface{}{tableName, seq})
+}
+return &Rows{Columns: columns, Data: data}, nil
 }

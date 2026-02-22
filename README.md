@@ -4,13 +4,19 @@
 
 ## Features
 
-- **SQL:1999 compatibility** — 75+ test suites passing (added F771 window functions)
+- **SQL:1999 compatibility** — 81+ test suites passing (added F561/F621/F631/F641/F651/F661)
 - **In-memory databases** — `:memory:` URI for fast, ephemeral storage
 - **Comprehensive SQL**: DDL, DML, JOINs, Subqueries, Aggregates, Window functions (ROW_NUMBER/RANK/LAG/LEAD/NTILE/PERCENT_RANK/CUME_DIST), CTEs (recursive), VALUES derived tables, ANY/ALL subqueries, GROUP_CONCAT, etc.
+- **Foreign Key Enforcement** — `PRAGMA foreign_keys = ON`, inline REFERENCES, table-level FOREIGN KEY, ON DELETE CASCADE/RESTRICT/SET NULL, ON UPDATE CASCADE
+- **Trigger Support** — `CREATE TRIGGER` / `DROP TRIGGER`, BEFORE/AFTER INSERT/UPDATE/DELETE, WHEN conditions, UPDATE OF column filters
+- **AUTOINCREMENT** — Monotonically increasing INTEGER PRIMARY KEY with `sqlite_sequence` tracking
+- **DateTime Functions** — `julianday()`, `unixepoch()`, extended `strftime()` with `%w`/`%W`/`%s`/`%J`
+- **String Functions** — `printf()`/`format()`, `quote()`, `hex()`, `char()`, `unicode()`, `instr()`
 - **Concurrency & Transactions** — WAL mode, MVCC snapshot isolation, configurable isolation levels (READ UNCOMMITTED / READ COMMITTED / SERIALIZABLE), deadlock detection, busy timeout
 - **Advanced Compression** — Pluggable compression via `PRAGMA compression`: NONE, RLE, LZ4, ZSTD, GZIP
 - **Incremental Backup** — `BACKUP DATABASE TO 'path'` and `BACKUP INCREMENTAL TO 'path'` SQL commands
 - **Storage Metrics** — `PRAGMA storage_info` for page counts, WAL size, compression ratio
+- **Extended PRAGMAs** — `foreign_keys`, `encoding`, `collation_list`, `sqlite_sequence`, `wal_mode`, `isolation_level`, `busy_timeout`, `compression`, `storage_info`
 
 ## Quick Start
 
@@ -37,7 +43,7 @@ rows, _ := db.Query(`SELECT name FROM users WHERE id > 0`)
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.8.5)
+## Performance (v0.8.6)
 
 Benchmarks on AMD EPYC 7763 @ 2.45GHz, in-memory database, `-benchtime=1s -benchmem`.
 
@@ -75,7 +81,7 @@ Benchmarks on AMD EPYC 7763 @ 2.45GHz, in-memory database, `-benchtime=1s -bench
 
 ## SQL:1999 Compatibility
 
-64+ test suites passing
+81+ test suites passing
 
 ## Building
 

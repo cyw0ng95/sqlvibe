@@ -96,6 +96,12 @@ type Database struct {
 	hybridStoresDirty  map[string]bool                     // table name -> needs rebuild on next access
 	isolationConfig    *TM.IsolationConfig                 // isolation level and busy_timeout settings
 	compressionName    string                              // active compression algorithm (NONE/RLE/LZ4/ZSTD/GZIP)
+	// v0.8.6 additions
+	foreignKeys       map[string][]QP.ForeignKeyConstraint // table name -> FK constraints
+	triggers          map[string][]*QP.CreateTriggerStmt   // table name -> triggers list
+	autoincrement     map[string]string                    // table name -> pk col name (if AUTOINCREMENT)
+	seqValues         map[string]int64                     // table name -> last used autoincrement value
+	foreignKeysEnabled bool                               // PRAGMA foreign_keys = ON/OFF
 }
 
 type dbSnapshot struct {
@@ -357,6 +363,11 @@ func Open(path string) (*Database, error) {
 		hybridStoresDirty:  make(map[string]bool),
 		isolationConfig:    TM.NewIsolationConfig(),
 		compressionName:    "NONE",
+		foreignKeys:        make(map[string][]QP.ForeignKeyConstraint),
+		triggers:           make(map[string][]*QP.CreateTriggerStmt),
+		autoincrement:      make(map[string]string),
+		seqValues:          make(map[string]int64),
+		foreignKeysEnabled: false,
 	}, nil
 }
 
@@ -525,6 +536,20 @@ func (db *Database) Exec(sql string) (Result, error) {
 		for i, tableCheck := range stmt.TableChecks {
 			db.columnChecks[stmt.Name][fmt.Sprintf("__table_check_%d__", i)] = tableCheck
 		}
+		// Store FK constraints
+		allFKs := make([]QP.ForeignKeyConstraint, 0)
+		for _, col := range stmt.Columns {
+			if col.ForeignKey != nil {
+				allFKs = append(allFKs, *col.ForeignKey)
+			}
+			if col.IsAutoincrement && col.PrimaryKey {
+				db.autoincrement[stmt.Name] = col.Name
+			}
+		}
+		allFKs = append(allFKs, stmt.ForeignKeys...)
+		if len(allFKs) > 0 {
+			db.foreignKeys[stmt.Name] = allFKs
+		}
 		db.engine.RegisterTable(stmt.Name, schema)
 		db.tables[stmt.Name] = colTypes
 		var colOrder []string
@@ -661,6 +686,43 @@ func (db *Database) Exec(sql string) (Result, error) {
 		delete(db.indexData, stmt.Name)
 		db.schemaCache.Invalidate()
 		return Result{}, nil
+	case "CreateTriggerStmt":
+		stmt := ast.(*QP.CreateTriggerStmt)
+		if _, exists := db.triggers[stmt.TableName]; !exists {
+			db.triggers[stmt.TableName] = nil
+		}
+		// Check if trigger already exists
+		for _, t := range db.triggers[stmt.TableName] {
+			if t.Name == stmt.Name {
+				if stmt.IfNotExists {
+					return Result{}, nil
+				}
+				return Result{}, fmt.Errorf("trigger %s already exists", stmt.Name)
+			}
+		}
+		db.triggers[stmt.TableName] = append(db.triggers[stmt.TableName], stmt)
+		db.invalidateSchemaCaches()
+		return Result{}, nil
+	case "DropTriggerStmt":
+		stmt := ast.(*QP.DropTriggerStmt)
+		dropped := false
+		for tbl, trigs := range db.triggers {
+			for i, t := range trigs {
+				if t.Name == stmt.Name {
+					db.triggers[tbl] = append(trigs[:i], trigs[i+1:]...)
+					dropped = true
+					break
+				}
+			}
+			if dropped {
+				break
+			}
+		}
+		if !dropped && !stmt.IfExists {
+			return Result{}, fmt.Errorf("no such trigger: %s", stmt.Name)
+		}
+		db.invalidateSchemaCaches()
+		return Result{}, nil
 	case "BeginStmt":
 		stmt := ast.(*QP.BeginStmt)
 		if db.activeTx != nil {
@@ -704,6 +766,14 @@ func (db *Database) Exec(sql string) (Result, error) {
 		}
 		// activeTx is cleared after snapshot restore so the engine sees clean state
 		db.activeTx = nil
+		return Result{}, nil
+	case "PragmaStmt":
+		// PRAGMAs like PRAGMA foreign_keys = ON need to work via Exec too
+		rows, err := db.handlePragma(ast.(*QP.PragmaStmt))
+		if err != nil {
+			return Result{}, err
+		}
+		_ = rows
 		return Result{}, nil
 	}
 

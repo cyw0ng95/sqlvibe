@@ -3552,14 +3552,326 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 			mod, _ := vm.evaluateExprOnRow(row, columns, e.Args[i]).(string)
 			t = applyDateModifier(t, mod)
 		}
-		goFmt := strings.NewReplacer(
-			"%Y", "2006", "%m", "01", "%d", "02",
-			"%H", "15", "%M", "04", "%S", "05",
-			"%j", "002", "%f", "05.000000",
-		).Replace(fmtStr)
-		return t.Format(goFmt)
+		return applyStrftime(fmtStr, t)
+	case "JULIANDAY":
+		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0)))
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		for i := 1; i < len(e.Args); i++ {
+			mod, _ := vm.evaluateExprOnRow(row, columns, e.Args[i]).(string)
+			t = applyDateModifier(t, mod)
+		}
+		return toJulianDay(t)
+	case "UNIXEPOCH":
+		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0)))
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		return t.Unix()
+	case "INSTR":
+		if len(e.Args) >= 2 {
+			haystack := fmt.Sprintf("%v", vm.evaluateExprOnRow(row, columns, e.Args[0]))
+			needle := fmt.Sprintf("%v", vm.evaluateExprOnRow(row, columns, e.Args[1]))
+			idx := strings.Index(haystack, needle)
+			return int64(idx + 1)
+		}
+		return int64(0)
+	case "GLOB":
+		if len(e.Args) >= 2 {
+			pattern := fmt.Sprintf("%v", vm.evaluateExprOnRow(row, columns, e.Args[0]))
+			str := fmt.Sprintf("%v", vm.evaluateExprOnRow(row, columns, e.Args[1]))
+			if globMatch(str, pattern) {
+				return int64(1)
+			}
+			return int64(0)
+		}
+		return int64(0)
+	case "PRINTF", "FORMAT":
+		if len(e.Args) < 1 {
+			return nil
+		}
+		fmtVal := vm.evaluateExprOnRow(row, columns, e.Args[0])
+		if fmtVal == nil {
+			return nil
+		}
+		formatStr := fmt.Sprintf("%v", fmtVal)
+		argVals := make([]interface{}, 0, len(e.Args)-1)
+		for i := 1; i < len(e.Args); i++ {
+			argVals = append(argVals, vm.evaluateExprOnRow(row, columns, e.Args[i]))
+		}
+		return sqlitePrintf(formatStr, argVals)
+	case "QUOTE":
+		if len(e.Args) >= 1 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			return sqliteQuote(val)
+		}
+		return nil
+	case "HEX":
+		if len(e.Args) >= 1 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			return sqliteHex(val)
+		}
+		return nil
+	case "CHAR":
+		var sb strings.Builder
+		for _, arg := range e.Args {
+			v := vm.evaluateExprOnRow(row, columns, arg)
+			if n, ok := toInt64ForVM(v); ok {
+				sb.WriteRune(rune(n))
+			}
+		}
+		return sb.String()
+	case "UNICODE":
+		if len(e.Args) >= 1 {
+			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
+			s := fmt.Sprintf("%v", val)
+			if len(s) > 0 {
+				r, _ := utf8.DecodeRuneInString(s)
+				return int64(r)
+			}
+		}
+		return nil
 	}
 	return nil
+}
+
+func toInt64ForVM(v interface{}) (int64, bool) {
+	switch x := v.(type) {
+	case int64:
+		return x, true
+	case int:
+		return int64(x), true
+	case float64:
+		return int64(x), true
+	}
+	return 0, false
+}
+
+// applyStrftime applies strftime format string with SQLite-compatible specifiers.
+func applyStrftime(fmtStr string, t time.Time) string {
+	var sb strings.Builder
+	i := 0
+	for i < len(fmtStr) {
+		if fmtStr[i] == '%' && i+1 < len(fmtStr) {
+			i++
+			switch fmtStr[i] {
+			case 'Y':
+				fmt.Fprintf(&sb, "%04d", t.Year())
+			case 'm':
+				fmt.Fprintf(&sb, "%02d", int(t.Month()))
+			case 'd':
+				fmt.Fprintf(&sb, "%02d", t.Day())
+			case 'H':
+				fmt.Fprintf(&sb, "%02d", t.Hour())
+			case 'M':
+				fmt.Fprintf(&sb, "%02d", t.Minute())
+			case 'S':
+				fmt.Fprintf(&sb, "%02d", t.Second())
+			case 'j':
+				sb.WriteString(t.Format("002"))
+			case 'f':
+				fmt.Fprintf(&sb, "%02d.%06d", t.Second(), t.Nanosecond()/1000)
+			case 'W':
+				_, week := t.ISOWeek()
+				fmt.Fprintf(&sb, "%02d", week)
+			case 'w':
+				// Weekday 0=Sunday ... 6=Saturday
+				fmt.Fprintf(&sb, "%d", int(t.Weekday()))
+			case 's':
+				fmt.Fprintf(&sb, "%d", t.Unix())
+			case 'J':
+				fmt.Fprintf(&sb, "%.7f", toJulianDay(t))
+			case '%':
+				sb.WriteByte('%')
+			default:
+				sb.WriteByte('%')
+				sb.WriteByte(fmtStr[i])
+			}
+		} else {
+			sb.WriteByte(fmtStr[i])
+		}
+		i++
+	}
+	return sb.String()
+}
+
+// toJulianDay converts a time.Time to a Julian day number.
+// Julian Day Number for Unix epoch (1970-01-01) = julianDayUnixEpoch
+func toJulianDay(t time.Time) float64 {
+	return julianDayUnixEpoch + float64(t.UnixNano())/float64(24*60*60*1e9)
+}
+
+// sqlitePrintf implements SQLite's printf() / format() function.
+func sqlitePrintf(format string, args []interface{}) string {
+	var sb strings.Builder
+	argIdx := 0
+	i := 0
+	for i < len(format) {
+		if format[i] != '%' {
+			sb.WriteByte(format[i])
+			i++
+			continue
+		}
+		i++
+		if i >= len(format) {
+			break
+		}
+		// Parse flags, width, precision
+		var flags strings.Builder
+		for i < len(format) && (format[i] == '-' || format[i] == '+' || format[i] == ' ' || format[i] == '0' || format[i] == '#') {
+			flags.WriteByte(format[i])
+			i++
+		}
+		var width strings.Builder
+		for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+			width.WriteByte(format[i])
+			i++
+		}
+		var prec strings.Builder
+		if i < len(format) && format[i] == '.' {
+			prec.WriteByte('.')
+			i++
+			for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+				prec.WriteByte(format[i])
+				i++
+			}
+		}
+		if i >= len(format) {
+			break
+		}
+		spec := format[i]
+		i++
+		goFmt := "%" + flags.String() + width.String() + prec.String()
+		var arg interface{}
+		if argIdx < len(args) {
+			arg = args[argIdx]
+			argIdx++
+		}
+		switch spec {
+		case 'd', 'i':
+			n, _ := toInt64ForVM(arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"d", n))
+		case 'f':
+			f := 0.0
+			if arg != nil {
+				switch v := arg.(type) {
+				case float64:
+					f = v
+				case int64:
+					f = float64(v)
+				}
+			}
+			sb.WriteString(fmt.Sprintf(goFmt+"f", f))
+		case 'e', 'E':
+			f := 0.0
+			if arg != nil {
+				switch v := arg.(type) {
+				case float64:
+					f = v
+				case int64:
+					f = float64(v)
+				}
+			}
+			sb.WriteString(fmt.Sprintf(goFmt+string(spec), f))
+		case 'g', 'G':
+			f := 0.0
+			if arg != nil {
+				switch v := arg.(type) {
+				case float64:
+					f = v
+				case int64:
+					f = float64(v)
+				}
+			}
+			sb.WriteString(fmt.Sprintf(goFmt+string(spec), f))
+		case 's':
+			s := fmt.Sprintf("%v", arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"s", s))
+		case 'q':
+			s := fmt.Sprintf("%v", arg)
+			sb.WriteString("'" + strings.ReplaceAll(s, "'", "''") + "'")
+		case 'x':
+			n, _ := toInt64ForVM(arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"x", n))
+		case 'X':
+			n, _ := toInt64ForVM(arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"X", n))
+		case 'o':
+			n, _ := toInt64ForVM(arg)
+			sb.WriteString(fmt.Sprintf(goFmt+"o", n))
+		case 'c':
+			if arg != nil {
+				n, _ := toInt64ForVM(arg)
+				if n > 0 {
+					sb.WriteRune(rune(n))
+				} else {
+					s := fmt.Sprintf("%v", arg)
+					if len(s) > 0 {
+						sb.WriteByte(s[0])
+					}
+				}
+			}
+		case '%':
+			sb.WriteByte('%')
+		}
+	}
+	return sb.String()
+}
+
+// sqliteQuote implements SQLite's QUOTE() function.
+func sqliteQuote(v interface{}) interface{} {
+	if v == nil {
+		return "NULL"
+	}
+	switch val := v.(type) {
+	case string:
+		return "'" + strings.ReplaceAll(val, "'", "''") + "'"
+	case int64:
+		return fmt.Sprintf("%d", val)
+	case float64:
+		return fmt.Sprintf("%g", val)
+	case []byte:
+		// BLOB: X'hexstring'
+		hex := make([]byte, len(val)*2)
+		const hexChars = "0123456789ABCDEF"
+		for i, b := range val {
+			hex[i*2] = hexChars[b>>4]
+			hex[i*2+1] = hexChars[b&0xf]
+		}
+		return "X'" + string(hex) + "'"
+	default:
+		s := fmt.Sprintf("%v", val)
+		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	}
+}
+
+// sqliteHex implements SQLite's HEX() function.
+func sqliteHex(v interface{}) interface{} {
+	if v == nil {
+		return nil
+	}
+	switch val := v.(type) {
+	case []byte:
+		const hexChars = "0123456789ABCDEF"
+		hex := make([]byte, len(val)*2)
+		for i, b := range val {
+			hex[i*2] = hexChars[b>>4]
+			hex[i*2+1] = hexChars[b&0xf]
+		}
+		return string(hex)
+	case string:
+		const hexChars = "0123456789ABCDEF"
+		hex := make([]byte, len(val)*2)
+		for i := 0; i < len(val); i++ {
+			b := val[i]
+			hex[i*2] = hexChars[b>>4]
+			hex[i*2+1] = hexChars[b&0xf]
+		}
+		return string(hex)
+	default:
+		return fmt.Sprintf("%X", val)
+	}
 }
 
 // evaluateBoolExprOnRow evaluates a WHERE-clause expression as a boolean against a row
