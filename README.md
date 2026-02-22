@@ -4,9 +4,9 @@
 
 ## Features
 
-- **Full SQL:1999 support** — 64+ test suites passing
+- **SQL:1999 compatibility** — 75+ test suites passing (added F771 window functions)
 - **In-memory databases** — `:memory:` URI for fast, ephemeral storage
-- **Comprehensive SQL**: DDL, DML, JOINs, Subqueries, Aggregates, Window functions, CTEs, etc.
+- **Comprehensive SQL**: DDL, DML, JOINs, Subqueries, Aggregates, Window functions (ROW_NUMBER/RANK/LAG/LEAD/NTILE/PERCENT_RANK/CUME_DIST), CTEs (recursive), VALUES derived tables, ANY/ALL subqueries, GROUP_CONCAT, etc.
 
 ## Quick Start
 
@@ -33,10 +33,9 @@ rows, _ := db.Query(`SELECT name FROM users WHERE id > 0`)
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.8.3)
+## Performance (v0.8.4)
 
 Benchmarks on AMD EPYC 7763 @ 2.45GHz, in-memory database, `-benchtime=1s -benchmem`.
-_Note: complex query benchmarks from v0.8.2 benchmark suite on same hardware._
 
 ### Complex Queries - sqlvibe WINS
 

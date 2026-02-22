@@ -543,7 +543,7 @@ graph TD
 | FIRST_VALUE/LAST_VALUE | Works | [x] |
 | NTILE | Works | [x] |
 | Multiple windows per query | Works | [x] |
-| Window aggregates (SUM/AVG) | Works | [ ] |
+| Window aggregates (SUM/AVG) | Works | [x] |
 | SQL:1999 F771 tests (10 test files) | Pass | [x] |
 | SQLite comparison | Match | [x] |
 | No regressions | 0 | [x] |
@@ -555,7 +555,7 @@ graph TD
 | GROUP_CONCAT | Works | [x] |
 | VALUES multi-row INSERT | Works | [x] |
 | VALUES as derived table | Works | [x] |
-| RETURNING clause | Works | [ ] |
+| RETURNING clause | Works | [x] |
 
 ### Group B: Balanced Extensions
 
@@ -568,8 +568,8 @@ graph TD
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ON CONFLICT DO UPDATE | Works | [ ] |
-| ON CONFLICT DO NOTHING | Works | [ ] |
+| ON CONFLICT DO UPDATE | Works | [x] |
+| ON CONFLICT DO NOTHING | Works | [x] |
 | ANY/SOME subquery | Works | [x] |
 | ALL subquery | Works | [x] |
 

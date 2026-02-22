@@ -354,11 +354,33 @@ func computePartitionValues(rows *Rows, wf *QP.WindowFuncExpr, compute func(part
 }
 
 // computeWindowAgg computes a window aggregate for each row.
+// If wf has a Frame spec, uses frame-based per-row computation; otherwise full-partition agg.
 func computeWindowAgg(rows *Rows, wf *QP.WindowFuncExpr, agg func(rowIndices []int) interface{}) []interface{} {
 	n := len(rows.Data)
 	result := make([]interface{}, n)
 	partGroups := buildPartitionGroups(rows, wf.Partition)
 
+	// If there are ORDER BY expressions or a frame spec, compute per-row frame values
+	if len(wf.OrderBy) > 0 || wf.Frame != nil {
+		for _, group := range partGroups {
+			sortedGroup := sortRowIndices(rows, group, wf.OrderBy)
+			total := len(sortedGroup)
+			// Build reverse map: original row index → position in sorted group
+			posMap := make(map[int]int, total)
+			for pos, ri := range sortedGroup {
+				posMap[ri] = pos
+			}
+			for _, ri := range group {
+				pos := posMap[ri]
+				start, end := resolveFrameBounds(wf.Frame, pos, total)
+				frameIndices := sortedGroup[start : end+1]
+				result[ri] = agg(frameIndices)
+			}
+		}
+		return result
+	}
+
+	// No ORDER BY / frame: aggregate over full partition
 	for _, group := range partGroups {
 		val := agg(group)
 		for _, ri := range group {
@@ -366,6 +388,74 @@ func computeWindowAgg(rows *Rows, wf *QP.WindowFuncExpr, agg func(rowIndices []i
 		}
 	}
 	return result
+}
+
+// resolveFrameBounds returns the [start, end] (inclusive) positions within a sorted partition
+// for the given frame spec and current position. Default frame when no spec:
+//   - With ORDER BY: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+//   - Without ORDER BY (handled by caller): full partition
+func resolveFrameBounds(frame *QP.WindowFrame, pos, total int) (start, end int) {
+	if total == 0 {
+		return 0, 0
+	}
+	if frame == nil {
+		// Default with ORDER BY: from beginning to current row
+		return 0, pos
+	}
+	start = resolveFramePos(frame.Start, pos, total, true)
+	end = resolveFramePos(frame.End, pos, total, false)
+	// Clamp
+	if start < 0 {
+		start = 0
+	}
+	if end >= total {
+		end = total - 1
+	}
+	if start > end {
+		start = end
+	}
+	return start, end
+}
+
+// resolveFramePos resolves a FrameBound to an absolute position.
+// isStart indicates whether this is the start bound (for FOLLOWING, use pos+offset).
+func resolveFramePos(fb QP.FrameBound, pos, total int, isStart bool) int {
+	switch fb.Type {
+	case "UNBOUNDED":
+		if isStart {
+			return 0
+		}
+		return total - 1
+	case "CURRENT":
+		return pos
+	case "PRECEDING":
+		offset := frameBoundOffset(fb.Value)
+		return pos - offset
+	case "FOLLOWING":
+		offset := frameBoundOffset(fb.Value)
+		return pos + offset
+	default:
+		if isStart {
+			return 0
+		}
+		return total - 1
+	}
+}
+
+// frameBoundOffset extracts the integer offset from a FrameBound value expression.
+func frameBoundOffset(expr QP.Expr) int {
+	if expr == nil {
+		return 0
+	}
+	if lit, ok := expr.(*QP.Literal); ok {
+		switch v := lit.Value.(type) {
+		case int64:
+			return int(v)
+		case float64:
+			return int(v)
+		}
+	}
+	return 0
 }
 
 // computeOrderedWindowValues computes per-row values based on position within ordered partition.

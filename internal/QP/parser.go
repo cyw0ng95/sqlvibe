@@ -2139,6 +2139,15 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				}
 			}
 			p.expect(TokenRightParen)
+			// Check for OVER clause (window function) - handles identifiers like PERCENT_RANK, CUME_DIST
+			if p.current().Type == TokenKeyword && p.current().Literal == "OVER" {
+				p.advance() // consume OVER
+				partition, orderBy, frame, err := p.parseWindowSpec()
+				if err != nil {
+					return nil, err
+				}
+				return &WindowFuncExpr{Name: strings.ToUpper(tok.Literal), Args: args, Partition: partition, OrderBy: orderBy, Frame: frame}, nil
+			}
 			return &FuncCall{Name: tok.Literal, Args: args}, nil
 		}
 
@@ -2544,10 +2553,11 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []WindowOrderBy, f
 		frameType := p.current().Literal
 		p.advance()
 		wf := &WindowFrame{Type: frameType}
-		if p.current().Type == TokenKeyword && p.current().Literal == "BETWEEN" {
+		// BETWEEN has its own token type (TokenBetween), check by type OR literal
+		if p.current().Type == TokenBetween || (p.current().Type == TokenKeyword && p.current().Literal == "BETWEEN") {
 			p.advance()
 			wf.Start = p.parseFrameBound()
-			if p.current().Type == TokenKeyword && p.current().Literal == "AND" {
+			if p.current().Type == TokenAnd || (p.current().Type == TokenKeyword && p.current().Literal == "AND") {
 				p.advance()
 			}
 			wf.End = p.parseFrameBound()
@@ -2578,7 +2588,9 @@ func (p *Parser) parseFrameBound() FrameBound {
 	}
 	if p.current().Type == TokenKeyword && p.current().Literal == "CURRENT" {
 		p.advance()
-		if p.current().Type == TokenKeyword && p.current().Literal == "ROW" {
+		// Consume ROW - it may be a keyword or identifier depending on tokenizer version
+		if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) &&
+			strings.ToUpper(p.current().Literal) == "ROW" {
 			p.advance()
 		}
 		return FrameBound{Type: "CURRENT"}
