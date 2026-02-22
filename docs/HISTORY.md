@@ -1,5 +1,21 @@
 # sqlvibe Release History
 
+## **v0.8.8** (2026-02-22)
+
+### Features
+- **Unified Error Code System**: New `ErrorCode` type (`pkg/sqlvibe/error_code.go`) with 29 primary codes (`SVDB_OK`…`SVDB_WARNING`, `SVDB_ROW`, `SVDB_DONE`) and 70+ extended codes (`SVDB_CONSTRAINT_*`, `SVDB_BUSY_*`, `SVDB_IOERR_*`, etc.) following the SQLite error code convention. `String()` returns `"SVDB_OK"` etc.; `Primary()` extracts the base code via `code & 0xFF`.
+- **Error Struct & API**: New `Error` struct (`error.go`) with `Code/Message/Err` fields, `errors.Is`/`errors.As`/`errors.Unwrap` support. `NewError`, `Errorf`, `ErrorCodeOf`, `IsErrorCode` constructors and helpers.
+- **Error Mapping**: `ToError()` (`error_map.go`) converts standard Go errors (`io.EOF`, `io.ErrUnexpectedEOF`, `os.ErrNotExist`, `context.DeadlineExceeded`, etc.) and string-pattern errors (unique/not null/foreign key/corrupt/locked/busy…) to typed `*Error` values.
+- **Lock Optimization**: `ShardedMap` (`lock_opt.go`) with 16 shards and per-shard `sync.RWMutex`, `sync.Pool`-backed hash reuse for low-allocation key routing. `AtomicCounter` and `LockMetrics` for tracking contention. `queryMu sync.RWMutex` added to `Database` for concurrent read queries.
+- **CPU Pipeline Optimization**: `CacheLinePad`, `AlignedCounter` (atomic int64 padded to cache lines to prevent false sharing), `ScanPrefetcher.PrefetchRows()` (`cpu_opt.go`) for sequential scan warm-up.
+- **Error Tests**: 50+ tests in `error_test.go` covering all error codes, `Primary()`, `ErrorCodeOf`, `ToError` mapping, `errors.Is` integration, `ShardedMap`, `AtomicCounter`, `LockMetrics`, and `ScanPrefetcher`.
+
+### Bug Fixes
+- None
+
+### Breaking Changes
+- None
+
 ## **v0.8.7** (2026-02-22)
 
 ### Features

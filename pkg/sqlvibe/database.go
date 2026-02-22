@@ -104,6 +104,7 @@ type Database struct {
 	foreignKeysEnabled bool                               // PRAGMA foreign_keys = ON/OFF
 	pragmaSettings     map[string]interface{}             // PRAGMA setting storage
 	tableStats         map[string]int64                   // table name -> row count (for ANALYZE)
+	queryMu            sync.RWMutex                       // guards concurrent read queries
 }
 
 type dbSnapshot struct {
