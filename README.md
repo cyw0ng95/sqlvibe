@@ -171,6 +171,27 @@ These benchmarks identify performance bottlenecks for future optimization:
 | Bulk INSERT 10K rows | 87 ms |
 | 3-table JOIN (100 rows each) | 2.9 ms |
 
+### Comparison with SQLite Go (v0.7.4)
+
+Benchmarks comparing sqlvibe against [go-sqlite](https://github.com/glebarez/go-sqlite) (pure Go SQLite binding) on identical workloads (in-memory database, `-benchtime=3s -benchmem`):
+
+| Operation | sqlvibe (v0.7.4) | SQLite Go | Winner |
+|-----------|------------------:|----------:|--------|
+| INSERT single row | 21.7 µs | 26.8 µs | **sqlvibe 19% faster** |
+| SELECT all (1K rows) | 55.5 µs | 1,019 µs | **sqlvibe 18x faster** |
+| SELECT WHERE | 279 µs | 122 µs | SQLite 2.3x faster |
+| SELECT ORDER BY | 181 µs | 423 µs | **sqlvibe 2.3x faster** |
+| COUNT(*) | 46.7 µs | 6.3 µs | SQLite 7.4x faster |
+| SUM | 64.8 µs | 74.5 µs | SQLite 1.2x faster |
+| GROUP BY | 126 µs | 538 µs | **sqlvibe 4.3x faster** |
+| UPDATE | 21.3 µs | 26.9 µs | **sqlvibe 21% faster** |
+| DELETE | 23.2 µs | 43.1 µs | **sqlvibe 46% faster** |
+| CASE expression | 149 µs | 251 µs | **sqlvibe 41% faster** |
+
+**Analysis:**
+- **sqlvibe advantages**: Full table scans (18x faster), GROUP BY (4.3x), ORDER BY (2.3x), DML operations (19-46% faster)
+- **SQLite advantages**: WHERE filtering (2.3x faster due to better index optimization), COUNT aggregate (7.4x faster)
+
 ## Known Performance Bottlenecks
 
 The v0.7.x benchmark suite identified the following areas for future optimization:
