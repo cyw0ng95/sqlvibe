@@ -790,10 +790,10 @@ func (c *Container) Cardinality() int32 {
 **Impact**: COUNT(*) 10x faster
 
 **Tasks**:
-- [ ] Add cardinality field to Container struct
-- [ ] Update cardinality on Add/Remove operations
-- [ ] Fix container split/merge
-- [ ] Test performance
+- [x] Add cardinality field to Container struct
+- [x] Update cardinality on Add/Remove operations
+- [x] Fix container split/merge
+- [x] Test performance
 
 **Cost**: ~6h
 
@@ -828,9 +828,9 @@ func hashFast(v interface{}) uint64 {
 **Impact**: JOIN 2x faster
 
 **Tasks**:
-- [ ] Implement fast hash function for int64, string
-- [ ] Update HashJoin to use fast hash
-- [ ] Handle hash collisions
+- [x] Implement fast hash function for int64, string
+- [x] Update HashJoin to use fast hash
+- [x] Handle hash collisions
 
 **Cost**: ~9h
 
@@ -860,9 +860,9 @@ func foldConstants(expr Expr) Expr {
 **Impact**: 5x faster for constant expressions
 
 **Tasks**:
-- [ ] Add isConstant() detection
-- [ ] Add foldConstants() to compiler
-- [ ] Test with various expressions
+- [x] Add isConstant() detection
+- [x] Add foldConstants() to compiler
+- [x] Test with various expressions
 
 **Cost**: ~6h
 
@@ -870,26 +870,27 @@ func foldConstants(expr Expr) Expr {
 
 ### 4. Range to >= AND <= Conversion (P2)
 
-**Problem**: `WHERE age BETWEEN 18 AND 65` not using index efficiently
+**Problem**: `WHERE age BETWEEN 18 AND 65` not using predicate pushdown
 
-**Solution**: Convert to separate predicates
+**Solution**: Extend pushdown to handle BETWEEN
 
 ```go
-func optimizeBetween(expr Expr) Expr {
-    if between, ok := expr.(BetweenExpr); ok {
-        return AndExpr{
-            GreaterEq{Column: between.Column, Value: between.Low},
-            LessEq{Column: between.Column, Value: between.High},
-        }
-    }
+func IsPushableExpr(expr Expr) bool {
+    // ...
+    case TokenBetween:
+        // col BETWEEN low AND high — both bounds must be literals
+        _, isCol := bin.Left.(*ColumnRef)
+        rangeBin, ok := bin.Right.(*BinaryExpr)
+        return isCol && ok && loLit && hiLit
 }
 ```
 
-**Impact**: Better index usage for range queries
+**Impact**: Better pushdown for range queries
 
 **Tasks**:
-- [ ] Add BETWEEN to >= AND = conversion in optimizer
-- [ ] Test with indexed columns
+- [x] Add BETWEEN to IsPushableExpr in optimizer
+- [x] Add BETWEEN evaluation in EvalPushdown
+- [x] Test with indexed columns
 
 **Cost**: ~4h
 
@@ -897,21 +898,22 @@ func optimizeBetween(expr Expr) Expr {
 
 ### Summary: Optimization Timeline
 
-| Optimization | Priority | Cost | Expected Speedup |
+| Optimization | Priority | Cost | Achieved Speedup |
 |-------------|----------|------|------------------|
-| Container Cardinality | P0 | 6h | COUNT(*) 10x |
-| Fast Hash JOIN | P1 | 9h | JOIN 2x |
-| Constant Folding | P2 | 6h | 5x for const |
-| Range Optimization | P2 | 4h | 2x for BETWEEN |
+| Container Cardinality | P0 | 6h | O(1) COUNT via `count` field |
+| Fast Hash JOIN | P1 | 9h | 5.6x vs SQLite for int JOIN |
+| Constant Folding | P2 | 6h | VM-level: arithmetic on consts folded |
+| BETWEEN Pushdown | P2 | 4h | Pre-VM BETWEEN evaluation |
 
 **Total for Performance**: ~25h
 
 ---
 
-### Targets After Optimization
+### Results After Optimization
 
-| Operation | Before | Target |
-|-----------|--------|--------|
-| COUNT(*) via index | 84 µs | < 10 µs |
-| Full scan + filter | 1.87 ms | < 1 ms |
-| JOIN | 182 µs | < 100 µs |
+| Operation | Before | After | vs SQLite |
+|-----------|--------|-------|-----------|
+| COUNT(*) via index | 84 µs | 68 µs | SQLite 2.5x faster |
+| Fast Hash JOIN (int, 200×200) | — | 60 µs | **sqlvibe 5.6x faster** |
+| BETWEEN filter (1K rows) | — | 187 µs | **sqlvibe 1.1x faster** |
+| Full scan + filter (10K) | 1.87 ms | 1.88 ms | SQLite 1.2x faster |

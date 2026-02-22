@@ -214,6 +214,22 @@ func ColumnarGroupBy(keyCol, valCol *DS.ColumnVector, agg string) map[string]DS.
 	return result
 }
 
+// joinHashKey returns a hashable key for a DS.Value without allocation for the
+// common int64/float64/string cases.  For rare types (bytes, etc.) it falls
+// back to the string representation.
+func joinHashKey(v DS.Value) interface{} {
+	switch v.Type {
+	case DS.TypeInt, DS.TypeBool:
+		return v.Int
+	case DS.TypeFloat:
+		return v.Float
+	case DS.TypeString:
+		return v.Str
+	default:
+		return v.String()
+	}
+}
+
 // ColumnarHashJoin performs an inner join between left and right stores on a single
 // column pair (leftCol = rightCol).  The result is a slice of merged value rows
 // where the first len(left.Columns()) values are from the left row and the
@@ -226,9 +242,10 @@ func ColumnarHashJoin(left, right *DS.HybridStore, leftCol, rightCol string) [][
 	}
 
 	// Build hash table from the smaller side (right).
-	hash := make(map[string][][]DS.Value)
+	// Use interface{} key to avoid fmt.Sprintf allocation for int/float/string values.
+	hash := make(map[interface{}][][]DS.Value)
 	for _, rRow := range right.Scan() {
-		key := rRow[rci].String()
+		key := joinHashKey(rRow[rci])
 		hash[key] = append(hash[key], rRow)
 	}
 
@@ -237,7 +254,7 @@ func ColumnarHashJoin(left, right *DS.HybridStore, leftCol, rightCol string) [][
 	lCols := len(left.Columns())
 	rCols := len(right.Columns())
 	for _, lRow := range left.Scan() {
-		key := lRow[lci].String()
+		key := joinHashKey(lRow[lci])
 		matches, ok := hash[key]
 		if !ok {
 			continue

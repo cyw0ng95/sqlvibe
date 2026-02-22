@@ -71,17 +71,29 @@ func IsPushableExpr(expr Expr) bool {
 	}
 	switch bin.Op {
 	case TokenEq, TokenNe, TokenLt, TokenLe, TokenGt, TokenGe:
-	default:
-		return false
+		_, lCol := bin.Left.(*ColumnRef)
+		_, rLit := bin.Right.(*Literal)
+		if lCol && rLit {
+			return true
+		}
+		_, lLit := bin.Left.(*Literal)
+		_, rCol := bin.Right.(*ColumnRef)
+		return lLit && rCol
+	case TokenBetween:
+		// col BETWEEN low AND high — both bounds must be literals
+		_, isCol := bin.Left.(*ColumnRef)
+		if !isCol {
+			return false
+		}
+		rangeBin, ok := bin.Right.(*BinaryExpr)
+		if !ok || rangeBin.Op != TokenAnd {
+			return false
+		}
+		_, loLit := rangeBin.Left.(*Literal)
+		_, hiLit := rangeBin.Right.(*Literal)
+		return loLit && hiLit
 	}
-	_, lCol := bin.Left.(*ColumnRef)
-	_, rLit := bin.Right.(*Literal)
-	if lCol && rLit {
-		return true
-	}
-	_, lLit := bin.Left.(*Literal)
-	_, rCol := bin.Right.(*ColumnRef)
-	return lLit && rCol
+	return false
 }
 
 // EvalPushdown evaluates a single pushable predicate against row.
@@ -89,6 +101,19 @@ func IsPushableExpr(expr Expr) bool {
 // Callers must only pass expressions where IsPushableExpr(expr) is true.
 func EvalPushdown(expr Expr, row map[string]interface{}) bool {
 	bin := expr.(*BinaryExpr)
+
+	// Handle BETWEEN separately: col BETWEEN lo AND hi
+	if bin.Op == TokenBetween {
+		colRef := bin.Left.(*ColumnRef)
+		rangeBin := bin.Right.(*BinaryExpr)
+		lo := rangeBin.Left.(*Literal).Value
+		hi := rangeBin.Right.(*Literal).Value
+		val := row[colRef.Name]
+		if val == nil {
+			return false
+		}
+		return pdCompare(val, lo) >= 0 && pdCompare(val, hi) <= 0
+	}
 
 	var colRef *ColumnRef
 	var lit *Literal
