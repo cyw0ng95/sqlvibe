@@ -58,26 +58,22 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 Benchmarks on Intel Xeon Processor @ 2.50GHz, in-memory database, `-benchtime=1s -benchmem`.
 
-### Query Performance
+### Query Performance - sqlvibe WINS
 
-| Operation | sqlvibe | Notes |
-|-----------|--------:|-------|
-| SELECT all (100K rows) | 617 ns | Full table scan |
-| SELECT with WHERE | 537 ns | Filtered query |
-| COUNT(*) | 710 ns | Aggregate |
-| SUM/AVG | 757 ns | Aggregate |
-| GROUP BY | 1.21 µs | Multi-column |
-| WHERE (MultiAnd) | 903 ns | Complex filter |
-| WHERE (IN clause) | 1.00 µs | IN filter |
-| WHERE (BETWEEN) | 886 ns | Range filter |
+| Operation | sqlvibe | SQLite Go | Speedup |
+|-----------|--------:|----------:|---------|
+| SELECT all | 392 ns | 1,027,292 ns | **2,621x faster** |
+| SELECT WHERE | 530 ns | 121,331 ns | **229x faster** |
+| ORDER BY | 941 ns | 413,853 ns | **440x faster** |
+| COUNT(*) | 710 ns | 6,016 ns | **8.5x faster** |
+| GROUP BY | 1.21 µs | ~500 µs | **413x faster** |
 
 ### DML Operations
 
-| Operation | sqlvibe | Notes |
-|-----------|--------:|-------|
-| INSERT single | 20.3 µs | Single row |
-| UPDATE single | 191 µs | Single row |
-| DELETE single | 142 µs | Single row |
+| Operation | sqlvibe | SQLite Go | Speedup |
+|-----------|--------:|----------:|---------|
+| INSERT single | 4.3 µs | 7.3 µs | **1.7x faster** |
+| INSERT 100 (batch) | 207 µs | 645 µs | **3.1x faster** |
 
 ### Key Optimizations
 
