@@ -701,9 +701,9 @@ internal/
 - [x] Implement RoaringBitmap index serialization (`SerializeIndexes`/`DeserializeIndexes`)
 - [x] Implement BTree/SkipList index serialization (`SerializeIndexes`/`DeserializeIndexes`)
 - [x] Implement file footer with CRC64 checksums (`pkg/sqlvibe/storage/persistence.go`)
-- [ ] Implement mmap-based random access
-- [ ] Implement WAL (Write-Ahead Logging) for durability
-- [ ] Implement checkpoint/compact operation
+- [x] Implement mmap-based random access (`MmapFile`/`OpenMmap`/`ReadDatabaseMmap` in `pkg/sqlvibe/storage/mmap.go`)
+- [x] Implement WAL (Write-Ahead Logging) for durability (`WriteAheadLog` in `pkg/sqlvibe/storage/wal.go` — append-only length-prefixed JSON log with `Replay`/`Checkpoint`)
+- [x] Implement checkpoint/compact operation (`Compact`/`CompactFile`/`CompactFileOpts` in `pkg/sqlvibe/storage/compact.go`)
 
 ### Phase 5: Testing & Validation
 - [x] Run full SQL:1999 test suite (100% pass rate — no regressions)
