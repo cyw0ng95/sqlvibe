@@ -1797,7 +1797,7 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 		}
 		return nil
 	case "RANDOM":
-		return rand.Int63() - rand.Int63()
+		return int64(rand.Uint64())
 	case "RANDOMBLOB":
 		if len(fc.Args) >= 1 {
 			val := qe.evalValue(row, fc.Args[0])

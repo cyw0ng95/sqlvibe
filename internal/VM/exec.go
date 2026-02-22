@@ -3655,7 +3655,7 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 		}
 		return nil
 	case "RANDOM":
-		return rand.Int63() - rand.Int63()
+		return int64(rand.Uint64())
 	case "RANDOMBLOB":
 		if len(e.Args) >= 1 {
 			val := vm.evaluateExprOnRow(row, columns, e.Args[0])

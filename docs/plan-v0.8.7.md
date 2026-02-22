@@ -103,7 +103,7 @@ INSERT INTO orders_view VALUES (1, 100, 50.00);
 - [x] Handle view column expansion
 - [x] DROP VIEW support
 - [ ] Add INSTEAD OF trigger support (already in v0.8.6)
-- [ ] Implement updatable view with INSTEAD OF
+- [x] Implement updatable view with INSTEAD OF
 - [x] Tests: view creation, query, INSTEAD OF trigger
 
 **Workload:** ~20 hours
@@ -215,7 +215,7 @@ type IndexStats struct {
 - [x] Implement index statistics collection
 - [x] Create sqlite_stat1 system table
 - [ ] Use statistics in query planner
-- [ ] PRAGMA analyze_info
+- [x] PRAGMA analyze_info
 - [x] Tests: ANALYZE correctness
 
 **Workload:** ~10 hours
@@ -339,16 +339,16 @@ var BinaryFunctions = map[string]func(args ...interface{}) (interface{}, error){
 
 ### Tasks
 
-- [ ] HEX() - integer/blob to hex string
+- [x] HEX() - integer/blob to hex string
 - [x] UNHEX() - hex string to blob
 - [x] UNICODE() - character to code point
 - [x] CHAR() - code points to string
 - [x] RANDOM() - random integer
 - [x] RANDOMBLOB() - random blob
 - [x] ZEROBLOB() - zero-filled blob
-- [ ] TYPEOF() - return type name
-- [ ] QUOTE() - escape string
-- [ ] ESCAPE() - escape LIKE pattern
+- [x] TYPEOF() - return type name
+- [x] QUOTE() - escape string
+- [x] ESCAPE() - escape LIKE pattern
 - [x] IIF() - inline if
 - [x] Tests: function comparisons with SQLite
 
@@ -366,9 +366,9 @@ var BinaryFunctions = map[string]func(args ...interface{}) (interface{}, error){
 | Query view | Works | [x] |
 | DROP VIEW | Works | [x] |
 | View with columns | Works | [x] |
-| INSTEOD OF INSERT | Works | [ ] |
-| INSTEAD OF UPDATE | Works | [ ] |
-| INSTEAD OF DELETE | Works | [ ] |
+| INSTEOD OF INSERT | Works | [x] |
+| INSTEAD OF UPDATE | Works | [x] |
+| INSTEAD OF DELETE | Works | [x] |
 | SQLite comparison | Match | [x] |
 
 ### Phase 2: VACUUM
@@ -409,14 +409,14 @@ var BinaryFunctions = map[string]func(args ...interface{}) (interface{}, error){
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| HEX() | Works | [ ] |
+| HEX() | Works | [x] |
 | UNHEX() | Works | [x] |
 | RANDOM() | Works | [x] |
 | RANDOMBLOB() | Works | [x] |
 | ZEROBLOB() | Works | [x] |
 | UNICODE() | Works | [x] |
 | CHAR() | Works | [x] |
-| TYPEOF() | Works | [ ] |
+| TYPEOF() | Works | [x] |
 | IIF() | Works | [x] |
 | SQLite comparison | Match | [x] |
 

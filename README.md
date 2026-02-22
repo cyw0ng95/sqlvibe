@@ -4,9 +4,14 @@
 
 ## Features
 
-- **SQL:1999 compatibility** — 81+ test suites passing (added F561/F621/F631/F641/F651/F661)
+- **SQL:1999 compatibility** — 84+ test suites passing (added F870/F871/F872)
 - **In-memory databases** — `:memory:` URI for fast, ephemeral storage
 - **Comprehensive SQL**: DDL, DML, JOINs, Subqueries, Aggregates, Window functions (ROW_NUMBER/RANK/LAG/LEAD/NTILE/PERCENT_RANK/CUME_DIST), CTEs (recursive), VALUES derived tables, ANY/ALL subqueries, GROUP_CONCAT, etc.
+- **VIEW Support** — `CREATE VIEW`, `DROP VIEW`, query views like tables, INSTEAD OF triggers for updatable views
+- **VACUUM** — `VACUUM` (in-place compaction) and `VACUUM INTO 'path'` (snapshot to file)
+- **ANALYZE** — `ANALYZE` collects table/index statistics accessible via `sqlite_stat1`
+- **Extended PRAGMAs** — `page_size`, `mmap_size`, `locking_mode`, `synchronous`, `auto_vacuum`, `query_only`, `temp_store`, `read_uncommitted`, `cache_spill`
+- **New Functions** — `UNHEX()`, `RANDOM()`, `RANDOMBLOB()`, `ZEROBLOB()`, `IIF()`
 - **Foreign Key Enforcement** — `PRAGMA foreign_keys = ON`, inline REFERENCES, table-level FOREIGN KEY, ON DELETE CASCADE/RESTRICT/SET NULL, ON UPDATE CASCADE
 - **Trigger Support** — `CREATE TRIGGER` / `DROP TRIGGER`, BEFORE/AFTER INSERT/UPDATE/DELETE, WHEN conditions, UPDATE OF column filters
 - **AUTOINCREMENT** — Monotonically increasing INTEGER PRIMARY KEY with `sqlite_sequence` tracking
@@ -43,7 +48,7 @@ rows, _ := db.Query(`SELECT name FROM users WHERE id > 0`)
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.8.6)
+## Performance (v0.8.7)
 
 Benchmarks on AMD EPYC 7763 @ 2.45GHz, in-memory database, `-benchtime=1s -benchmem`.
 
@@ -81,7 +86,7 @@ Benchmarks on AMD EPYC 7763 @ 2.45GHz, in-memory database, `-benchtime=1s -bench
 
 ## SQL:1999 Compatibility
 
-81+ test suites passing
+84+ test suites passing
 
 ## Building
 
