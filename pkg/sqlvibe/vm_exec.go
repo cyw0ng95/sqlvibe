@@ -190,8 +190,11 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 
 	compiler := CG.NewCompiler()
-	// Build column index map
-	colIndices := make(map[string]int)
+	// Build column index map using a pooled map to reduce allocations.
+	colIndices := schemaMapPool.Get().(map[string]int)
+	for k := range colIndices {
+		delete(colIndices, k)
+	}
 	for i, colName := range tableCols {
 		colIndices[colName] = i
 	}
@@ -203,7 +206,10 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	origColumns := stmt.Columns
 	var extraOrderByCols []string
 	if len(stmt.OrderBy) > 0 {
-		selectColSet := make(map[string]bool)
+		selectColSet := colSetPool.Get().(map[string]bool)
+		for k := range selectColSet {
+			delete(selectColSet, k)
+		}
 		for _, col := range stmt.Columns {
 			if cr, ok := col.(*QP.ColumnRef); ok {
 				selectColSet[cr.Name] = true
@@ -225,9 +231,11 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 				}
 			}
 		}
+		colSetPool.Put(selectColSet)
 	}
 
 	program := compiler.CompileSelect(stmt)
+	schemaMapPool.Put(colIndices)
 	stmt.Columns = origColumns // restore immediately after compilation
 
 	// Create context with outer row
@@ -538,8 +546,12 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		}
 		cg.TableColSources = sources
 	} else {
-		// Single table query - set TableColIndices normally
-		cg.SetTableSchema(make(map[string]int), tableCols)
+		// Single table query - set TableColIndices using a pooled map.
+		singleSchema := schemaMapPool.Get().(map[string]int)
+		for k := range singleSchema {
+			delete(singleSchema, k)
+		}
+		cg.SetTableSchema(singleSchema, tableCols)
 		for i, col := range tableCols {
 			cg.TableColIndices[col] = i
 		}
@@ -549,7 +561,10 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	// This allows ORDER BY col that isn't in the SELECT list to still sort correctly
 	var extraOrderByCols []string
 	if stmt.OrderBy != nil && len(stmt.OrderBy) > 0 {
-		selectColNames := make(map[string]bool)
+		selectColNames := colSetPool.Get().(map[string]bool)
+		for k := range selectColNames {
+			delete(selectColNames, k)
+		}
 		for _, col := range stmt.Columns {
 			if cr, ok := col.(*QP.ColumnRef); ok {
 				selectColNames[cr.Name] = true
@@ -573,9 +588,14 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 				}
 			}
 		}
+		colSetPool.Put(selectColNames)
 	}
 
 	program := cg.CompileSelect(stmt)
+	// Return pooled schema map now that compilation is complete.
+	if cg.TableColIndices != nil && len(cg.TableColSources) == 0 {
+		schemaMapPool.Put(cg.TableColIndices)
+	}
 
 	// Remove extra ORDER BY columns from stmt after compilation
 	if len(extraOrderByCols) > 0 {
