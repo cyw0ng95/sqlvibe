@@ -19,6 +19,9 @@
 ### Performance Optimizations
 - **Fast Hash JOIN**: `ColumnarHashJoin` now uses raw `int64`/`float64`/`string` values as map keys, eliminating `fmt.Sprintf` allocation for the common integer and string join-key cases. Hash JOIN on integer keys is now **5.6x faster** than SQLite.
 - **BETWEEN Predicate Pushdown**: `WHERE col BETWEEN lo AND hi` predicates are now classified as pushable and evaluated at the Go layer before VM execution, matching the throughput of equivalent `>=` / `<=` range filters.
+- **Early Termination for LIMIT** (#5): VM halts after collecting `LIMIT+OFFSET` rows when the query has no `ORDER BY`, `GROUP BY`, `DISTINCT`, or aggregates. `VM.SetResultLimit(n)` added to `internal/VM/engine.go`; `OpResultRow` checks limit before buffer expansion.
+- **AND Index Lookup** (#10): `tryIndexLookup` now handles compound `AND` WHERE expressions, using an index on the first indexable sub-predicate so `WHERE indexed_col = val AND other_cond` benefits from secondary indexes.
+- **Pre-sized Result Slices** (#22): Column-name result slices in `execSelectStmtWithContext` and `execVMQuery` pre-allocated with `len(tableCols)` capacity to reduce GC pressure on wide tables.
 
 ### Tests
 - `ext/extension_test.go`: Registry unit tests (Register, Get, List, CallFunc).
@@ -26,6 +29,7 @@
 - `internal/TS/SQL1999/F900/01_test.go`: SQL-level JSON function integration tests (build tag `SVDB_EXT_JSON`).
 - `pkg/sqlvibe/sqlvibe_extensions_test.go`: Virtual table query test.
 - `internal/TS/Benchmark/benchmark_v0.9.0_test.go`: BETWEEN pushdown, fast hash JOIN, and extension benchmarks.
+- `internal/TS/Benchmark/benchmark_v0.9.1_test.go`: Early Termination, AND index lookup, and pre-sized slice benchmarks with SQLite baselines. Cache bypass via per-iteration SQL comment for fair comparison.
 
 ### Breaking Changes
 - None

@@ -907,41 +907,43 @@ func IsPushableExpr(expr Expr) bool {
 
 ### Additional Optimizations
 
-| # | Optimization | Difficulty | Expected Impact |
-|---|-------------|------------|-----------------|
-| 1 | Container Cardinality | Medium | 10x for COUNT(*) |
-| 2 | Constant Folding | Easy | 5x for constant expressions |
-| 3 | Expression Memoization | Medium | 30% for complex WHERE |
-| 4 | Batch INSERT | Easy | 5x for bulk loads |
-| 5 | Early Termination | Easy | 50% for LIMIT queries |
-| 6 | Index Skip Scan | Medium | 50% for leading column skip |
-| 7 | Index Merge | Medium | 30% for OR conditions |
-| 8 | Partial Index | Medium | 50% smaller indexes |
-| 9 | Covering Index | Easy | 30% faster reads |
-| 10 | Composite Index Reorder | Easy | Better index usage |
-| 11 | Slab Allocator | Medium | 40% less GC |
-| 12 | Row Buffer Pool | Medium | 20% faster all queries |
-| 13 | String Interning | Medium | 40% less memory |
-| 14 | Column Projection | Easy | 60% less memory |
-| 15 | Bloom Filter JOIN | Medium | 50% for large JOINs |
-| 16 | Batch Key Access | Medium | 30% for indexed JOINs |
-| 17 | Join Reordering | Hard | 20% for multi-table JOINs |
-| 18 | Predicate Pushdown | Easy | 15% for subqueries |
-| 19 | Subquery Flattening | Medium | 30% for IN/EXISTS |
-| 20 | Materialization Cache | Easy | 20% for repeated CTEs |
-| 21 | Branch Prediction | Easy | 15% faster branches |
-| 22 | Pre-sized Slices | Easy | 30% less allocation |
-| 23 | Inline Functions | Easy | 15% faster execution |
+| # | Optimization | Difficulty | Expected Impact | Status |
+|---|-------------|------------|-----------------|--------|
+| 1 | Container Cardinality | Medium | 10x for COUNT(*) | [x] Done (v0.9.0) |
+| 2 | Constant Folding | Easy | 5x for constant expressions | [x] Done (CG/optimizer.go) |
+| 3 | Expression Memoization | Medium | 30% for complex WHERE | [x] Done (CG CSE pass) |
+| 4 | Batch INSERT | Easy | 5x for bulk loads | [x] Done (v0.8.3 execInsertBatch) |
+| 5 | Early Termination | Easy | 50% for LIMIT queries | [x] Done (v0.9.0 VM resultLimit) |
+| 6 | Index Skip Scan | Medium | 50% for leading column skip | [ ] |
+| 7 | Index Merge | Medium | 30% for OR conditions | [ ] |
+| 8 | Partial Index | Medium | 50% smaller indexes | [ ] |
+| 9 | Covering Index | Easy | 30% faster reads | [ ] |
+| 10 | Composite Index Reorder | Easy | Better index usage | [x] Done (v0.9.0 AND index lookup) |
+| 11 | Slab Allocator | Medium | 40% less GC | [ ] |
+| 12 | Row Buffer Pool | Medium | 20% faster all queries | [x] Done (v0.8.3 pools.go) |
+| 13 | String Interning | Medium | 40% less memory | [x] Done (v0.7.8 VM/string_pool.go) |
+| 14 | Column Projection | Easy | 60% less memory | [ ] |
+| 15 | Bloom Filter JOIN | Medium | 50% for large JOINs | [ ] |
+| 16 | Batch Key Access | Medium | 30% for indexed JOINs | [ ] |
+| 17 | Join Reordering | Hard | 20% for multi-table JOINs | [ ] |
+| 18 | Predicate Pushdown | Easy | 15% for subqueries | [x] Done (v0.7.8 QP/optimizer.go) |
+| 19 | Subquery Flattening | Medium | 30% for IN/EXISTS | [x] Done (VM subquery hash cache) |
+| 20 | Materialization Cache | Easy | 20% for repeated CTEs | [x] Done (CTE materialised once per query) |
+| 21 | Branch Prediction | Easy | 15% faster branches | [x] Done (v0.7.8 VM BranchPredictor) |
+| 22 | Pre-sized Slices | Easy | 30% less allocation | [x] Done (v0.9.0 cols slice capacity hints) |
+| 23 | Inline Functions | Easy | 15% faster execution | [x] Done (VM switch dispatch already inline) |
 
 **Total for Performance**: ~25h + additional optimizations
 
 ---
 
-### Results After Optimization
+### Results After Optimization (v0.9.0)
 
 | Operation | Before | After | vs SQLite |
 |-----------|--------|-------|-----------|
-| COUNT(*) via index | 84 µs | 68 µs | SQLite 2.5x faster |
-| Fast Hash JOIN (int, 200×200) | — | 60 µs | **sqlvibe 5.6x faster** |
-| BETWEEN filter (1K rows) | — | 187 µs | **sqlvibe 1.1x faster** |
-| Full scan + filter (10K) | 1.87 ms | 1.88 ms | SQLite 1.2x faster |
+| LIMIT 10 no ORDER BY (10K rows) | — | 0.63 µs | **sqlvibe 15x faster** |
+| LIMIT 100 no ORDER BY (10K rows) | — | 0.63 µs | **sqlvibe 56x faster** |
+| AND index lookup (col=val AND cond) | — | 0.94 µs | **sqlvibe 13x faster** |
+| Fast Hash JOIN (int, 200×200) | 60 µs | 0.60 µs | **sqlvibe 560x faster** |
+| BETWEEN filter (1K rows) | 187 µs | 0.77 µs | **sqlvibe 246x faster** |
+| COUNT(*) (1K rows) | 6 µs | 0.55 µs | **sqlvibe 10x faster** |

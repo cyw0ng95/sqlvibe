@@ -1118,6 +1118,17 @@ func (db *Database) Close() error {
 	return db.pm.Close()
 }
 
+// ClearResultCache invalidates the in-process query result cache, forcing the
+// next identical SELECT to be re-executed against live data.  This is useful
+// in benchmarks that want to measure actual query-execution cost rather than
+// cache-hit latency, and in tests that need to verify fresh results after a
+// series of writes have been made outside the normal Exec path.
+func (db *Database) ClearResultCache() {
+	if db.queryCache != nil {
+		db.queryCache.Invalidate()
+	}
+}
+
 // invalidateWriteCaches clears the result cache and plan cache after any
 // write operation (INSERT, UPDATE, DELETE, DROP, etc.) so that subsequent
 // reads see fresh data.
@@ -1744,6 +1755,17 @@ func (db *Database) tryIndexLookup(tableName string, where QP.Expr) []map[string
 	}
 
 	switch bin.Op {
+	case QP.TokenAnd:
+		// For AND conditions, try to use an index for one sub-predicate.
+		// We use the first indexable sub-predicate found (left-to-right), which
+		// is typically the most selective condition placed first by the query
+		// writer or the predicate reorderer.  The VM still applies the full
+		// WHERE clause for correctness; the index only pre-filters rows.
+		if rows := db.tryIndexLookup(tableName, bin.Left); rows != nil {
+			return rows
+		}
+		return db.tryIndexLookup(tableName, bin.Right)
+
 	case QP.TokenEq:
 		var colName string
 		var val interface{}
