@@ -15,8 +15,7 @@ sqlvibe/
 ├── ext/                      # Extension packages (source root)
 │   ├── extension.go          # Core extension interface & registry
 │   ├── json/                 # JSON extension
-│   ├── fts5/                # Full-text search extension
-│   └── uuid/                 # UUID extension
+│   └── uuid/                 # UUID extension (future)
 ├── pkg/sqlvibe/              # Core library
 └── cmd/                     # CLI tools
 ```
@@ -26,7 +25,6 @@ sqlvibe/
 **v0.8.10 Scope**:
 - Extension Framework: 6h
 - JSON Extension: 6h
-- FTS5 Extension: 8h
 - Testing: 4h
 
 ---
@@ -139,8 +137,33 @@ func Loaded() []string {
 
 ### 1.3 Build Tags Integration
 
+Extensions can be included via build tags:
+
+```bash
+# Include JSON extension only
+go build -tags "svdb_ext_json" -o sqlvibe .
+
+# Include multiple extensions
+go build -tags "svdb_ext_json svdb_ext_uuid" -o sqlvibe .
+
+# Include all extensions
+go build -tags "extensions" -o sqlvibe .
+```
+
 ```go
 // ext/extensions.go
+
+// +build svdb_ext_json
+
+package ext
+
+import _ "github.com/cyw0ng95/sqlvibe/ext/json"
+
+// +build svdb_ext_uuid
+
+package ext
+
+import _ "github.com/cyw0ng95/sqlvibe/ext/uuid"
 
 // +build extensions
 
@@ -148,10 +171,17 @@ package ext
 
 import (
     _ "github.com/cyw0ng95/sqlvibe/ext/json"
-    _ "github.com/cyw0ng95/sqlvibe/ext/fts5"
     _ "github.com/cyw0ng95/sqlvibe/ext/uuid"
 )
 ```
+
+### Available Build Tags
+
+| Tag | Extension |
+|-----|-----------|
+| `svdb_ext_json` | JSON extension |
+| `svdb_ext_uuid` | UUID extension |
+| `extensions` | All extensions |
 
 ### 1.4 Database Integration
 
@@ -335,114 +365,6 @@ func init() {
 
 ---
 
-## Phase 3: FTS5 Extension (8h)
-
-### Overview
-
-Implement Full-Text Search extension using existing RoaringBitmap.
-
-### Directory
-
-```
-ext/fts5/
-├── fts5.go
-└── fts5_test.go
-```
-
-### Features
-
-| Feature | Description |
-|---------|-------------|
-| CREATE VIRTUAL TABLE | Create FTS5 virtual table |
-| MATCH | Full-text search |
-| Snippet | Highlight matching text |
-
-### Implementation
-
-```go
-// ext/fts5/fts5.go
-
-package fts5
-
-import (
-    "fmt"
-    "strings"
-
-    "github.com/cyw0ng95/sqlvibe/ext"
-    "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
-    "github.com/cyw0ng95/sqlvibe/internal/DS"
-)
-
-type FTS5Extension struct{}
-
-func (e *FTS5Extension) Name() string    { return "fts5" }
-func (e *FTS5Extension) Version() string  { return "1.0.0" }
-
-func (e *FTS5Extension) Register(db *sqlvibe.Database) error {
-    // Register virtual table handler
-    return nil
-}
-
-func (e *FTS5Extension) Close() error { return nil }
-
-// FTS5Table implements virtual table for FTS5
-type FTS5Table struct {
-    name    string
-    columns []string
-    index   *DS.RoaringBitmap
-    docs    []string
-}
-
-func CreateFTS5Table(db *sqlvibe.Database, name string, columns []string) (*FTS5Table, error) {
-    ft := &FTS5Table{
-        name:    name,
-        columns: columns,
-        index:   DS.NewRoaringBitmap(),
-        docs:    make([]string, 0),
-    }
-    return ft, nil
-}
-
-func (ft *FTS5Table) Insert(docID int64, content string) error {
-    words := tokenize(content)
-    for _, word := range words {
-        // Index each word
-    }
-    ft.docs = append(ft.docs, content)
-    return nil
-}
-
-func (ft *FTS5Table) Search(query string) ([]int64, error) {
-    terms := tokenize(query)
-    // Search using index
-    return results, nil
-}
-
-func tokenize(text string) []string {
-    text = strings.ToLower(text)
-    return strings.Fields(text)
-}
-
-func init() {
-    ext.Register("fts5", func() ext.Extension {
-        return &FTS5Extension{}
-    })
-}
-```
-
-### Tasks
-
-- [ ] Create `ext/fts5/fts5.go`
-- [ ] Implement virtual table interface
-- [ ] Implement tokenization
-- [ ] Implement FTS MATCH operator
-- [ ] Implement Snippet function
-- [ ] Add tests
-
-**Workload:** ~8 hours
-
----
-
 ## Phase 4: Testing (4h)
 
 ### Overview
@@ -581,10 +503,9 @@ func TestJSONValid(t *testing.T) {
 |-------|---------|-------|
 | 1 | Extension Framework | 6 |
 | 2 | JSON Extension | 6 |
-| 3 | FTS5 Extension | 8 |
-| 4 | Testing | 4 |
+| 3 | Testing | 4 |
 
-**Total:** ~24 hours
+**Total:** ~16 hours
 
 ---
 
@@ -608,22 +529,12 @@ func TestJSONValid(t *testing.T) {
 | json_object | Works | [ ] |
 | json_valid | Works | [ ] |
 
-### Phase 3: FTS5 Extension
-
-| Criteria | Target | Status |
-|----------|--------|--------|
-| Virtual table | Works | [ ] |
-| MATCH operator | Works | [ ] |
-| Tokenization | Works | [ ] |
-| Snippet | Works | [ ] |
-
 ### Phase 4: Testing
 
 | Criteria | Target | Status |
 |----------|--------|--------|
 | Registry tests | 3 tests | [ ] |
 | JSON tests | 4 tests | [ ] |
-| FTS5 tests | 3 tests | [ ] |
 | All tests pass | 100% | [ ] |
 
 ---
@@ -634,7 +545,13 @@ func TestJSONValid(t *testing.T) {
 # Default (no extensions)
 go build -o sqlvibe .
 
-# With extensions
+# Include JSON extension only
+go build -tags "svdb_ext_json" -o sqlvibe .
+
+# Include multiple extensions
+go build -tags "svdb_ext_json svdb_ext_uuid" -o sqlvibe .
+
+# Include all extensions
 go build -tags "extensions" -o sqlvibe .
 
 # Run with extensions
@@ -646,19 +563,20 @@ sqlvibe> SELECT json_extract('{"a":1}', '$.a');
 
 ## Future Extensions (v0.9.0+)
 
-| Extension | Description |
-|-----------|-------------|
-| `uuid` | UUID generation functions |
-| `math` | Mathematical functions |
-| `regex` | Regular expression functions |
-| `csv` | CSV virtual table |
-| `http` | HTTP virtual table |
+| Extension | Build Tag | Description |
+|-----------|-----------|-------------|
+| `uuid` | `svdb_ext_uuid` | UUID generation functions |
+| `math` | `svdb_ext_math` | Mathematical functions |
+| `regex` | `svdb_ext_regex` | Regular expression functions |
+| `csv` | `svdb_ext_csv` | CSV virtual table |
+| `http` | `svdb_ext_http` | HTTP virtual table |
 
 ---
 
 ## Notes
 
 - Extensions use Registry Pattern for simplicity
-- Build tags control inclusion to keep base binary small
+- Build tags (e.g., `svdb_ext_json`) control inclusion to keep base binary small
+- Each extension has its own build tag for fine-grained control
 - Extensions can be loaded at runtime via PRAGMA
 - All tests use L2 temp files only
