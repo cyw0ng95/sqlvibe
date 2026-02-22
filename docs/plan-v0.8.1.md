@@ -267,7 +267,16 @@ internal/QP/
 ├── tokenizer.go          # Update: add normalization
 ├── parser.go             # Update: memoization, constant folding
 ├── normalize.go          # NEW: query normalization
-└── type_infer.go         # NEW: type inference
+├── type_infer.go         # NEW: type inference
+└── dag.go               # NEW: DAG query plan
+
+internal/DS/              # REMOVE: legacy SQLite format
+├── btree.go             # DELETE
+├── page.go              # DELETE
+├── encoding.go           # DELETE
+├── overflow.go          # DELETE
+├── freelist.go          # DELETE
+└── balance.go           # DELETE
 ```
 
 ---
@@ -622,10 +631,149 @@ func (wp *WorkerPool) Submit(task func()) {
 | Parallel Scan 100K | < 10 ms | 4x faster |
 | Parallel JOIN | < 20 ms | 3x faster |
 
-### Phase 9: Validation
+#### Phase 7: Concurrent DAG Query Plan
+
+Build DAG of operators for parallel execution:
+
+```go
+type DAGNode struct {
+    ID       int
+    Op       Operator
+    Inputs   []*DAGNode
+    Ready    chan struct{}
+    Result   interface{}
+}
+
+type DAGExecutor struct {
+    nodes []*DAGNode
+    cores int
+}
+
+// SELECT * FROM a JOIN b ON a.id = b.id WHERE a.x > 5
+//
+//    [Scan a]    [Scan b]     ← Can run in parallel
+//        \         /
+//       [Filter]            ← After scans
+//          |
+//       [HashJoin]         ← After filter
+//          |
+//       [Project]           ← After join
+```
+
+##### 7.1 DAG Compiler
+
+```go
+func (cg *Compiler) BuildDAG(stmt *SelectStmt) *DAG {
+    dag := &DAG{nodes: make([]*DAGNode, 0)}
+    
+    // Build nodes from operators
+    scanA := dag.AddNode(OpScan{Table: "a"})
+    scanB := dag.AddNode(OpScan{Table: "b"})
+    filter := dag.AddNode(OpFilter{Predicate: stmt.Where})
+    join := dag.AddNode(OpHashJoin{Key: "id"})
+    project := dag.AddNode(OpProject{Columns: stmt.Columns})
+    
+    // Add dependencies
+    dag.AddEdge(scanA, filter)
+    dag.AddEdge(scanB, filter)
+    dag.AddEdge(filter, join)
+    dag.AddEdge(join, project)
+    
+    return dag
+}
+```
+
+##### 7.2 DAG Executor with Work Stealing
+
+```go
+func (e *DAGExecutor) Execute() {
+    ready := make(chan *DAGNode, e.cores)
+    
+    // Phase 1: Schedule nodes with no dependencies
+    for _, node := range e.nodes {
+        if len(node.Inputs) == 0 {
+            ready <- node
+        }
+    }
+    
+    // Phase 2: Execute in parallel
+    var wg sync.WaitGroup
+    for i := 0; i < e.cores; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for node := range ready {
+                node.Execute()
+                // Check if dependents are now ready
+                for _, dep := range node.Outputs {
+                    if dep.IsReady() {
+                        ready <- dep
+                    }
+                }
+            }
+        }()
+    }
+    wg.Wait()
+}
+```
+
+##### 7.3 Benchmark Requirements
+
+| Benchmark | Target | vs Sequential |
+|-----------|--------|---------------|
+| 3-way JOIN | < 15 ms | 2x faster |
+| Parallel subqueries | < 5 ms | 2x faster |
+| Wide projection | < 2 ms | 2x faster |
+
+### Phase 10: Remove Legacy Format Support
+
+Since v0.8.0 already broke SQLite compatibility, remove all legacy B-Tree / page format code:
+
+#### 10.1 Remove SQLite-compatible Code
+
+- Remove `internal/DS/btree.go` (old B-Tree storage)
+- Remove `internal/DS/page.go` (SQLite page format)
+- Remove `internal/DS/encoding.go` (SQLite varint encoding)
+- Remove `internal/DS/overflow.go` (SQLite overflow pages)
+- Remove `internal/DS/freelist.go` (SQLite freelist)
+- Remove `internal/DS/balance.go` (B-Tree balancing)
+
+#### 10.2 Keep Only Storage Layer
+
+```go
+pkg/sqlvibe/storage/
+├── hybrid_store.go      # Main storage (KEEP)
+├── column_store.go      # Column vectors (KEEP)
+├── row_store.go        # Row storage (KEEP)
+├── column_vector.go    # Vector types (KEEP)
+├── index_engine.go     # RoaringBitmap indexes (KEEP)
+├── roaring_bitmap.go   # Bitmap indexes (KEEP)
+├── skip_list.go        # Ordered data (KEEP)
+├── arena.go            # Memory allocator (KEEP)
+├── persistence.go      # New binary format (KEEP)
+└── value.go           # Value types (KEEP)
+```
+
+#### 10.3 Clean Up
+
+- Remove SQLite header parsing
+- Remove page type constants (0x0d, 0x02, etc.)
+- Remove cell encoding/decoding
+- Simplify PageManager interface
+
+#### 10.4 Benchmark Requirements
+
+| Benchmark | Target |
+|-----------|--------|
+| Build time | < 5s |
+| Binary size | < 5 MB |
+| No regressions | 0 |
+
+### Phase 11: Validation
 - [ ] Run full SQL:1999 test suite
-- [ ] Run SQLite comparison tests
+- [ ] Run SQLite comparison benchmarks
 - [ ] Benchmark vs v0.8.0
+- [ ] Update README.md with v0.8.1 vs SQLite comparison
 - [ ] Update HISTORY.md
 
 ---
@@ -640,8 +788,12 @@ func (wp *WorkerPool) Submit(task func()) {
 | SELECT * (1K) | < 300 ns (2x faster) |
 | LIMIT 10 | < 300 ns (3x faster) |
 | Parallel COUNT 100K | < 5 ms (4x vs single-core) |
+| Parse cached query | < 100 ns |
+| 3-way JOIN (parallel) | < 15 ms (2x vs sequential) |
+| Binary size | < 5 MB |
 | Allocations/query | < 5 |
 | No regressions | 0 |
+| SQLite comparison | Added to README.md |
 
 ---
 
@@ -670,10 +822,12 @@ go test ./... -bench=BenchmarkSelectAll -memprofile=mem.prof
 | 4 | Early Termination | 10 |
 | 5 | Predicate Reordering | 10 |
 | 6 | QP Optimizations | 15 |
-| 7 | Multi-Core Parallelization | 25 |
-| 8 | Validation | 10 |
+| 7 | Multi-Core Partition | 25 |
+| 8 | Concurrent DAG Plan | 20 |
+| 9 | Remove Legacy Format | 10 |
+| 10 | Validation | 10 |
 
-**Total**: ~120 hours
+**Total**: ~150 hours
 
 ---
 
