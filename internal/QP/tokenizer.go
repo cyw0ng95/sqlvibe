@@ -6,6 +6,26 @@ import (
 	"unicode"
 )
 
+// hexValTable is a lookup table for hex character values.
+// Values > 15 indicate invalid hex characters.
+var hexValTable [256]byte
+
+func init() {
+	// Mark all entries as invalid (255)
+	for i := range hexValTable {
+		hexValTable[i] = 255
+	}
+	for i := byte('0'); i <= '9'; i++ {
+		hexValTable[i] = i - '0'
+	}
+	for i := byte('A'); i <= 'F'; i++ {
+		hexValTable[i] = i - 'A' + 10
+	}
+	for i := byte('a'); i <= 'f'; i++ {
+		hexValTable[i] = i - 'a' + 10
+	}
+}
+
 type TokenType int
 
 const (
@@ -190,12 +210,224 @@ type Tokenizer struct {
 }
 
 func NewTokenizer(input string) *Tokenizer {
+	// Pre-allocate token slice: estimate ~1 token per 8 chars, minimum 16
+	estimated := len(input) / 8
+	if estimated < 16 {
+		estimated = 16
+	}
 	return &Tokenizer{
 		input:  input,
 		pos:    0,
 		start:  0,
-		tokens: make([]Token, 0),
+		tokens: make([]Token, 0, estimated),
 	}
+}
+
+// lookupKeyword uses a switch on string length + content for O(1) keyword lookup
+// without map hash computation on the common case. Falls back to the map for
+// less-frequent long keywords.
+func lookupKeyword(s string) (TokenType, bool) {
+	switch len(s) {
+	case 2:
+		switch s {
+		case "OR":
+			return TokenOr, true
+		case "IN":
+			return TokenIn, true
+		case "IS":
+			return TokenIs, true
+		case "AS":
+			return TokenKeyword, true
+		case "BY":
+			return TokenKeyword, true
+		case "ON":
+			return TokenKeyword, true
+		case "DO":
+			return TokenKeyword, true
+		case "IF":
+			return TokenKeyword, true
+		}
+	case 3:
+		switch s {
+		case "NOT":
+			return TokenNot, true
+		case "AND":
+			return TokenAnd, true
+		case "ANY":
+			return TokenAny, true
+		case "ALL":
+			return TokenAll, true
+		case "SET":
+			return TokenKeyword, true
+		case "ADD":
+			return TokenKeyword, true
+		case "KEY":
+			return TokenKeyword, true
+		case "ASC":
+			return TokenKeyword, true
+		case "END":
+			return TokenKeyword, true
+		case "MIN":
+			return TokenKeyword, true
+		case "MAX":
+			return TokenKeyword, true
+		case "AVG":
+			return TokenKeyword, true
+		case "SUM":
+			return TokenKeyword, true
+		}
+	case 4:
+		switch s {
+		case "LIKE":
+			return TokenLike, true
+		case "GLOB":
+			return TokenGlob, true
+		case "CAST":
+			return TokenCast, true
+		case "SOME":
+			return TokenAny, true
+		case "LEAD":
+			return TokenKeyword, true
+		case "RANK":
+			return TokenKeyword, true
+		case "NULL":
+			return TokenKeyword, true
+		case "TRUE":
+			return TokenKeyword, true
+		case "FROM":
+			return TokenKeyword, true
+		case "INTO":
+			return TokenKeyword, true
+		case "JOIN":
+			return TokenKeyword, true
+		case "LEFT":
+			return TokenKeyword, true
+		case "DESC":
+			return TokenKeyword, true
+		case "WITH":
+			return TokenKeyword, true
+		case "CASE":
+			return TokenKeyword, true
+		case "WHEN":
+			return TokenKeyword, true
+		case "THEN":
+			return TokenKeyword, true
+		case "ELSE":
+			return TokenKeyword, true
+		case "DROP":
+			return TokenKeyword, true
+		case "TEXT":
+			return TokenKeyword, true
+		case "REAL":
+			return TokenKeyword, true
+		case "BLOB":
+			return TokenKeyword, true
+		case "CHAR":
+			return TokenKeyword, true
+		case "DATE":
+			return TokenKeyword, true
+		case "TIME":
+			return TokenKeyword, true
+		case "OVER":
+			return TokenKeyword, true
+		}
+	case 5:
+		switch s {
+		case "NTILE":
+			return TokenKeyword, true
+		case "WHERE":
+			return TokenKeyword, true
+		case "ORDER":
+			return TokenKeyword, true
+		case "GROUP":
+			return TokenKeyword, true
+		case "LIMIT":
+			return TokenKeyword, true
+		case "INNER":
+			return TokenKeyword, true
+		case "OUTER":
+			return TokenKeyword, true
+		case "CROSS":
+			return TokenKeyword, true
+		case "UNION":
+			return TokenKeyword, true
+		case "USING":
+			return TokenKeyword, true
+		case "BEGIN":
+			return TokenKeyword, true
+		case "TABLE":
+			return TokenKeyword, true
+		case "INDEX":
+			return TokenKeyword, true
+		case "ROWID":
+			return TokenKeyword, true
+		case "FALSE":
+			return TokenKeyword, true
+		}
+	case 6:
+		switch s {
+		case "EXISTS":
+			return TokenExists, true
+		case "SELECT":
+			return TokenKeyword, true
+		case "INSERT":
+			return TokenKeyword, true
+		case "UPDATE":
+			return TokenKeyword, true
+		case "DELETE":
+			return TokenKeyword, true
+		case "CREATE":
+			return TokenKeyword, true
+		case "HAVING":
+			return TokenKeyword, true
+		case "OFFSET":
+			return TokenKeyword, true
+		case "UNIQUE":
+			return TokenKeyword, true
+		case "COLUMN":
+			return TokenKeyword, true
+		case "EXCEPT":
+			return TokenKeyword, true
+		case "COMMIT":
+			return TokenKeyword, true
+		case "PRAGMA":
+			return TokenKeyword, true
+		case "VALUES":
+			return TokenKeyword, true
+		}
+	case 7:
+		switch s {
+		case "BETWEEN":
+			return TokenBetween, true
+		case "EXPLAIN":
+			return TokenExplain, true
+		case "NATURAL":
+			return TokenKeyword, true
+		case "PRIMARY":
+			return TokenKeyword, true
+		case "DEFAULT":
+			return TokenKeyword, true
+		case "FOREIGN":
+			return TokenKeyword, true
+		case "NOTHING":
+			return TokenKeyword, true
+		case "BOOLEAN":
+			return TokenKeyword, true
+		case "INTEGER":
+			return TokenKeyword, true
+		case "VARCHAR":
+			return TokenKeyword, true
+		case "CURRENT":
+			return TokenKeyword, true
+		case "LEADING":
+			return TokenKeyword, true
+		}
+	}
+	// Fallback to map for longer/less common keywords
+	if tokenType, ok := keywords[s]; ok {
+		return tokenType, true
+	}
+	return TokenIdentifier, false
 }
 
 func (t *Tokenizer) Tokenize() ([]Token, error) {
@@ -276,7 +508,7 @@ func (t *Tokenizer) readIdentifier() error {
 	literal := t.input[t.start:t.pos]
 	upper := strings.ToUpper(literal)
 
-	if tokenType, ok := keywords[upper]; ok {
+	if tokenType, ok := lookupKeyword(upper); ok {
 		// Store keywords in uppercase for consistent parser checks
 		t.addToken(tokenType, upper)
 	} else {
@@ -376,12 +608,12 @@ func parseHexString(s string) ([]byte, error) {
 	}
 	result := make([]byte, len(s)/2)
 	for i := 0; i < len(s); i += 2 {
-		var b byte
-		n, err := fmt.Sscanf(s[i:i+2], "%2x", &b)
-		if err != nil || n != 1 {
+		hi := hexValTable[s[i]]
+		lo := hexValTable[s[i+1]]
+		if hi > 15 || lo > 15 {
 			return nil, fmt.Errorf("invalid hex string: %s", s[i:i+2])
 		}
-		result[i/2] = b
+		result[i/2] = (hi << 4) | lo
 	}
 	return result, nil
 }

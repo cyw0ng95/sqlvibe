@@ -1,5 +1,25 @@
 # sqlvibe Release History
 
+## **v0.7.7** (2026-02-22)
+
+### Performance Improvements
+
+- **QP: Switch-based keyword lookup** (`internal/QP/tokenizer.go`) — Replaced the `keywords` map lookup in `readIdentifier` with a two-level `switch` on `len(s)` + `s`. The switch handles all keywords up to length 7 directly, avoiding map hashing for the common case. Falls back to the existing `keywords` map for longer/less-common keywords only.
+- **QP: Hex string lookup table** (`internal/QP/tokenizer.go`) — Replaced `fmt.Sscanf("%2x", ...)` in `parseHexString` with a 256-byte `hexValTable` lookup array initialised once at startup. Each hex character decodes with a single array index operation instead of format-string parsing, eliminating all allocations in the hot path.
+- **QP: Token slice pre-allocation** (`internal/QP/tokenizer.go`) — `NewTokenizer` now pre-allocates the token slice with `cap = max(len(input)/8, 16)`, reducing the number of slice growth reallocations during tokenisation of typical queries.
+- **DS: VarintLen with math/bits** (`internal/DS/encoding.go`) — `VarintLen` now uses `math/bits.Len64` to compute the number of significant bits in a single CPU instruction (`BSR`/`LZCNT`), replacing the eight sequential threshold comparisons. Result is capped at 9 (maximum SQLite varint size).
+- **DS: sync.Pool for record encoding** (`internal/DS/encoding.go`) — Added `recordBufferPool` (a `sync.Pool` of `*bytes.Buffer`) and `EncodeRecordPooled`: a variant of `EncodeRecord` that obtains a scratch buffer from the pool, writes the encoded record into it, copies the result to a fresh caller-owned slice, and returns the buffer to the pool. This amortises the `bytes.Buffer` internal allocation cost across repeated calls.
+- **DS: Worker pool for page prefetch** (`internal/DS/btree.go`) — `prefetchChildren` no longer spawns a bare goroutine per child page. Instead a single shared `prefetchWorkerPool` with 4 fixed worker goroutines and a 64-slot task channel is initialised lazily on first use. Each child page read is submitted as a closure; if the channel is full, the prefetch is silently skipped, preventing goroutine explosion under high concurrency.
+- **DS: Cell key caching in findCell** (`internal/DS/btree.go`) — `findCell` now pre-decodes all cell keys from a page into a `[]cachedKey` slice before entering the binary search loop. Previously each comparison could decode the same mid-point key multiple times due to binary search revisits. With N cells the binary search visits O(log N) keys total but may visit the same key multiple times when the range narrows; pre-decoding eliminates all redundant decoding work.
+
+### New Benchmarks
+
+- `internal/QP/bench_tokenizer_test.go` — Tokenizer/parser benchmarks: `BenchmarkTokenizer_Identifiers`, `BenchmarkTokenizer_Numbers`, `BenchmarkTokenizer_Strings`, `BenchmarkTokenizer_HexStrings`, `BenchmarkTokenizer_FullQuery`, `BenchmarkParser_Select`, `BenchmarkParser_ComplexExpr`
+- `internal/DS/bench_encoding_test.go` — Encoding benchmarks: `BenchmarkVarint_Put`, `BenchmarkVarint_Get`, `BenchmarkVarint_Len`, `BenchmarkRecord_Encode`, `BenchmarkRecord_EncodePooled`, `BenchmarkRecord_Decode`
+- `internal/DS/bench_btree_test.go` — BTree and cache benchmarks: `BenchmarkBTree_Insert`, `BenchmarkBTree_Search`, `BenchmarkBTree_Cursor`, `BenchmarkCache_Get`, `BenchmarkCache_Set`
+
+---
+
 ## **v0.7.6** (2026-02-21)
 
 ### Performance Improvements
