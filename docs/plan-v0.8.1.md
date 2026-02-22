@@ -284,37 +284,41 @@ internal/DS/              # REMOVE: legacy SQLite format
 ## Tasks
 
 ### Phase 1: Columnar VM Opcodes
-- [ ] Add OpColumnarScan opcode
-- [ ] Add OpColumnarFilter opcode
-- [ ] Add OpColumnarAgg opcode
-- [ ] Unit tests for each opcode
-- [ ] Benchmark: ColumnarScan 1K rows
+- [x] Add OpColumnarScan opcode
+- [x] Add OpColumnarFilter opcode
+- [x] Add OpColumnarAgg opcode
+- [x] Add OpTopK opcode
+- [x] Unit tests for each opcode
+- [x] Benchmark: ColumnarScan 1K rows
 
 ### Phase 2: CG Columnar Plan Generation
-- [ ] Implement shouldUseColumnar() detector
-- [ ] Generate OpColumnarAgg for COUNT/SUM
-- [ ] Generate OpColumnarScan for SELECT *
-- [ ] Benchmark: CG Columnar COUNT/SUM
-- [ ] Benchmark: CG plan generation time
+- [x] Implement shouldUseColumnar() detector
+- [x] Generate OpColumnarAgg for COUNT/SUM
+- [x] Generate OpColumnarScan for SELECT *
+- [x] Benchmark: CG Columnar COUNT/SUM
+- [x] Benchmark: CG plan generation time
 
 ### Phase 3: Filter Pushdown
-- [ ] Implement ScanWithFilter in storage
-- [ ] Generate OpColumnarFilter in CG
-- [ ] Benchmark: WHERE col = val
-- [ ] Benchmark: WHERE col > val
+- [x] Implement ScanWithFilter in storage
+- [x] Generate OpColumnarFilter in CG
+- [x] Benchmark: WHERE col = val
+- [x] Benchmark: WHERE col > val
 
 ### Phase 4: Early Termination
-- [ ] Implement OpTopK for LIMIT
-- [ ] Implement OpExistsShortCircuit
-- [ ] Benchmark: LIMIT 10
-- [ ] Benchmark: EXISTS subquery
+- [x] Implement OpTopK for LIMIT
+- [x] Implement OpExistsShortCircuit
+- [x] Benchmark: LIMIT 10
+- [x] Benchmark: EXISTS subquery
 
 ### Phase 5: Predicate Reordering
-- [ ] Implement selectivity estimation
-- [ ] Reorder predicates in CG
-- [ ] Benchmark: Multi-predicate WHERE
+- [x] Implement selectivity estimation
+- [x] Reorder predicates in CG (ReorderPredicates)
+- [x] Benchmark: Multi-predicate WHERE
 
 ### Phase 6: QP (Query Processing) Optimizations
+- [x] Implement NormalizeQuery (normalize.go)
+- [x] Implement InferExprType (type_infer.go)
+- [x] Implement ParseCached LRU cache (parse_cache.go)
 
 #### 6.1 Query Normalization
 
@@ -442,6 +446,10 @@ func (p *Parser) ParseInsertStream(table string, emit func([]interface{})) error
 | INSERT 1M rows stream | < 100 ms | 2x faster |
 
 ### Phase 8: Multi-Core Parallelization
+- [x] Implement ParallelCount in HybridStore (parallel.go)
+- [x] Implement ParallelSum in HybridStore (parallel.go)
+- [x] Implement ParallelScan in HybridStore (parallel.go)
+- [x] Implement WorkerPool (worker_pool.go)
 
 #### 6.1 Core Detection
 
@@ -632,6 +640,7 @@ func (wp *WorkerPool) Submit(task func()) {
 | Parallel JOIN | < 20 ms | 3x faster |
 
 #### Phase 7: Concurrent DAG Query Plan
+- [x] Implement DAGNode and DAGExecutor (dag.go)
 
 Build DAG of operators for parallel execution:
 
@@ -726,8 +735,7 @@ func (e *DAGExecutor) Execute() {
 | Wide projection | < 2 ms | 2x faster |
 
 ### Phase 10: Remove Legacy Format Support
-
-Since v0.8.0 already broke SQLite compatibility, remove all legacy B-Tree / page format code:
+> **DEFERRED**: internal/DS is actively imported by 16+ files. Removal is out of scope for v0.8.1.
 
 #### 10.1 Remove SQLite-compatible Code
 
@@ -770,11 +778,11 @@ pkg/sqlvibe/storage/
 | No regressions | 0 |
 
 ### Phase 11: Validation
-- [ ] Run full SQL:1999 test suite
-- [ ] Run SQLite comparison benchmarks
-- [ ] Benchmark vs v0.8.0
+- [x] Run full SQL:1999 test suite
+- [x] Run SQLite comparison benchmarks
+- [x] Benchmark vs v0.8.0
 - [ ] Update README.md with v0.8.1 vs SQLite comparison
-- [ ] Update HISTORY.md
+- [x] Update HISTORY.md
 
 ---
 
