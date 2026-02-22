@@ -140,42 +140,51 @@ func Loaded() []string {
 Extensions can be included via build tags:
 
 ```bash
-# Include JSON extension only
-go build -tags "svdb_ext_json" -o sqlvibe .
+# Include JSON extension
+go build -ldflags "-X=github.com/cyw0ng95/sqlvibe/ext.extensions=json" -o sqlvibe .
 
 # Include multiple extensions
-go build -tags "svdb_ext_json" -o sqlvibe .
+go build -ldflags "-X=github.com/cyw0ng95/sqlvibe/ext.extensions=json,uuid" -o sqlvibe .
 
 # Include all extensions
-go build -tags "extensions" -o sqlvibe .
+go build -ldflags "-X=github.com/cyw0ng95/sqlvibe/ext.extensions=all" -o sqlvibe .
 ```
+
+### 1.4 Extension Variables
+
+Use ldflags to set extensions at build time:
 
 ```go
-// ext/extensions.go
+// ext/registry.go
 
-// +build svdb_ext_json
+var extensions string
 
-package ext
-
-import _ "github.com/cyw0ng95/sqlvibe/ext/json"
-
-// +build extensions
-
-package ext
-
-import (
-    _ "github.com/cyw0ng95/sqlvibe/ext/json"
-)
+func init() {
+    if extensions == "" {
+        return // no extensions
+    }
+    exts := strings.Split(extensions, ",")
+    for _, ext := range exts {
+        switch ext {
+        case "json":
+            loadExtension(&JSONExtension{})
+        case "all":
+            loadExtension(&JSONExtension{})
+        // future extensions
+        }
+    }
+}
 ```
 
-### Available Build Tags
+### Available ldflags
 
-| Tag | Extension |
-|-----|-----------|
-| `svdb_ext_json` | JSON extension |
-| `extensions` | All extensions |
+| ldflags | Extensions |
+|---------|-----------|
+| `-X=...ext.extensions=json` | JSON extension |
+| `-X=...ext.extensions=json,uuid` | Multiple |
+| `-X=...ext.extensions=all` | All extensions |
 
-### 1.4 Database Integration
+### 1.5 Database Integration
 
 ```go
 // pkg/sqlvibe/database.go additions
@@ -512,7 +521,7 @@ func TestJSONValid(t *testing.T) {
 |----------|--------|--------|
 | Extension interface | Works | [ ] |
 | Registry pattern | Works | [ ] |
-| Build tags | Works | [ ] |
+| ldflags integration | Works | [ ] |
 | Auto-register at startup | Works | [ ] |
 
 ### Phase 2: JSON Extension
@@ -536,17 +545,20 @@ func TestJSONValid(t *testing.T) {
 
 ## Building with Extensions (Static, Build-Time Only)
 
-Extensions are **statically linked** at compile time. No runtime loading.
+Extensions are **statically linked** at compile time using ldflags. No runtime loading.
 
 ```bash
 # Default (no extensions)
 go build -o sqlvibe .
 
 # Include JSON extension
-go build -tags "svdb_ext_json" -o sqlvibe .
+go build -ldflags "-X=github.com/cyw0ng95/sqlvibe/ext.extensions=json" -o sqlvibe .
+
+# Include multiple extensions
+go build -ldflags "-X=github.com/cyw0ng95/sqlvibe/ext.extensions=json,uuid" -o sqlvibe .
 
 # Include all extensions
-go build -tags "extensions" -o sqlvibe .
+go build -ldflags "-X=github.com/cyw0ng95/sqlvibe/ext.extensions=all" -o sqlvibe .
 ```
 
 When built with extensions, functions are available immediately:
@@ -571,7 +583,7 @@ SELECT json_extract('{"a":1}', '$.a');
 ## Notes
 
 - Extensions use Registry Pattern for simplicity
-- Build tags (e.g., `svdb_ext_json`) control inclusion to keep base binary small
+- **ldflags** control inclusion at build time
 - **Static linking only** - extensions are compiled in, no runtime loading
-- Each extension has its own build tag for fine-grained control
+- No source code changes needed to add extensions
 - All tests use L2 temp files only
