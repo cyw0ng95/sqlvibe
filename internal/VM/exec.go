@@ -3067,70 +3067,70 @@ type AggregateState struct {
 
 // compareForAnyAllVM compares two values for ANY/ALL predicates (returns -1, 0, or 1).
 func compareForAnyAllVM(a, b interface{}) int {
-if a == nil && b == nil {
-return 0
-}
-if a == nil {
-return -1
-}
-if b == nil {
-return 1
-}
-switch av := a.(type) {
-case int64:
-switch bv := b.(type) {
-case int64:
-if av < bv {
-return -1
-} else if av > bv {
-return 1
-}
-return 0
-case float64:
-fa := float64(av)
-if fa < bv {
-return -1
-} else if fa > bv {
-return 1
-}
-return 0
-}
-case float64:
-switch bv := b.(type) {
-case float64:
-if av < bv {
-return -1
-} else if av > bv {
-return 1
-}
-return 0
-case int64:
-fb := float64(bv)
-if av < fb {
-return -1
-} else if av > fb {
-return 1
-}
-return 0
-}
-case string:
-if bv, ok := b.(string); ok {
-if av < bv {
-return -1
-} else if av > bv {
-return 1
-}
-return 0
-}
-}
-as := fmt.Sprintf("%v", a)
-bs := fmt.Sprintf("%v", b)
-if as < bs {
-return -1
-} else if as > bs {
-return 1
-}
-return 0
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	switch av := a.(type) {
+	case int64:
+		switch bv := b.(type) {
+		case int64:
+			if av < bv {
+				return -1
+			} else if av > bv {
+				return 1
+			}
+			return 0
+		case float64:
+			fa := float64(av)
+			if fa < bv {
+				return -1
+			} else if fa > bv {
+				return 1
+			}
+			return 0
+		}
+	case float64:
+		switch bv := b.(type) {
+		case float64:
+			if av < bv {
+				return -1
+			} else if av > bv {
+				return 1
+			}
+			return 0
+		case int64:
+			fb := float64(bv)
+			if av < fb {
+				return -1
+			} else if av > fb {
+				return 1
+			}
+			return 0
+		}
+	case string:
+		if bv, ok := b.(string); ok {
+			if av < bv {
+				return -1
+			} else if av > bv {
+				return 1
+			}
+			return 0
+		}
+	}
+	as := fmt.Sprintf("%v", a)
+	bs := fmt.Sprintf("%v", b)
+	if as < bs {
+		return -1
+	} else if as > bs {
+		return 1
+	}
+	return 0
 }
 
 // isCountStar reports whether an aggregate definition is COUNT(*) or COUNT() with no args.
@@ -3657,28 +3657,6 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 			return b
 		}
 		return nil
-	case "RANDOM":
-		return int64(rand.Uint64())
-	case "RANDOMBLOB":
-		if len(e.Args) >= 1 {
-			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
-			if n, ok := toInt64ForVM(val); ok && n > 0 {
-				b := make([]byte, n)
-				for i := range b {
-					b[i] = byte(rand.Intn(256))
-				}
-				return b
-			}
-		}
-		return []byte{}
-	case "ZEROBLOB":
-		if len(e.Args) >= 1 {
-			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
-			if n, ok := toInt64ForVM(val); ok && n > 0 {
-				return make([]byte, n)
-			}
-		}
-		return []byte{}
 	case "IIF":
 		if len(e.Args) >= 3 {
 			cond := vm.evaluateExprOnRow(row, columns, e.Args[0])

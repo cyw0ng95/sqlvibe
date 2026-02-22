@@ -687,14 +687,12 @@ go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ABS function | Works | (core) |
-| CEIL/CEILING | Works | (core) |
-| FLOOR function | Works | (core) |
-| ROUND function | Works | (core) |
-| POWER function | Works | [x] |
-| SQRT function | Works | [x] |
-| MOD function | Works | [x] |
-| RANDOM function | Works | (core) |
+| ABS function | Moved to extension | [x] |
+| CEIL/CEILING | Moved to extension | [x] |
+| FLOOR function | Moved to extension | [x] |
+| ROUND function | Moved to extension | [x] |
+| POWER/SQRT/MOD | Works | [x] |
+| RANDOM/RANDOMBLOB | Moved to extension | [x] |
 | Build tag SVDB_EXT_MATH | Works | [x] |
 
 ### Phase 4: sqlvibe_extensions Table

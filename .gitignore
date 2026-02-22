@@ -46,6 +46,7 @@ test_output/
 # Build output
 /bin/
 /dist/
+sv-*
 
 # Temporary files
 tmp/

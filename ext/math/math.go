@@ -5,12 +5,12 @@
 //
 //	go build -tags SVDB_EXT_MATH ./...
 //
-// Note: ABS, CEIL, CEILING, FLOOR, ROUND are always available in the core engine.
-// This extension adds POWER, SQRT, MOD, PI, EXP, LN, LOG, LOG2, LOG10, SIGN.
+// Note: Without SVDB_EXT_MATH, ABS, CEIL, CEILING, FLOOR, ROUND will NOT be available.
 package math
 
 import (
 	gomath "math"
+	mathrand "math/rand"
 	"strings"
 
 	"github.com/cyw0ng95/sqlvibe/ext"
@@ -24,8 +24,10 @@ func (e *MathExtension) Description() string { return "Math extension" }
 
 func (e *MathExtension) Functions() []string {
 	return []string{
+		"ABS", "CEIL", "CEILING", "FLOOR", "ROUND",
 		"POWER", "POW", "SQRT", "MOD", "PI",
 		"EXP", "LN", "LOG", "LOG2", "LOG10", "SIGN",
+		"RANDOM", "RANDOMBLOB", "ZEROBLOB",
 	}
 }
 
@@ -37,6 +39,14 @@ func (e *MathExtension) Close() error { return nil }
 
 func (e *MathExtension) CallFunc(name string, args []interface{}) interface{} {
 	switch strings.ToUpper(name) {
+	case "ABS":
+		return evalAbs(args)
+	case "CEIL", "CEILING":
+		return evalCeil(args)
+	case "FLOOR":
+		return evalFloor(args)
+	case "ROUND":
+		return evalRound(args)
 	case "POWER", "POW":
 		return evalPower(args)
 	case "SQRT":
@@ -57,6 +67,12 @@ func (e *MathExtension) CallFunc(name string, args []interface{}) interface{} {
 		return evalLog10(args)
 	case "SIGN":
 		return evalSign(args)
+	case "RANDOM":
+		return evalRandom(args)
+	case "RANDOMBLOB":
+		return evalRandombLOB(args)
+	case "ZEROBLOB":
+		return evalZerobLOB(args)
 	}
 	return nil
 }
@@ -83,6 +99,104 @@ func toFloat64Math(v interface{}) (float64, bool) {
 }
 
 // ---------- function implementations ----------
+
+func evalAbs(args []interface{}) interface{} {
+	if len(args) < 1 {
+		return nil
+	}
+	val := args[0]
+	if val == nil {
+		return nil
+	}
+	switch v := val.(type) {
+	case int64:
+		if v < 0 {
+			return -v
+		}
+		return v
+	case float64:
+		return gomath.Abs(v)
+	}
+	return val
+}
+
+func evalCeil(args []interface{}) interface{} {
+	if len(args) < 1 {
+		return nil
+	}
+	val := args[0]
+	if val == nil {
+		return nil
+	}
+	switch v := val.(type) {
+	case int64:
+		return v
+	case float64:
+		return gomath.Ceil(v)
+	}
+	return val
+}
+
+func evalFloor(args []interface{}) interface{} {
+	if len(args) < 1 {
+		return nil
+	}
+	val := args[0]
+	if val == nil {
+		return nil
+	}
+	switch v := val.(type) {
+	case int64:
+		return v
+	case float64:
+		return gomath.Floor(v)
+	}
+	return val
+}
+
+func evalRound(args []interface{}) interface{} {
+	if len(args) < 1 {
+		return nil
+	}
+	val := args[0]
+	if val == nil {
+		return nil
+	}
+	decimals := 0
+	if len(args) >= 2 {
+		if decVal := args[1]; decVal != nil {
+			switch d := decVal.(type) {
+			case int64:
+				decimals = int(d)
+			case float64:
+				decimals = int(d)
+			}
+		}
+	}
+	switch v := val.(type) {
+	case int64:
+		if decimals == 0 {
+			return v
+		}
+		if decimals < 0 {
+			divisor := gomath.Pow10(-decimals)
+			return int64(gomath.Round(float64(v)/divisor) * divisor)
+		}
+		divisor := gomath.Pow10(decimals)
+		return gomath.Round(float64(v)*divisor) / divisor
+	case float64:
+		if decimals == 0 {
+			return gomath.Round(v)
+		}
+		if decimals < 0 {
+			divisor := gomath.Pow10(-decimals)
+			return gomath.Round(v/divisor) * divisor
+		}
+		divisor := gomath.Pow10(decimals)
+		return gomath.Round(v*divisor) / divisor
+	}
+	return val
+}
 
 func evalPower(args []interface{}) interface{} {
 	if len(args) < 2 {
@@ -221,4 +335,49 @@ func evalSign(args []interface{}) interface{} {
 		return float64(0)
 	}
 	return nil
+}
+
+func evalRandom(args []interface{}) interface{} {
+	return int64(mathrand.Uint64())
+}
+
+func evalRandombLOB(args []interface{}) interface{} {
+	if len(args) < 1 {
+		return []byte{}
+	}
+	n, ok := toInt64Math(args[0])
+	if !ok || n <= 0 {
+		return []byte{}
+	}
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte(mathrand.Intn(256))
+	}
+	return b
+}
+
+func evalZerobLOB(args []interface{}) interface{} {
+	if len(args) < 1 {
+		return []byte{}
+	}
+	n, ok := toInt64Math(args[0])
+	if !ok || n <= 0 {
+		return []byte{}
+	}
+	return make([]byte, n)
+}
+
+func toInt64Math(v interface{}) (int64, bool) {
+	if v == nil {
+		return 0, false
+	}
+	switch x := v.(type) {
+	case int64:
+		return x, true
+	case int:
+		return int64(x), true
+	case float64:
+		return int64(x), true
+	}
+	return 0, false
 }
