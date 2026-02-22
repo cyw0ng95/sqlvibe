@@ -258,6 +258,8 @@ func ColumnarSum(col *ColumnVector) float64 {
 
 ### Phase 4: Persistence (New Format)
 
+### Phase 4: Persistence (New Format)
+
 #### 4.1 Custom Binary Format
 
 ```
@@ -286,6 +288,256 @@ func ColumnarSum(col *ColumnVector) float64 {
 │  - Data offset: uint64                │
 └────────────────────────────────────────┘
 ```
+
+#### 4.2 New On-Disk File Format (v0.8.0)
+
+**Design Principles:**
+- Columnar-first: Store data by columns, not rows
+- Embedded compression: LZ4 for fast compression/decompression
+- Optional indexes: Bitmap indexes for fast filtering
+- Memory-mapped: Support mmap for large databases
+
+**File Structure:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         SQLVIBE Database File                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │ HEADER (256 bytes fixed)                                        │   │
+│  ├──────────────────────────────────────────────────────────────────┤   │
+│  │ Offset │ Size │ Field                                           │   │
+│  │--------|------|-------------------------------------------------│   │
+│  │ 0      | 8    │ Magic: "SQLVIBE\x01" (7 chars + \x01)          │   │
+│  │ 8      | 4    │ Format Version: uint32 (e.g., 0x00000001)     │   │
+│  │ 12     | 4    │ Flags: uint32                                  │   │
+│  │        |      │   - Bit 0: Compression enabled                  │   │
+│  │        |      │   - Bit 1: Indexes embedded                    │   │
+│  │        |      │   - Bit 2: Encryption enabled                  │   │
+│  │        |      │   - Bit 3: Columnar storage                    │   │
+│  │ 16     | 4    │ Schema offset: uint32                         │   │
+│  │ 20     | 4    │ Schema length: uint32                         │   │
+│  │ 24     | 4    │ Column count: uint32                           │   │
+│  │ 28     | 4    │ Row count: uint32 (total rows)                │   │
+│  │ 32     | 4    │ Index count: uint32                            │   │
+│  │ 36     | 4    │ Created timestamp: uint32 (Unix)              │   │
+│  │ 40     | 4    │ Modified timestamp: uint32 (Unix)              │   │
+│  │ 44     | 4    │ Compression type: uint32                       │   │
+│  │        |      │   0 = none, 1 = lz4, 2 = zstd                  │   │
+│  │ 48     | 4    │ Page size: uint32 (default 4096)              │   │
+│  │ 52     | 4    │ Reserved for future use                       │   │
+│  │ ...    | ...  │ ...                                           │   │
+│  │ 248    | 8    │ Header CRC32: uint64                          │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │ SCHEMA SECTION (JSON)                                            │   │
+│  ├──────────────────────────────────────────────────────────────────┤   │
+│  │ {                                                               │   │
+│  │   "tables": [                                                   │   │
+│  │     {                                                           │   │
+│  │       "name": "users",                                          │   │
+│  │       "columns": [                                              │   │
+│  │         {"name": "id", "type": "INT64"},                        │   │
+│  │         {"name": "name", "type": "STRING"},                    │   │
+│  │         {"name": "email", "type": "STRING"}                    │   │
+│  │       ],                                                        │   │
+│  │       "primary_key": ["id"],                                    │   │
+│  │       "indexes": ["idx_email"]                                  │   │
+│  │     }                                                           │   │
+│  │   ],                                                            │   │
+│  │   "indexes": [                                                  │   │
+│  │     {"name": "idx_email", "table": "users", "column": "email"} │   │
+│  │   ]                                                            │   │
+│  │ }                                                               │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │ COLUMN DATA SECTION                                              │   │
+│  ├──────────────────────────────────────────────────────────────────┤   │
+│  │                                                                  │   │
+│  │ ┌─────────────────────────────────────────────────────────────┐ │   │
+│  │ │ Column Header (16 bytes fixed)                               │ │   │
+│  │ ├─────────────────────────────────────────────────────────────┤ │   │
+│  │ │ Offset │ Size │ Field                                       │ │   │
+│  │ │--------|------|----------------------------------------------│ │   │
+│  │ │ 0      │ 2    │ Column name length: uint16                  │ │   │
+│  │ │ 2      │ 64   │ Column name (null-padded)                  │ │   │
+│  │ │ 66     │ 1    │ Column type: uint8                         │ │   │
+│  │ │        |      │   0 = NULL, 1 = INT8, 2 = INT16            │ │   │
+│  │ │        |      │   3 = INT32, 4 = INT64, 5 = UINT64         │ │   │
+│  │ │        |      │   6 = FLOAT32, 7 = FLOAT64                 │ │   │
+│  │ │        |      │   8 = STRING, 9 = BYTES                   │ │   │
+│  │ │        |      │  10 = BOOL, 11 = DATE, 12 = DATETIME      │ │   │
+│  │ │ 67     │ 1    │ Compression: uint8 (0=none, 1=lz4)        │ │   │
+│  │ │ 68     │ 4    │ Value count: uint32                        │ │   │
+│  │ │ 72     │ 4    │ Null count: uint32                         │ │   │
+│  │ │ 76     │ 4    │ Data offset: uint32                        │ │   │
+│  │ │ 80     │ 4    │ Compressed size: uint32 (0 if not compr)  │ │   │
+│  │ │ 84     │ 4    │ RLE run count: uint32 (if RLE enabled)     │ │   │
+│  │ │ 88     │ 4    │ Reserved                                    │ │   │
+│  │ │ 92     │ 4    │ Column CRC32: uint32                        │ │   │
+│  │ └─────────────────────────────────────────────────────────────┘ │   │
+│  │                                                                  │   │
+│  │ ┌─────────────────────────────────────────────────────────────┐ │   │
+│  │ │ Column Data (compressed or raw)                             │ │   │
+│  │ ├─────────────────────────────────────────────────────────────┤ │   │
+│  │ │                                                                  │   │
+│  │ │ For INT8/INT16/INT32/INT64:                                   │   │
+│  │ │   - Stored as plain little-endian bytes                       │   │
+│  │ │   - Example: [0x01, 0x00, 0x00, 0x00] = 1 (int32)           │   │
+│  │ │                                                                  │   │
+│  │ │ For FLOAT32/FLOAT64:                                           │   │
+│  │ │   - IEEE 754 little-endian                                     │   │
+│  │ │                                                                  │   │
+│  │ │ For STRING:                                                     │   │
+│  │ │   - [4 bytes length] [UTF-8 bytes] [null terminator]          │   │
+│  │ │   - Strings are length-prefixed                                │   │
+│  │ │                                                                  │   │
+│  │ │ For BYTES:                                                     │   │
+│  │ │   - [4 bytes length] [raw bytes]                              │   │
+│  │ │                                                                  │   │
+│  │ │ Optional RLE Compression:                                        │   │
+│  │ │   - For columns with high repetition                           │   │
+│  │ │   - Format: [value] [run_count-1]                              │   │
+│  │ │   - Example: [0x41, 0x09] = 'A' repeated 10 times             │   │
+│  │ │                                                                  │   │
+│  │ │ Optional LZ4 Compression:                                        │   │
+│  │ │   - Applied after RLE                                          │   │
+│  │ │   - Better for random data                                     │   │
+│  │ │                                                                  │   │
+│  │ └─────────────────────────────────────────────────────────────┘ │   │
+│  │                                                                  │   │
+│  │ [Repeat for each column...]                                     │   │
+│  │                                                                  │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │ INDEX SECTION (Optional - only if indexes defined)               │   │
+│  ├──────────────────────────────────────────────────────────────────┤   │
+│  │                                                                  │   │
+│  │ ┌─────────────────────────────────────────────────────────────┐ │   │
+│  │ │ Index Header (16 bytes)                                     │ │   │
+│  │ ├─────────────────────────────────────────────────────────────┤ │   │
+│  │ │ Offset │ Size │ Field                                       │ │   │
+│  │ │--------|------|----------------------------------------------│ │   │
+│  │ │ 0      │ 2    │ Index name length: uint16                   │ │   │
+│  │ │ 2      │ 64   │ Index name (null-padded)                   │ │   │
+│  │ │ 66     │ 1    │ Index type: uint8                          │ │   │
+│  │ │        |      │   0 = Bitmap, 1 = BTree, 2 = SkipList     │ │   │
+│  │ │ 67     │ 1    │ Key type: uint8 (same as column types)    │ │   │
+│  │ │ 68     │ 4    │ Unique values count: uint32               │ │   │
+│  │ │ 72     │ 4    │ Data offset: uint32                        │ │   │
+│  │ │ 76     │ 4    │ Data size: uint32                          │ │   │
+│  │ │ 80     │ 4    │ Reserved                                    │ │   │
+│  │ │ 84     │ 4    │ Index CRC32: uint32                         │ │   │
+│  │ └─────────────────────────────────────────────────────────────┘ │   │
+│  │                                                                  │   │
+│  │ ┌─────────────────────────────────────────────────────────────┐ │   │
+│  │ │ Bitmap Index Data                                            │ │   │
+│  │ │ (For equality filters: WHERE col = value)                  │ │   │
+│  │ ├─────────────────────────────────────────────────────────────┤ │   │
+│  │ │                                                                  │   │
+│  │ │ ┌─────────────────────────────────────────────────────────┐ │ │   │
+│  │ │ │ Bitmap Container (4096 bits = 512 bytes per container)  │ │ │   │
+│  │ │ ├─────────────────────────────────────────────────────────┤ │ │   │
+│  │ │ │ For each unique value v in indexed column:             │ │ │   │
+│  │ │ │   - Key: uint16 (value mod 65536)                     │ │ │   │
+│  │ │ │   - Container: Roaring Bitmap (set of row indices)    │ │ │   │
+│  │ │ │                                                                  │   │
+│  │ │ │ Example: column "status" with values [0,1,2]           │ │ │   │
+│  │ │ │   - status=0: bitmap {0, 5, 10, 15, ...}               │ │ │   │
+│  │ │ │   - status=1: bitmap {1, 6, 11, 16, ...}               │ │ │   │
+│  │ │ │   - status=2: bitmap {2, 7, 12, 17, ...}               │ │ │   │
+│  │ │ └─────────────────────────────────────────────────────────┘ │ │   │
+│  │ │                                                                  │   │
+│  │ └─────────────────────────────────────────────────────────────┘ │   │
+│  │                                                                  │   │
+│  │ ┌─────────────────────────────────────────────────────────────┐ │   │
+│  │ │ BTree/SkipList Index Data                                   │ │   │
+│  │ │ (For range queries: WHERE col > value)                    │ │   │
+│  │ ├─────────────────────────────────────────────────────────────┤ │   │
+│  │ │   - Ordered key-value pairs                                │ │   │
+│  │ │   - Value: list of row indices                             │ │   │
+│  │ └─────────────────────────────────────────────────────────────┘ │   │
+│  │                                                                  │   │
+│  │ [Repeat for each index...]                                     │   │
+│  │                                                                  │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │ FOOTER (32 bytes)                                               │   │
+│  ├──────────────────────────────────────────────────────────────────┤   │
+│  │ Offset │ Size │ Field                                           │   │
+│  │--------|------|-------------------------------------------------│   │
+│  │ 0      │ 4    │ Data section magic: 0x53414D50 ("SAMP")       │   │
+│  │ 4      │ 4    │ Index section magic: 0x494E4458 ("INDX")      │   │
+│  │ 8      │ 8    │ Data section length: uint64                   │   │
+│  │ 16     │ 8    │ Index section length: uint64                  │   │
+│  │ 24     │ 8    │ File CRC64: uint64 (entire file)             │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Column Type Encoding:**
+
+| Type ID | Type Name  | Size (bytes) | Description                    |
+|---------|------------|--------------|--------------------------------|
+| 0       | NULL       | 0            | No data, tracked in null bitmap |
+| 1       | INT8       | 1            | 8-bit signed integer           |
+| 2       | INT16      | 2            | 16-bit signed integer          |
+| 3       | INT32      | 4            | 32-bit signed integer          |
+| 4       | INT64      | 8            | 64-bit signed integer          |
+| 5       | UINT64     | 8            | 64-bit unsigned integer        |
+| 6       | FLOAT32    | 4            | IEEE 754 float32               |
+| 7       | FLOAT64    | 8            | IEEE 754 float64              |
+| 8       | STRING     | variable     | Length-prefixed UTF-8          |
+| 9       | BYTES      | variable     | Length-prefixed binary         |
+| 10      | BOOL       | 1            | 0 or 1                         |
+| 11      | DATE       | 4            | Unix timestamp (date only)     |
+| 12      | DATETIME   | 8            | Unix timestamp (full)         |
+
+**Compression Strategy:**
+
+1. **No compression** (default for small tables)
+   - Fastest read/write
+   - Best for frequently updated data
+
+2. **RLE (Run-Length Encoding)**
+   - Good for: boolean, low-cardinality columns
+   - Example: `AAAAABBBBBCCCCC` → `A*5 B*5 C*5`
+
+3. **LZ4**
+   - Good for: random string data
+   - Fast decompression (important for reads)
+   - Compression ratio: 2-5x typical
+
+4. **Zstd** (optional)
+   - Better compression ratio than LZ4
+   - Slower but still fast
+
+**Advantages over SQLite Format:**
+
+| Feature         | SQLite v3          | SQLVIBE v0.8.0           |
+|-----------------|-------------------|--------------------------|
+| Storage model   | Row-based B-Tree  | Columnar + optional index|
+| Compression     | None              | RLE + LZ4               |
+| Index type      | B-Tree only       | Bitmap + B-Tree + SkipList |
+| Random access   | Page-based        | Column offset direct    |
+| Schema          | SQLite header     | JSON                    |
+| Encryption      | External          | Optional embedded       |
+| Read performance| Good              | 10-50x faster (columnar)|
+| Write performance| Good              | Similar or slightly less|
+
+**File Size Estimate:**
+
+For 1 million rows with 10 columns:
+- SQLite: ~50-100 MB (depends on data)
+- SQLVIBE (uncompressed): ~40-80 MB
+- SQLVIBE (LZ4): ~20-50 MB (2-3x compression)
+- SQLVIBE (RLE + LZ4): ~15-40 MB (3-5x compression)
 
 ---
 
@@ -384,12 +636,20 @@ internal/
 - [ ] Update GROUP BY for vectors
 - [ ] Benchmark and tune
 
-### Phase 4: Persistence
-- [ ] Design new binary format
-- [ ] Implement serialization
-- [ ] Implement deserialization
-- [ ] Add compression (optional)
-- [ ] Migration tools
+### Phase 4: Persistence (New v0.8.0 Format)
+- [ ] Design new binary format (columnar-first, see spec above)
+- [ ] Implement file header read/write (256 bytes)
+- [ ] Implement schema JSON serialization/deserialization
+- [ ] Implement column data serialization (typed vectors)
+- [ ] Implement RLE compression for low-cardinality columns
+- [ ] Implement LZ4 compression for general columns
+- [ ] Implement RoaringBitmap index serialization
+- [ ] Implement BTree/SkipList index serialization
+- [ ] Implement file footer with CRC32/CRC64 checksums
+- [ ] Implement mmap-based random access
+- [ ] Implement WAL (Write-Ahead Logging) for durability
+- [ ] Implement checkpoint/compact operation
+- [ ] Migration tools: SQLite import, SQLVIBE export
 
 ### Phase 5: Testing & Validation
 - [ ] Run full SQL:1999 test suite
