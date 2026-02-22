@@ -242,16 +242,24 @@ func (hs *HybridStore) Stats() QueryStats { return hs.stats }
 
 // RecommendMode returns the storage mode best suited to the observed workload.
 //
-// Heuristics:
-//   - FilterQueries > ScanQueries*2  → ModeColumnar (filter-heavy analytical)
-//   - WriteQueries > FilterQueries*3 → ModeRow      (write-heavy transactional)
-//   - otherwise                      → ModeHybrid
+// Heuristics use division to avoid integer overflow:
+//   - FilterQueries/max(ScanQueries,1) >= 2  → ModeColumnar (filter-heavy analytical)
+//   - WriteQueries/max(FilterQueries,1) >= 3 → ModeRow      (write-heavy transactional)
+//   - otherwise                               → ModeHybrid
 func (hs *HybridStore) RecommendMode() Mode {
 	s := hs.stats
-	if s.FilterQueries > s.ScanQueries*2 {
+	scans := s.ScanQueries
+	if scans < 1 {
+		scans = 1
+	}
+	filters := s.FilterQueries
+	if filters < 1 {
+		filters = 1
+	}
+	if s.FilterQueries/scans >= 2 {
 		return ModeColumnar
 	}
-	if s.WriteQueries > s.FilterQueries*3 {
+	if s.WriteQueries/filters >= 3 {
 		return ModeRow
 	}
 	return ModeHybrid
