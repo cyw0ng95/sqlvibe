@@ -1,5 +1,21 @@
 # sqlvibe Release History
 
+## **v0.8.2** (2026-02-22)
+
+### Features
+- **SQL:1999 Test Suites**: Added 9 new test suite directories (E071, F221, F471, F812, F032, F033, F034, F111, F121) — 24 new test files
+- **HybridStore Aggregate Fast Paths**: COUNT(*), SUM(col), MIN(col), MAX(col) bypass VM and route directly to HybridStore vectorized aggregates (< 50 ns for COUNT(*))
+- **IS Schema Cache**: New `SchemaCache` in `internal/IS` caches information_schema view data; invalidated only on DDL, not DML
+- **Storage Layer Migration**: Moved `pkg/sqlvibe/storage/` → `internal/DS/` (18 files); all consumers updated to use `internal/DS` imports
+
+### Performance
+- COUNT(*) fast path: O(1) via HybridStore.ParallelCount()
+- SUM/MIN/MAX: type-aware (int64 for integer columns, float64 for float columns)
+- SchemaCache avoids rebuilding information_schema on repeated queries (DDL-only invalidation)
+
+### Breaking Changes
+- `pkg/sqlvibe/storage` package removed; use `internal/DS` (internal package)
+
 ## **v0.8.1** (2026-02-22)
 
 ### Features

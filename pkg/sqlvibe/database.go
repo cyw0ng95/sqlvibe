@@ -91,6 +91,7 @@ type Database struct {
 	indexData      map[string]map[interface{}][]int    // index name -> col value -> []row indices
 	planCache          *CG.PlanCache                       // compiled query plan cache
 	queryCache         *queryResultCache                   // full query result cache (columns + rows)
+	schemaCache        *IS.SchemaCache                     // information_schema result cache (DDL-invalidated)
 	hybridStores       map[string]*DS.HybridStore     // table name -> columnar hybrid store (analytical fast path)
 	hybridStoresDirty  map[string]bool                     // table name -> needs rebuild on next access
 }
@@ -349,6 +350,7 @@ func Open(path string) (*Database, error) {
 		indexData:      make(map[string]map[interface{}][]int),
 		planCache:          CG.NewPlanCache(256),
 		queryCache:         newQueryResultCache(512),
+		schemaCache:        IS.NewSchemaCache(),
 		hybridStores:       make(map[string]*DS.HybridStore),
 		hybridStoresDirty:  make(map[string]bool),
 	}, nil
@@ -541,6 +543,9 @@ func (db *Database) Exec(sql string) (Result, error) {
 		// Initialise an empty HybridStore for the new table.
 		db.hybridStores[stmt.Name] = db.buildHybridStore(stmt.Name)
 		db.hybridStoresDirty[stmt.Name] = false
+		if db.schemaCache != nil {
+			db.schemaCache.Invalidate()
+		}
 
 		return Result{}, nil
 	case "InsertStmt":
@@ -597,10 +602,14 @@ func (db *Database) Exec(sql string) (Result, error) {
 				delete(db.indexData, idxName)
 			}
 		}
-		db.invalidateWriteCaches()
+		db.invalidateSchemaCaches()
 		return Result{}, nil
 	case "CreateViewStmt":
-		return db.execCreateView(ast.(*QP.CreateViewStmt), sql)
+		result, err := db.execCreateView(ast.(*QP.CreateViewStmt), sql)
+		if err == nil && db.schemaCache != nil {
+			db.schemaCache.Invalidate()
+		}
+		return result, err
 	case "DropViewStmt":
 		stmt := ast.(*QP.DropViewStmt)
 		if _, exists := db.views[stmt.Name]; !exists {
@@ -609,9 +618,16 @@ func (db *Database) Exec(sql string) (Result, error) {
 			}
 		}
 		delete(db.views, stmt.Name)
+		if db.schemaCache != nil {
+			db.schemaCache.Invalidate()
+		}
 		return Result{}, nil
 	case "AlterTableStmt":
-		return db.execAlterTable(ast.(*QP.AlterTableStmt))
+		result, err := db.execAlterTable(ast.(*QP.AlterTableStmt))
+		if err == nil && db.schemaCache != nil {
+			db.schemaCache.Invalidate()
+		}
+		return result, err
 	case "CreateIndexStmt":
 		stmt := ast.(*QP.CreateIndexStmt)
 		if _, exists := db.indexes[stmt.Name]; exists {
@@ -631,11 +647,13 @@ func (db *Database) Exec(sql string) (Result, error) {
 		}
 		// Build hash index immediately from existing table data.
 		db.buildIndexData(stmt.Name)
+		db.schemaCache.Invalidate()
 		return Result{}, nil
 	case "DropIndexStmt":
 		stmt := ast.(*QP.DropIndexStmt)
 		delete(db.indexes, stmt.Name)
 		delete(db.indexData, stmt.Name)
+		db.schemaCache.Invalidate()
 		return Result{}, nil
 	case "BeginStmt":
 		stmt := ast.(*QP.BeginStmt)
@@ -986,6 +1004,16 @@ func (db *Database) invalidateWriteCaches() {
 	// Mark all hybrid stores as needing a rebuild on next access.
 	for tbl := range db.tables {
 		db.hybridStoresDirty[tbl] = true
+	}
+}
+
+// invalidateSchemaCaches clears caches that depend on schema structure.
+// Call this after DDL operations (CREATE/DROP/ALTER TABLE, CREATE/DROP INDEX)
+// so information_schema queries are re-evaluated with the updated schema.
+func (db *Database) invalidateSchemaCaches() {
+	db.invalidateWriteCaches()
+	if db.schemaCache != nil {
+		db.schemaCache.Invalidate()
 	}
 }
 
@@ -2001,11 +2029,20 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 	}
 	viewName := strings.ToLower(parts[1])
 
-	// Generate data based on view type
+	// Check schema cache for pre-built view data.
+	// The cache is invalidated on DDL; DML never changes the schema.
 	var allResults [][]interface{}
 	var columnNames []string
+	if db.schemaCache != nil {
+		if cachedCols, cachedRows, ok := db.schemaCache.Get(viewName); ok {
+			columnNames = cachedCols
+			allResults = cachedRows
+		}
+	}
 
-	switch viewName {
+	if allResults == nil {
+		// Generate data based on view type
+		switch viewName {
 	case "columns":
 		columnNames = []string{"column_name", "table_name", "table_schema", "data_type", "is_nullable", "column_default"}
 		// Extract columns from in-memory schema
@@ -2091,6 +2128,11 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 	default:
 		return nil, fmt.Errorf("unknown information_schema view: %s", viewName)
 	}
+		// Store built results in schema cache for subsequent calls.
+		if db.schemaCache != nil {
+			db.schemaCache.Set(viewName, columnNames, allResults)
+		}
+	} // end if allResults == nil
 
 	// Filter based on WHERE clause (simple support)
 	filtered := allResults
