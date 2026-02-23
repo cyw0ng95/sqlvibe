@@ -1,5 +1,10 @@
 package VM
 
+import (
+	"fmt"
+	"strings"
+)
+
 // OpHandler is the function signature for a dispatch-table opcode handler.
 // Returns true to advance PC by 1; returns false if the handler already
 // modified vm.pc.
@@ -27,6 +32,21 @@ func init() {
 	dispatchTable[OpLower] = execDispatchLower
 	dispatchTable[OpLength] = execDispatchLength
 	dispatchTable[OpConcat] = execDispatchConcat
+
+	// Extended string ops (v0.9.3)
+	dispatchTable[OpTrim] = execDispatchTrim
+	dispatchTable[OpLTrim] = execDispatchLTrim
+	dispatchTable[OpRTrim] = execDispatchRTrim
+	dispatchTable[OpReplace] = execDispatchReplace
+	dispatchTable[OpInstr] = execDispatchInstr
+
+	// Comparison ops (v0.9.3)
+	dispatchTable[OpEq] = execDispatchCmp(func(c int) bool { return c == 0 })
+	dispatchTable[OpNe] = execDispatchCmp(func(c int) bool { return c != 0 })
+	dispatchTable[OpLt] = execDispatchCmp(func(c int) bool { return c < 0 })
+	dispatchTable[OpLe] = execDispatchCmp(func(c int) bool { return c <= 0 })
+	dispatchTable[OpGt] = execDispatchCmp(func(c int) bool { return c > 0 })
+	dispatchTable[OpGe] = execDispatchCmp(func(c int) bool { return c >= 0 })
 }
 
 // ExecDirect executes the program using the dispatch table for supported opcodes.
@@ -144,4 +164,121 @@ func execDispatchConcat(vm *VM, inst *Instruction) bool {
 		vm.registers[dst] = stringConcat(lhs, rhs)
 	}
 	return true
+}
+
+// execDispatchTrim handles OpTrim (both sides).
+func execDispatchTrim(vm *VM, inst *Instruction) bool {
+	src := vm.registers[inst.P1]
+	chars := " "
+	if inst.P2 != 0 {
+		if v, ok := vm.registers[inst.P2].(string); ok {
+			chars = v
+		}
+	}
+	if dst, ok := inst.P4.(int); ok {
+		vm.registers[dst] = getTrim(src, chars, true /*both*/, false /*left*/, false /*right*/)
+	}
+	return true
+}
+
+// execDispatchLTrim handles OpLTrim (left trim).
+func execDispatchLTrim(vm *VM, inst *Instruction) bool {
+	src := vm.registers[inst.P1]
+	chars := " "
+	if inst.P2 != 0 {
+		if v, ok := vm.registers[inst.P2].(string); ok {
+			chars = v
+		}
+	}
+	if dst, ok := inst.P4.(int); ok {
+		vm.registers[dst] = getTrim(src, chars, false /*both*/, true /*left*/, false /*right*/)
+	}
+	return true
+}
+
+// execDispatchRTrim handles OpRTrim (right trim).
+func execDispatchRTrim(vm *VM, inst *Instruction) bool {
+	src := vm.registers[inst.P1]
+	chars := " "
+	if inst.P2 != 0 {
+		if v, ok := vm.registers[inst.P2].(string); ok {
+			chars = v
+		}
+	}
+	if dst, ok := inst.P4.(int); ok {
+		vm.registers[dst] = getTrim(src, chars, false /*both*/, false /*left*/, true /*right*/)
+	}
+	return true
+}
+
+// execDispatchReplace handles OpReplace.
+func execDispatchReplace(vm *VM, inst *Instruction) bool {
+	dst, ok := inst.P4.(int)
+	if !ok {
+		return true
+	}
+	srcVal := vm.registers[dst]
+	if srcVal == nil {
+		return true
+	}
+	srcStr := fmt.Sprintf("%v", srcVal)
+	from := ""
+	to := ""
+	if v, ok := vm.registers[inst.P1].(string); ok {
+		from = v
+	}
+	if v, ok := vm.registers[inst.P2].(string); ok {
+		to = v
+	}
+	vm.registers[dst] = strings.Replace(srcStr, from, to, -1)
+	return true
+}
+
+// execDispatchInstr handles OpInstr.
+func execDispatchInstr(vm *VM, inst *Instruction) bool {
+	haystack := ""
+	needle := ""
+	if v, ok := vm.registers[inst.P1].(string); ok {
+		haystack = v
+	}
+	if v, ok := vm.registers[inst.P2].(string); ok {
+		needle = v
+	}
+	if dst, ok := inst.P4.(int); ok {
+		vm.registers[dst] = int64(strings.Index(haystack, needle) + 1)
+	}
+	return true
+}
+
+// execDispatchCmp returns an OpHandler for a comparison opcode.
+// The predicate fn maps the compareVals result to true/false.
+func execDispatchCmp(fn func(int) bool) OpHandler {
+	return func(vm *VM, inst *Instruction) bool {
+		lhs := vm.registers[inst.P1]
+		rhs := vm.registers[inst.P2]
+		if lhs == nil || rhs == nil {
+			if inst.P4 != nil {
+				if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
+					vm.registers[dst] = nil
+				}
+			}
+			return true
+		}
+		result := fn(compareVals(lhs, rhs))
+		if inst.P4 != nil {
+			if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
+				if result {
+					vm.registers[dst] = int64(1)
+				} else {
+					vm.registers[dst] = int64(0)
+				}
+			} else if result {
+				if target, ok := inst.P4.(int); ok {
+					vm.pc = target
+					return false
+				}
+			}
+		}
+		return true
+	}
 }

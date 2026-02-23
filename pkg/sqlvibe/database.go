@@ -594,6 +594,10 @@ func (db *Database) Exec(sql string) (Result, error) {
 			result, err = db.execInsertSelect(stmt)
 		} else if stmt.OnConflict != nil {
 			result, err = db.execInsertOnConflict(stmt)
+		} else if stmt.OrAction == "REPLACE" {
+			result, err = db.execInsertOrReplace(stmt)
+		} else if stmt.OrAction == "IGNORE" {
+			result, err = db.execInsertOrIgnore(stmt)
 		} else if res, batchErr, handled := db.execInsertBatch(stmt); handled {
 			result, err = res, batchErr
 		} else {
@@ -3250,8 +3254,8 @@ func evalLiteralExpr(expr QP.Expr) interface{} {
 // Returns (result, error, true) when handled; (Result{}, nil, false) to fall through.
 func (db *Database) execInsertBatch(stmt *QP.InsertStmt) (Result, error, bool) {
 	util.AssertNotNil(stmt, "InsertStmt")
-	// Only handle simple literal-value inserts (no SELECT, ON CONFLICT, DEFAULT VALUES).
-	if stmt.SelectQuery != nil || stmt.OnConflict != nil || stmt.UseDefaults {
+	// Only handle simple literal-value inserts (no SELECT, ON CONFLICT, DEFAULT VALUES, OrAction).
+	if stmt.SelectQuery != nil || stmt.OnConflict != nil || stmt.UseDefaults || stmt.OrAction != "" {
 		return Result{}, nil, false
 	}
 	if !isAllLiteralValues(stmt) {
@@ -3506,6 +3510,143 @@ func (db *Database) execInsertOnConflict(stmt *QP.InsertStmt) (Result, error) {
 			return Result{}, upErr
 		}
 		affected += upRes.RowsAffected
+	}
+
+	return Result{RowsAffected: affected}, nil
+}
+
+// execInsertOrReplace handles INSERT OR REPLACE: for each row, attempt the INSERT;
+// on a UNIQUE/PK constraint violation, delete the conflicting row and re-insert.
+func (db *Database) execInsertOrReplace(stmt *QP.InsertStmt) (Result, error) {
+	util.AssertNotNil(stmt, "InsertStmt")
+	util.Assert(stmt.Table != "", "InsertStmt.Table cannot be empty")
+	util.Assert(stmt.OrAction == "REPLACE", "execInsertOrReplace called with wrong OrAction")
+
+	tableName := db.resolveTableName(stmt.Table)
+	if _, exists := db.tables[tableName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName)
+	}
+
+	tableCols := db.columnOrder[tableName]
+	if tableCols == nil {
+		tableCols = db.getOrderedColumns(tableName)
+	}
+
+	var affected int64
+
+	for _, row := range stmt.Values {
+		insertCols := stmt.Columns
+		if len(insertCols) == 0 {
+			insertCols = tableCols
+		}
+
+		colParts := make([]string, 0, len(insertCols))
+		valParts := make([]string, 0, len(insertCols))
+		colVals := make(map[string]string, len(insertCols))
+		for i, col := range insertCols {
+			v := "NULL"
+			if i < len(row) {
+				v = exprToSQL(row[i])
+			}
+			colParts = append(colParts, col)
+			valParts = append(valParts, v)
+			colVals[col] = v
+		}
+
+		insertSQL := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+			tableName,
+			strings.Join(colParts, ", "),
+			strings.Join(valParts, ", "))
+
+		res, err := db.execVMDML(insertSQL, tableName)
+		if err == nil {
+			affected += res.RowsAffected
+			continue
+		}
+
+		if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return Result{}, err
+		}
+
+		// Conflict: delete matching row(s) and re-insert.
+		pkCols := db.primaryKeys[tableName]
+		if len(pkCols) == 0 {
+			// No primary key — delete all rows matching the unique columns present.
+			pkCols = insertCols
+		}
+
+		whereParts := make([]string, 0, len(pkCols))
+		for _, col := range pkCols {
+			if val, ok := colVals[col]; ok {
+				whereParts = append(whereParts, fmt.Sprintf("%s = %s", col, val))
+			}
+		}
+		if len(whereParts) > 0 {
+			deleteSQL := fmt.Sprintf("DELETE FROM %s WHERE %s",
+				tableName, strings.Join(whereParts, " AND "))
+			if _, delErr := db.execVMDML(deleteSQL, tableName); delErr != nil {
+				return Result{}, delErr
+			}
+		}
+
+		res2, err2 := db.execVMDML(insertSQL, tableName)
+		if err2 != nil {
+			return Result{}, err2
+		}
+		affected += res2.RowsAffected
+	}
+
+	return Result{RowsAffected: affected}, nil
+}
+
+// execInsertOrIgnore handles INSERT OR IGNORE: attempt the INSERT;
+// on a UNIQUE/PK constraint violation, silently skip the row.
+func (db *Database) execInsertOrIgnore(stmt *QP.InsertStmt) (Result, error) {
+	util.AssertNotNil(stmt, "InsertStmt")
+	util.Assert(stmt.Table != "", "InsertStmt.Table cannot be empty")
+	util.Assert(stmt.OrAction == "IGNORE", "execInsertOrIgnore called with wrong OrAction")
+
+	tableName := db.resolveTableName(stmt.Table)
+	if _, exists := db.tables[tableName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName)
+	}
+
+	tableCols := db.columnOrder[tableName]
+	if tableCols == nil {
+		tableCols = db.getOrderedColumns(tableName)
+	}
+
+	var affected int64
+
+	for _, row := range stmt.Values {
+		insertCols := stmt.Columns
+		if len(insertCols) == 0 {
+			insertCols = tableCols
+		}
+
+		colParts := make([]string, 0, len(insertCols))
+		valParts := make([]string, 0, len(insertCols))
+		for i, col := range insertCols {
+			v := "NULL"
+			if i < len(row) {
+				v = exprToSQL(row[i])
+			}
+			colParts = append(colParts, col)
+			valParts = append(valParts, v)
+		}
+
+		insertSQL := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+			tableName,
+			strings.Join(colParts, ", "),
+			strings.Join(valParts, ", "))
+
+		res, err := db.execVMDML(insertSQL, tableName)
+		if err == nil {
+			affected += res.RowsAffected
+		} else if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return Result{}, err
+		}
+		// Constraint violation silently ignored.
 	}
 
 	return Result{RowsAffected: affected}, nil

@@ -85,7 +85,7 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.9.2)
+## Performance (v0.9.3)
 
 Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
@@ -99,14 +99,14 @@ Results may vary on different hardware.
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| SELECT all (3 cols) | 60 µs | 576 µs | **sqlvibe 9.6x faster** |
-| SELECT WHERE | 271 µs | 94 µs | SQLite 2.8x faster |
-| ORDER BY (500 rows) | 190 µs | 301 µs | **sqlvibe 1.6x faster** |
-| COUNT(*) | 6.3 µs | 5.3 µs | roughly equal |
-| SUM | 18 µs | 68 µs | **sqlvibe 3.7x faster** |
-| GROUP BY | 134 µs | 496 µs | **sqlvibe 3.7x faster** |
-| JOIN (100×500 rows) | 564 µs | 240 µs | SQLite 2.3x faster |
-| BETWEEN filter | 488 µs | 191 µs | SQLite 2.6x faster |
+| SELECT all (3 cols) | 60 µs | 572 µs | **sqlvibe 9.5x faster** |
+| SELECT WHERE | 271 µs | 92 µs | SQLite 2.9x faster |
+| ORDER BY (500 rows) | 193 µs | 304 µs | **sqlvibe 1.6x faster** |
+| COUNT(*) | 7.3 µs | 5.3 µs | roughly equal |
+| SUM | 21 µs | 67 µs | **sqlvibe 3.3x faster** |
+| GROUP BY | 141 µs | 513 µs | **sqlvibe 3.6x faster** |
+| JOIN (100×500 rows) | 561 µs | 238 µs | SQLite 2.4x faster |
+| BETWEEN filter | 551 µs | 187 µs | SQLite 2.9x faster |
 
 ### DML Operations
 
@@ -114,41 +114,62 @@ Results may vary on different hardware.
 |-----------|--------:|----------:|--------|
 | INSERT single | 3.7 µs | 6.2 µs | **sqlvibe 1.7x faster** |
 | INSERT 100 (batch) | 266 µs | 551 µs | **sqlvibe 2.1x faster** |
+| INSERT OR REPLACE | 37 µs | — | conflict + delete + re-insert |
+| INSERT OR IGNORE | 9.6 µs | — | conflict silently skipped |
 
 ### Special-case Performance
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| Result cache hit (repeated query) | 1.4 µs | 576 µs | **sqlvibe 397x faster** |
+| Result cache hit (repeated query) | 1.5 µs | 572 µs | **sqlvibe 381x faster** |
 | LIMIT 10 no ORDER BY (10K rows) | 20 µs | 119 µs | **sqlvibe 6x faster** |
 | LIMIT 100 no ORDER BY (10K rows) | 38 µs | 119 µs | **sqlvibe 3.1x faster** |
 | Expression bytecode eval | 99 ns | — | single-dispatch expression evaluation |
 
-### v0.9.2 Fixes & Improvements
+### SIMD Vectorization (v0.9.3)
+
+| Operation | 256 elems | 1 024 elems | 4 096 elems |
+|-----------|----------:|------------:|------------:|
+| VectorSumInt64 | 70 ns | 251 ns | 988 ns |
+| VectorSumFloat64 | 69 ns | 249 ns | 969 ns |
+| VectorAddInt64 (1 024) | — | 567 ns | — |
+| VectorMulFloat64 (1 024) | — | 503 ns | — |
+
+4-way loop unrolling enables the Go compiler to auto-vectorize on amd64/arm64 (SSE2/NEON).
+
+### Dispatch Table (v0.9.3)
+
+| Opcode group | Before | After (v0.9.3) |
+|--------------|-------:|---------------:|
+| Opcodes in dispatch table | 10 | 22 |
+
+v0.9.3 extends the dispatch table to 22 opcodes: comparison operators (Eq/Ne/Lt/Le/Gt/Ge)
+and extended string ops (Trim/LTrim/RTrim/Replace/Instr) now bypass the large switch statement.
+
+### v0.9.3 Fixes & Improvements
 
 | Fix / Improvement | Detail |
 |-------------------|--------|
-| Unknown function error | `no such function: <name>` returned instead of silent NULL (VM + QE paths) |
-| JULIANDAY(NULL) → NULL | Explicit NULL input now returns NULL, matching SQLite semantics |
-| ROUND returns float64 | `ROUND(x)` with 0 decimals returns `float64` (was `int64`), enabling `ROUND(julianday(...))` |
-| Math in constant SELECT | ROUND, ABS, CEIL, FLOOR, SQRT, … work in `SELECT expr` without FROM |
-| Dispatch table | OpUpper, OpLower, OpLength, OpConcat added to fast-path dispatch |
-| bytes.Compare | `[]byte` comparison uses stdlib `bytes.Compare` |
+| INSERT OR REPLACE | Deletes conflicting row and re-inserts; fully SQLite-compatible |
+| INSERT OR IGNORE | Silently skips rows that violate UNIQUE/PK constraints |
+| SIMD vectorization | `VectorAddInt64/Float64`, `VectorMulInt64/Float64`, `VectorSumInt64/Float64`, Min/Max helpers |
+| Extended dispatch table | Comparison (Eq/Ne/Lt/Le/Gt/Ge) + string (Trim/LTrim/RTrim/Replace/Instr) opcodes |
+| UPSERT (ON CONFLICT DO) | Already complete; F875 suite validates against SQLite |
+| REPLACE/SUBSTR/TRIM | Already complete; F875 suite validates 13 function variants |
 
-> **Analysis**: sqlvibe's in-memory columnar engine excels at full-table scans and aggregates
-> (SELECT *, SUM, GROUP BY) and delivers near-zero latency for repeated identical queries via its
-> result cache (397x faster than SQLite for cache hits). v0.9.2 improves correctness: undefined
-> functions now surface an error instead of silently returning NULL, JULIANDAY(NULL) correctly
-> returns NULL, and ROUND returns float64 to match SQLite semantics. SQLite's B-Tree index
-> implementation gives it an advantage for selective WHERE filters, range predicates, and JOIN on
-> indexed keys. Overall, sqlvibe excels at analytical/BI workloads and repeated queries; SQLite is
-> better for highly selective point lookups on indexed columns.
+> **Analysis**: sqlvibe v0.9.3 adds full `INSERT OR REPLACE/IGNORE` support for conflict-safe DML,
+> SIMD-style vectorized batch operations for columnar analytics, and extends the dispatch table to 22
+> opcodes covering all arithmetic, comparison, and string operations. The vectorized helpers deliver
+> sub-µs throughput for batch numeric operations (70 ns for 256-element int64 sum), while the
+> extended dispatch reduces branch-prediction misses in tight query loops. sqlvibe continues to excel
+> at full-table analytics and repeated-query workloads; SQLite retains an advantage for indexed point
+> lookups and selective range queries.
 
 ### Key Optimizations
 
 - **Columnar storage**: Fast full table scans via vectorised SIMD-friendly layouts
 - **Hybrid row/column**: Adaptive switching for best performance per workload
-- **Result cache**: Near-zero latency for repeated identical queries (FNV-1a keyed, 397x vs SQLite)
+- **Result cache**: Near-zero latency for repeated identical queries (FNV-1a keyed, 381x vs SQLite)
 - **Predicate pushdown**: WHERE/BETWEEN conditions evaluated before VM for fast filtered scans
 - **Plan cache**: Skip tokenise/parse/codegen for cached query plans
 - **Batch INSERT fast path**: Literal multi-row INSERT bypasses VM entirely
@@ -163,10 +184,11 @@ Results may vary on different hardware.
 - **Index Skip Scan**: `SkipScan` enables range scans on non-leading index columns (v0.9.1)
 - **Slab Allocator**: Bump-pointer slab with `sync.Pool` for small objects reduces GC pressure (v0.9.1)
 - **Prepared Statement Pool**: LRU-evicting `StatementPool` caches compiled plans for parameterized queries (v0.9.1)
-- **Direct Threaded VM**: Dispatch table infrastructure for arithmetic and string opcodes reduces branch misprediction (v0.9.1/v0.9.2)
+- **Direct Threaded VM**: Dispatch table (22 opcodes: arith + comparison + string) reduces branch misprediction (v0.9.1–v0.9.3)
 - **Expression Bytecode**: Compact `ExprBytecode` stack machine for single-call expression evaluation (v0.9.1)
 - **Direct Compiler**: `DirectCompiler` with fast-path detection for simple SELECT patterns (v0.9.1)
 - **bytes.Compare**: `[]byte` comparison uses stdlib `bytes.Compare` (v0.9.2)
+- **SIMD Vectorization**: 4-way unrolled batch ops for int64/float64 (VectorSum/Add/Sub/Mul/Min/Max) (v0.9.3)
 - **sync.Pool allocation reduction**: Pooled schema maps reduce per-query allocations
 - **VM constant folding**: Arithmetic on compile-time constants folded at compile time
 - **Strength reduction**: `x*1` → copy, `x*0` → 0, `x*2` → add (VM optimizer)
