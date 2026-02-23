@@ -1,6 +1,7 @@
 package VM
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -772,6 +773,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 				}
 				syntheticCall := &QP.FuncCall{Name: info.Name, Args: argExprs}
 				vm.registers[info.Dst] = vm.evaluateFuncCallOnRow(nil, nil, syntheticCall)
+				if vm.err != nil {
+					return vm.err
+				}
 			}
 			continue
 
@@ -2118,23 +2122,7 @@ func compareVals(a, b interface{}) int {
 		return strings.Compare(as, bs)
 
 	case []byte:
-		as := a.([]byte)
-		bs := b.([]byte)
-		if len(as) < len(bs) {
-			return -1
-		}
-		if len(as) > len(bs) {
-			return 1
-		}
-		for i := range as {
-			if as[i] < bs[i] {
-				return -1
-			}
-			if as[i] > bs[i] {
-				return 1
-			}
-		}
-		return 0
+		return bytes.Compare(a.([]byte), b.([]byte))
 	}
 
 	return strings.Compare(fmt.Sprintf("%v", a), fmt.Sprintf("%v", b))
@@ -2446,7 +2434,8 @@ func getRound(v interface{}, decimals int) interface{} {
 	}
 	f := reflectVal(v).toFloat()
 	if decimals == 0 {
-		return int64(math.Round(f))
+		// SQLite returns a float (real) for ROUND, even with 0 decimal places.
+		return math.Round(f)
 	}
 	m := math.Pow10(decimals)
 	return math.Round(f*m) / m
@@ -3562,7 +3551,11 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 		}
 		return applyStrftime(fmtStr, t)
 	case "JULIANDAY":
-		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0)))
+		arg0 := vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0))
+		if arg0 == nil && len(e.Args) > 0 {
+			return nil // JULIANDAY(NULL) -> NULL
+		}
+		t := parseDateTimeValue(arg0)
 		if t.IsZero() {
 			t = time.Now().UTC()
 		}
@@ -3680,6 +3673,8 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 	if result, ok := ext.CallFunc(funcName, evalArgs); ok {
 		return result
 	}
+	// Function not found: set vm.err so the caller can propagate it.
+	vm.err = fmt.Errorf("no such function: %s", funcName)
 	return nil
 }
 
@@ -4136,24 +4131,32 @@ func parseNumericPrefix(s string) int64 {
 // parseDateTimeValue parses a value into a time.Time, trying common SQLite date formats.
 // Returns zero time if parsing fails.
 func parseDateTimeValue(val interface{}) time.Time {
-	var s string
 	switch v := val.(type) {
-	case string:
-		s = v
 	case nil:
 		return time.Time{}
-	default:
-		return time.Time{}
-	}
-	if strings.ToLower(s) == "now" {
-		return time.Now().UTC()
-	}
-	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02", "15:04:05"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t
+	case float64:
+		// Interpret as Julian day number.
+		return julianDayToTime(v)
+	case int64:
+		// Interpret as Unix timestamp (seconds since epoch).
+		return time.Unix(v, 0).UTC()
+	case string:
+		if strings.ToLower(v) == "now" {
+			return time.Now().UTC()
+		}
+		for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02", "15:04:05"} {
+			if t, err := time.Parse(layout, v); err == nil {
+				return t
+			}
 		}
 	}
 	return time.Time{}
+}
+
+// julianDayToTime converts a Julian day number to time.Time (UTC).
+func julianDayToTime(jd float64) time.Time {
+	nanos := (jd - julianDayUnixEpoch) * float64(24*60*60*1e9)
+	return time.Unix(0, int64(nanos)).UTC()
 }
 
 // applyDateModifier applies a SQLite date modifier string (e.g., "+1 day") to a time.Time.

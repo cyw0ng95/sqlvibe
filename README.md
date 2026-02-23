@@ -85,7 +85,7 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.9.1)
+## Performance (v0.9.2)
 
 Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
@@ -99,14 +99,14 @@ Results may vary on different hardware.
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| SELECT all (3 cols) | 60 µs | 571 µs | **sqlvibe 9.5x faster** |
-| SELECT WHERE | 269 µs | 92 µs | SQLite 2.9x faster |
-| ORDER BY (500 rows) | 193 µs | 299 µs | **sqlvibe 1.6x faster** |
-| COUNT(*) | 6.8 µs | 5.3 µs | roughly equal |
-| SUM | 19 µs | 66 µs | **sqlvibe 3.5x faster** |
-| GROUP BY | 136 µs | 507 µs | **sqlvibe 3.7x faster** |
-| JOIN (100×500 rows) | 547 µs | 236 µs | SQLite 2.3x faster |
-| BETWEEN filter | 545 µs | 186 µs | SQLite 2.9x faster |
+| SELECT all (3 cols) | 60 µs | 576 µs | **sqlvibe 9.6x faster** |
+| SELECT WHERE | 271 µs | 94 µs | SQLite 2.8x faster |
+| ORDER BY (500 rows) | 190 µs | 301 µs | **sqlvibe 1.6x faster** |
+| COUNT(*) | 6.3 µs | 5.3 µs | roughly equal |
+| SUM | 18 µs | 68 µs | **sqlvibe 3.7x faster** |
+| GROUP BY | 134 µs | 496 µs | **sqlvibe 3.7x faster** |
+| JOIN (100×500 rows) | 564 µs | 240 µs | SQLite 2.3x faster |
+| BETWEEN filter | 488 µs | 191 µs | SQLite 2.6x faster |
 
 ### DML Operations
 
@@ -119,31 +119,27 @@ Results may vary on different hardware.
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| Result cache hit (repeated query) | 1.4 µs | 571 µs | **sqlvibe 397x faster** |
+| Result cache hit (repeated query) | 1.4 µs | 576 µs | **sqlvibe 397x faster** |
 | LIMIT 10 no ORDER BY (10K rows) | 20 µs | 119 µs | **sqlvibe 6x faster** |
 | LIMIT 100 no ORDER BY (10K rows) | 38 µs | 119 µs | **sqlvibe 3.1x faster** |
 | Expression bytecode eval | 99 ns | — | single-dispatch expression evaluation |
 
-### v0.9.1 Optimization Benchmarks
+### v0.9.2 Fixes & Improvements
 
-| v0.9.1 Feature | Metric | Result |
-|----------------|--------|--------|
-| Covering Index | `CoversColumns` decision | O(1) set lookup |
-| Column Projection | `ScanProjected` (n cols) | Reduces materialized data by 1 − n/total |
-| Index Skip Scan | `SkipScan` on low-cardinality leading col | Union of per-value bitmap intersections |
-| Slab Allocator | `SlabAllocator.Alloc(64B)` | ~1.1 µs with pool reuse; zero GC pressure on Reset |
-| Statement Pool | `StatementPool.Get` LRU cache | O(1) plan reuse, no re-parse/compile on hit |
-| Direct Threaded VM | `HasDispatchHandler` lookup | O(1) table index vs branch prediction cost |
-| Expression Bytecode | `ExprBytecode.Eval` stack machine | ~99 ns for simple arithmetic, ~100 ns for comparison |
-| Fast-path detection | `IsFastPath` query classification | ~210 ns classification, avoids JOIN/CTE paths |
+| Fix / Improvement | Detail |
+|-------------------|--------|
+| Unknown function error | `no such function: <name>` returned instead of silent NULL (VM + QE paths) |
+| JULIANDAY(NULL) → NULL | Explicit NULL input now returns NULL, matching SQLite semantics |
+| ROUND returns float64 | `ROUND(x)` with 0 decimals returns `float64` (was `int64`), enabling `ROUND(julianday(...))` |
+| Math in constant SELECT | ROUND, ABS, CEIL, FLOOR, SQRT, … work in `SELECT expr` without FROM |
+| Dispatch table | OpUpper, OpLower, OpLength, OpConcat added to fast-path dispatch |
+| bytes.Compare | `[]byte` comparison uses stdlib `bytes.Compare` |
 
 > **Analysis**: sqlvibe's in-memory columnar engine excels at full-table scans and aggregates
 > (SELECT *, SUM, GROUP BY) and delivers near-zero latency for repeated identical queries via its
-> result cache (397x faster than SQLite for cache hits). v0.9.1 adds covering index metadata for
-> index-only scan decisions, column projection to reduce memory for wide-table queries, index skip
-> scan for low-cardinality leading columns, a slab allocator to reduce GC pressure in high-throughput
-> OLTP workloads, a prepared statement pool with LRU eviction, direct-threaded VM dispatch table
-> infrastructure, and expression bytecode for compact expression evaluation. SQLite's B-Tree index
+> result cache (397x faster than SQLite for cache hits). v0.9.2 improves correctness: undefined
+> functions now surface an error instead of silently returning NULL, JULIANDAY(NULL) correctly
+> returns NULL, and ROUND returns float64 to match SQLite semantics. SQLite's B-Tree index
 > implementation gives it an advantage for selective WHERE filters, range predicates, and JOIN on
 > indexed keys. Overall, sqlvibe excels at analytical/BI workloads and repeated queries; SQLite is
 > better for highly selective point lookups on indexed columns.
@@ -167,16 +163,17 @@ Results may vary on different hardware.
 - **Index Skip Scan**: `SkipScan` enables range scans on non-leading index columns (v0.9.1)
 - **Slab Allocator**: Bump-pointer slab with `sync.Pool` for small objects reduces GC pressure (v0.9.1)
 - **Prepared Statement Pool**: LRU-evicting `StatementPool` caches compiled plans for parameterized queries (v0.9.1)
-- **Direct Threaded VM**: Dispatch table infrastructure for arithmetic opcodes reduces branch misprediction (v0.9.1)
+- **Direct Threaded VM**: Dispatch table infrastructure for arithmetic and string opcodes reduces branch misprediction (v0.9.1/v0.9.2)
 - **Expression Bytecode**: Compact `ExprBytecode` stack machine for single-call expression evaluation (v0.9.1)
 - **Direct Compiler**: `DirectCompiler` with fast-path detection for simple SELECT patterns (v0.9.1)
+- **bytes.Compare**: `[]byte` comparison uses stdlib `bytes.Compare` (v0.9.2)
 - **sync.Pool allocation reduction**: Pooled schema maps reduce per-query allocations
 - **VM constant folding**: Arithmetic on compile-time constants folded at compile time
 - **Strength reduction**: `x*1` → copy, `x*0` → 0, `x*2` → add (VM optimizer)
 
 ## SQL:1999 Compatibility
 
-84+ test suites passing
+87+ test suites passing
 
 ## Building
 

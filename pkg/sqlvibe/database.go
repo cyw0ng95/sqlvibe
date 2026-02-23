@@ -448,6 +448,10 @@ func (db *Database) evalConstantExpression(stmt *QP.SelectStmt) (*Rows, error) {
 
 		cols = append(cols, colName)
 		row = append(row, colValue)
+		// Propagate any "no such function" errors from EvalExpr.
+		if err := db.engine.LastError(); err != nil {
+			return nil, err
+		}
 	}
 
 	return &Rows{Columns: cols, Data: [][]interface{}{row}}, nil

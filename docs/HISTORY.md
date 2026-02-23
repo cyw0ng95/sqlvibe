@@ -1,6 +1,31 @@
 # sqlvibe Release History
 
-## **v0.9.1** (2026-02-22)
+## **v0.9.2** (2026-02-23)
+
+### Bug Fixes
+- **Unknown function error** (`internal/VM/exec.go`, `internal/VM/query_engine.go`, `pkg/sqlvibe/database.go`): Calling an undefined function (or an extension function when the extension is not loaded) now returns `"no such function: <name>"` instead of silently returning NULL. Fixed in both the VM execution path (`OpCallScalar`) and the QueryEngine constant-expression path.
+- **JULIANDAY(NULL)** (`internal/VM/exec.go`, `internal/VM/query_engine.go`): `JULIANDAY(NULL)` now correctly returns NULL instead of the current Julian day. Previously `parseDateTimeValue` returned zero time for nil, causing the code to fall back to `time.Now()`.
+- **ROUND returns float64** (`internal/VM/exec.go`): `ROUND(x)` with 0 decimal places now returns `float64` to match SQLite semantics. Previously returned `int64`, causing type mismatches with downstream operations (e.g. `ROUND(julianday(...))`).
+- **parseDateTimeValue float64 input** (`internal/VM/exec.go`, `internal/VM/query_engine.go`): Date/time functions now correctly accept a Julian day number (`float64`) as input, enabling chained calls like `DATE(JULIANDAY('now', '+1 day'))`.
+
+### Performance
+- **Dispatch table expansion** (`internal/VM/dispatch.go`): `OpUpper`, `OpLower`, `OpLength`, `OpConcat` added to the fast-path dispatch table.
+- **compareVals optimisation** (`internal/VM/exec.go`): `[]byte` comparison now uses `bytes.Compare` (standard library) instead of a manual byte loop.
+- **Math functions in QE path** (`internal/VM/query_engine.go`): `ROUND`, `ABS`, `CEIL`, `CEILING`, `FLOOR`, `SQRT`, `POWER`, `POW`, `EXP`, `LOG`, `LN`, `SIN`, `COS`, `TAN`, `ASIN`, `ACOS`, `ATAN`, `ATAN2` added to `evalFuncCall` so they work in constant-SELECT context (no FROM clause).
+
+### Testing
+- **Regression suite** (`internal/TS/Regression/regression_test.go`): Five regression tests guard against the three bug fixes above.
+- **F874 test suite** (`internal/TS/SQL1999/F874/01_test.go`): 15 new test cases covering date/time functions, unknown-function errors, and math functions in constant-SELECT context.
+
+### Performance (v0.9.2, AMD EPYC 7763, -benchtime=3s)
+- SELECT all (3 cols, 1K rows): **60 µs** sqlvibe vs 576 µs SQLite — **9.6× faster**
+- SUM aggregate (1K rows): **18 µs** sqlvibe vs 68 µs SQLite — **3.7× faster**
+- GROUP BY (1K rows): **134 µs** sqlvibe vs 496 µs SQLite — **3.7× faster**
+- ORDER BY (1K rows): **190 µs** sqlvibe vs 301 µs SQLite — **1.6× faster**
+- Result cache hit: **1.4 µs** (from v0.9.0 cache architecture)
+- SELECT WHERE: 271 µs sqlvibe vs 94 µs SQLite — SQLite 2.8× faster (full-table scan vs indexed lookup)
+- JOIN (1K×1K): 564 µs sqlvibe vs 240 µs SQLite — SQLite 2.3× faster (hash-join overhead on small tables)
+
 
 ### Features
 - **Covering Index** (`internal/DS/index_engine.go`): `IndexMeta` struct with `CoversColumns(required []string) bool` enables index-only scan decisions without table lookup. `DistinctCount(colName)` and `SkipScan(leadingCol, filterCol, filterVal)` added to `IndexEngine`.

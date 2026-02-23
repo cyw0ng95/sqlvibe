@@ -3,6 +3,7 @@ package VM
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ type QueryEngine struct {
 	cursorID   int
 	data       map[string][]map[string]interface{}
 	outerAlias string // Current outer query's table alias for correlation
+	evalErr    error  // last error from evalFuncCall (e.g. no such function)
 }
 
 type TableReader struct {
@@ -71,6 +73,14 @@ func NewQueryEngine(pm *DS.PageManager, data map[string][]map[string]interface{}
 
 func (qe *QueryEngine) SetOuterAlias(alias string) {
 	qe.outerAlias = alias
+}
+
+// LastError returns the last evaluation error (e.g. "no such function") and
+// clears it so subsequent calls return nil unless another error occurs.
+func (qe *QueryEngine) LastError() error {
+	err := qe.evalErr
+	qe.evalErr = nil
+	return err
 }
 
 func (qe *QueryEngine) RegisterTable(name string, schema map[string]ColumnType) {
@@ -1385,7 +1395,6 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			return strings.TrimRight(s, " \t\n\r")
 		}
 		return val
-		return val
 	case "POSITION", "INSTR":
 		if len(fc.Args) < 2 {
 			return nil
@@ -1619,6 +1628,9 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 		}
 	case "JULIANDAY":
 		tsVal := qe.evalValue(row, safeArgQE(fc.Args, 0))
+		if tsVal == nil && len(fc.Args) > 0 {
+			return nil // JULIANDAY(NULL) -> NULL
+		}
 		t := parseQEDateTime(tsVal)
 		if t.IsZero() {
 			t = time.Now().UTC()
@@ -1733,6 +1745,180 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 			return qe.evalValue(row, fc.Args[2])
 		}
 		return nil
+	case "ABS":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			switch v := val.(type) {
+			case int64:
+				if v < 0 {
+					return -v
+				}
+				return v
+			case float64:
+				return math.Abs(v)
+			}
+		}
+		return nil
+	case "ROUND":
+		if len(fc.Args) < 1 {
+			return nil
+		}
+		val := qe.evalValue(row, fc.Args[0])
+		if val == nil {
+			return nil
+		}
+		f := toFloat64QE(val)
+		decimals := 0
+		if len(fc.Args) >= 2 {
+			d := qe.evalValue(row, fc.Args[1])
+			if dv, ok := toInt64QE(d); ok {
+				decimals = int(dv)
+			}
+		}
+		if decimals == 0 {
+			return math.Round(f)
+		}
+		m := math.Pow10(decimals)
+		return math.Round(f*m) / m
+	case "CEIL", "CEILING":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			return math.Ceil(toFloat64QE(val))
+		}
+		return nil
+	case "FLOOR":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			return math.Floor(toFloat64QE(val))
+		}
+		return nil
+	case "SQRT":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			return math.Sqrt(toFloat64QE(val))
+		}
+		return nil
+	case "POWER", "POW":
+		if len(fc.Args) >= 2 {
+			base := qe.evalValue(row, fc.Args[0])
+			exp := qe.evalValue(row, fc.Args[1])
+			if base == nil || exp == nil {
+				return nil
+			}
+			return math.Pow(toFloat64QE(base), toFloat64QE(exp))
+		}
+		return nil
+	case "EXP":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			return math.Exp(toFloat64QE(val))
+		}
+		return nil
+	case "LOG", "LOG10":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			return math.Log10(toFloat64QE(val))
+		}
+		return nil
+	case "LN":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			return math.Log(toFloat64QE(val))
+		}
+		return nil
+	case "SIN":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			return math.Sin(toFloat64QE(val))
+		}
+		return nil
+	case "COS":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			return math.Cos(toFloat64QE(val))
+		}
+		return nil
+	case "TAN":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			return math.Tan(toFloat64QE(val))
+		}
+		return nil
+	case "ASIN":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			return math.Asin(toFloat64QE(val))
+		}
+		return nil
+	case "ACOS":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			return math.Acos(toFloat64QE(val))
+		}
+		return nil
+	case "ATAN":
+		if len(fc.Args) >= 1 {
+			val := qe.evalValue(row, fc.Args[0])
+			if val == nil {
+				return nil
+			}
+			return math.Atan(toFloat64QE(val))
+		}
+		return nil
+	case "ATAN2":
+		if len(fc.Args) >= 2 {
+			y := qe.evalValue(row, fc.Args[0])
+			x := qe.evalValue(row, fc.Args[1])
+			if y == nil || x == nil {
+				return nil
+			}
+			return math.Atan2(toFloat64QE(y), toFloat64QE(x))
+		}
+		return nil
+	case "ROW":
+		// SQL standard row constructor: return a string representation of the values.
+		parts := make([]string, len(fc.Args))
+		for i, arg := range fc.Args {
+			val := qe.evalValue(row, arg)
+			parts[i] = fmt.Sprintf("%v", val)
+		}
+		return "(" + strings.Join(parts, ",") + ")"
 	}
 	// Dispatch to registered extension functions.
 	{
@@ -1743,6 +1929,8 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 		if result, ok := ext.CallFunc(strings.ToUpper(fc.Name), evalArgs); ok {
 			return result
 		}
+		// Function not found: record error so callers can retrieve it via LastError().
+		qe.evalErr = fmt.Errorf("no such function: %s", fc.Name)
 	}
 	return nil
 }
@@ -1783,6 +1971,10 @@ func toInt64QE(v interface{}) (int64, bool) {
 	return 0, false
 }
 
+func toFloat64QE(v interface{}) float64 {
+	return reflectVal(v).toFloat()
+}
+
 func parseQEDateTime(v interface{}) time.Time {
 	if v == nil {
 		return time.Time{}
@@ -1800,8 +1992,9 @@ func parseQEDateTime(v interface{}) time.Time {
 	case int64:
 		return time.Unix(val, 0).UTC()
 	case float64:
-		sec := int64(val)
-		return time.Unix(sec, 0).UTC()
+		// Interpret as Julian day number (same as SQLite).
+		nanos := (val - julianDayUnixEpoch) * float64(24*60*60*1e9)
+		return time.Unix(0, int64(nanos)).UTC()
 	}
 	return time.Time{}
 }
