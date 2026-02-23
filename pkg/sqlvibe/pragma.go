@@ -18,6 +18,12 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		return db.pragmaTableInfo(stmt)
 	case "index_list":
 		return db.pragmaIndexList(stmt)
+	case "index_info":
+		return db.pragmaIndexInfo(stmt)
+	case "foreign_key_list":
+		return db.pragmaForeignKeyList(stmt)
+	case "function_list":
+		return db.pragmaFunctionList()
 	case "database_list":
 		return db.pragmaDatabaseList()
 	case "journal_mode":
@@ -196,6 +202,118 @@ func (db *Database) pragmaIndexList(stmt *QP.PragmaStmt) (*Rows, error) {
 		}
 	}
 
+	return &Rows{Columns: columns, Data: data}, nil
+}
+
+func (db *Database) pragmaIndexInfo(stmt *QP.PragmaStmt) (*Rows, error) {
+	var idxName string
+	if stmt.Value != nil {
+		switch v := stmt.Value.(type) {
+		case *QP.Literal:
+			if s, ok := v.Value.(string); ok {
+				idxName = s
+			}
+		case *QP.ColumnRef:
+			idxName = v.Name
+		}
+	}
+	columns := []string{"seqno", "cid", "name"}
+	if idxName == "" {
+		return &Rows{Columns: columns, Data: [][]interface{}{}}, nil
+	}
+	idx, exists := db.indexes[idxName]
+	if !exists {
+		return &Rows{Columns: columns, Data: [][]interface{}{}}, nil
+	}
+	data := make([][]interface{}, 0, len(idx.Columns))
+	// Build column-id lookup from the table schema
+	colOrderMap := make(map[string]int)
+	if colOrder, ok := db.columnOrder[idx.Table]; ok {
+		for i, c := range colOrder {
+			colOrderMap[c] = i
+		}
+	}
+	for seqno, colName := range idx.Columns {
+		cid := int64(-1) // expression index
+		if id, ok := colOrderMap[colName]; ok {
+			cid = int64(id)
+		}
+		data = append(data, []interface{}{int64(seqno), cid, colName})
+	}
+	return &Rows{Columns: columns, Data: data}, nil
+}
+
+func (db *Database) pragmaForeignKeyList(stmt *QP.PragmaStmt) (*Rows, error) {
+	var tableName string
+	if stmt.Value != nil {
+		switch v := stmt.Value.(type) {
+		case *QP.Literal:
+			if s, ok := v.Value.(string); ok {
+				tableName = s
+			}
+		case *QP.ColumnRef:
+			tableName = v.Name
+		}
+	}
+	columns := []string{"id", "seq", "table", "from", "to", "on_update", "on_delete", "match"}
+	if tableName == "" {
+		return &Rows{Columns: columns, Data: [][]interface{}{}}, nil
+	}
+	fks, ok := db.foreignKeys[tableName]
+	if !ok {
+		return &Rows{Columns: columns, Data: [][]interface{}{}}, nil
+	}
+	data := make([][]interface{}, 0)
+	for id, fk := range fks {
+		onUpdate := actionName(fk.OnUpdate)
+		onDelete := actionName(fk.OnDelete)
+		for seq, fromCol := range fk.ChildColumns {
+			toCol := ""
+			if seq < len(fk.ParentColumns) {
+				toCol = fk.ParentColumns[seq]
+			}
+			data = append(data, []interface{}{
+				int64(id), int64(seq), fk.ParentTable,
+				fromCol, toCol, onUpdate, onDelete, "NONE",
+			})
+		}
+	}
+	return &Rows{Columns: columns, Data: data}, nil
+}
+
+// actionName converts a ReferenceAction to its SQLite string representation.
+func actionName(a QP.ReferenceAction) string {
+	switch a {
+	case QP.ReferenceCascade:
+		return "CASCADE"
+	case QP.ReferenceSetNull:
+		return "SET NULL"
+	case QP.ReferenceSetDefault:
+		return "SET DEFAULT"
+	case QP.ReferenceRestrict:
+		return "RESTRICT"
+	default:
+		return "NO ACTION"
+	}
+}
+
+// pragmaFunctionList returns the list of built-in scalar functions.
+func (db *Database) pragmaFunctionList() (*Rows, error) {
+	columns := []string{"name"}
+	names := []string{
+		"abs", "ceil", "coalesce", "count", "date", "datetime",
+		"floor", "glob", "hex", "ifnull", "iif", "instr",
+		"julianday", "last_insert_rowid", "length", "like", "lower",
+		"ltrim", "max", "min", "nullif", "printf", "quote",
+		"random", "randomblob", "replace", "round", "rtrim",
+		"sign", "soundex", "sqrt", "strftime", "substr", "substring",
+		"time", "total_changes", "trim", "typeof", "unhex",
+		"unicode", "unixepoch", "upper", "zeroblob",
+	}
+	data := make([][]interface{}, 0, len(names))
+	for _, n := range names {
+		data = append(data, []interface{}{n})
+	}
 	return &Rows{Columns: columns, Data: data}, nil
 }
 
