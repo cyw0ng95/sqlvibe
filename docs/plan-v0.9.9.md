@@ -75,11 +75,11 @@ Complete the remaining SQL:1999 feature tests and add comprehensive edge case co
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ARRAY tests added (F291) | 5+ | [ ] |
-| STRUCT tests added (F301) | 3+ | [ ] |
-| MERGE tests added (F871) | 4+ | [ ] |
-| GROUPING SETS tests (F301) | 3+ | [ ] |
-| All new tests pass | 100% | [ ] |
+| ARRAY tests added (F291) | 5+ | [x] |
+| STRUCT tests added (F301) | 3+ | [x] |
+| MERGE tests added (F871) | 4+ | [x] |
+| GROUPING SETS tests (F301) | 3+ | [x] |
+| All new tests pass | 100% | [x] |
 
 ---
 
@@ -181,15 +181,15 @@ Add extensive edge case tests organized by SQL:1999 feature packages.
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| NULL edge case tests | 8+ | [ ] |
-| Type conversion tests | 6+ | [ ] |
-| Numeric boundary tests | 6+ | [ ] |
-| String edge tests | 6+ | [ ] |
-| Aggregation tests | 6+ | [ ] |
-| JOIN edge tests | 6+ | [ ] |
-| Subquery tests | 5+ | [ ] |
-| Expression tests | 5+ | [ ] |
-| All edge tests pass | 100% | [ ] |
+| NULL edge case tests | 8+ | [x] |
+| Type conversion tests | 6+ | [x] |
+| Numeric boundary tests | 6+ | [x] |
+| String edge tests | 6+ | [x] |
+| Aggregation tests | 6+ | [x] |
+| JOIN edge tests | 6+ | [x] |
+| Subquery tests | 5+ | [x] |
+| Expression tests | 5+ | [x] |
+| All edge tests pass | 100% | [x] |
 
 ---
 
@@ -304,17 +304,17 @@ Add support for all SQL standard test series beyond E and F.
 
 | Series | Tests Target | Status |
 |--------|--------------|--------|
-| D - Data Types | 7+ | [ ] |
-| G - General | 3+ | [ ] |
-| I - Integrity | 5+ | [ ] |
-| L - Language | 5+ | [ ] |
-| N - NULL | 5+ | [ ] |
-| Q - Query | 6+ | [ ] |
-| R - Schema | 5+ | [ ] |
-| T - Transaction | 5+ | [ ] |
-| V - Views | 4+ | [ ] |
-| W - Window | 6+ | [ ] |
-| All new tests pass | 100% | [ ] |
+| D - Data Types | 7+ | [x] |
+| G - General | 3+ | [x] |
+| I - Integrity | 5+ | [x] |
+| L - Language | 5+ | [x] |
+| N - NULL | 5+ | [x] |
+| Q - Query | 6+ | [x] |
+| R - Schema | 5+ | [x] |
+| T - Transaction | 5+ | [x] |
+| V - Views | 4+ | [x] |
+| W - Window | 6+ | [x] |
+| All new tests pass | 100% | [x] |
 
 ---
 
