@@ -216,6 +216,7 @@ var keywords = map[string]TokenType{
 	"BEFORE":            TokenKeyword,
 	"VACUUM":            TokenKeyword,
 	"ANALYZE":           TokenKeyword,
+	"REINDEX":           TokenKeyword,
 	"MATCH":             TokenMatch,
 	"COLLATE":           TokenCollate,
 	"RETURNING":         TokenKeyword,

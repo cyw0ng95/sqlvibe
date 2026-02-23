@@ -1,5 +1,34 @@
 # sqlvibe Release History
 
+## **v0.9.5** (2026-02-23)
+
+### Features
+- **REINDEX** (`internal/QP/tokenizer.go`, `internal/QP/parser.go`, `pkg/sqlvibe/vacuum.go`, `pkg/sqlvibe/database.go`): `REINDEX` rebuilds all secondary indexes; `REINDEX tablename` rebuilds all indexes on a specific table; `REINDEX indexname` rebuilds a single named index. Matches SQLite semantics — silently succeeds when the target does not exist.
+- **SELECT INTO** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `SELECT col1, col2 INTO newtable FROM src [WHERE ...]` creates a new persistent table populated with the query results. Equivalent to `CREATE TABLE newtable AS SELECT col1, col2 FROM src WHERE ...`. Schema is inferred from the source columns.
+
+### Verified Features (already implemented, explicitly tested in F877)
+- **Window Functions**: `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE` with full `OVER (PARTITION BY ... ORDER BY ... ROWS/RANGE BETWEEN ...)` support.
+- **CTE / WITH**: Non-recursive and recursive common table expressions.
+- **UPSERT**: `INSERT ... ON CONFLICT (col) DO NOTHING / DO UPDATE SET ...`
+- **EXPLAIN QUERY PLAN**: Returns a readable query execution plan showing index usage and scan type.
+- **Multi-VALUES INSERT**: `INSERT INTO t VALUES (...), (...), (...)` batch literal inserts.
+- **ANALYZE**: Collects row-count statistics per table and index used by the query optimizer.
+- **VACUUM**: In-place compaction and `VACUUM INTO 'path'` backup variant.
+- **AUTOINCREMENT**: `INTEGER PRIMARY KEY AUTOINCREMENT` guarantees monotonically increasing IDs.
+- **LIKE ESCAPE**: `expr LIKE pattern ESCAPE '\'` — user-defined escape character.
+
+### Testing
+- **F877 test suite** (`internal/TS/SQL1999/F877/01_test.go`): 5 test functions covering REINDEX (all / by table / by index) validated against SQLite, and SELECT INTO as a sqlvibe-only test (SQLite does not support the syntax).
+
+### Performance (v0.9.5, AMD EPYC 7763, -benchtime=3s)
+- SELECT all (3 cols, 1K rows): **61 µs** sqlvibe vs 564 µs SQLite — **9.3× faster**
+- SUM aggregate (1K rows): **19.5 µs** sqlvibe vs 66 µs SQLite — **3.4× faster**
+- GROUP BY (1K rows): **140 µs** sqlvibe vs 497 µs SQLite — **3.6× faster**
+- ORDER BY (1K rows): **197 µs** sqlvibe vs 298 µs SQLite — **1.5× faster**
+- Result cache hit: **1.46 µs** (vs 564 µs SQLite — **386× faster**)
+- SELECT WHERE: 284 µs sqlvibe vs 91 µs SQLite — SQLite 3.1× faster (indexed lookup vs full scan)
+- JOIN (100×500 rows): 561 µs sqlvibe vs 231 µs SQLite — SQLite 2.4× faster
+
 ## **v0.9.4** (2026-02-23)
 
 ### Features
