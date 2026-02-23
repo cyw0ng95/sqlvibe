@@ -27,6 +27,7 @@ type SelectStmt struct {
 	SetOpAll   bool
 	SetOpRight *SelectStmt
 	CTEs       []CTEClause // WITH ... AS (...) clauses
+	IntoTable  string      // non-empty for SELECT ... INTO tablename
 }
 
 // CTEClause represents a single CTE definition: name AS (SELECT ...)
@@ -284,6 +285,13 @@ type AnalyzeStmt struct {
 
 func (a *AnalyzeStmt) NodeType() string { return "AnalyzeStmt" }
 
+// ReindexStmt represents REINDEX [table_or_index]
+type ReindexStmt struct {
+	Target string // empty = all indexes
+}
+
+func (r *ReindexStmt) NodeType() string { return "ReindexStmt" }
+
 type Expr interface {
 	exprNode()
 }
@@ -480,6 +488,8 @@ func (p *Parser) parseInternal() (ASTNode, error) {
 			return p.parseVacuum()
 		case "ANALYZE":
 			return p.parseAnalyze()
+		case "REINDEX":
+			return p.parseReindex()
 		}
 	case TokenExplain:
 		return p.parseExplain()
@@ -716,7 +726,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				if p.current().Type == TokenKeyword {
 					lit := p.current().Literal
 					litUpper := strings.ToUpper(lit)
-					if litUpper == "FROM" || litUpper == "WHERE" || litUpper == "ORDER" || litUpper == "GROUP" || litUpper == "HAVING" || litUpper == "LIMIT" {
+					if litUpper == "FROM" || litUpper == "INTO" || litUpper == "WHERE" || litUpper == "ORDER" || litUpper == "GROUP" || litUpper == "HAVING" || litUpper == "LIMIT" {
 						break
 					}
 				}
@@ -724,6 +734,13 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 			}
 			p.advance()
 		}
+	}
+
+	// Handle SELECT ... INTO tablename (SELECT INTO creates a new table)
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "INTO" {
+		p.advance() // consume INTO
+		stmt.IntoTable = p.current().Literal
+		p.advance() // consume table name
 	}
 
 	if p.current().Literal == "FROM" {
@@ -2930,6 +2947,17 @@ func (p *Parser) parseVacuum() (ASTNode, error) {
 func (p *Parser) parseAnalyze() (ASTNode, error) {
 	p.advance() // consume ANALYZE
 	stmt := &AnalyzeStmt{}
+	cur := p.current()
+	if cur.Type == TokenIdentifier || cur.Type == TokenKeyword {
+		stmt.Target = cur.Literal
+		p.advance()
+	}
+	return stmt, nil
+}
+
+func (p *Parser) parseReindex() (ASTNode, error) {
+	p.advance() // consume REINDEX
+	stmt := &ReindexStmt{}
 	cur := p.current()
 	if cur.Type == TokenIdentifier || cur.Type == TokenKeyword {
 		stmt.Target = cur.Literal

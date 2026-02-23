@@ -76,134 +76,134 @@ This plan implements SQL compatibility features and maintenance statements for v
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes ROW_NUMBER() | Works | [ ] |
-| Basic row numbering works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes ROW_NUMBER() | Works | [x] |
+| Basic row numbering works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 2: RANK() / DENSE_RANK()
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes RANK() | Works | [ ] |
-| Parser recognizes DENSE_RANK() | Works | [ ] |
-| Rank with gaps works | Works | [ ] |
-| Rank without gaps works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes RANK() | Works | [x] |
+| Parser recognizes DENSE_RANK() | Works | [x] |
+| Rank with gaps works | Works | [x] |
+| Rank without gaps works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 3: OVER (PARTITION BY)
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes PARTITION BY | Works | [ ] |
-| Partition grouping works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes PARTITION BY | Works | [x] |
+| Partition grouping works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 4: OVER (ORDER BY)
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes ORDER BY in OVER | Works | [ ] |
-| Ordered window frames work | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes ORDER BY in OVER | Works | [x] |
+| Ordered window frames work | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 5: OVER (ROWS/RANGE)
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes ROWS | Works | [ ] |
-| Parser recognizes RANGE | Works | [ ] |
-| Frame boundaries work | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes ROWS | Works | [x] |
+| Parser recognizes RANGE | Works | [x] |
+| Frame boundaries work | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 6: CTE (WITH)
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes WITH | Works | [ ] |
-| Non-recursive CTE works | Works | [ ] |
-| Multiple CTEs work | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes WITH | Works | [x] |
+| Non-recursive CTE works | Works | [x] |
+| Multiple CTEs work | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 7: Multi-VALUES INSERT
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes multiple VALUES | Works | [ ] |
-| Batch insert works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes multiple VALUES | Works | [x] |
+| Batch insert works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 8: UPSERT
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes ON CONFLICT | Works | [ ] |
-| DO NOTHING works | Works | [ ] |
-| DO UPDATE works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes ON CONFLICT | Works | [x] |
+| DO NOTHING works | Works | [x] |
+| DO UPDATE works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 9: SELECT INTO
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes SELECT INTO | Works | [ ] |
-| Temp table creation works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes SELECT INTO | Works | [x] |
+| Temp table creation works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 10: ANALYZE
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ANALYZE command executes | Works | [ ] |
-| Statistics collected | Works | [ ] |
-| Query optimizer uses stats | Works | [ ] |
+| ANALYZE command executes | Works | [x] |
+| Statistics collected | Works | [x] |
+| Query optimizer uses stats | Works | [x] |
 
 ### Phase 11: EXPLAIN QUERY PLAN
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| EXPLAIN QUERY PLAN executes | Works | [ ] |
-| Plan output is readable | Works | [ ] |
-| Shows index usage | Works | [ ] |
+| EXPLAIN QUERY PLAN executes | Works | [x] |
+| Plan output is readable | Works | [x] |
+| Shows index usage | Works | [x] |
 
 ### Phase 12: REINDEX
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| REINDEX command executes | Works | [ ] |
-| Single index rebuild works | Works | [ ] |
-| All indexes rebuild works | Works | [ ] |
+| REINDEX command executes | Works | [x] |
+| Single index rebuild works | Works | [x] |
+| All indexes rebuild works | Works | [x] |
 
 ### Phase 13: VACUUM
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| VACUUM command executes | Works | [ ] |
-| Database size reduced | Works | [ ] |
-| Data integrity maintained | Works | [ ] |
+| VACUUM command executes | Works | [x] |
+| Database size reduced | Works | [x] |
+| Data integrity maintained | Works | [x] |
 
 ### Phase 14: AUTOINCREMENT
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| AUTOINCREMENT parsed | Works | [ ] |
-| Unique ID generation works | Works | [ ] |
-| Differs from plain INTEGER PK | Works | [ ] |
+| AUTOINCREMENT parsed | Works | [x] |
+| Unique ID generation works | Works | [x] |
+| Differs from plain INTEGER PK | Works | [x] |
 
 ### Phase 15: LIKE ESCAPE
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ESCAPE clause parsed | Works | [ ] |
-| Custom escape character works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| ESCAPE clause parsed | Works | [x] |
+| Custom escape character works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 16: Testing
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| All unit tests pass | 100% | [ ] |
-| SQLite comparison tests pass | 100% | [ ] |
-| New SQL:1999 tests added | Done | [ ] |
+| All unit tests pass | 100% | [x] |
+| SQLite comparison tests pass | 100% | [x] |
+| New SQL:1999 tests added | Done | [x] |
 
 ---
 

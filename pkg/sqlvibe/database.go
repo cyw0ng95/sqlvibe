@@ -810,6 +810,16 @@ func (db *Database) Exec(sql string) (Result, error) {
 	case "AnalyzeStmt":
 		_, err := db.handleAnalyze(ast.(*QP.AnalyzeStmt))
 		return Result{}, err
+	case "ReindexStmt":
+		_, err := db.handleReindex(ast.(*QP.ReindexStmt))
+		return Result{}, err
+	case "SelectStmt":
+		// SELECT INTO via Exec path
+		stmt := ast.(*QP.SelectStmt)
+		if stmt.IntoTable != "" {
+			_, err := db.execSelectInto(stmt)
+			return Result{}, err
+		}
 	}
 
 	return Result{}, nil
@@ -891,12 +901,21 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		return db.handleAnalyze(ast.(*QP.AnalyzeStmt))
 	}
 
+	if ast.NodeType() == "ReindexStmt" {
+		return db.handleReindex(ast.(*QP.ReindexStmt))
+	}
+
 	if ast.NodeType() == "ExplainStmt" {
 		return db.handleExplain(ast.(*QP.ExplainStmt), sql)
 	}
 
 	if ast.NodeType() == "SelectStmt" {
 		stmt := ast.(*QP.SelectStmt)
+
+		// Handle SELECT ... INTO tablename — creates a new table with the query results.
+		if stmt.IntoTable != "" {
+			return db.execSelectInto(stmt)
+		}
 
 		// Handle CTE (WITH ... AS (...) SELECT ...) by materializing temp tables
 		if len(stmt.CTEs) > 0 {
@@ -3100,6 +3119,55 @@ func (db *Database) execCreateTableAsSelect(stmt *QP.CreateTableStmt) (Result, e
 	db.hybridStoresDirty[stmt.Name] = false
 
 	return Result{}, nil
+}
+
+// execSelectInto handles SELECT col1, col2 INTO newtable FROM source [WHERE ...].
+// Creates a new table populated with the query results (similar to CREATE TABLE AS SELECT).
+func (db *Database) execSelectInto(stmt *QP.SelectStmt) (*Rows, error) {
+	tableName := stmt.IntoTable
+	// Execute the SELECT without the INTO clause.
+	selectStmt := *stmt
+	selectStmt.IntoTable = ""
+	rows, err := db.execSelectStmt(&selectStmt)
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		rows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
+	}
+
+	// Create the new table with inferred schema.
+	schema := make(map[string]VM.ColumnType)
+	colTypes := make(map[string]string)
+	db.columnDefaults[tableName] = make(map[string]interface{})
+	db.columnNotNull[tableName] = make(map[string]bool)
+	db.columnChecks[tableName] = make(map[string]QP.Expr)
+	for _, col := range rows.Columns {
+		colType := db.inferColumnTypeFromSelect(col, &selectStmt)
+		schema[col] = VM.ColumnType{Name: col, Type: colType}
+		colTypes[col] = colType
+	}
+	db.engine.RegisterTable(tableName, schema)
+	db.tables[tableName] = colTypes
+	db.columnOrder[tableName] = rows.Columns
+
+	bt := DS.NewBTree(db.pm, 0, true)
+	db.tableBTrees[tableName] = bt
+
+	db.data[tableName] = make([]map[string]interface{}, 0, len(rows.Data))
+	for _, row := range rows.Data {
+		rowMap := make(map[string]interface{})
+		for i, col := range rows.Columns {
+			if i < len(row) {
+				rowMap[col] = row[i]
+			}
+		}
+		db.data[tableName] = append(db.data[tableName], rowMap)
+	}
+	db.hybridStores[tableName] = db.buildHybridStore(tableName)
+	db.hybridStoresDirty[tableName] = false
+	db.invalidateSchemaCaches()
+	return nil, nil
 }
 
 // inferColumnTypeFromSelect tries to determine a column's type from its source in a SELECT statement.
