@@ -136,15 +136,74 @@ func (s *SchemaTracker) GetColumnType(tableName, colName string) ColumnType {
 	return ColumnTypeUnknown
 }
 
+// ComplexityBudget limits the complexity of generated SQL
+type ComplexityBudget struct {
+	MaxExprDepth    int // Maximum nesting depth for expressions
+	MaxSubqueries   int // Maximum number of nested subqueries
+	MaxJoins        int // Maximum number of JOINs
+	MaxColumns      int // Maximum columns in SELECT
+	MaxFunctions    int // Maximum nested function calls
+	CurrentDepth    int // Current nesting depth
+}
+
+func NewComplexityBudget() *ComplexityBudget {
+	return &ComplexityBudget{
+		MaxExprDepth:  5,
+		MaxSubqueries: 3,
+		MaxJoins:     3,
+		MaxColumns:    8,
+		MaxFunctions: 4,
+		CurrentDepth: 0,
+	}
+}
+
+// CanIncreaseDepth checks if we can increase expression depth
+func (b *ComplexityBudget) CanIncreaseDepth() bool {
+	return b.CurrentDepth < b.MaxExprDepth
+}
+
+// IncreaseDepth increases depth, returns false if at limit
+func (b *ComplexityBudget) IncreaseDepth() bool {
+	if !b.CanIncreaseDepth() {
+		return false
+	}
+	b.CurrentDepth++
+	return true
+}
+
+// DecreaseDepth decreases depth
+func (b *ComplexityBudget) DecreaseDepth() {
+	if b.CurrentDepth > 0 {
+		b.CurrentDepth--
+	}
+}
+
+// Reset resets the depth counter
+func (b *ComplexityBudget) Reset() {
+	b.CurrentDepth = 0
+}
+
+// WithDepth executes a function with increased depth, resetting after
+func (b *ComplexityBudget) WithDepth(fn func() string) string {
+	if !b.IncreaseDepth() {
+		return fn() // At limit, execute without increasing
+	}
+	defer b.DecreaseDepth()
+	return fn()
+}
+
+
 type SQLGenerator struct {
-	rand *rand.Rand
-	Schema *SchemaTracker
+	rand   *rand.Rand
+	Schema  *SchemaTracker
+	Budget  *ComplexityBudget
 }
 
 func NewSQLGenerator(seed int64) *SQLGenerator {
 	return &SQLGenerator{
 		rand:   rand.New(rand.NewSource(seed)),
 		Schema: NewSchemaTracker(seed),
+		Budget: NewComplexityBudget(),
 	}
 }
 
@@ -993,4 +1052,333 @@ func (g *SQLGenerator) GenerateSchemaAwareRandomSQL() string {
 		g.GenerateCase,
 	}
 	return generators[g.rand.Intn(len(generators))]()
+}
+
+
+// =============================================================================
+// SQLSmith-style Optimizations: Recursive Expression, Cross-feature, Persistent Schema
+// =============================================================================
+
+// GenerateRecursiveExpression generates nested expressions using complexity budget
+func (g *SQLGenerator) GenerateRecursiveExpression(colType ColumnType) string {
+	// Base case: simple column or value
+	if g.Budget == nil || !g.Budget.CanIncreaseDepth() {
+		return g.generateSimpleExpression(colType)
+	}
+
+	return g.Budget.WithDepth(func() string {
+		// Randomly choose between nested function, binary op, or simple expression
+		choice := g.rand.Intn(4)
+		switch choice {
+		case 0:
+			return g.generateNestedFunction(colType)
+		case 1:
+			return g.generateBinaryExpression(colType)
+		case 2:
+			return g.generateCaseExpression(colType)
+		default:
+			return g.generateSimpleExpression(colType)
+		}
+	})
+}
+
+// generateSimpleExpression generates simple column or literal
+func (g *SQLGenerator) generateSimpleExpression(colType ColumnType) string {
+	switch colType {
+	case ColumnTypeInteger:
+		choices := []string{
+			fmt.Sprintf("%d", g.rand.Intn(1000)),
+			fmt.Sprintf("%d", -g.rand.Intn(100)),
+		}
+		return choices[g.rand.Intn(len(choices))]
+	case ColumnTypeReal:
+		return fmt.Sprintf("%f", g.rand.Float64()*100)
+	case ColumnTypeText:
+		return fmt.Sprintf("'%s'", g.generateString())
+	default:
+		return "NULL"
+	}
+}
+
+// generateNestedFunction generates nested function calls
+func (g *SQLGenerator) generateNestedFunction(colType ColumnType) string {
+	// Generate nested function calls like ABS(COALESCE(col, 0))
+	inner := g.GenerateRecursiveExpression(colType)
+	
+	funcs := []struct {
+		name string
+		args int // 0 = *, 1 = single arg
+	}{
+		{"ABS", 1}, {"LENGTH", 1}, {"UPPER", 1}, {"LOWER", 1},
+		{"TRIM", 1}, {"COALESCE", 2}, {"IFNULL", 2}, {"NULLIF", 2},
+	}
+	f := funcs[g.rand.Intn(len(funcs))]
+	
+	if f.args == 2 {
+		// Binary function: COALESCE(x, y) or IFNULL(x, y)
+		second := g.generateSimpleExpression(colType)
+		return fmt.Sprintf("%s(%s, %s)", f.name, inner, second)
+	}
+	return fmt.Sprintf("%s(%s)", f.name, inner)
+}
+
+// generateBinaryExpression generates binary operations
+func (g *SQLGenerator) generateBinaryExpression(colType ColumnType) string {
+	left := g.GenerateRecursiveExpression(colType)
+	right := g.GenerateRecursiveExpression(colType)
+	
+	ops := []string{"+", "-", "*", "/"}
+	if colType == ColumnTypeText {
+		ops = []string{"||"}
+	}
+	op := ops[g.rand.Intn(len(ops))]
+	
+	return fmt.Sprintf("(%s %s %s)", left, op, right)
+}
+
+// generateCaseExpression generates CASE WHEN expressions
+func (g *SQLGenerator) generateCaseExpression(colType ColumnType) string {
+	caseWhen := g.rand.Intn(3) + 1 // 1-3 WHEN clauses
+	
+	var whens []string
+	for i := 0; i < caseWhen; i++ {
+		cond := g.generateSimpleCondition()
+		val := g.generateSimpleExpression(colType)
+		whens = append(whens, fmt.Sprintf("WHEN %s THEN %s", cond, val))
+	}
+	
+	elseVal := g.generateSimpleExpression(colType)
+	return fmt.Sprintf("CASE %s ELSE %s END", strings.Join(whens, " "), elseVal)
+}
+
+// generateSimpleCondition generates simple WHERE conditions
+func (g *SQLGenerator) generateSimpleCondition() string {
+	ops := []string{"=", "!=", ">", "<", ">=", "<="}
+	op := ops[g.rand.Intn(len(ops))]
+	
+	left := fmt.Sprintf("c%d", g.rand.Intn(5))
+	right := fmt.Sprintf("%d", g.rand.Intn(100))
+	
+	return fmt.Sprintf("%s %s %s", left, op, right)
+}
+
+// GenerateCrossFeatureQuery generates queries combining multiple SQL features
+func (g *SQLGenerator) GenerateCrossFeatureQuery() string {
+	if !g.Schema.HasTables() {
+		return g.GenerateCreateTable()
+	}
+
+	tableName := g.Schema.GetRandomTable()
+	table := g.Schema.GetTable(tableName)
+	if table == nil || len(table.Columns) == 0 {
+		return g.GenerateCreateTable()
+	}
+
+	// Build a complex query with multiple features
+	var clauses []string
+	
+	// SELECT clause with functions
+	numCols := g.rand.Intn(len(table.Columns)) + 1
+	cols := make([]string, numCols)
+	for i := 0; i < numCols; i++ {
+		colIdx := g.rand.Intn(len(table.Columns))
+		col := table.Columns[colIdx]
+		
+		// 30% chance of function on column
+		if g.rand.Intn(10) < 3 {
+			funcs := []string{"COUNT(%s)", "MAX(%s)", "MIN(%s)", "AVG(%s)", "SUM(%s)"}
+			cols[i] = fmt.Sprintf(funcs[g.rand.Intn(len(funcs))], col.Name)
+		} else {
+			cols[i] = col.Name
+		}
+	}
+	clauses = append(clauses, fmt.Sprintf("SELECT %s", strings.Join(cols, ", ")))
+	
+	// FROM clause with JOIN possibility
+	if g.Schema.HasTables() && g.rand.Intn(3) == 0 {
+		table2Name := g.Schema.GetRandomTable()
+		if table2Name != tableName {
+			joinType := []string{"JOIN", "LEFT JOIN", "INNER JOIN"}
+			clauses = append(clauses, fmt.Sprintf("FROM %s %s %s ON %s.c0 = %s.c0",
+			tableName, joinType[g.rand.Intn(len(joinType))], table2Name, tableName, table2Name))
+		} else {
+			clauses = append(clauses, fmt.Sprintf("FROM %s", tableName))
+		}
+	} else {
+		clauses = append(clauses, fmt.Sprintf("FROM %s", tableName))
+	}
+
+	// WHERE clause
+	if g.rand.Intn(2) == 1 && len(table.Columns) > 0 {
+		col := table.Columns[g.rand.Intn(len(table.Columns))]
+		where := g.generateSchemaAwareWhere(tableName, col)
+		clauses = append(clauses, where)
+	}
+
+	// GROUP BY
+	if g.rand.Intn(3) == 0 && len(table.Columns) > 0 {
+		colIdx := g.rand.Intn(len(table.Columns))
+		clauses = append(clauses, fmt.Sprintf("GROUP BY %s", table.Columns[colIdx].Name))
+	}
+
+	// HAVING (only with GROUP BY)
+	if len(clauses) > 3 && g.rand.Intn(2) == 1 {
+		colIdx := g.rand.Intn(len(table.Columns))
+		clauses = append(clauses, fmt.Sprintf("HAVING %s > %d", table.Columns[colIdx].Name, g.rand.Intn(50)))
+	}
+
+	// ORDER BY
+	if g.rand.Intn(3) == 0 && len(table.Columns) > 0 {
+		colIdx := g.rand.Intn(len(table.Columns))
+		dir := []string{"ASC", "DESC"}
+		clauses = append(clauses, fmt.Sprintf("ORDER BY %s %s", table.Columns[colIdx].Name, dir[g.rand.Intn(len(dir))]))
+	}
+
+	// LIMIT
+	if g.rand.Intn(4) == 0 {
+		clauses = append(clauses, fmt.Sprintf("LIMIT %d", g.rand.Intn(100)))
+	}
+
+	return strings.Join(clauses, " ")
+}
+
+// GenerateSubqueryInFrom generates subqueries in FROM clause
+func (g *SQLGenerator) GenerateSubqueryInFrom() string {
+	if !g.Schema.HasTables() {
+		return g.GenerateCreateTable()
+	}
+
+	// Generate inner query
+	inner := g.GenerateCrossFeatureQuery()
+	
+	return fmt.Sprintf("SELECT * FROM (%s) AS subq", inner)
+}
+
+// GenerateComplexJoin generates complex JOIN queries
+func (g *SQLGenerator) GenerateComplexJoin() string {
+	if g.Schema == nil || !g.Schema.HasTables() || len(g.Schema.Tables) < 2 {
+		return g.GenerateCreateTable()
+	}
+
+	// Get two different tables
+	tableNames := make([]string, 0, len(g.Schema.Tables))
+	for name := range g.Schema.Tables {
+		tableNames = append(tableNames, name)
+	}
+	
+	if len(tableNames) < 2 {
+		return g.GenerateCreateTable()
+	}
+
+	// Shuffle and pick two
+	t1 := tableNames[g.rand.Intn(len(tableNames))]
+	t2 := tableNames[g.rand.Intn(len(tableNames))]
+	for t2 == t1 && len(tableNames) > 1 {
+		t2 = tableNames[g.rand.Intn(len(tableNames))]
+	}
+
+	table1 := g.Schema.GetTable(t1)
+	table2 := g.Schema.GetTable(t2)
+	
+	if table1 == nil || table2 == nil || len(table1.Columns) == 0 || len(table2.Columns) == 0 {
+		return g.GenerateCreateTable()
+	}
+
+	// Build JOIN with multiple conditions
+	joinTypes := []string{"JOIN", "LEFT JOIN", "INNER JOIN", "CROSS JOIN"}
+	joinType := joinTypes[g.rand.Intn(len(joinTypes))]
+	
+	col1 := table1.Columns[g.rand.Intn(len(table1.Columns))].Name
+	col2 := table2.Columns[g.rand.Intn(len(table2.Columns))].Name
+	
+	query := fmt.Sprintf("SELECT * FROM %s %s %s ON %s.%s = %s.%s",
+		t1, joinType, t2, t1, col1, t2, col2)
+	
+	// Add WHERE
+	if g.rand.Intn(2) == 1 {
+		whereCol := table1.Columns[g.rand.Intn(len(table1.Columns))].Name
+		query += fmt.Sprintf(" WHERE %s.%s > %d", t1, whereCol, g.rand.Intn(50))
+	}
+	
+	return query
+}
+
+// GenerateComplexAggregate generates complex aggregate queries with multiple features
+func (g *SQLGenerator) GenerateComplexAggregate() string {
+	if !g.Schema.HasTables() {
+		return g.GenerateCreateTable()
+	}
+
+	tableName := g.Schema.GetRandomTable()
+	table := g.Schema.GetTable(tableName)
+	if table == nil || len(table.Columns) == 0 {
+		return g.GenerateCreateTable()
+	}
+
+	// Build aggregate query with multiple aggregates
+	numAggs := g.rand.Intn(3) + 1 // 1-3 aggregates
+	aggs := make([]string, numAggs)
+	
+	for i := 0; i < numAggs; i++ {
+		colIdx := g.rand.Intn(len(table.Columns))
+		col := table.Columns[colIdx]
+		
+		aggFuncs := []string{"COUNT(%s)", "SUM(%s)", "AVG(%s)", "MIN(%s)", "MAX(%s)"}
+		// Use COUNT(*) for non-integer columns
+		if col.Type != ColumnTypeInteger {
+			aggFuncs = []string{"COUNT(%s)", "MIN(%s)", "MAX(%s)"}
+		}
+		agg := aggFuncs[g.rand.Intn(len(aggFuncs))]
+		aggs[i] = fmt.Sprintf(agg, col.Name)
+	}
+	
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(aggs, ", "), tableName)
+	
+	// Add WHERE
+	if g.rand.Intn(2) == 1 && len(table.Columns) > 0 {
+		col := table.Columns[g.rand.Intn(len(table.Columns))]
+		query += g.generateSchemaAwareWhere(tableName, col)
+	}
+	
+	// Add GROUP BY
+	if g.rand.Intn(2) == 1 && len(table.Columns) > 0 {
+		colIdx := g.rand.Intn(len(table.Columns))
+		query += fmt.Sprintf(" GROUP BY %s", table.Columns[colIdx].Name)
+	}
+	
+	// Add ORDER BY with aggregate
+	if g.rand.Intn(3) == 0 {
+		query += fmt.Sprintf(" ORDER BY %s", aggs[0])
+	}
+	
+	return query
+}
+
+// SQLSmithMode generates SQL in SQLSmith style - schema-aware with complexity control
+func (g *SQLGenerator) SQLSmithMode() string {
+	// Ensure we have a table
+	if !g.Schema.HasTables() {
+		return g.GenerateCreateTable()
+	}
+
+	// Reset budget for each query
+	if g.Budget != nil {
+		g.Budget.Reset()
+	}
+
+	// Choose generation strategy based on complexity
+	strategies := []func() string{
+		g.GenerateSchemaAwareSelect,
+		g.GenerateSchemaAwareInsert,
+		g.GenerateSchemaAwareUpdate,
+		g.GenerateSchemaAwareDelete,
+		g.GenerateCrossFeatureQuery,
+		g.GenerateComplexJoin,
+		g.GenerateComplexAggregate,
+		g.GenerateSubqueryInFrom,
+		g.GenerateCTE,
+		g.GenerateWindowFunction,
+	}
+
+	return strategies[g.rand.Intn(len(strategies))]()
 }
