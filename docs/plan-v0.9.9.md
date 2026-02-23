@@ -1,8 +1,8 @@
-# Plan v0.9.9 - Test Suite Enhancement & COPY Support
+# Plan v0.9.9 - Test Suite Enhancement & Edge Cases
 
 ## Summary
 
-This version focuses on two major areas: expanding the SQL:1999 test suite coverage and adding COPY statement for data import/export.
+This version focuses on expanding SQL:1999 test suite coverage with comprehensive edge cases to ensure robust behavior in boundary conditions.
 
 ---
 
@@ -10,7 +10,7 @@ This version focuses on two major areas: expanding the SQL:1999 test suite cover
 
 ### Goal
 
-Complete the remaining SQL:1999 feature tests to achieve comprehensive coverage.
+Complete the remaining SQL:1999 feature tests and add comprehensive edge case coverage.
 
 ### A1: ARRAY/LIST Type Tests
 
@@ -70,34 +70,113 @@ Complete the remaining SQL:1999 feature tests to achieve comprehensive coverage.
 
 ---
 
-## Track B: COPY Statement Implementation
+## Track B: Edge Case Testing (Comprehensive Coverage)
 
 ### Goal
 
-Add data import/export capability.
+Add extensive edge case tests to ensure robust behavior in boundary conditions.
 
-### B1: COPY TO
+### B1: NULL Edge Cases (High Priority)
 
-| # | Task | Description | Priority |
+| # | Test | Description | Priority |
 |---|------|-------------|----------|
-| B1.1 | COPY TO CSV | Export to CSV file | High |
-| B1.2 | COPY TO JSON | Export to JSON file | Medium |
+| B1.1 | NULL_IS_NULL | IS NULL / IS NOT NULL comparison | High |
+| B1.2 | NULL_COALESCE | COALESCE with multiple NULLs | High |
+| B1.3 | NULL_IFNULL | IFNULL(NULL, default) behavior | High |
+| B1.4 | NULL_NULLIF | NULLIF(equal values) returns NULL | High |
+| B1.5 | NULL_AGGREGATE | NULL handling in COUNT, SUM, AVG | High |
+| B1.6 | NULL_EXPRESSION | NULL in arithmetic (+ - * /) | High |
+| B1.7 | NULL_DISTINCT | DISTINCT with NULL values | Medium |
+| B1.8 | NULL_ORDER | ORDER BY NULL ordering | Medium |
 
-### B2: COPY FROM
+### B2: Type Conversion Edge Cases
 
-| # | Task | Description | Priority |
+| # | Test | Description | Priority |
 |---|------|-------------|----------|
-| B2.1 | COPY FROM CSV | Import from CSV file | High |
-| B2.2 | COPY FROM JSON | Import from JSON file | Medium |
+| B2.1 | TYPE_IMPLICIT_NUM | Implicit string to number | High |
+| B2.2 | TYPE_IMPLICIT_STR | Implicit number to string | High |
+| B2.3 | TYPE_CAST_BOUNDARY | CAST on boundary values | High |
+| B2.4 | TYPE_AFFINITY | Type affinity rules | Medium |
+| B2.5 | TYPE_EXPRESSION | Type coercion in expressions | Medium |
+| B2.6 | TYPE_CAST_NULL | CAST NULL behavior | Medium |
+
+### B3: Numeric Boundary Cases
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| B3.1 | NUM_OVERFLOW | Integer overflow (+1, -1) | High |
+| B3.2 | NUM_FLOAT_PREC | Floating point precision (1.1 + 2.2) | High |
+| B3.3 | NUM_DIV_ZERO | Division by zero handling | High |
+| B3.4 | NUM_MOD_NEGATIVE | Negative modulo operations | Medium |
+| B3.5 | NUM_EXTREME | MIN/MAX value boundaries | Medium |
+| B3.6 | NUM_SCIENTIFIC | Scientific notation | Low |
+
+### B4: String Edge Cases
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| B4.1 | STR_EMPTY | Empty string '' behavior | High |
+| B4.2 | STR_WHITESPACE | Whitespace-only strings | High |
+| B4.3 | STR_SPECIAL_CHARS | Special chars (\n, \t, ') | High |
+| B4.4 | STR_LIKE_ESCAPE | LIKE escape sequences | Medium |
+| B4.5 | STR_GLOB_CASE | GLOB case sensitivity | Medium |
+| B4.6 | STR_LENGTH_BOUNDARY | String length limits | Low |
+
+### B5: Aggregation Edge Cases
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| B5.1 | AGG_COUNT_DISTINCT_NULL | COUNT(DISTINCT col) with NULL | High |
+| B5.2 | AGG_SUM_AVG_NULL | SUM/AVG with NULL values | High |
+| B5.3 | AGG_GROUP_BY_MIXED | GROUP BY with mixed NULL | Medium |
+| B5.4 | AGG_EMPTY_TABLE | Aggregation on empty table | Medium |
+| B5.5 | AGG_STRING | String aggregation functions | Medium |
+| B5.6 | AGG_MULTI_COLUMN | Multi-column GROUP BY | Medium |
+
+### B6: JOIN Edge Cases
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| B6.1 | JOIN_LEFT_NULL | LEFT JOIN with NULL keys | High |
+| B6.2 | JOIN_CROSS_EMPTY | CROSS JOIN with empty table | Medium |
+| B6.3 | JOIN_SELF | Self-join behavior | Medium |
+| B6.4 | JOIN_MULTI_TABLE | Multi-table JOIN (5+ tables) | Medium |
+| B6.5 | JOIN_USING_ON | USING vs ON difference | Low |
+| B6.6 | JOIN_NATURAL | NATURAL JOIN behavior | Low |
+
+### B7: Subquery Edge Cases
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| B7.1 | SUB_SCALAR_MULTI | Scalar subquery returning multiple rows | High |
+| B7.2 | SUB_CORRELATED | Correlated subquery behavior | Medium |
+| B7.3 | SUB_EXISTS | EXISTS / NOT EXISTS edge cases | Medium |
+| B7.4 | SUB_IN_NULL | IN / NOT IN with NULL values | Medium |
+| B7.5 | SUB_NESTED_DEPTH | Deep nested subqueries | Low |
+
+### B8: Expression Edge Cases
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| B8.1 | EXPR_SHORT_CIRCUIT | Short-circuit evaluation | Medium |
+| B8.2 | EXPR_PRECEDENCE | Operator precedence | Medium |
+| B8.3 | EXPR_CASE_NULL | CASE WHEN with NULL | High |
+| B8.4 | EXPR_BETWEEN_NULL | BETWEEN with NULL | Medium |
+| B8.5 | EXPR_COMPLEX | Complex expression combinations | Medium |
 
 ### Success Criteria
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| COPY TO CSV works | Yes | [ ] |
-| COPY FROM CSV works | Yes | [ ] |
-| COPY TO JSON works | Yes | [ ] |
-| COPY FROM JSON works | Yes | [ ] |
+| NULL edge case tests | 8+ | [ ] |
+| Type conversion tests | 6+ | [ ] |
+| Numeric boundary tests | 6+ | [ ] |
+| String edge tests | 6+ | [ ] |
+| Aggregation tests | 6+ | [ ] |
+| JOIN edge tests | 6+ | [ ] |
+| Subquery tests | 5+ | [ ] |
+| Expression tests | 5+ | [ ] |
+| All edge tests pass | 100% | [ ] |
 
 ---
 
@@ -111,8 +190,14 @@ graph TD
     A4[A4: Grouping Sets] --> E[E: Bug Fixes]
     A5 --> E
     
-    B1[B1: COPY TO] --> B2[B2: COPY FROM]
-    B2 --> E
+    B1[B1: NULL Cases] --> B8[B8: Expression Cases]
+    B2[B2: Type Cases] --> B8
+    B3[B3: Numeric Cases] --> B8
+    B4[B4: String Cases] --> B8
+    B5[B5: Aggregation Cases] --> B8
+    B6[B6: JOIN Cases] --> B8
+    B7[B7: Subquery Cases] --> B8
+    B8 --> E
 ```
 
 ---
@@ -121,12 +206,12 @@ graph TD
 
 | Track | Tasks | Hours |
 |-------|-------|-------|
-| A: Test Suite | A1-A5 | 12h |
-| B: COPY | B1-B2 | 6h |
-| Bug Fixes | As discovered | 6h |
+| A: SQL:1999 Features | A1-A5 | 12h |
+| B: Edge Cases | B1-B8 | 20h |
+| Bug Fixes | As discovered | 8h |
 | Testing & Documentation | All tracks | 4h |
 
-**Total:** ~28 hours
+**Total:** ~44 hours
 
 ---
 
@@ -142,22 +227,54 @@ graph TD
 | Metric | Target |
 |--------|--------|
 | New SQL:1999 tests | +15 |
-| COPY functionality | CSV + JSON |
-| Binary size | < 7MB |
+| New edge case tests | +48 |
+| Total test functions | 450+ |
 | All tests passing | 100% |
+
+---
+
+## New Test Directories to Create
+
+```
+internal/TS/SQL1999/
+├── NULL/                         # NULL edge cases
+│   ├── 01_is_null_test.go
+│   ├── 02_coalesce_test.go
+│   ├── 03_nullif_test.go
+│   └── 04_agg_null_test.go
+├── TypeConv/                     # Type conversion
+│   ├── 01_implicit_cast_test.go
+│   └── 02_explicit_cast_test.go
+├── Numeric/                      # Numeric boundaries
+│   ├── 01_overflow_test.go
+│   └── 02_precision_test.go
+├── String/                       # String edge cases
+│   ├── 01_empty_test.go
+│   └── 02_special_char_test.go
+├── Aggregation/                  # Aggregation edge
+│   └── 01_distinct_null_test.go
+├── Join/                         # JOIN edge cases
+│   └── 01_outer_join_null_test.go
+└── Subquery/                     # Subquery edge
+    └── 01_scalar_multi_row_test.go
+```
 
 ---
 
 ## Files to Modify
 
-### Test Suite
+### Test Suite Expansion
 - `internal/TS/SQL1999/F291/` - New directory for ARRAY tests
 - `internal/TS/SQL1999/F301/` - New directory for STRUCT tests
 - `internal/TS/SQL1999/F871/` - Add MERGE tests
-
-### COPY Implementation
-- `pkg/sqlvibe/copy.go` - New COPY statement handler
-- `internal/QP/parser.go` - Add COPY syntax
+- `internal/TS/SQL1999/NULL/` - New NULL edge cases
+- `internal/TS/SQL1999/TypeConv/` - New type conversion tests
+- `internal/TS/SQL1999/Numeric/` - New numeric boundary tests
+- `internal/TS/SQL1999/String/` - New string edge tests
+- `internal/TS/SQL1999/Aggregation/` - New aggregation tests
+- `internal/TS/SQL1999/Join/` - New JOIN edge tests
+- `internal/TS/SQL1999/Subquery/` - New subquery tests
+- `internal/TS/SQL1999/Expression/` - New expression tests
 
 ---
 
@@ -167,6 +284,13 @@ After v0.9.9:
 
 | Category | Before | After |
 |----------|--------|-------|
-| SQL:1999 Test Suites | 92 | 95+ |
-| Test Functions | 396 | 410+ |
-| COPY Tests | 0 | 4+ |
+| SQL:1999 Test Suites | 92 | 100+ |
+| Test Functions | 396 | 440+ |
+| NULL Edge Cases | Partial | Complete |
+| Type Conversion | Basic | Complete |
+| Numeric Boundaries | Basic | Complete |
+| String Edge Cases | Basic | Complete |
+| Aggregation Edge | Basic | Complete |
+| JOIN Edge | Basic | Complete |
+| Subquery Edge | Basic | Complete |
+| Expression Edge | Basic | Complete |
