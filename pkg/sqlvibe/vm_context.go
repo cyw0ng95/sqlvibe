@@ -271,6 +271,11 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 			}
 		}
 
+		// Check non-PK unique index constraints.
+		if err := ctx.db.checkUniqueIndexes(tableName, row); err != nil {
+			return err
+		}
+
 		ctx.db.data[tableName] = append(ctx.db.data[tableName], row)
 		newIdx := len(ctx.db.data[tableName]) - 1
 		ctx.db.addToIndexes(tableName, row, newIdx)
@@ -532,6 +537,11 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		if ctx.db.pkHashContains(tableName, row) {
 			return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
 		}
+	}
+
+	// Check non-PK unique index constraints.
+	if err := ctx.db.checkUniqueIndexes(tableName, row); err != nil {
+		return err
 	}
 
 	ctx.db.data[tableName] = append(ctx.db.data[tableName], row)

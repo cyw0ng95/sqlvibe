@@ -1,5 +1,30 @@
 # sqlvibe Release History
 
+## **v0.9.6** (2026-02-23)
+
+### Features
+- **SAVEPOINT** (`internal/QP/tokenizer.go`, `internal/QP/parser.go`, `pkg/sqlvibe/savepoint.go`, `pkg/sqlvibe/database.go`): `SAVEPOINT name` creates a named savepoint within a transaction, capturing the current database state.
+- **RELEASE SAVEPOINT** (`RELEASE [SAVEPOINT] name`): Releases the named savepoint (and any nested savepoints), keeping all changes made after it.
+- **ROLLBACK TO SAVEPOINT** (`ROLLBACK [TRANSACTION] TO [SAVEPOINT] name`): Reverts the database to the named savepoint state. The savepoint is kept on the stack for possible future rollbacks.
+- **Nested Savepoints**: Multiple savepoints can be stacked within a single transaction for fine-grained undo control.
+- **UNIQUE Constraint Enforcement** (`pkg/sqlvibe/database.go`, `pkg/sqlvibe/vm_context.go`): Inline column-level `UNIQUE` (`col TEXT UNIQUE`) and table-level `UNIQUE(col1, col2)` constraints are now properly enforced at INSERT time with `UNIQUE constraint failed: table.col` errors matching SQLite behaviour.
+- **Auto Unique Indexes**: `CREATE TABLE` now creates implicit unique indexes for `UNIQUE` columns and `UNIQUE(...)` table constraints, stored in `db.indexes` under `sqlite_autoindex_*` names.
+
+### Testing
+- **F878 test suite** (`internal/TS/SQL1999/F878/01_test.go`): 6 test functions covering basic savepoints, RELEASE SAVEPOINT, nested savepoints, NOT NULL enforcement, UNIQUE constraint enforcement, and FK ON DELETE CASCADE — all validated against SQLite.
+
+### Performance (v0.9.6, AMD EPYC 7763, -benchtime=2s)
+- SELECT all (3 cols, 1K rows): **60 µs** sqlvibe vs 568 µs SQLite — **9.4× faster**
+- SUM aggregate (1K rows): **19 µs** sqlvibe vs 66 µs SQLite — **3.5× faster**
+- GROUP BY (1K rows): **135 µs** sqlvibe vs 499 µs SQLite — **3.7× faster**
+- ORDER BY (1K rows): **197 µs** sqlvibe vs 299 µs SQLite — **1.5× faster**
+- Result cache hit: **1.5 µs** (vs 568 µs SQLite — **379× faster**)
+- SAVEPOINT + ROLLBACK cycle: **79 µs/op**
+- SAVEPOINT + RELEASE cycle: **54 µs/op**
+- INSERT with UNIQUE check: **4.7 µs/op** (vs 3.8 µs without — ~24% overhead)
+- SELECT WHERE: 285 µs sqlvibe vs 91 µs SQLite — SQLite 3.1× faster (indexed lookup vs full scan)
+- JOIN (100×500 rows): 559 µs sqlvibe vs 230 µs SQLite — SQLite 2.4× faster
+
 ## **v0.9.5** (2026-02-23)
 
 ### Features

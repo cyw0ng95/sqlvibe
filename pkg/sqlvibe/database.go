@@ -105,6 +105,14 @@ type Database struct {
 	pragmaSettings     map[string]interface{}             // PRAGMA setting storage
 	tableStats         map[string]int64                   // table name -> row count (for ANALYZE)
 	queryMu            sync.RWMutex                       // guards concurrent read queries
+	// v0.9.6: savepoint stack
+	savepointStack     []savepointEntry                   // named savepoints within a transaction
+}
+
+// savepointEntry holds the name and snapshot for a named savepoint.
+type savepointEntry struct {
+	name     string
+	snapshot *dbSnapshot
 }
 
 type dbSnapshot struct {
@@ -375,6 +383,7 @@ func Open(path string) (*Database, error) {
 		foreignKeysEnabled: false,
 		pragmaSettings:     make(map[string]interface{}),
 		tableStats:         make(map[string]int64),
+		savepointStack:     nil,
 	}, nil
 }
 
@@ -583,6 +592,34 @@ func (db *Database) Exec(sql string) (Result, error) {
 		// Initialise an empty HybridStore for the new table.
 		db.hybridStores[stmt.Name] = db.buildHybridStore(stmt.Name)
 		db.hybridStoresDirty[stmt.Name] = false
+
+		// Create implicit unique indexes for columns with inline UNIQUE constraint.
+		for _, col := range stmt.Columns {
+			if col.Unique && !col.PrimaryKey {
+				idxName := fmt.Sprintf("sqlite_autoindex_%s_%s", stmt.Name, col.Name)
+				db.indexes[idxName] = &IndexInfo{
+					Name:    idxName,
+					Table:   stmt.Name,
+					Columns: []string{col.Name},
+					Unique:  true,
+				}
+				db.indexData[idxName] = make(map[interface{}][]int)
+			}
+		}
+		// Create implicit unique indexes for table-level UNIQUE(...) constraints.
+		for i, ukCols := range stmt.UniqueKeys {
+			if len(ukCols) > 0 {
+				idxName := fmt.Sprintf("sqlite_autoindex_%s_uk%d", stmt.Name, i)
+				db.indexes[idxName] = &IndexInfo{
+					Name:    idxName,
+					Table:   stmt.Name,
+					Columns: ukCols,
+					Unique:  true,
+				}
+				db.indexData[idxName] = make(map[interface{}][]int)
+			}
+		}
+
 		if db.schemaCache != nil {
 			db.schemaCache.Invalidate()
 		}
@@ -782,12 +819,19 @@ func (db *Database) Exec(sql string) (Result, error) {
 		db.txSnapshot = nil
 		return Result{}, nil
 	case "RollbackStmt":
-		if db.activeTx == nil {
+		stmt := ast.(*QP.RollbackStmt)
+		if stmt.Savepoint != "" {
+			// ROLLBACK TO SAVEPOINT sp_name
+			return db.handleRollbackToSavepoint(stmt.Savepoint)
+		}
+		if db.activeTx == nil && len(db.savepointStack) == 0 {
 			return Result{}, fmt.Errorf("no transaction active")
 		}
-		err := db.txMgr.RollbackTransaction(db.activeTx.ID)
-		if err != nil {
-			return Result{}, fmt.Errorf("failed to rollback transaction: %w", err)
+		if db.activeTx != nil {
+			err := db.txMgr.RollbackTransaction(db.activeTx.ID)
+			if err != nil {
+				return Result{}, fmt.Errorf("failed to rollback transaction: %w", err)
+			}
 		}
 		if db.txSnapshot != nil {
 			db.restoreSnapshot(db.txSnapshot)
@@ -795,7 +839,13 @@ func (db *Database) Exec(sql string) (Result, error) {
 		}
 		// activeTx is cleared after snapshot restore so the engine sees clean state
 		db.activeTx = nil
+		db.savepointStack = nil
 		return Result{}, nil
+	case "SavepointStmt":
+		return db.handleSavepoint(ast.(*QP.SavepointStmt).Name)
+	case "ReleaseSavepointStmt":
+		return db.handleReleaseSavepoint(ast.(*QP.ReleaseSavepointStmt).Name)
+
 	case "PragmaStmt":
 		// PRAGMAs like PRAGMA foreign_keys = ON need to work via Exec too
 		rows, err := db.handlePragma(ast.(*QP.PragmaStmt))
@@ -1423,6 +1473,45 @@ func pkKey(row map[string]interface{}, pkCols []string) interface{} {
 		}
 	}
 	return b.String()
+}
+
+// checkUniqueIndexes verifies that row does not violate any UNIQUE index on tableName.
+// Returns an error in the form "UNIQUE constraint failed: table.col" on violation.
+func (db *Database) checkUniqueIndexes(tableName string, row map[string]interface{}) error {
+	for idxName, idx := range db.indexes {
+		if !idx.Unique || idx.Table != tableName {
+			continue
+		}
+		// Skip if this is effectively the primary-key index (PK uniqueness is checked separately).
+		pkCols := db.primaryKeys[tableName]
+		if len(pkCols) == 1 && len(idx.Columns) == 1 && pkCols[0] == idx.Columns[0] {
+			continue
+		}
+		hmap := db.indexData[idxName]
+		if hmap == nil {
+			continue
+		}
+		// Build composite key for multi-column unique indexes.
+		var key interface{}
+		if len(idx.Columns) == 1 {
+			key = normalizeIndexKey(row[idx.Columns[0]])
+		} else {
+			parts := make([]interface{}, len(idx.Columns))
+			for i, c := range idx.Columns {
+				parts[i] = row[c]
+			}
+			key = fmt.Sprintf("%v", parts)
+		}
+		if existing, ok := hmap[key]; ok && len(existing) > 0 {
+			// Build column list for the error message (matches SQLite format).
+			colRefs := make([]string, len(idx.Columns))
+			for i, c := range idx.Columns {
+				colRefs[i] = tableName + "." + c
+			}
+			return fmt.Errorf("UNIQUE constraint failed: %s", strings.Join(colRefs, ", "))
+		}
+	}
+	return nil
 }
 
 // pkHashAdd adds a row's PK to the hash set for tableName.
