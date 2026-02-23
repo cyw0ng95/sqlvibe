@@ -21,6 +21,12 @@ func init() {
 	dispatchTable[OpLoadConst] = execDispatchLoadConst
 	dispatchTable[OpMove] = execDispatchMove
 	dispatchTable[OpCopy] = execDispatchCopy
+
+	// String ops
+	dispatchTable[OpUpper] = execDispatchUpper
+	dispatchTable[OpLower] = execDispatchLower
+	dispatchTable[OpLength] = execDispatchLength
+	dispatchTable[OpConcat] = execDispatchConcat
 }
 
 // ExecDirect executes the program using the dispatch table for supported opcodes.
@@ -101,6 +107,41 @@ func execDispatchMove(vm *VM, inst *Instruction) bool {
 func execDispatchCopy(vm *VM, inst *Instruction) bool {
 	if inst.P1 != inst.P2 {
 		vm.registers[inst.P2] = vm.registers[inst.P1]
+	}
+	return true
+}
+
+func execDispatchUpper(vm *VM, inst *Instruction) bool {
+	src := vm.registers[inst.P1]
+	if dst, ok := inst.P4.(int); ok {
+		vm.registers[dst] = getUpper(src)
+	}
+	return true
+}
+
+func execDispatchLower(vm *VM, inst *Instruction) bool {
+	src := vm.registers[inst.P1]
+	if dst, ok := inst.P4.(int); ok {
+		vm.registers[dst] = getLower(src)
+	}
+	return true
+}
+
+func execDispatchLength(vm *VM, inst *Instruction) bool {
+	src := vm.registers[inst.P1]
+	if dst, ok := inst.P4.(int); ok {
+		vm.registers[dst] = getLength(src)
+	}
+	return true
+}
+
+func execDispatchConcat(vm *VM, inst *Instruction) bool {
+	lhs := vm.registers[inst.P1]
+	rhs := vm.registers[inst.P2]
+	if inst.HasDst {
+		vm.registers[inst.DstReg] = stringConcat(lhs, rhs)
+	} else if dst, ok := inst.P4.(int); ok {
+		vm.registers[dst] = stringConcat(lhs, rhs)
 	}
 	return true
 }
