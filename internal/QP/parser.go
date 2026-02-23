@@ -139,6 +139,7 @@ type CreateTableStmt struct {
 	AsSelect    *SelectStmt           // CREATE TABLE ... AS SELECT
 	TableChecks []Expr                // table-level CHECK constraints
 	ForeignKeys []ForeignKeyConstraint // table-level FOREIGN KEY constraints
+	UniqueKeys  [][]string            // table-level UNIQUE(col, ...) constraints
 }
 
 func (c *CreateTableStmt) NodeType() string { return "CreateTableStmt" }
@@ -148,6 +149,7 @@ type ColumnDef struct {
 	Type          string
 	PrimaryKey    bool
 	NotNull       bool
+	Unique        bool                  // UNIQUE constraint on this column
 	Default       Expr
 	Check         Expr                  // CHECK constraint expression
 	IsAutoincrement bool               // AUTOINCREMENT
@@ -256,11 +258,24 @@ type CommitStmt struct {
 func (c *CommitStmt) NodeType() string { return "CommitStmt" }
 
 type RollbackStmt struct {
+	Savepoint string // if non-empty: ROLLBACK TO [SAVEPOINT] sp_name
 }
 
 func (r *RollbackStmt) NodeType() string { return "RollbackStmt" }
 
-// BackupStmt represents:
+type SavepointStmt struct {
+	Name string
+}
+
+func (s *SavepointStmt) NodeType() string { return "SavepointStmt" }
+
+type ReleaseSavepointStmt struct {
+	Name string
+}
+
+func (r *ReleaseSavepointStmt) NodeType() string { return "ReleaseSavepointStmt" }
+
+
 //
 //	BACKUP DATABASE TO 'path'
 //	BACKUP INCREMENTAL TO 'path'
@@ -478,6 +493,10 @@ func (p *Parser) parseInternal() (ASTNode, error) {
 			return p.parseCommit()
 		case "ROLLBACK":
 			return p.parseRollback()
+		case "SAVEPOINT":
+			return p.parseSavepoint()
+		case "RELEASE":
+			return p.parseRelease()
 		case "ALTER":
 			return p.parseAlterTable()
 		case "WITH":
@@ -1402,7 +1421,7 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 							p.advance()
 						}
 					} else if keyword == "UNIQUE" {
-						col.Type += " UNIQUE"
+						col.Unique = true
 						p.advance()
 					} else if keyword == "DEFAULT" {
 						// Parse DEFAULT value
@@ -1494,11 +1513,22 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 					} else if kw == "UNIQUE" {
 						p.advance()
 						if p.current().Type == TokenLeftParen {
+							p.advance()
+							var ukCols []string
 							for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+								if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+									ukCols = append(ukCols, p.current().Literal)
+								}
 								p.advance()
+								if p.current().Type == TokenComma {
+									p.advance()
+								}
 							}
 							if p.current().Type == TokenRightParen {
 								p.advance()
+							}
+							if len(ukCols) > 0 {
+								stmt.UniqueKeys = append(stmt.UniqueKeys, ukCols)
 							}
 						}
 					} else if kw == "CHECK" {
@@ -2877,12 +2907,52 @@ func (p *Parser) parseCommit() (ASTNode, error) {
 func (p *Parser) parseRollback() (ASTNode, error) {
 	p.advance() // consume ROLLBACK
 
+	stmt := &RollbackStmt{}
+
 	// Optional TRANSACTION keyword
 	if p.current().Type == TokenKeyword && p.current().Literal == "TRANSACTION" {
 		p.advance()
 	}
 
-	return &RollbackStmt{}, nil
+	// ROLLBACK TO [SAVEPOINT] sp_name
+	if p.current().Type == TokenKeyword && p.current().Literal == "TO" {
+		p.advance() // consume TO
+		// Optional SAVEPOINT keyword
+		if p.current().Type == TokenKeyword && p.current().Literal == "SAVEPOINT" {
+			p.advance()
+		}
+		if p.current().Type != TokenIdentifier && p.current().Type != TokenKeyword {
+			return nil, fmt.Errorf("expected savepoint name after ROLLBACK TO")
+		}
+		stmt.Savepoint = p.current().Literal
+		p.advance()
+	}
+
+	return stmt, nil
+}
+
+func (p *Parser) parseSavepoint() (ASTNode, error) {
+	p.advance() // consume SAVEPOINT
+	if p.current().Type != TokenIdentifier && p.current().Type != TokenKeyword {
+		return nil, fmt.Errorf("expected savepoint name after SAVEPOINT")
+	}
+	name := p.current().Literal
+	p.advance()
+	return &SavepointStmt{Name: name}, nil
+}
+
+func (p *Parser) parseRelease() (ASTNode, error) {
+	p.advance() // consume RELEASE
+	// Optional SAVEPOINT keyword
+	if p.current().Type == TokenKeyword && p.current().Literal == "SAVEPOINT" {
+		p.advance()
+	}
+	if p.current().Type != TokenIdentifier && p.current().Type != TokenKeyword {
+		return nil, fmt.Errorf("expected savepoint name after RELEASE")
+	}
+	name := p.current().Literal
+	p.advance()
+	return &ReleaseSavepointStmt{Name: name}, nil
 }
 
 // parseBackup parses:

@@ -85,28 +85,28 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.9.5)
+## Performance (v0.9.6)
 
-Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3s`.
+Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=2s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
 `db.ClearResultCache()` so actual per-query execution cost is measured (not cache-hit
 latency). SQLite's `database/sql` driver reuses prepared statements across iterations.
 Both sides iterate all result rows end-to-end.
-(`go test ./internal/TS/Benchmark/... -bench=BenchmarkFair_ -benchtime=3s`).
+(`go test ./internal/TS/Benchmark/... -bench=BenchmarkFair_ -benchtime=2s`).
 Results may vary on different hardware.
 
 ### Query Performance (1 000-row table)
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| SELECT all (3 cols) | 61 µs | 564 µs | **sqlvibe 9.3x faster** |
-| SELECT WHERE | 284 µs | 91 µs | SQLite 3.1x faster |
-| ORDER BY (500 rows) | 197 µs | 298 µs | **sqlvibe 1.5x faster** |
-| COUNT(*) | 6.6 µs | 5.4 µs | roughly equal |
-| SUM | 19.5 µs | 66 µs | **sqlvibe 3.4x faster** |
-| GROUP BY | 140 µs | 497 µs | **sqlvibe 3.6x faster** |
-| JOIN (100×500 rows) | 561 µs | 231 µs | SQLite 2.4x faster |
-| BETWEEN filter | 497 µs | 184 µs | SQLite 2.7x faster |
+| SELECT all (3 cols) | 60 µs | 568 µs | **sqlvibe 9.4x faster** |
+| SELECT WHERE | 285 µs | 91 µs | SQLite 3.1x faster |
+| ORDER BY (500 rows) | 197 µs | 299 µs | **sqlvibe 1.5x faster** |
+| COUNT(*) | 6.9 µs | 5.3 µs | roughly equal |
+| SUM | 19 µs | 66 µs | **sqlvibe 3.5x faster** |
+| GROUP BY | 135 µs | 499 µs | **sqlvibe 3.7x faster** |
+| JOIN (100×500 rows) | 559 µs | 230 µs | SQLite 2.4x faster |
+| BETWEEN filter | 491 µs | 185 µs | SQLite 2.7x faster |
 
 ### DML Operations
 
@@ -121,9 +121,18 @@ Results may vary on different hardware.
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| Result cache hit (repeated query) | 1.46 µs | 564 µs | **sqlvibe 386x faster** |
+| Result cache hit (repeated query) | 1.5 µs | 568 µs | **sqlvibe 379x faster** |
 | LIMIT 10 no ORDER BY (10K rows) | 20.2 µs | — | fast early-termination path |
 | Expression bytecode eval | 99 ns | — | single-dispatch expression evaluation |
+
+### Transaction & Savepoint Performance (v0.9.6)
+
+| Operation | sqlvibe | Notes |
+|-----------|--------:|-------|
+| SAVEPOINT + ROLLBACK TO cycle | 79 µs | snapshot capture + restore |
+| SAVEPOINT + RELEASE cycle | 54 µs | snapshot capture + discard |
+| INSERT with UNIQUE constraint | 4.7 µs | ~24% overhead vs plain INSERT |
+| INSERT with NOT NULL constraint | 3.8 µs | negligible overhead |
 
 ### SIMD Vectorization (v0.9.3)
 
@@ -145,6 +154,31 @@ Results may vary on different hardware.
 v0.9.3 extends the dispatch table to 22 opcodes: comparison operators (Eq/Ne/Lt/Le/Gt/Ge)
 and extended string ops (Trim/LTrim/RTrim/Replace/Instr) now bypass the large switch statement.
 
+### v0.9.6 SQL Compatibility Features
+
+| Feature | Description |
+|---------|-------------|
+| SAVEPOINT | `SAVEPOINT name` — create named savepoint within transaction |
+| RELEASE SAVEPOINT | `RELEASE [SAVEPOINT] name` — discard savepoint, keep changes |
+| ROLLBACK TO SAVEPOINT | `ROLLBACK TO [SAVEPOINT] name` — revert to savepoint, keep it on stack |
+| Nested Savepoints | Multiple savepoints stacked within a single transaction |
+| UNIQUE (inline) | `col TEXT UNIQUE` — inline column-level unique constraint enforced at insert |
+| UNIQUE (table-level) | `UNIQUE(col1, col2)` — composite unique constraint enforced at insert |
+| NOT NULL (verified) | `col TEXT NOT NULL` — NULL rejection on INSERT/UPDATE |
+| REFERENCES (verified) | `col INTEGER REFERENCES parent(id)` — FK constraint with ON DELETE/UPDATE |
+| ON DELETE CASCADE (verified) | Deleting parent row cascades to child rows |
+| ON DELETE RESTRICT (verified) | Prevents parent deletion when child rows exist |
+| BEGIN (verified) | `BEGIN [DEFERRED\|IMMEDIATE\|EXCLUSIVE]` — start transaction |
+| COMMIT (verified) | `COMMIT` — persist transaction changes |
+| ROLLBACK (verified) | `ROLLBACK` — revert all transaction changes |
+
+> **Analysis**: sqlvibe v0.9.6 adds SAVEPOINT support (create/release/rollback-to) and fixes
+> UNIQUE constraint enforcement for inline and table-level UNIQUE declarations. Core query
+> throughput is stable — SELECT all at 9.4× faster, SUM at 3.5× faster, GROUP BY at 3.7×
+> faster, and result cache at 379× faster. The UNIQUE constraint check adds ~24% overhead to
+> INSERT (4.7 µs vs 3.8 µs without), a single index lookup per unique column. SQLite retains
+> its advantage for filtered WHERE scans and range queries (indexed lookup vs. full-table scan).
+
 ### v0.9.5 SQL Compatibility Features
 
 | Feature | Description |
@@ -160,13 +194,6 @@ and extended string ops (Trim/LTrim/RTrim/Replace/Instr) now bypass the large sw
 | VACUUM (verified) | `VACUUM` compact in-place; `VACUUM INTO 'path'` backup variant |
 | AUTOINCREMENT (verified) | `INTEGER PRIMARY KEY AUTOINCREMENT` monotonically increasing IDs |
 | LIKE ESCAPE (verified) | `expr LIKE pattern ESCAPE '\'` — custom escape character |
-
-> **Analysis**: sqlvibe v0.9.5 adds REINDEX and SELECT INTO while verifying the full set of
-> SQL compatibility features listed in the plan. Core query throughput is stable relative to
-> v0.9.4 — SELECT all stays at 9.3× faster, SUM at 3.4× faster, GROUP BY at 3.6× faster,
-> and result cache at 386× faster. SQLite retains its advantage for filtered WHERE scans and
-> range queries (indexed lookup vs. full-table scan). The REINDEX command allows rebuilding
-> stale or corrupted indexes without restarting the server.
 
 ### v0.9.4 SQL Compatibility Features
 

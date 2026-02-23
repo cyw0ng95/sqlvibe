@@ -168,6 +168,8 @@ var keywords = map[string]TokenType{
 	"BEGIN":             TokenKeyword,
 	"COMMIT":            TokenKeyword,
 	"ROLLBACK":          TokenKeyword,
+	"SAVEPOINT":         TokenKeyword,
+	"RELEASE":           TokenKeyword,
 	"BACKUP":            TokenKeyword,
 	"DATABASE":          TokenKeyword,
 	"INCREMENTAL":       TokenKeyword,

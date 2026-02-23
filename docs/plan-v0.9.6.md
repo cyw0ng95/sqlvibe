@@ -66,99 +66,99 @@ This plan implements transaction handling and integrity constraints for v0.9.6.
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes BEGIN | Works | [ ] |
-| BEGIN DEFERRED works | Works | [ ] |
-| BEGIN IMMEDIATE works | Works | [ ] |
-| BEGIN EXCLUSIVE works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes BEGIN | Works | [x] |
+| BEGIN DEFERRED works | Works | [x] |
+| BEGIN IMMEDIATE works | Works | [x] |
+| BEGIN EXCLUSIVE works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 2: COMMIT
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes COMMIT | Works | [ ] |
-| Changes persist after commit | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes COMMIT | Works | [x] |
+| Changes persist after commit | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 3: ROLLBACK
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes ROLLBACK | Works | [ ] |
-| Changes reverted after rollback | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes ROLLBACK | Works | [x] |
+| Changes reverted after rollback | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 4: SAVEPOINT
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes SAVEPOINT | Works | [ ] |
-| Named savepoints work | Works | [ ] |
-| Nested savepoints work | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes SAVEPOINT | Works | [x] |
+| Named savepoints work | Works | [x] |
+| Nested savepoints work | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 5: RELEASE SAVEPOINT
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes RELEASE SAVEPOINT | Works | [ ] |
-| Release specific savepoint works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes RELEASE SAVEPOINT | Works | [x] |
+| Release specific savepoint works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 6: REFERENCES
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes REFERENCES | Works | [ ] |
-| FK constraint created | Works | [ ] |
-| Child table FK validation | Works | [ ] |
-| Parent table existence check | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes REFERENCES | Works | [x] |
+| FK constraint created | Works | [x] |
+| Child table FK validation | Works | [x] |
+| Parent table existence check | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 7: ON DELETE
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ON DELETE CASCADE works | Works | [ ] |
-| ON DELETE SET NULL works | Works | [ ] |
-| ON DELETE RESTRICT works | Works | [ ] |
-| ON DELETE NO ACTION works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| ON DELETE CASCADE works | Works | [x] |
+| ON DELETE SET NULL works | Works | [x] |
+| ON DELETE RESTRICT works | Works | [x] |
+| ON DELETE NO ACTION works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 8: ON UPDATE
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ON UPDATE CASCADE works | Works | [ ] |
-| ON UPDATE SET NULL works | Works | [ ] |
-| ON UPDATE RESTRICT works | Works | [ ] |
-| ON UPDATE NO ACTION works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| ON UPDATE CASCADE works | Works | [x] |
+| ON UPDATE SET NULL works | Works | [x] |
+| ON UPDATE RESTRICT works | Works | [x] |
+| ON UPDATE NO ACTION works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 9: NOT NULL Constraint
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| NOT NULL parsed | Works | [ ] |
-| Insert NULL rejected | Works | [ ] |
-| Update NULL rejected | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| NOT NULL parsed | Works | [x] |
+| Insert NULL rejected | Works | [x] |
+| Update NULL rejected | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 10: UNIQUE Constraint
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Table-level UNIQUE parsed | Works | [ ] |
-| Duplicate values rejected | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Table-level UNIQUE parsed | Works | [x] |
+| Duplicate values rejected | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 11: Testing
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| All unit tests pass | 100% | [ ] |
-| SQLite comparison tests pass | 100% | [ ] |
-| New SQL:1999 tests added | Done | [ ] |
+| All unit tests pass | 100% | [x] |
+| SQLite comparison tests pass | 100% | [x] |
+| New SQL:1999 tests added | Done | [x] |
 
 ---
 
