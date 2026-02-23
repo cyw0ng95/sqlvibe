@@ -1,8 +1,8 @@
-# Plan v0.9.9 - Test Suite Enhancement & Advanced Features
+# Plan v0.9.9 - Test Suite Enhancement & COPY Support
 
 ## Summary
 
-This version focuses on two major areas: expanding the SQL:1999 test suite coverage and implementing advanced data types (ARRAY/STRUCT) that are commonly requested.
+This version focuses on two major areas: expanding the SQL:1999 test suite coverage and adding COPY statement for data import/export.
 
 ---
 
@@ -70,68 +70,25 @@ Complete the remaining SQL:1999 feature tests to achieve comprehensive coverage.
 
 ---
 
-## Track B: FTS (Full-Text Search) Implementation
-
-### Goal
-
-Implement basic full-text search capability using bleve library.
-
-### B1: Integration Setup
-
-| # | Task | Description | Priority |
-|---|------|-------------|----------|
-| B1.1 | Add bleve dependency | Add bleve/v2 to go.mod | High |
-| B1.2 | FTS Virtual Table | Implement FTS virtual table interface | High |
-| B1.3 | Tokenizer | Configure ASCII/Unicode tokenizer | High |
-
-### B2: Core FTS Features
-
-| # | Task | Description | Priority |
-|---|------|-------------|----------|
-| B2.1 | CREATE FTS Table | CREATE VIRTUAL TABLE ... USING fts5 | High |
-| B2.2 | FTS INSERT | Insert documents into FTS index | High |
-| B2.3 | FTS Query | MATCH operator for full-text search | High |
-| B2.4 | FTS Ranking | BM25 scoring | Medium |
-
-### B3: Advanced FTS
-
-| # | Task | Description | Priority |
-|---|------|-------------|----------|
-| B3.1 | Prefix Search | prefix* matching | Medium |
-| B3.2 | Boolean Operators | AND, OR, NOT | Medium |
-| B3.3 | Column Filter | Search specific columns | Low |
-| B3.4 | Highlight Function | Highlight matching terms | Low |
-
-### Success Criteria
-
-| Criteria | Target | Status |
-|----------|--------|--------|
-| FTS table creation works | Yes | [ ] |
-| Full-text search returns correct results | Yes | [ ] |
-| Binary size increase | < 10MB | [ ] |
-| Tests pass | 100% | [ ] |
-
----
-
-## Track C: COPY Statement Implementation
+## Track B: COPY Statement Implementation
 
 ### Goal
 
 Add data import/export capability.
 
-### C1: COPY TO
+### B1: COPY TO
 
 | # | Task | Description | Priority |
 |---|------|-------------|----------|
-| C1.1 | COPY TO CSV | Export to CSV file | High |
-| C1.2 | COPY TO JSON | Export to JSON file | Medium |
+| B1.1 | COPY TO CSV | Export to CSV file | High |
+| B1.2 | COPY TO JSON | Export to JSON file | Medium |
 
-### C2: COPY FROM
+### B2: COPY FROM
 
 | # | Task | Description | Priority |
 |---|------|-------------|----------|
-| C2.1 | COPY FROM CSV | Import from CSV file | High |
-| C2.2 | COPY FROM JSON | Import from JSON file | Medium |
+| B2.1 | COPY FROM CSV | Import from CSV file | High |
+| B2.2 | COPY FROM JSON | Import from JSON file | Medium |
 
 ### Success Criteria
 
@@ -154,12 +111,8 @@ graph TD
     A4[A4: Grouping Sets] --> E[E: Bug Fixes]
     A5 --> E
     
-    B1[B1: bleve setup] --> B2[B2: Core FTS]
-    B2 --> B3[B3: Advanced FTS]
-    B3 --> E
-    
-    C1[C1: COPY TO] --> C2[C2: COPY FROM]
-    C2 --> E
+    B1[B1: COPY TO] --> B2[B2: COPY FROM]
+    B2 --> E
 ```
 
 ---
@@ -169,12 +122,11 @@ graph TD
 | Track | Tasks | Hours |
 |-------|-------|-------|
 | A: Test Suite | A1-A5 | 12h |
-| B: FTS | B1-B3 | 10h |
-| C: COPY | C1-C2 | 6h |
+| B: COPY | B1-B2 | 6h |
 | Bug Fixes | As discovered | 6h |
 | Testing & Documentation | All tracks | 4h |
 
-**Total:** ~38 hours
+**Total:** ~28 hours
 
 ---
 
@@ -182,7 +134,6 @@ graph TD
 
 - Existing SQL:1999 test infrastructure (`internal/TS/SQL1999/`)
 - Existing regression tests (`internal/TS/Regression/`)
-- bleve library (v2.5.7+)
 
 ---
 
@@ -191,20 +142,9 @@ graph TD
 | Metric | Target |
 |--------|--------|
 | New SQL:1999 tests | +15 |
-| FTS functionality | Working |
 | COPY functionality | CSV + JSON |
-| Binary size | < 17MB |
+| Binary size | < 7MB |
 | All tests passing | 100% |
-
----
-
-## Binary Size Impact
-
-| Component | Size |
-|-----------|------|
-| sqlvibe baseline | 6.1 MB |
-| + bleve (FTS) | +7 MB |
-| **Total** | **~13 MB** |
 
 ---
 
@@ -214,11 +154,6 @@ graph TD
 - `internal/TS/SQL1999/F291/` - New directory for ARRAY tests
 - `internal/TS/SQL1999/F301/` - New directory for STRUCT tests
 - `internal/TS/SQL1999/F871/` - Add MERGE tests
-
-### FTS Implementation
-- `pkg/sqlvibe/fts.go` - New FTS virtual table
-- `internal/QP/parser.go` - Add FTS syntax
-- `internal/VM/exec.go` - Add MATCH operator
 
 ### COPY Implementation
 - `pkg/sqlvibe/copy.go` - New COPY statement handler
@@ -234,5 +169,4 @@ After v0.9.9:
 |----------|--------|-------|
 | SQL:1999 Test Suites | 92 | 95+ |
 | Test Functions | 396 | 410+ |
-| FTS Tests | 0 | 5+ |
 | COPY Tests | 0 | 4+ |
