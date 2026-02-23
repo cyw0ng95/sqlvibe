@@ -1382,3 +1382,295 @@ func (g *SQLGenerator) SQLSmithMode() string {
 
 	return strategies[g.rand.Intn(len(strategies))]()
 }
+// GenerateDateTime generates date/time related queries
+func (g *SQLGenerator) GenerateDateTime() string {
+	funcs := []string{
+		"SELECT julianday('now')",
+		"SELECT unixepoch('now')",
+		"SELECT strftime('%Y-%m-%d', 'now')",
+		"SELECT strftime('%H:%M:%S', 'now')",
+		"SELECT strftime('%w', 'now')",
+		"SELECT strftime('%W', 'now')",
+		"SELECT strftime('%s', 'now')",
+		"SELECT strftime('%J', 'now')",
+	}
+	return funcs[g.rand.Intn(len(funcs))]
+}
+
+// GenerateJSON generates JSON-related queries (if extension available)
+func (g *SQLGenerator) GenerateJSON() string {
+	funcs := []string{
+		"SELECT json('{\"a\":1}')",
+		"SELECT json_array(1, 2, 3)",
+		"SELECT json_extract('{\"a\":1}', '$.a')",
+		"SELECT json_object('a', 1)",
+		"SELECT json_set('{\"a\":1}', '$.b', 2)",
+		"SELECT json_type('{\"a\":1}', '$.a')",
+		"SELECT json_length('{\"a\":[1,2,3]}', '$.a')",
+		"SELECT json_valid('{\"a\":1}')",
+	}
+	return funcs[g.rand.Intn(len(funcs))]
+}
+
+// GenerateMath generates math-related queries (if extension available)
+func (g *SQLGenerator) GenerateMath() string {
+	funcs := []string{
+		"SELECT POWER(2, 8)",
+		"SELECT SQRT(16)",
+		"SELECT MOD(10, 3)",
+		"SELECT ABS(-5)",
+		"SELECT CEIL(1.5)",
+		"SELECT FLOOR(1.5)",
+		"SELECT ROUND(3.14159, 2)",
+		"SELECT EXP(1)",
+		"SELECT LN(2.718)",
+		"SELECT LOG(10)",
+		"SELECT LOG2(8)",
+		"SELECT COS(0)",
+		"SELECT SIN(0)",
+		"SELECT TAN(0)",
+	}
+	return funcs[g.rand.Intn(len(funcs))]
+}
+
+// GenerateExpression generates complex expressions
+func (g *SQLGenerator) GenerateExpression() string {
+	ops := []string{"+", "-", "*", "/", "%", "||"}
+	op := ops[g.rand.Intn(len(ops))]
+
+	valTypes := []string{
+		fmt.Sprintf("%d", g.rand.Intn(100)),
+		fmt.Sprintf("%f", g.rand.Float64()*100),
+		fmt.Sprintf("'%s'", g.generateString()),
+	}
+
+	left := valTypes[g.rand.Intn(len(valTypes))]
+	right := valTypes[g.rand.Intn(len(valTypes))]
+
+	return fmt.Sprintf("SELECT %s %s %s", left, op, right)
+}
+
+// GenerateComparisonChain generates chained comparisons
+func (g *SQLGenerator) GenerateComparisonChain() string {
+	comparisons := []string{
+		"SELECT 1 < 2 AND 2 < 3",
+		"SELECT 1 < 2 < 3",
+		"SELECT 10 > 5 AND 5 > 1",
+		"SELECT c0 BETWEEN 0 AND 100 FROM t0",
+		"SELECT c0 NOT BETWEEN 0 AND 100 FROM t0",
+	}
+	return comparisons[g.rand.Intn(len(comparisons))]
+}
+
+// GenerateExists generates EXISTS/NOT EXISTS queries
+func (g *SQLGenerator) GenerateExists() string {
+	queries := []string{
+		"SELECT EXISTS(SELECT 1)",
+		"SELECT NOT EXISTS(SELECT 1)",
+		"SELECT * FROM t0 WHERE EXISTS(SELECT 1 FROM t1)",
+		"SELECT * FROM t0 WHERE NOT EXISTS(SELECT 1 FROM t1)",
+	}
+	return queries[g.rand.Intn(len(queries))]
+}
+
+// GenerateHaving generates queries with HAVING clause
+func (g *SQLGenerator) GenerateHaving() string {
+	queries := []string{
+		"SELECT c0, COUNT(*) FROM t0 GROUP BY c0 HAVING COUNT(*) > 1",
+		"SELECT c0, SUM(c1) FROM t0 GROUP BY c0 HAVING SUM(c1) > 100",
+		"SELECT c0, AVG(c1) FROM t0 GROUP BY c0 HAVING AVG(c1) < 50",
+	}
+	return queries[g.rand.Intn(len(queries))]
+}
+
+// GenerateDistinct generates DISTINCT queries
+func (g *SQLGenerator) GenerateDistinct() string {
+	queries := []string{
+		"SELECT DISTINCT c0 FROM t0",
+		"SELECT DISTINCT c0, c1 FROM t0",
+		"SELECT COUNT(DISTINCT c0) FROM t0",
+		"SELECT COUNT(DISTINCT c0), COUNT(DISTINCT c1) FROM t0",
+	}
+	return queries[g.rand.Intn(len(queries))]
+}
+
+// GenerateLimitOffset generates queries with LIMIT/OFFSET
+func (g *SQLGenerator) GenerateLimitOffset() string {
+	limit := g.rand.Intn(100)
+	offset := g.rand.Intn(50)
+	queries := []string{
+		fmt.Sprintf("SELECT * FROM t0 LIMIT %d", limit),
+		fmt.Sprintf("SELECT * FROM t0 LIMIT %d OFFSET %d", limit, offset),
+		fmt.Sprintf("SELECT * FROM t0 ORDER BY c0 LIMIT %d", limit),
+		fmt.Sprintf("SELECT * FROM t0 LIMIT %d, %d", offset, limit),
+	}
+	return queries[g.rand.Intn(len(queries))]
+}
+
+// GenerateCompound generates compound queries (UNION/INTERSECT/EXCEPT)
+func (g *SQLGenerator) GenerateCompound() string {
+	ops := []string{"UNION", "UNION ALL", "INTERSECT", "EXCEPT"}
+	op := ops[g.rand.Intn(len(ops))]
+
+	queries := []string{
+		fmt.Sprintf("SELECT c0 FROM t0 %s SELECT c0 FROM t1", op),
+		fmt.Sprintf("SELECT 1 %s SELECT 2 %s SELECT 3", op, ops[g.rand.Intn(len(ops))]),
+		fmt.Sprintf("SELECT c0 FROM t0 WHERE c0 > 0 %s SELECT c0 FROM t0 WHERE c0 < 100", op),
+	}
+	return queries[g.rand.Intn(len(queries))]
+}
+
+// GenerateBlob generates BLOB-related queries
+func (g *SQLGenerator) GenerateBlob() string {
+	queries := []string{
+		"SELECT X'0102030405'",
+		"SELECT X''",
+		"SELECT X'ff'",
+		"SELECT CAST(X'0102' AS TEXT)",
+		"SELECT HEX(X'0102030405')",
+		"SELECT LENGTH(X'0102030405')",
+	}
+	return queries[g.rand.Intn(len(queries))]
+}
+
+// GeneratePragmaExtended generates extended PRAGMA queries
+func (g *SQLGenerator) GeneratePragmaExtended() string {
+	pragma := []string{
+		"PRAGMA page_size = 4096",
+		"PRAGMA cache_size = 2000",
+		"PRAGMA synchronous = NORMAL",
+		"PRAGMA journal_mode = WAL",
+		"PRAGMA locking_mode = NORMAL",
+		"PRAGMA temp_store = MEMORY",
+		"PRAGMA read_uncommitted = 1",
+		"PRAGMA wal_autocheckpoint = 1000",
+		"PRAGMA auto_vacuum = INCREMENTAL",
+		"PRAGMA busy_timeout = 5000",
+		"PRAGMA query_only = 0",
+		"PRAGMA mmap_size = 268435456",
+	}
+	return pragma[g.rand.Intn(len(pragma))]
+}
+
+// GenerateSchemaAdvanced generates advanced schema patterns
+func (g *SQLGenerator) GenerateSchemaAdvanced() string {
+	schemas := []string{
+		"CREATE TABLE t1 (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)",
+		"CREATE TABLE t1 (id INTEGER, name TEXT, UNIQUE(id, name))",
+		"CREATE TABLE t1 (id INTEGER, name TEXT DEFAULT 'unknown')",
+		"CREATE TABLE t1 (id INTEGER, data TEXT CHECK(LENGTH(data) > 0))",
+		"CREATE TABLE t1 (id INTEGER, name TEXT COLLATE NOCASE)",
+		"CREATE TABLE t1 AS SELECT 1 AS id, 'test' AS name",
+		"CREATE INDEX idx1 ON t0(c0) WHERE c0 IS NOT NULL",
+		"CREATE INDEX idx1 ON t0(LOWER(c1))",
+	}
+	return schemas[g.rand.Intn(len(schemas))]
+}
+
+// GenerateRecursiveCTE generates recursive CTE queries
+func (g *SQLGenerator) GenerateRecursiveCTE() string {
+	ctes := []string{
+		"WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM cnt WHERE x<10) SELECT x FROM cnt",
+		"WITH RECURSIVE fib(a, b) AS (SELECT 0, 1 UNION ALL SELECT b, a+b FROM fib WHERE b<100) SELECT a FROM fib",
+		"WITH RECURSIVE tree(id, parent, depth) AS (SELECT 1, NULL, 0 UNION ALL SELECT t.id, t.parent, tree.depth+1 FROM t0 t JOIN tree ON t.parent = tree.id WHERE tree.depth < 5) SELECT * FROM tree",
+	}
+	return ctes[g.rand.Intn(len(ctes))]
+}
+
+// GenerateFlattenedSubquery generates flattened subquery patterns
+func (g *SQLGenerator) GenerateFlattenedSubquery() string {
+	queries := []string{
+		"SELECT * FROM (SELECT c0, COUNT(*) as cnt FROM t0 GROUP BY c0)",
+		"SELECT * FROM (SELECT * FROM t0 WHERE c0 > 0) WHERE c0 < 100",
+		"SELECT a.* FROM (SELECT * FROM t0) a JOIN (SELECT * FROM t1) b ON a.c0 = b.c0",
+	}
+	return queries[g.rand.Intn(len(queries))]
+}
+
+// GenerateCorrelatedSubquery generates correlated subquery patterns
+func (g *SQLGenerator) GenerateCorrelatedSubquery() string {
+	queries := []string{
+		"SELECT * FROM t0 WHERE c0 > (SELECT AVG(c0) FROM t0)",
+		"SELECT * FROM t0 WHERE c0 = (SELECT MAX(c0) FROM t0 WHERE c1 = t0.c1)",
+		"SELECT c0, (SELECT COUNT(*) FROM t1 WHERE t1.c0 = t0.c0) FROM t0",
+	}
+	return queries[g.rand.Intn(len(queries))]
+}
+
+// GenerateAdvancedWindow generates advanced window function patterns
+func (g *SQLGenerator) GenerateAdvancedWindow() string {
+	queries := []string{
+		"SELECT c0, SUM(c1) OVER (PARTITION BY c0 ORDER BY c1 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM t0",
+		"SELECT c0, AVG(c1) OVER (PARTITION BY c0 ORDER BY c1 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM t0",
+		"SELECT c0, FIRST_VALUE(c1) OVER (PARTITION BY c0 ORDER BY c1) FROM t0",
+		"SELECT c0, LAG(c1, 1, 0) OVER (PARTITION BY c0 ORDER BY c1) FROM t0",
+	}
+	return queries[g.rand.Intn(len(queries))]
+}
+
+// GenerateMalformed generates intentionally malformed SQL for robustness testing
+func (g *SQLGenerator) GenerateMalformed() string {
+	malformed := []string{
+		"SELECT IN(c",
+		"SELECT MAX(0;",
+		"SELECT * FROM WHERE c0 = 1",
+		"INSERT INTO t0 VALUES",
+		"SELECT * FROM t0 GROUP BY",
+		"SELECT * FROM t0 ORDER BY",
+		"SELECT * FROM t0 WHERE (c0 = 1",
+		"SELECT * FROM t0 WHERE c0 = 1)",
+		"BEGIN;",
+		"SELECT 1 + ",
+		"SELECT * FROM t0 JOIN t1 ON",
+		"SELECT CASE WHEN 1 THEN 'a'",
+		"SELECT COALESCE(",
+		"SELECT SUBSTR('test',",
+	}
+	return malformed[g.rand.Intn(len(malformed))]
+}
+
+// GenerateExtendedRandomSQL extends the random SQL generation with new patterns
+func (g *SQLGenerator) GenerateExtendedRandomSQL() string {
+	generators := []func() string{
+		g.GenerateCreateTable,
+		g.GenerateDropTable,
+		g.GenerateCreateIndex,
+		g.GenerateDropIndex,
+		g.GenerateInsert,
+		g.GenerateMultiRowInsert,
+		g.GenerateSelect,
+		g.GenerateUpdate,
+		g.GenerateDelete,
+		g.GeneratePragma,
+		g.GenerateJoin,
+		g.GenerateSubquery,
+		g.GenerateCTE,
+		g.GenerateWindowFunction,
+		g.GenerateUpsert,
+		g.GenerateTransaction,
+		g.GenerateAlterTable,
+		g.GenerateView,
+		g.GenerateExplain,
+		g.GenerateSetOperation,
+		g.GenerateCase,
+		g.GenerateDateTime,
+		g.GenerateJSON,
+		g.GenerateMath,
+		g.GenerateExpression,
+		g.GenerateComparisonChain,
+		g.GenerateExists,
+		g.GenerateHaving,
+		g.GenerateDistinct,
+		g.GenerateLimitOffset,
+		g.GenerateCompound,
+		g.GenerateBlob,
+		g.GeneratePragmaExtended,
+		g.GenerateSchemaAdvanced,
+		g.GenerateRecursiveCTE,
+		g.GenerateFlattenedSubquery,
+		g.GenerateCorrelatedSubquery,
+		g.GenerateAdvancedWindow,
+		g.GenerateMalformed,
+	}
+	return generators[g.rand.Intn(len(generators))]()
+}
