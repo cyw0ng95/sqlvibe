@@ -346,6 +346,37 @@ func TestRegression_CoalesceNULL_L1(t *testing.T) {
 
 ---
 
+#### 8.4.8 Fuzzer Bug Tracking (PlainFuzzer)
+
+When PlainFuzzer confirms a bug, record it in `internal/TS/PlainFuzzer/HUNTINGS.md` instead of HISTORY.md to avoid redundancy.
+
+**HUNTINGS.md Format**:
+```markdown
+### Bug Title
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High/Medium/Low |
+| **Type** | Bug category |
+| **File** | affected file path |
+| **Function** | function name |
+| **Trigger** | SQL that triggers the bug |
+| **Impact** | What happens (panic, hang, wrong result) |
+| **Root Cause** | Explanation of the bug |
+| **Fix** | How it was fixed |
+| **Corpus Entry** | Fuzzer corpus ID (if applicable) |
+| **Found By** | PlainFuzzer |
+| **Date** | YYYY-MM-DD |
+```
+
+**Workflow**:
+1. Add bug entry to `HUNTINGS.md` with full details
+2. Add regression test in `internal/TS/Regression/`
+3. Commit and push
+4. Do NOT add to HISTORY.md - HUNTINGS.md is the source of truth for fuzzer bugs
+
+---
+
 ## 4. Subsystem-Specific Guidelines
 
 ### 4.1 Data Storage (DS) Subsystem
