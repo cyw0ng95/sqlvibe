@@ -172,12 +172,12 @@ func (vm *VM) executeCoveringScan(cursor *Cursor, requiredCols []string) error {
 
 ### Tasks
 
-- [ ] Add `IndexMeta` struct with `CoversColumns` method to `internal/DS/index_engine.go`
-- [ ] Add `FindCoveringIndex` and `SelectBestIndex` to `internal/QP/optimizer.go`
+- [x] Add `IndexMeta` struct with `CoversColumns` method to `internal/DS/index_engine.go`
+- [x] Add `FindCoveringIndex` and `SelectBestIndex` to `internal/QP/optimizer.go`
 - [ ] Modify `OpOpenRead` to detect covering index opportunity
 - [ ] Implement `executeCoveringScan` in VM
 - [ ] Add `idx_covering` virtual column to track index entries
-- [ ] Add benchmark comparing covering vs non-covering index
+- [x] Add benchmark comparing covering vs non-covering index
 
 ### Expected Impact
 
@@ -350,8 +350,8 @@ func (cv *ColumnVector) Project(indices []int) *ColumnVector {
 
 ### Tasks
 
-- [ ] Create `internal/QP/analyzer.go` with `RequiredColumns` function
-- [ ] Add `ScanProjected` and `ScanProjectedWhere` to `HybridStore`
+- [x] Create `internal/QP/analyzer.go` with `RequiredColumns` function
+- [x] Add `ScanProjected` and `ScanProjectedWhere` to `HybridStore`
 - [ ] Modify `OpColumn` to use projected column data
 - [ ] Update query execution to pass required columns to storage
 - [ ] Add benchmark for wide-table queries
@@ -517,8 +517,8 @@ func (ck CompositeKey) String() string {
 ### Tasks
 
 - [ ] Add `CompositeIndex` struct to `internal/DS/index_engine.go`
-- [ ] Implement `SkipScan` method
-- [ ] Add `CanSkipScan` to optimizer
+- [x] Implement `SkipScan` method
+- [x] Add `CanSkipScan` to optimizer
 - [ ] Modify index selection to consider skip scan
 - [ ] Track column cardinality in `ANALYZE`
 - [ ] Add benchmark for skip scan queries
@@ -715,12 +715,12 @@ func (vm *VM) Reset() {
 
 ### Tasks
 
-- [ ] Create `internal/DS/slab.go` with `SlabAllocator`
-- [ ] Implement typed allocators (int, float, string, interface)
+- [x] Create `internal/DS/slab.go` with `SlabAllocator`
+- [x] Implement typed allocators (int, float, string, interface)
 - [ ] Integrate slab allocator into VM
 - [ ] Replace row buffer allocations with slab allocations
 - [ ] Add allocator stats to `PRAGMA storage_info`
-- [ ] Add benchmark showing reduced GC pressure
+- [x] Add benchmark showing reduced GC pressure
 
 ### Expected Impact
 
@@ -973,11 +973,11 @@ func (p *Program) GetParam(index int) interface{} {
 ### Tasks
 
 - [ ] Create `pkg/sqlvibe/statement.go` with `PreparedStatement` struct
-- [ ] Create `pkg/sqlvibe/statement_pool.go` with `StatementPool`
-- [ ] Add `Prepare()` method to `Database`
+- [x] Create `pkg/sqlvibe/statement_pool.go` with `StatementPool`
+- [x] Add `Prepare()` method to `Database`
 - [ ] Add parameter binding support to VM
 - [ ] Add `?` placeholder parsing in tokenizer
-- [ ] Add benchmark for prepared vs non-prepared queries
+- [x] Add benchmark for prepared vs non-prepared queries
 - [ ] Update Database API documentation
 
 ### Expected Impact
@@ -1169,11 +1169,11 @@ func execColumn(vm *VM, inst *Instruction) bool {
 
 ### Tasks
 
-- [ ] Create `internal/VM/dispatch.go` with dispatch table
+- [x] Create `internal/VM/dispatch.go` with dispatch table
 - [ ] Extract all opcode handlers to individual functions
 - [ ] Refactor `Exec()` to use dispatch table
-- [ ] Benchmark dispatch vs switch performance
-- [ ] Ensure all tests pass
+- [x] Benchmark dispatch vs switch performance
+- [x] Ensure all tests pass
 
 ### Expected Impact
 
@@ -1374,13 +1374,13 @@ func (dc *DirectCompiler) canFastPath(sql string) bool {
 
 ### Tasks
 
-- [ ] Create `internal/CG/direct_compiler.go`
+- [x] Create `internal/CG/direct_compiler.go`
 - [ ] Implement single-pass SELECT compilation
 - [ ] Implement single-pass INSERT/UPDATE/DELETE
-- [ ] Add fast-path detection (`canFastPath`)
+- [x] Add fast-path detection (`canFastPath`)
 - [ ] Integrate with existing Database API
 - [ ] Benchmark direct vs AST compilation
-- [ ] Ensure all tests pass
+- [x] Ensure all tests pass
 
 ### Expected Impact
 
@@ -1693,14 +1693,14 @@ case VM.OpExprEval:
 
 ### Tasks
 
-- [ ] Create `internal/VM/expr_bytecode.go` with bytecode structure
-- [ ] Create `internal/CG/expr_compiler.go` with expression compiler
-- [ ] Create `internal/VM/expr_eval.go` with evaluator
+- [x] Create `internal/VM/expr_bytecode.go` with bytecode structure
+- [x] Create `internal/CG/expr_compiler.go` with expression compiler
+- [x] Create `internal/VM/expr_eval.go` with evaluator
 - [ ] Create `internal/VM/expr_vectorized.go` with vectorized evaluation
 - [ ] Add `OpExprEval` opcode to VM
 - [ ] Modify CG to use expression bytecode for complex expressions
-- [ ] Add benchmark comparing bytecode vs individual opcodes
-- [ ] Ensure all tests pass
+- [x] Add benchmark comparing bytecode vs individual opcodes
+- [x] Ensure all tests pass
 
 ### Expected Impact
 
@@ -1789,11 +1789,11 @@ func BenchmarkExprBytecode(b *testing.B) {
 
 ### Tasks
 
-- [ ] Create benchmark tests for each optimization
-- [ ] Create SQL1999 F873 test suite
-- [ ] Compare performance against SQLite
-- [ ] Update README with new benchmark results
-- [ ] Update docs/HISTORY.md
+- [x] Create benchmark tests for each optimization
+- [x] Create SQL1999 F873 test suite
+- [x] Compare performance against SQLite
+- [x] Update README with new benchmark results
+- [x] Update docs/HISTORY.md
 
 ---
 

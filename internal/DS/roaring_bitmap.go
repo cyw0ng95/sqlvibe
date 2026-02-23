@@ -351,3 +351,15 @@ func iterateContainer(c *rbContainer, fn func(uint16)) {
 		}
 	}
 }
+
+// IntersectWith replaces the receiver with its intersection with other.
+func (rb *RoaringBitmap) IntersectWith(other *RoaringBitmap) {
+result := rb.And(other)
+rb.containers = result.containers
+}
+
+// UnionInPlace merges other into the receiver.
+func (rb *RoaringBitmap) UnionInPlace(other *RoaringBitmap) {
+result := rb.Or(other)
+rb.containers = result.containers
+}

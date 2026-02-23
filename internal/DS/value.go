@@ -3,6 +3,7 @@ package DS
 import (
 	"fmt"
 	"math"
+	"strconv"
 )
 
 // ValueType enumerates the supported column types.
@@ -159,4 +160,19 @@ func cmpBytes(a, b []byte) int {
 		return 1
 	}
 	return 0
+}
+
+// ParseValue parses a string (as produced by Value.String()) back to a Value.
+// It tries int64, then float64, then falls back to string.
+func ParseValue(s string) Value {
+if s == "NULL" {
+return NullValue()
+}
+if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+return IntValue(i)
+}
+if f, err := strconv.ParseFloat(s, 64); err == nil {
+return FloatValue(f)
+}
+return StringValue(s)
 }
