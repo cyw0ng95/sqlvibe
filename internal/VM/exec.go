@@ -569,7 +569,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpSubstr:
 			src := vm.registers[inst.P1]
 			start := int64(1)
-			length := int64(-1)
+			length := int64(math.MinInt64) // sentinel: no length argument
 			if inst.P2 != 0 {
 				if v, ok := vm.registers[inst.P2].(int64); ok {
 					start = v
@@ -2332,9 +2332,25 @@ func stringSubstr(s interface{}, start, length int64) interface{} {
 	}
 
 	endIdx := len(runes)
+	// math.MinInt64 is the sentinel meaning "no length argument" - return rest of string
+	if length == math.MinInt64 {
+		return string(runes[startIdx:endIdx])
+	}
 	// SQLite: if length is 0, return empty string
 	if length == 0 {
 		return ""
+	}
+	// Handle negative length: SUBSTR(s, start, -n) returns n chars ending at start
+	if length < 0 {
+		endIdx = startIdx
+		startIdx = startIdx + int(length)
+		if startIdx < 0 {
+			startIdx = 0
+		}
+		if endIdx <= 0 {
+			return ""
+		}
+		return string(runes[startIdx:endIdx])
 	}
 	// If start was 0, length is reduced by 1 to exclude first char
 	if start == 0 && length > 0 {

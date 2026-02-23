@@ -1347,9 +1347,24 @@ func (qe *QueryEngine) evalFuncCall(row map[string]interface{}, fc *QP.FuncCall)
 		if start > len(runes) {
 			return ""
 		}
+		// Handle negative length: SUBSTR(s, start, -n) returns n chars ending at start
+		if length < 0 {
+			end := start - 1
+			start = end + length + 1
+			if start < 1 {
+				start = 1
+			}
+			if end < 1 {
+				return ""
+			}
+			return string(runes[start-1 : end])
+		}
 		end := start - 1 + length
 		if end > len(runes) {
 			end = len(runes)
+		}
+		if end < start-1 {
+			return ""
 		}
 		return string(runes[start-1 : end])
 	case "TRIM":

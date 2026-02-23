@@ -1,6 +1,26 @@
 # sqlvibe Release History
 
-## **v0.9.7** (2026-02-23)
+## **v0.9.8** (2026-02-23)
+
+### Bug Fixes
+- **SUBSTR with negative length** (`internal/VM/exec.go`, `internal/VM/query_engine.go`): `SUBSTR('hello', 5, -3)` now returns `'ell'` (3 characters ending at position 5), matching SQLite semantics. Previously panicked with `slice bounds out of range`. Root cause: the `stringSubstr` helper had no negative-length handling; the sentinel `-1` (no-length-arg) was confused with explicit negative length. Fixed by using `math.MinInt64` as the sentinel value.
+- **`information_schema.views` always empty** (`pkg/sqlvibe/database.go`): `SELECT * FROM information_schema.views` now returns rows for each view registered via `CREATE VIEW`. Root cause: the `views` case in `queryInformationSchema` had no data generation code.
+- **`information_schema.table_constraints` missing UNIQUE / FOREIGN KEY** (`pkg/sqlvibe/database.go`): The view now returns rows for all constraint types: `PRIMARY KEY`, `UNIQUE`, and `FOREIGN KEY`. Root cause: only primary key entries were emitted; unique indexes and FK constraints were not included.
+- **`information_schema.referential_constraints` always empty** (`pkg/sqlvibe/database.go`): The view now returns one row per foreign key constraint referencing the parent table's primary key. Root cause: no data generation code existed for this case.
+- **`sqlite_master` SQL column returned empty column list** (`pkg/sqlvibe/database.go`): `SELECT sql FROM sqlite_master WHERE type='table'` now returns reconstructed `CREATE TABLE` SQL including all column definitions, `NOT NULL`, `PRIMARY KEY`, and `FOREIGN KEY` clauses. Root cause: the SQL was hardcoded as `CREATE TABLE name ()` with no column info.
+- **`information_schema.columns` IS_NULLABLE tracking** (`pkg/sqlvibe/database.go`): The `is_nullable` column now correctly reflects `NOT NULL` constraints tracked in `db.columnNotNull` rather than using a string search on the type string.
+
+### Features
+- **`PRAGMA index_info(index_name)`** (`pkg/sqlvibe/pragma.go`): Returns `(seqno, cid, name)` rows for each column in the named index, matching SQLite's output. Returns empty for missing or unknown indexes.
+- **`PRAGMA foreign_key_list(table)`** (`pkg/sqlvibe/pragma.go`): Returns `(id, seq, table, from, to, on_update, on_delete, match)` rows for all foreign key constraints on the table. Returns empty when no FKs exist.
+- **`PRAGMA function_list`** (`pkg/sqlvibe/pragma.go`): Returns the list of built-in scalar function names. Useful for tooling and IDE completion.
+- **Reconstructed CREATE TABLE SQL** (`pkg/sqlvibe/database.go`): New `reconstructCreateTableSQL` helper rebuilds a full `CREATE TABLE` statement from in-memory schema metadata including column types, `NOT NULL`, `PRIMARY KEY`, and `FOREIGN KEY` clauses.
+
+### Testing
+- **F879 test suite** (`internal/TS/SQL1999/F879/01_test.go`): 8 test functions covering all v0.9.8 features: `PRAGMA index_info`, `PRAGMA foreign_key_list` (with and without FKs), `PRAGMA function_list`, `information_schema.views`, `information_schema.table_constraints` (PK+UNIQUE+FK), `information_schema.referential_constraints`, `sqlite_master` SQL reconstruction, and `SUBSTR` negative length.
+- **Regression suite v0.9.8** (`internal/TS/Regression/regression_v0.9.8_test.go`): 6 regression tests guarding against recurrence of all bugs fixed in this release.
+
+
 
 ### Bug Fixes
 - **GLOB in aggregate WHERE clauses** (`internal/VM/exec.go`): `SELECT COUNT(*) FROM t WHERE col GLOB '*.txt'` now correctly filters rows. Root cause: `evaluateBoolExprOnRow` had no `TokenGlob` case and fell through to `evaluateBinaryOp` which also lacked `TokenGlob` support.

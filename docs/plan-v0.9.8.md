@@ -28,11 +28,11 @@ Complete the INFORMATION_SCHEMA implementation to provide full schema introspect
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| sqlite_master query works | 100% | [ ] |
-| PRAGMA table_info returns correct data | 100% | [ ] |
-| Column info with types | All columns | [ ] |
-| Constraint extraction | PK, FK, UNIQUE | [ ] |
-| View definitions queryable | Yes | [ ] |
+| sqlite_master query works | 100% | [x] |
+| PRAGMA table_info returns correct data | 100% | [x] |
+| Column info with types | All columns | [x] |
+| Constraint extraction | PK, FK, UNIQUE | [x] |
+| View definitions queryable | Yes | [x] |
 
 ---
 
@@ -59,11 +59,11 @@ Extend PRAGMA support to cover more introspection queries needed for tools and c
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| PRAGMA table_info | Works | [ ] |
-| PRAGMA index_list | Works | [ ] |
-| PRAGMA index_info | Works | [ ] |
-| PRAGMA foreign_key_list | Works | [ ] |
-| All PRAGMAs return correct format | 100% | [ ] |
+| PRAGMA table_info | Works | [x] |
+| PRAGMA index_list | Works | [x] |
+| PRAGMA index_info | Works | [x] |
+| PRAGMA foreign_key_list | Works | [x] |
+| All PRAGMAs return correct format | 100% | [x] |
 
 ---
 
@@ -88,11 +88,11 @@ Implement proper transaction modes and locking behavior to match SQLite semantic
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| BEGIN DEFERRED works | Yes | [ ] |
-| BEGIN IMMEDIATE works | Yes | [ ] |
-| BEGIN EXCLUSIVE works | Yes | [ ] |
-| Correct lock behavior | Matches SQLite | [ ] |
-| busy_timeout respected | Yes | [ ] |
+| BEGIN DEFERRED works | Yes | [x] |
+| BEGIN IMMEDIATE works | Yes | [x] |
+| BEGIN EXCLUSIVE works | Yes | [x] |
+| Correct lock behavior | Matches SQLite | [x] |
+| busy_timeout respected | Yes | [x] |
 
 ---
 
@@ -121,12 +121,12 @@ Add more SQL standard built-in functions for better compatibility.
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| SUBSTR works | Yes | [ ] |
-| INSTR works | Yes | [ ] |
-| REPLACE works | Yes | [ ] |
-| TRIM/LTRIM/RTRIM | Yes | [ ] |
-| DATE/TIME functions | Yes | [ ] |
-| All functions pass tests | 100% | [ ] |
+| SUBSTR works | Yes | [x] |
+| INSTR works | Yes | [x] |
+| REPLACE works | Yes | [x] |
+| TRIM/LTRIM/RTRIM | Yes | [x] |
+| DATE/TIME functions | Yes | [x] |
+| All functions pass tests | 100% | [x] |
 
 ---
 

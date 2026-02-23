@@ -2253,7 +2253,7 @@ func (db *Database) serializeRow(row map[string]interface{}) []byte {
 func (db *Database) querySqliteMaster(stmt *QP.SelectStmt) (*Rows, error) {
 	allResults := make([]map[string]interface{}, 0)
 	for tableName := range db.tables {
-		sql := fmt.Sprintf("CREATE TABLE %s ()", tableName)
+		sql := db.reconstructCreateTableSQL(tableName)
 		allResults = append(allResults, map[string]interface{}{
 			"type":     "table",
 			"name":     tableName,
@@ -2360,6 +2360,54 @@ func (db *Database) querySqliteMaster(stmt *QP.SelectStmt) (*Rows, error) {
 	return &Rows{Columns: cols, Data: resultData}, nil
 }
 
+// reconstructCreateTableSQL rebuilds the CREATE TABLE SQL from the in-memory schema.
+func (db *Database) reconstructCreateTableSQL(tableName string) string {
+	colOrder, ok := db.columnOrder[tableName]
+	if !ok {
+		return fmt.Sprintf("CREATE TABLE %s ()", tableName)
+	}
+	colTypes := db.tables[tableName]
+	pkCols := db.primaryKeys[tableName]
+	pkSet := make(map[string]bool)
+	for _, pk := range pkCols {
+		pkSet[pk] = true
+	}
+
+	var parts []string
+	for _, colName := range colOrder {
+		colType := colTypes[colName]
+		if colType == "" {
+			colType = "TEXT"
+		}
+		col := colName + " " + colType
+		if db.columnNotNull[tableName] != nil && db.columnNotNull[tableName][colName] {
+			col += " NOT NULL"
+		}
+		if pkSet[colName] && len(pkCols) == 1 {
+			col += " PRIMARY KEY"
+		}
+		parts = append(parts, col)
+	}
+	if len(pkCols) > 1 {
+		parts = append(parts, "PRIMARY KEY ("+strings.Join(pkCols, ", ")+")")
+	}
+	for _, fk := range db.foreignKeys[tableName] {
+		fkStr := "FOREIGN KEY (" + strings.Join(fk.ChildColumns, ", ") + ")" +
+			" REFERENCES " + fk.ParentTable
+		if len(fk.ParentColumns) > 0 {
+			fkStr += " (" + strings.Join(fk.ParentColumns, ", ") + ")"
+		}
+		if fk.OnDelete != QP.ReferenceNoAction {
+			fkStr += " ON DELETE " + actionName(fk.OnDelete)
+		}
+		if fk.OnUpdate != QP.ReferenceNoAction {
+			fkStr += " ON UPDATE " + actionName(fk.OnUpdate)
+		}
+		parts = append(parts, fkStr)
+	}
+	return fmt.Sprintf("CREATE TABLE %s (%s)", tableName, strings.Join(parts, ", "))
+}
+
 // queryInformationSchema handles queries to information_schema virtual tables
 func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string) (*Rows, error) {
 	// Extract view name from "information_schema.viewname"
@@ -2399,16 +2447,15 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 				// PRIMARY KEY columns cannot be NULL
 				if pkMap[colName] {
 					isNullable = "NO"
-				} else if strings.Contains(strings.ToUpper(colType), "NOT NULL") {
+				} else if db.columnNotNull[tblName] != nil && db.columnNotNull[tblName][colName] {
 					isNullable = "NO"
 				}
+				var colDefault interface{}
+				if db.columnDefaults[tblName] != nil {
+					colDefault = db.columnDefaults[tblName][colName]
+				}
 				allResults = append(allResults, []interface{}{
-					colName,
-					tblName,
-					"main",
-					colType,
-					isNullable,
-					nil, // column_default (not tracked yet)
+					colName, tblName, "main", colType, isNullable, colDefault,
 				})
 			}
 		}
@@ -2426,26 +2473,51 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 
 	case "views":
 		columnNames = []string{"table_name", "table_schema", "view_definition"}
-		// No views tracked yet, return empty
+		for viewName, viewSQL := range db.views {
+			allResults = append(allResults, []interface{}{viewName, "main", viewSQL})
+		}
 
 	case "table_constraints":
 		columnNames = []string{"constraint_name", "table_name", "table_schema", "constraint_type"}
-		// Extract PRIMARY KEY constraints from in-memory schema
+		// PRIMARY KEY constraints
 		for tblName, pkCols := range db.primaryKeys {
 			if len(pkCols) > 0 {
 				constraintName := fmt.Sprintf("pk_%s", tblName)
 				allResults = append(allResults, []interface{}{
-					constraintName,
-					tblName,
-					"main",
-					"PRIMARY KEY",
+					constraintName, tblName, "main", "PRIMARY KEY",
+				})
+			}
+		}
+		// UNIQUE constraints (from unique indexes with autoindex prefix)
+		for idxName, idx := range db.indexes {
+			if idx.Unique {
+				allResults = append(allResults, []interface{}{
+					idxName, idx.Table, "main", "UNIQUE",
+				})
+			}
+		}
+		// FOREIGN KEY constraints
+		for tblName, fks := range db.foreignKeys {
+			for i := range fks {
+				constraintName := fmt.Sprintf("fk_%s_%d", tblName, i)
+				allResults = append(allResults, []interface{}{
+					constraintName, tblName, "main", "FOREIGN KEY",
 				})
 			}
 		}
 
 	case "referential_constraints":
 		columnNames = []string{"constraint_name", "unique_constraint_schema", "unique_constraint_name"}
-		// No foreign keys tracked yet, return empty
+		for tblName, fks := range db.foreignKeys {
+			for i, fk := range fks {
+				constraintName := fmt.Sprintf("fk_%s_%d", tblName, i)
+				// The unique constraint on the parent table
+				parentConstraint := fmt.Sprintf("pk_%s", fk.ParentTable)
+				allResults = append(allResults, []interface{}{
+					constraintName, "main", parentConstraint,
+				})
+			}
+		}
 
 	case "key_column_usage":
 		columnNames = []string{"constraint_name", "table_name", "table_schema", "column_name", "ordinal_position"}
