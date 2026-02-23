@@ -233,6 +233,9 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 	case QP.TokenGlob:
 		c.program.EmitOpWithDst(VM.OpGlob, int32(leftReg), int32(rightReg), dst)
 		return dst
+	case QP.TokenMatch:
+		c.program.EmitOpWithDst(VM.OpMatch, int32(leftReg), int32(rightReg), dst)
+		return dst
 	case QP.TokenNotLike:
 		c.program.EmitOpWithDst(VM.OpNotLike, int32(leftReg), int32(rightReg), dst)
 		return dst

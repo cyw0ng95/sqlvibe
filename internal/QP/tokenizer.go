@@ -72,6 +72,8 @@ const (
 	TokenAll
 	TokenAny
 	TokenCast
+	TokenMatch
+	TokenCollate
 )
 
 var keywords = map[string]TokenType{
@@ -214,6 +216,9 @@ var keywords = map[string]TokenType{
 	"BEFORE":            TokenKeyword,
 	"VACUUM":            TokenKeyword,
 	"ANALYZE":           TokenKeyword,
+	"MATCH":             TokenMatch,
+	"COLLATE":           TokenCollate,
+	"RETURNING":         TokenKeyword,
 }
 
 type Token struct {

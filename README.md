@@ -85,7 +85,7 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.9.3)
+## Performance (v0.9.4)
 
 Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
@@ -99,31 +99,31 @@ Results may vary on different hardware.
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| SELECT all (3 cols) | 60 µs | 572 µs | **sqlvibe 9.5x faster** |
-| SELECT WHERE | 271 µs | 92 µs | SQLite 2.9x faster |
-| ORDER BY (500 rows) | 193 µs | 304 µs | **sqlvibe 1.6x faster** |
-| COUNT(*) | 7.3 µs | 5.3 µs | roughly equal |
-| SUM | 21 µs | 67 µs | **sqlvibe 3.3x faster** |
-| GROUP BY | 141 µs | 513 µs | **sqlvibe 3.6x faster** |
-| JOIN (100×500 rows) | 561 µs | 238 µs | SQLite 2.4x faster |
-| BETWEEN filter | 551 µs | 187 µs | SQLite 2.9x faster |
+| SELECT all (3 cols) | 61 µs | 571 µs | **sqlvibe 9.3x faster** |
+| SELECT WHERE | 401 µs | 92 µs | SQLite 4.3x faster |
+| ORDER BY (500 rows) | 225 µs | 298 µs | **sqlvibe 1.3x faster** |
+| COUNT(*) | 7.3 µs | 5.4 µs | roughly equal |
+| SUM | 20 µs | 68 µs | **sqlvibe 3.3x faster** |
+| GROUP BY | 145 µs | 497 µs | **sqlvibe 3.4x faster** |
+| JOIN (100×500 rows) | 568 µs | 233 µs | SQLite 2.4x faster |
+| BETWEEN filter | 726 µs | 187 µs | SQLite 3.9x faster |
 
 ### DML Operations
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| INSERT single | 3.7 µs | 6.2 µs | **sqlvibe 1.7x faster** |
-| INSERT 100 (batch) | 266 µs | 551 µs | **sqlvibe 2.1x faster** |
-| INSERT OR REPLACE | 37 µs | — | conflict + delete + re-insert |
-| INSERT OR IGNORE | 9.6 µs | — | conflict silently skipped |
+| INSERT single | 6.5 µs | 6.2 µs | roughly equal |
+| INSERT 100 (batch) | 564 µs | 572 µs | roughly equal |
+| INSERT OR REPLACE | 40 µs | — | conflict + delete + re-insert |
+| INSERT OR IGNORE | 9.7 µs | — | conflict silently skipped |
 
 ### Special-case Performance
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| Result cache hit (repeated query) | 1.5 µs | 572 µs | **sqlvibe 381x faster** |
-| LIMIT 10 no ORDER BY (10K rows) | 20 µs | 119 µs | **sqlvibe 6x faster** |
-| LIMIT 100 no ORDER BY (10K rows) | 38 µs | 119 µs | **sqlvibe 3.1x faster** |
+| Result cache hit (repeated query) | 1.5 µs | 571 µs | **sqlvibe 381x faster** |
+| LIMIT 10 no ORDER BY (10K rows) | 9.5 µs | 119 µs | **sqlvibe 12.5x faster** |
+| LIMIT 100 no ORDER BY (10K rows) | 33 µs | 119 µs | **sqlvibe 3.6x faster** |
 | Expression bytecode eval | 99 ns | — | single-dispatch expression evaluation |
 
 ### SIMD Vectorization (v0.9.3)
@@ -146,24 +146,28 @@ Results may vary on different hardware.
 v0.9.3 extends the dispatch table to 22 opcodes: comparison operators (Eq/Ne/Lt/Le/Gt/Ge)
 and extended string ops (Trim/LTrim/RTrim/Replace/Instr) now bypass the large switch statement.
 
-### v0.9.3 Fixes & Improvements
+### v0.9.4 SQL Compatibility Features
 
-| Fix / Improvement | Detail |
-|-------------------|--------|
-| INSERT OR REPLACE | Deletes conflicting row and re-inserts; fully SQLite-compatible |
-| INSERT OR IGNORE | Silently skips rows that violate UNIQUE/PK constraints |
-| SIMD vectorization | `VectorAddInt64/Float64`, `VectorMulInt64/Float64`, `VectorSumInt64/Float64`, Min/Max helpers |
-| Extended dispatch table | Comparison (Eq/Ne/Lt/Le/Gt/Ge) + string (Trim/LTrim/RTrim/Replace/Instr) opcodes |
-| UPSERT (ON CONFLICT DO) | Already complete; F875 suite validates against SQLite |
-| REPLACE/SUBSTR/TRIM | Already complete; F875 suite validates 13 function variants |
+| Feature | Description |
+|---------|-------------|
+| Partial Index | `CREATE INDEX ... WHERE expr` — index filtered by a predicate |
+| Expression Index | `CREATE INDEX ON t(LOWER(col))` — index on computed expression |
+| RETURNING clause | `INSERT/UPDATE/DELETE ... RETURNING col1, col2, *` |
+| UPDATE ... FROM | `UPDATE t SET ... FROM t2 WHERE ...` (PostgreSQL-style) |
+| DELETE ... USING | `DELETE FROM t USING t2 WHERE ...` (PostgreSQL-style) |
+| MATCH operator | `expr MATCH pattern` — case-insensitive substring matching |
+| COLLATE support | `COLLATE NOCASE / RTRIM / BINARY` in column defs and expressions |
+| CHECK (verified) | `CHECK(expr)` constraints enforced on INSERT and UPDATE |
+| GLOB (verified) | `expr GLOB pattern` case-sensitive wildcard matching (`*`, `?`, `[...]`) |
+| ALTER TABLE (verified) | `ADD COLUMN` and `RENAME TO` fully functional |
 
-> **Analysis**: sqlvibe v0.9.3 adds full `INSERT OR REPLACE/IGNORE` support for conflict-safe DML,
-> SIMD-style vectorized batch operations for columnar analytics, and extends the dispatch table to 22
-> opcodes covering all arithmetic, comparison, and string operations. The vectorized helpers deliver
-> sub-µs throughput for batch numeric operations (70 ns for 256-element int64 sum), while the
-> extended dispatch reduces branch-prediction misses in tight query loops. sqlvibe continues to excel
-> at full-table analytics and repeated-query workloads; SQLite retains an advantage for indexed point
-> lookups and selective range queries.
+> **Analysis**: sqlvibe v0.9.4 delivers a major SQL compatibility expansion — 10 new or verified
+> features covering constraints, advanced DML, pattern matching, and schema operations.
+> Core query throughput (SELECT all, SUM, GROUP BY, result cache) remains comparable to v0.9.3.
+> sqlvibe continues to excel at full-table analytics and repeated-query workloads; SQLite retains
+> an advantage for filtered scans and range queries. New partial-index and expression-index support
+> improves selectivity for filtered workloads, and RETURNING enables efficient single-round-trip
+> DML patterns.
 
 ### Key Optimizations
 
@@ -195,7 +199,7 @@ and extended string ops (Trim/LTrim/RTrim/Replace/Instr) now bypass the large sw
 
 ## SQL:1999 Compatibility
 
-87+ test suites passing
+88+ test suites passing
 
 ## Building
 

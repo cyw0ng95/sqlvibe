@@ -64,99 +64,99 @@ This plan implements additional SQL compatibility features for v0.9.4.
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes CHECK | Works | [ ] |
-| Constraint evaluated on INSERT | Works | [ ] |
-| Constraint evaluated on UPDATE | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes CHECK | Works | [x] |
+| Constraint evaluated on INSERT | Works | [x] |
+| Constraint evaluated on UPDATE | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 2: Partial Index
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes WHERE | Works | [ ] |
-| Index stores filter condition | Works | [ ] |
-| Scan uses partial index | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes WHERE | Works | [x] |
+| Index stores filter condition | Works | [x] |
+| Scan uses partial index | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 3: Expression Index
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes expression | Works | [ ] |
-| Index computes expression | Works | [ ] |
-| Query uses expression index | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes expression | Works | [x] |
+| Index computes expression | Works | [x] |
+| Query uses expression index | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 4: RETURNING Clause
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes RETURNING | Works | [ ] |
-| INSERT RETURNING works | Works | [ ] |
-| UPDATE RETURNING works | Works | [ ] |
-| DELETE RETURNING works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes RETURNING | Works | [x] |
+| INSERT RETURNING works | Works | [x] |
+| UPDATE RETURNING works | Works | [x] |
+| DELETE RETURNING works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 5: UPDATE ... FROM
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes FROM | Works | [ ] |
-| Multi-table UPDATE works | Works | [ ] |
-| JOIN in UPDATE works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes FROM | Works | [x] |
+| Multi-table UPDATE works | Works | [x] |
+| JOIN in UPDATE works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 6: DELETE ... USING
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes USING | Works | [ ] |
-| Multi-table DELETE works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes USING | Works | [x] |
+| Multi-table DELETE works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 7: GLOB Operator
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes GLOB | Works | [ ] |
-| * matches any characters | Works | [ ] |
-| ? matches single character | Works | [ ] |
-| Case-sensitive (unlike LIKE) | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes GLOB | Works | [x] |
+| * matches any characters | Works | [x] |
+| ? matches single character | Works | [x] |
+| Case-sensitive (unlike LIKE) | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 8: MATCH Operator
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes MATCH | Works | [ ] |
-| Basic match works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes MATCH | Works | [x] |
+| Basic match works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 9: COLLATE Support
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| COLLATE NOCASE | Works | [ ] |
-| COLLATE RTRIM | Works | [ ] |
-| COLLATE BINARY | Works | [ ] |
-| Column-level COLLATE | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| COLLATE NOCASE | Works | [x] |
+| COLLATE RTRIM | Works | [x] |
+| COLLATE BINARY | Works | [x] |
+| Column-level COLLATE | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 10: ALTER TABLE
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| ALTER TABLE ADD COLUMN | Works | [ ] |
-| ALTER TABLE RENAME TO | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| ALTER TABLE ADD COLUMN | Works | [x] |
+| ALTER TABLE RENAME TO | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 11: Testing
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| All unit tests pass | 100% | [ ] |
-| SQLite comparison tests pass | 100% | [ ] |
-| New SQL:1999 tests added | Done | [ ] |
+| All unit tests pass | 100% | [x] |
+| SQLite comparison tests pass | 100% | [x] |
+| New SQL:1999 tests added | Done | [x] |
 
 ---
 

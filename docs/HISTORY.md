@@ -1,5 +1,30 @@
 # sqlvibe Release History
 
+## **v0.9.4** (2026-02-23)
+
+### Features
+- **Partial Index** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `CREATE INDEX ... WHERE expr` is now parsed and enforced — only rows satisfying the WHERE condition are added to the index, reducing index size and improving write performance on filtered data.
+- **Expression Index** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `CREATE INDEX ON table(LOWER(col))` and other function-based index expressions are now supported. The index key is computed by evaluating the expression at INSERT/UPDATE time.
+- **RETURNING clause** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `INSERT/UPDATE/DELETE ... RETURNING *` or `RETURNING col1, col2` returns the affected rows as a result set, compatible with PostgreSQL and SQLite 3.35+.
+- **UPDATE ... FROM** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): PostgreSQL-style multi-table UPDATE — `UPDATE t1 SET col = t2.val FROM t2 WHERE t1.id = t2.id` — is now supported via a nested loop join.
+- **DELETE ... USING** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): Multi-table DELETE — `DELETE FROM t1 USING t2 WHERE t1.fk = t2.id` — is now supported.
+- **MATCH operator** (`internal/QP/tokenizer.go`, `internal/QP/parser.go`, `internal/VM/exec.go`, `internal/CG/expr.go`): `col MATCH 'pattern'` performs case-insensitive substring search (contains). `TokenMatch`/`OpMatch` added to the tokenizer, parser, code generator, and VM evaluator.
+- **COLLATE support** (`internal/QP/tokenizer.go`, `internal/QP/parser.go`, `internal/VM/exec.go`): Column-level `COLLATE NOCASE/RTRIM/BINARY` in `CREATE TABLE` and `ALTER TABLE ADD COLUMN`. `CollateExpr` AST node and `applyCollation` VM helper added.
+- **RETURNING keyword** recognized as a top-level SQL keyword in the tokenizer, enabling correct parsing without identifier collision.
+
+### Testing
+- **F876 test suite** (`internal/TS/SQL1999/F876/01_test.go`): 9 test functions covering partial index, expression index, INSERT/UPDATE/DELETE RETURNING, UPDATE...FROM, DELETE...USING, MATCH operator, COLLATE NOCASE, GLOB operator, and ALTER TABLE — validated against SQLite where applicable.
+- **E061/08 test updated**: MATCH test now validates sqlvibe's own substring-search implementation (sqlvibe intentionally diverges from SQLite's FTS-only MATCH restriction).
+
+### Performance (v0.9.4, AMD EPYC 7763, -benchtime=3s)
+- SELECT all (3 cols, 1K rows): **61 µs** sqlvibe vs 571 µs SQLite — **9.3× faster**
+- SUM aggregate (1K rows): **20 µs** sqlvibe vs 68 µs SQLite — **3.3× faster**
+- GROUP BY (1K rows): **145 µs** sqlvibe vs 497 µs SQLite — **3.4× faster**
+- Result cache hit: **1.5 µs** (vs 571 µs SQLite — **381× faster**)
+- LIMIT 10 (10K rows, no ORDER BY): **9.5 µs** vs 119 µs SQLite — **12.5× faster**
+- INSERT OR REPLACE (conflict): **40 µs** per op
+- INSERT OR IGNORE (conflict): **9.7 µs** per op
+
 ## **v0.9.3** (2026-02-23)
 
 ### Features
