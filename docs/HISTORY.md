@@ -1,5 +1,30 @@
 # sqlvibe Release History
 
+## **v0.9.9** (2026-02-23)
+
+### Test Suite Expansion
+
+- **Track A: SQL:1999 Feature Tests**: Added F291_ARRAY (5 subquery tests), F301_GROUPING (5 GROUP BY tests), F871_MERGE (5 upsert/conflict-resolution tests).
+- **Track B: Edge Case Tests**: Added 8 new test suites covering NULL handling (B1_NULL), type conversion (B2_TYPECONV), numeric boundaries (B3_NUMERIC), string edge cases (B4_STRING), aggregation edge cases (B5_AGGREGATE), JOIN edge cases (B6_JOIN), subquery edge cases (B7_SUBQUERY), expression edge cases (B8_EXPRESSION). Total: 40+ edge case test functions.
+- **Track C: Complete SQL Standard Series**: Added 28 new test suites covering:
+  - **D series** (Data Types): D011 (VARCHAR), D012 (CHAR), D013 (BOOLEAN), D014 (DECIMAL), D015 (DATE/TIME), D016 (BLOB), D017 (INTERVAL)
+  - **G series** (General): G011 (Schema Definition), G013 (Information Schema)
+  - **I series** (Integrity): I011 (Referential), I012 (CHECK), I013 (UNIQUE), I014 (NOT NULL), I015 (PRIMARY KEY)
+  - **L series** (Language): L011 (Reserved Words), L012 (Identifiers), L013 (Expressions), L014 (Predicates), L015 (Functions)
+  - **N series** (NULL): N011 (NULL Comparison), N012 (NULL Logic), N013 (COALESCE), N014 (NULLIF), N015 (CAST NULL)
+  - **Q series** (Query): Q011 (SELECT Basic), Q021 (JOIN Syntax), Q031 (Subquery), Q041 (Set Operations), Q051 (GROUP BY), Q061 (ORDER BY)
+  - **R series** (Schema): R011 (CREATE TABLE), R012 (ALTER TABLE), R013 (DROP TABLE), R014 (CREATE INDEX), R015 (DROP INDEX)
+  - **T series** (Transaction): T011 (Transaction Basic), T012 (Savepoint), T013 (Autocommit)
+  - **V series** (Views): V011 (CREATE VIEW), V012 (DROP VIEW), V013 (Updatable View)
+  - **W series** (Window Functions): W011 (ROW_NUMBER), W012 (RANK/DENSE_RANK), W013 (NTILE), W014 (LAG/LEAD), W015 (FIRST/LAST VALUE), W016 (NTH_VALUE/aggregate windows)
+
+### Statistics
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Test Suites | ~92 | 149+ |
+| Test Functions | ~396 | 547+ |
+
 ## **v0.9.8** (2026-02-23)
 
 ### Bug Fixes
