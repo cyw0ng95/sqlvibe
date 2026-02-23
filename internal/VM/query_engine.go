@@ -656,6 +656,17 @@ func (qe *QueryEngine) evalValue(row map[string]interface{}, expr QP.Expr) inter
 		return qe.evalFuncCall(row, e)
 	case *QP.AliasExpr:
 		return qe.evalValue(row, e.Expr)
+	case *QP.CollateExpr:
+		val := qe.evalValue(row, e.Expr)
+		if s, ok := val.(string); ok {
+			switch strings.ToUpper(e.Collation) {
+			case "NOCASE":
+				return strings.ToUpper(s)
+			case "RTRIM":
+				return strings.TrimRight(s, " ")
+			}
+		}
+		return val
 	case *QP.CaseExpr:
 		return qe.evalCaseExpr(row, e)
 	case *QP.CastExpr:
