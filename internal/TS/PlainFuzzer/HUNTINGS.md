@@ -40,6 +40,23 @@ A record of bugs discovered through sqlvibe's PlainFuzzer - a SQL-native fuzzer 
 
 ---
 
+### Parser infinite loop in function argument parsing
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High (Denial of Service) |
+| **Type** | Infinite Loop |
+| **File** | `internal/QP/parser.go` |
+| **Function** | `parsePrimaryExpr` (function argument parsing loops) |
+| **Trigger SQL** | `SELECT MAX(0;` |
+| **Impact** | Parser hangs indefinitely |
+| **Root Cause** | Function argument parsing loops had no nil expression check and no unexpected token recovery. When given malformed input like `SELECT MAX(0;`, the parser would see `;` inside the parentheses and never advance, causing an infinite loop. |
+| **Fix** | Added nil expression check and unexpected token recovery to break out of the loop |
+| **Found By** | PlainFuzzer |
+| **Date** | 2026-02-23 |
+
+---
+
 ## Running the Fuzzer
 
 ```bash

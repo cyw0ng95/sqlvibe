@@ -2658,9 +2658,15 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				if err != nil {
 					return nil, err
 				}
+				if arg == nil {
+					break
+				}
 				args = append(args, arg)
 				if p.current().Type == TokenComma {
 					p.advance()
+				} else if p.current().Type != TokenRightParen {
+					// Unexpected token - try to recover by breaking
+					break
 				}
 			}
 			p.expect(TokenRightParen)
@@ -2720,9 +2726,14 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 					if err != nil {
 						return nil, err
 					}
+					if arg == nil {
+						break
+					}
 					args = append(args, arg)
 					if p.current().Type == TokenComma {
 						p.advance()
+					} else if p.current().Type != TokenRightParen {
+						break
 					}
 				}
 				p.expect(TokenRightParen)
