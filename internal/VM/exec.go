@@ -1806,16 +1806,22 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if cursor.Index < 0 || cursor.Index >= len(cursor.Data) {
 				return fmt.Errorf("OpUpdate: invalid cursor position %d", cursor.Index)
 			}
-			row := cursor.Data[cursor.Index]
+			oldRow := cursor.Data[cursor.Index]
 
-			// Update only the columns specified in SET clause
+			// Build an updated copy of the row instead of modifying in-place.
+			// This ensures that UpdateRow (and FK cascade checks inside it) can
+			// read the original "old" values from db.data before they are replaced.
+			updatedRow := make(map[string]interface{}, len(oldRow))
+			for k, v := range oldRow {
+				updatedRow[k] = v
+			}
 			for colName, regIdx := range setInfo {
-				row[colName] = vm.registers[regIdx]
+				updatedRow[colName] = vm.registers[regIdx]
 			}
 
 			// Update via context
 			if vm.ctx != nil {
-				err := vm.ctx.UpdateRow(cursor.TableName, cursor.Index, row)
+				err := vm.ctx.UpdateRow(cursor.TableName, cursor.Index, updatedRow)
 				if err != nil {
 					return err
 				}
@@ -3380,8 +3386,15 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 		}
 		return val
 	case *QP.BinaryExpr:
+		// When either side is a CollateExpr, apply that collation to both sides
+		// before comparing so that e.g. `name = 'alice' COLLATE NOCASE` works.
 		left := vm.evaluateExprOnRow(row, columns, e.Left)
 		right := vm.evaluateExprOnRow(row, columns, e.Right)
+		if ce, ok := e.Right.(*QP.CollateExpr); ok {
+			left = applyCollation(left, ce.Collation)
+		} else if ce, ok := e.Left.(*QP.CollateExpr); ok {
+			right = applyCollation(right, ce.Collation)
+		}
 		return vm.evaluateBinaryOp(left, right, e.Op)
 	case *QP.FuncCall:
 		return vm.evaluateFuncCallOnRow(row, columns, e)
@@ -3998,6 +4011,18 @@ func (vm *VM) evaluateBoolExprOnRow(row map[string]interface{}, columns []string
 				return false
 			}
 			return vmMatchLike(fmt.Sprintf("%v", left), fmt.Sprintf("%v", right))
+		case QP.TokenGlob:
+			left := vm.evaluateExprOnRow(row, columns, e.Left)
+			right := vm.evaluateExprOnRow(row, columns, e.Right)
+			if left == nil || right == nil {
+				return false
+			}
+			leftStr, leftOk := left.(string)
+			patStr, patOk := right.(string)
+			if !leftOk || !patOk {
+				return false
+			}
+			return globMatch(leftStr, patStr)
 		case QP.TokenNotLike:
 			left := vm.evaluateExprOnRow(row, columns, e.Left)
 			right := vm.evaluateExprOnRow(row, columns, e.Right)
@@ -4295,6 +4320,13 @@ func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interfa
 				return true
 			}
 			return false
+		}
+		return false
+	case QP.TokenGlob:
+		lStr, lok := left.(string)
+		rStr, rok := right.(string)
+		if lok && rok {
+			return globMatch(lStr, rStr)
 		}
 		return false
 	default:

@@ -1495,10 +1495,26 @@ func (db *Database) checkUniqueIndexes(tableName string, row map[string]interfac
 		var key interface{}
 		if len(idx.Columns) == 1 {
 			key = normalizeIndexKey(row[idx.Columns[0]])
+			// SQLite semantics: NULL is never equal to NULL, so a NULL value in a
+			// UNIQUE column does not violate the constraint.
+			if key == nil {
+				continue
+			}
 		} else {
+			// For composite UNIQUE indexes, if ANY component is NULL the constraint
+			// is not enforced (NULL != NULL per SQL standard).
+			hasNull := false
 			parts := make([]interface{}, len(idx.Columns))
 			for i, c := range idx.Columns {
-				parts[i] = row[c]
+				v := row[c]
+				if v == nil {
+					hasNull = true
+					break
+				}
+				parts[i] = v
+			}
+			if hasNull {
+				continue
 			}
 			key = fmt.Sprintf("%v", parts)
 		}
@@ -1567,6 +1583,25 @@ func (db *Database) buildPKHashSet(tableName string) {
 	db.pkHashSet[tableName] = set
 }
 
+// buildIndexKey returns the index key for a row.  Single-column (or expression)
+// indexes return the raw normalised value; composite indexes return a
+// fmt.Sprintf("%v", parts) string that matches the key format used in
+// checkUniqueIndexes, buildIndexData, indexAdd, and removeFromIndexes.
+func (db *Database) buildIndexKey(idx *IndexInfo, row map[string]interface{}) interface{} {
+	if len(idx.Exprs) > 0 && idx.Exprs[0] != nil {
+		return normalizeIndexKey(db.engine.EvalExpr(row, idx.Exprs[0]))
+	}
+	if len(idx.Columns) == 1 {
+		return normalizeIndexKey(row[idx.Columns[0]])
+	}
+	// Composite key: same format as checkUniqueIndexes.
+	parts := make([]interface{}, len(idx.Columns))
+	for i, c := range idx.Columns {
+		parts[i] = row[c]
+	}
+	return fmt.Sprintf("%v", parts)
+}
+
 // buildIndexData builds the hash index for a single secondary index from current data.
 func (db *Database) buildIndexData(indexName string) {
 	idx := db.indexes[indexName]
@@ -1580,12 +1615,7 @@ func (db *Database) buildIndexData(indexName string) {
 		if idx.WhereExpr != nil && !isTruthy(db.evalExprOnMap(idx.WhereExpr, row)) {
 			continue
 		}
-		var key interface{}
-		if len(idx.Exprs) > 0 && idx.Exprs[0] != nil {
-			key = normalizeIndexKey(db.engine.EvalExpr(row, idx.Exprs[0]))
-		} else {
-			key = normalizeIndexKey(row[idx.Columns[0]])
-		}
+		key := db.buildIndexKey(idx, row)
 		hmap[key] = append(hmap[key], i)
 	}
 	db.indexData[indexName] = hmap
@@ -1605,22 +1635,22 @@ func (db *Database) indexAdd(indexName string, rowIdx int, row map[string]interf
 	if hmap == nil {
 		return
 	}
-	var key interface{}
-	if len(idx.Exprs) > 0 && idx.Exprs[0] != nil {
-		key = normalizeIndexKey(db.engine.EvalExpr(row, idx.Exprs[0]))
-	} else {
-		key = normalizeIndexKey(row[idx.Columns[0]])
-	}
+	key := db.buildIndexKey(idx, row)
 	hmap[key] = append(hmap[key], rowIdx)
 }
 
 // indexRemove removes a specific row index from the secondary hash index entry.
-func (db *Database) indexRemove(indexName string, rowIdx int, colValue interface{}) {
+// row is the full row map; the index key is computed via buildIndexKey.
+func (db *Database) indexRemove(indexName string, rowIdx int, row map[string]interface{}) {
+	idx := db.indexes[indexName]
+	if idx == nil {
+		return
+	}
 	hmap := db.indexData[indexName]
 	if hmap == nil {
 		return
 	}
-	key := normalizeIndexKey(colValue)
+	key := db.buildIndexKey(idx, row)
 	entries := hmap[key]
 	for i, e := range entries {
 		if e == rowIdx {
@@ -1664,7 +1694,7 @@ func (db *Database) removeFromIndexes(tableName string, row map[string]interface
 	for idxName, idx := range db.indexes {
 		if idx.Table == tableName && len(idx.Columns) > 0 {
 			if db.indexData[idxName] != nil {
-				db.indexRemove(idxName, rowIdx, row[idx.Columns[0]])
+				db.indexRemove(idxName, rowIdx, row)
 				db.indexShiftDown(idxName, rowIdx)
 			}
 		}
@@ -1680,7 +1710,7 @@ func (db *Database) updateIndexes(tableName string, oldRow, newRow map[string]in
 	for idxName, idx := range db.indexes {
 		if idx.Table == tableName && len(idx.Columns) > 0 && db.indexData[idxName] != nil {
 			if oldRow != nil {
-				db.indexRemove(idxName, rowIdx, oldRow[idx.Columns[0]])
+				db.indexRemove(idxName, rowIdx, oldRow)
 			}
 			db.indexAdd(idxName, rowIdx, newRow)
 		}
@@ -3790,15 +3820,22 @@ func (db *Database) execInsertOrReplace(stmt *QP.InsertStmt) (Result, error) {
 			return Result{}, err
 		}
 
-		// Conflict: delete matching row(s) and re-insert.
-		pkCols := db.primaryKeys[tableName]
-		if len(pkCols) == 0 {
-			// No primary key — delete all rows matching the unique columns present.
-			pkCols = insertCols
+		// Conflict: determine which columns caused the violation, delete
+		// the conflicting row(s), then re-insert.
+		// Parse conflict columns from the error message:
+		//   "UNIQUE constraint failed: table.col1, table.col2"
+		conflictCols := parseUniqueConflictCols(err.Error())
+		if len(conflictCols) == 0 {
+			// Fall back to primary key columns when the error cannot be parsed.
+			conflictCols = db.primaryKeys[tableName]
+		}
+		if len(conflictCols) == 0 {
+			// No primary key — delete all rows matching the inserted columns.
+			conflictCols = insertCols
 		}
 
-		whereParts := make([]string, 0, len(pkCols))
-		for _, col := range pkCols {
+		whereParts := make([]string, 0, len(conflictCols))
+		for _, col := range conflictCols {
 			if val, ok := colVals[col]; ok {
 				whereParts = append(whereParts, fmt.Sprintf("%s = %s", col, val))
 			}
@@ -3872,6 +3909,26 @@ func (db *Database) execInsertOrIgnore(stmt *QP.InsertStmt) (Result, error) {
 	}
 
 	return Result{RowsAffected: affected}, nil
+}
+
+// parseUniqueConflictCols extracts the column names from a UNIQUE constraint
+// failed error message of the form "UNIQUE constraint failed: tbl.col1, tbl.col2".
+// Returns nil when the message does not match the expected format.
+func parseUniqueConflictCols(errMsg string) []string {
+	const prefix = "UNIQUE constraint failed: "
+	if !strings.HasPrefix(errMsg, prefix) {
+		return nil
+	}
+	refs := strings.Split(errMsg[len(prefix):], ", ")
+	cols := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if dot := strings.LastIndex(ref, "."); dot >= 0 {
+			cols = append(cols, ref[dot+1:])
+		} else if ref != "" {
+			cols = append(cols, ref)
+		}
+	}
+	return cols
 }
 
 // resolveExcluded converts an expression to SQL, replacing excluded.col references
@@ -3951,9 +4008,11 @@ func substituteAliasExpr(expr QP.Expr, aliasMap map[string]QP.Expr) QP.Expr {
 func (db *Database) projectReturning(returning []QP.Expr, rows []map[string]interface{}, tableCols []string) (*Rows, error) {
 	// Determine column names
 	var colNames []string
-	allCols := len(returning) == 1
-	if colRef, ok := returning[0].(*QP.ColumnRef); ok && colRef.Name == "*" {
-		allCols = true
+	allCols := false
+	if len(returning) == 1 {
+		if colRef, ok := returning[0].(*QP.ColumnRef); ok && colRef.Name == "*" {
+			allCols = true
+		}
 	}
 
 	if allCols {

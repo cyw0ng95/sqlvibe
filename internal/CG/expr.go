@@ -171,8 +171,40 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		}
 	}
 
-	leftReg := c.compileExpr(expr.Left)
-	rightReg := c.compileExpr(expr.Right)
+	// Detect COLLATE on either operand; compile the inner expression (not the
+	// CollateExpr wrapper) and apply the collation transform to both compiled
+	// values so that comparisons are collation-aware at the bytecode level.
+	var collation string
+	leftExpr := QP.Expr(expr.Left)
+	rightExpr := QP.Expr(expr.Right)
+	if ce, ok := rightExpr.(*QP.CollateExpr); ok {
+		collation = ce.Collation
+		rightExpr = ce.Expr
+	} else if ce, ok := leftExpr.(*QP.CollateExpr); ok {
+		collation = ce.Collation
+		leftExpr = ce.Expr
+	}
+
+	leftReg := c.compileExpr(leftExpr)
+	rightReg := c.compileExpr(rightExpr)
+
+	// Apply collation transform to both operands.
+	if collation != "" {
+		switch strings.ToUpper(collation) {
+		case "NOCASE":
+			lc := c.ra.Alloc()
+			c.program.EmitOpWithDst(VM.OpUpper, int32(leftReg), 0, lc)
+			rc := c.ra.Alloc()
+			c.program.EmitOpWithDst(VM.OpUpper, int32(rightReg), 0, rc)
+			leftReg, rightReg = lc, rc
+		case "RTRIM":
+			lc := c.ra.Alloc()
+			c.program.EmitOpWithDst(VM.OpRTrim, int32(leftReg), 0, lc)
+			rc := c.ra.Alloc()
+			c.program.EmitOpWithDst(VM.OpRTrim, int32(rightReg), 0, rc)
+			leftReg, rightReg = lc, rc
+		}
+	}
 
 	dst := c.ra.Alloc()
 

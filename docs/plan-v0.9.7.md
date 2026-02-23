@@ -132,14 +132,14 @@ Deep testing of v0.9.3-v0.9.6 new features with focus on boundary conditions.
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| E1 tests created | 10+ | [ ] |
-| E2 tests created | 10+ | [ ] |
-| E3 tests created | 10+ | [ ] |
-| E4 tests created | 10+ | [ ] |
-| E5 tests created | 10+ | [ ] |
-| E6 tests created | 10+ | [ ] |
-| All tests pass | 100% | [ ] |
-| Bugs found & fixed | TBD | [ ] |
+| E1 tests created | 10+ | [x] |
+| E2 tests created | 10+ | [x] |
+| E3 tests created | 10+ | [x] |
+| E4 tests created | 10+ | [x] |
+| E5 tests created | 10+ | [x] |
+| E6 tests created | 10+ | [x] |
+| All tests pass | 100% | [x] |
+| Bugs found & fixed | 8 | [x] |
 
 ---
 

@@ -2481,7 +2481,7 @@ func (p *Parser) parseUnaryExpr() (Expr, error) {
 		return &UnaryExpr{Op: op, Expr: expr}, nil
 	}
 
-	return p.parsePrimaryExpr()
+	return p.parsePrimaryExprWithCollate()
 }
 
 // parsePrimaryExprWithCollate parses a primary expression optionally followed by COLLATE name

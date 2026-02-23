@@ -1,6 +1,21 @@
 # sqlvibe Release History
 
-## **v0.9.6** (2026-02-23)
+## **v0.9.7** (2026-02-23)
+
+### Bug Fixes
+- **GLOB in aggregate WHERE clauses** (`internal/VM/exec.go`): `SELECT COUNT(*) FROM t WHERE col GLOB '*.txt'` now correctly filters rows. Root cause: `evaluateBoolExprOnRow` had no `TokenGlob` case and fell through to `evaluateBinaryOp` which also lacked `TokenGlob` support.
+- **COLLATE NOCASE in WHERE/ORDER BY** (`internal/QP/parser.go`, `internal/CG/expr.go`, `internal/VM/query_engine.go`): `WHERE name = 'alice' COLLATE NOCASE` and `ORDER BY name COLLATE NOCASE` now work. Root cause: `parseUnaryExpr` called `parsePrimaryExpr` instead of `parsePrimaryExprWithCollate`, so `COLLATE` tokens were ignored; CG had no `CollateExpr` handling; `evalValue` in query_engine.go had no `CollateExpr` case.
+- **FK CASCADE UPDATE** (`internal/VM/exec.go`): `UPDATE parent SET id = 99` now correctly cascades to child rows with `ON UPDATE CASCADE`. Root cause: `OpUpdate` modified the row map in-place before calling `UpdateRow`, so FK checks saw identical old/new rows and skipped the cascade.
+- **RETURNING with single non-`*` expression** (`pkg/sqlvibe/database.go`): `INSERT INTO t VALUES (...) RETURNING v * 2` now returns the computed expression value. Root cause: `allCols` was incorrectly set to `true` for any single RETURNING expression, not just `RETURNING *`.
+- **NULL values in UNIQUE columns** (`pkg/sqlvibe/database.go`): Multiple `NULL` values are now allowed in a `UNIQUE` column, matching SQLite semantics (`NULL != NULL`). Root cause: `checkUniqueIndexes` did not skip NULL keys before checking for conflicts.
+- **Deep FK CASCADE DELETE (3+ levels)** (`pkg/sqlvibe/fk_trigger.go`): Deleting a grandparent row now cascades correctly through 3+ levels of `ON DELETE CASCADE`. Root cause: `cascadeDelete` did not recursively call `checkFKOnDelete` on the child rows being deleted.
+- **INSERT OR REPLACE with non-PK UNIQUE conflict** (`pkg/sqlvibe/database.go`): `INSERT OR REPLACE` now resolves conflicts on non-primary-key `UNIQUE` columns. Root cause: conflict resolution used only PK columns in the `DELETE` WHERE clause, ignoring the conflicting UNIQUE column values.
+- **Composite UNIQUE index key inconsistency** (`pkg/sqlvibe/database.go`): `UNIQUE(a, b)` table-level constraints are now correctly enforced for `INSERT` and `INSERT OR REPLACE`. Root cause: `buildIndexData`/`indexAdd`/`indexRemove` all used only the first column as the hash key for composite indexes, while `checkUniqueIndexes` built a composite key string.
+
+### Testing
+- **E-series edge-case regression suite** (`internal/TS/Regression/regression_v0.9.7_test.go`): 60+ tests across 6 categories — INSERT edge cases (E1), RETURNING expressions (E2), FK cascade (E3), COLLATE (E4), MATCH/GLOB (E5), transaction savepoints (E6). All validated against expected SQLite behaviour.
+
+
 
 ### Features
 - **SAVEPOINT** (`internal/QP/tokenizer.go`, `internal/QP/parser.go`, `pkg/sqlvibe/savepoint.go`, `pkg/sqlvibe/database.go`): `SAVEPOINT name` creates a named savepoint within a transaction, capturing the current database state.

@@ -183,10 +183,16 @@ func (db *Database) cascadeDelete(childTable string, fk QP.ForeignKeyConstraint,
 			toDelete = append(toDelete, i)
 		}
 	}
-	// Delete in reverse order to keep indices valid
+	// Delete in reverse order to keep indices valid.
+	// Before removing each row, recursively cascade to its own children.
 	for i := len(toDelete) - 1; i >= 0; i-- {
 		idx := toDelete[i]
 		row := db.data[childTable][idx]
+		// Recursively enforce FK constraints on the child being deleted
+		// (handles 3+ level ON DELETE CASCADE chains).
+		if err := db.checkFKOnDelete(childTable, row); err != nil {
+			return err
+		}
 		db.removeFromIndexes(childTable, row, idx)
 		db.data[childTable] = append(db.data[childTable][:idx], db.data[childTable][idx+1:]...)
 	}
