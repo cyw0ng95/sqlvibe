@@ -1,6 +1,6 @@
 # sqlvibe Release History
 
-## **v0.9.4** (2026-03-01)
+## **v0.9.4** (2026-02-23)
 
 ### Features
 - **Partial Index** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `CREATE INDEX ... WHERE expr` is now parsed and enforced — only rows satisfying the WHERE condition are added to the index, reducing index size and improving write performance on filtered data.
@@ -16,7 +16,16 @@
 - **F876 test suite** (`internal/TS/SQL1999/F876/01_test.go`): 9 test functions covering partial index, expression index, INSERT/UPDATE/DELETE RETURNING, UPDATE...FROM, DELETE...USING, MATCH operator, COLLATE NOCASE, GLOB operator, and ALTER TABLE — validated against SQLite where applicable.
 - **E061/08 test updated**: MATCH test now validates sqlvibe's own substring-search implementation (sqlvibe intentionally diverges from SQLite's FTS-only MATCH restriction).
 
+### Performance (v0.9.4, AMD EPYC 7763, -benchtime=3s)
+- SELECT all (3 cols, 1K rows): **61 µs** sqlvibe vs 571 µs SQLite — **9.3× faster**
+- SUM aggregate (1K rows): **20 µs** sqlvibe vs 68 µs SQLite — **3.3× faster**
+- GROUP BY (1K rows): **145 µs** sqlvibe vs 497 µs SQLite — **3.4× faster**
+- Result cache hit: **1.5 µs** (vs 571 µs SQLite — **381× faster**)
+- LIMIT 10 (10K rows, no ORDER BY): **9.5 µs** vs 119 µs SQLite — **12.5× faster**
+- INSERT OR REPLACE (conflict): **40 µs** per op
+- INSERT OR IGNORE (conflict): **9.7 µs** per op
 
+## **v0.9.3** (2026-02-23)
 
 ### Features
 - **INSERT OR REPLACE** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `INSERT OR REPLACE INTO tbl ...` now parses correctly and executes conflict-safe replace semantics — existing rows matching PK/UNIQUE constraints are deleted before the new row is inserted, fully matching SQLite behaviour.
