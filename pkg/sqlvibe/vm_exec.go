@@ -9,9 +9,7 @@ import (
 	"github.com/cyw0ng95/sqlvibe/internal/CG"
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
-	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 	"github.com/cyw0ng95/sqlvibe/internal/VM"
-
 )
 
 func (db *Database) ExecVM(sql string) (*Rows, error) {
@@ -1310,8 +1308,12 @@ func exprToSQL(expr QP.Expr) string {
 }
 
 func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
-	util.Assert(sql != "", "sql cannot be empty")
-	util.Assert(tableName != "", "tableName cannot be empty")
+	if sql == "" {
+		return Result{}, fmt.Errorf("sql cannot be empty")
+	}
+	if tableName == "" {
+		return Result{}, fmt.Errorf("tableName cannot be empty")
+	}
 	// Check if table exists (strip schema prefix if present)
 	checkName := tableName
 	if idx := strings.Index(tableName, "."); idx >= 0 {
