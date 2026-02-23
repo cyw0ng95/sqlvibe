@@ -1,8 +1,8 @@
-# Plan v0.9.9 - Test Suite Enhancement & Edge Cases
+# Plan v0.9.9 - Test Suite Enhancement & Complete SQL Standard Coverage
 
 ## Summary
 
-This version focuses on expanding SQL:1999 test suite coverage with comprehensive edge cases to ensure robust behavior in boundary conditions.
+This version focuses on expanding SQL:1999 test suite coverage with comprehensive edge cases and adds support for all SQL standard test series (E, F, B, C, D, G, I, J, K, L, N, O, P, Q, R, S, T, V, W).
 
 ---
 
@@ -180,6 +180,152 @@ Add extensive edge case tests organized by SQL:1999 feature packages.
 
 ---
 
+## Track C: Complete SQL Standard Test Series
+
+### Goal
+
+Add support for all SQL standard test series beyond E and F.
+
+### Series Overview
+
+| Series | Description | Priority | Status |
+|--------|-------------|----------|--------|
+| **B** | SQL/CLI (Call Level Interface) | Low | [ ] |
+| **C** | SQL/Compatibility | Low | [ ] |
+| **D** | SQL/Data Types | High | [ ] |
+| **G** | SQL/General Features | Medium | [ ] |
+| **I** | SQL/Integrity Enhancement | Medium | [ ] |
+| **J** | SQL/PSM (Persistent Stored Modules) | Low | [ ] |
+| **K** | SQL/Key and Locking | Low | [ ] |
+| **L** | SQL/Language Elements | High | [ ] |
+| **N** | SQL/NULL | High | [ ] |
+| **O** | SQL/Object | Medium | [ ] |
+| **P** | SQL/PSM (Procedural) | Low | [ ] |
+| **Q** | SQL/Query | High | [ ] |
+| **R** | SQL/Schema (Reference) | Medium | [ ] |
+| **T** | SQL/Transaction | High | [ ] |
+| **V** | SQL/Views | Medium | [ ] |
+| **W** | SQL/Window Functions | High | [ ] |
+
+### C1: D Series - Data Types
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| C1.1 | D011_Varchar | VARCHAR type support | High |
+| C1.2 | D012_Char | CHAR type and padding | High |
+| C1.3 | D013_Boolean | BOOLEAN type | High |
+| C1.4 | D014_Decimal | DECIMAL/NUMERIC type | High |
+| C1.5 | D015_DateTime | DATE, TIME, TIMESTAMP types | High |
+| C1.6 | D016_Blob | BLOB/BINARY types | Medium |
+| C1.7 | D017_Interval | INTERVAL type | Medium |
+
+### C2: G Series - General Features
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| C2.1 | G011_SchemaDefinition | CREATE/ALTER/DROP SCHEMA | Medium |
+| C2.2 | G012_Catalog | Catalog operations | Low |
+| C2.3 | G013_InformationSchema | INFORMATION_SCHEMA views | High |
+
+### C3: I Series - Integrity Enhancement
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| C3.1 | I011_Referential | Foreign key constraints | High |
+| C3.2 | I012_CheckConstraint | CHECK constraints | High |
+| C3.3 | I013_UniqueConstraint | UNIQUE constraints | High |
+| C3.4 | I014_NotNullConstraint | NOT NULL constraints | High |
+| C3.5 | I015_PrimaryKey | PRIMARY KEY constraints | High |
+
+### C4: L Series - Language Elements
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| C4.1 | L011_ReservedWords | SQL reserved words | High |
+| C4.2 | L012_Identifiers | Identifier rules (quoted, delimited) | High |
+| C4.3 | L013_Expressions | Expression syntax | High |
+| C4.4 | L014_Predicates | Comparison predicates | High |
+| C4.5 | L015_Functions | Scalar and aggregate functions | High |
+
+### C5: N Series - NULL Handling
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| C5.1 | N011_NullComparison | IS NULL, IS NOT NULL | High |
+| C5.2 | N012_NullLogic | NULL in AND/OR/NOT | High |
+| C5.3 | N013_NullCoalesce | COALESCE function | High |
+| C5.4 | N014_NullIf | NULLIF function | High |
+| C5.5 | N015_NullCast | CAST NULL behavior | High |
+
+### C6: Q Series - Query
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| Q1.1 | Q011_SelectBasic | Basic SELECT | High |
+| Q2.1 | Q021_JoinSyntax | JOIN syntax variants | High |
+| Q3.1 | Q031_Subquery | Subqueries | High |
+| Q4.1 | Q041_SetOperations | UNION, INTERSECT, EXCEPT | High |
+| Q5.1 | Q051_GroupBy | GROUP BY, HAVING | High |
+| Q6.1 | Q061_OrderBy | ORDER BY | High |
+
+### C7: R Series - Schema
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| C7.1 | R011_CreateTable | CREATE TABLE | High |
+| C7.2 | R012_AlterTable | ALTER TABLE | High |
+| C7.3 | R013_DropTable | DROP TABLE | High |
+| C7.4 | R014_CreateIndex | CREATE INDEX | High |
+| C7.5 | R015_DropIndex | DROP INDEX | High |
+
+### C8: T Series - Transaction
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| C8.1 | T011_TransactionBasic | BEGIN/COMMIT/ROLLBACK | High |
+| C8.2 | T012_Savepoint | SAVEPOINT support | High |
+| C8.3 | T013_Autocommit | Autocommit behavior | Medium |
+| C8.4 | T014_Isolation | Transaction isolation levels | Medium |
+| C8.5 | T015_DeferredConstraint | Deferred constraints | Medium |
+
+### C9: V Series - Views
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| C9.1 | V011_CreateView | CREATE VIEW | High |
+| C9.2 | V012_DropView | DROP VIEW | High |
+| C9.3 | V013_UpdatableView | Updatable views | Medium |
+| C9.4 | V014_RecursiveView | Recursive views | Medium |
+
+### C10: W Series - Window Functions
+
+| # | Test | Description | Priority |
+|---|------|-------------|----------|
+| C10.1 | W011_RowNumber | ROW_NUMBER() | High |
+| C10.2 | W012_Rank | RANK(), DENSE_RANK() | High |
+| C10.3 | W013_Ntile | NTILE() | Medium |
+| C10.4 | W014_LagLead | LAG(), LEAD() | High |
+| C10.5 | W015_FirstLast | FIRST_VALUE(), LAST_VALUE() | High |
+| C10.6 | W016_NthValue | NTH_VALUE() | Medium |
+
+### Success Criteria
+
+| Series | Tests Target | Status |
+|--------|--------------|--------|
+| D - Data Types | 7+ | [ ] |
+| G - General | 3+ | [ ] |
+| I - Integrity | 5+ | [ ] |
+| L - Language | 5+ | [ ] |
+| N - NULL | 5+ | [ ] |
+| Q - Query | 6+ | [ ] |
+| R - Schema | 5+ | [ ] |
+| T - Transaction | 5+ | [ ] |
+| V - Views | 4+ | [ ] |
+| W - Window | 6+ | [ ] |
+| All new tests pass | 100% | [ ] |
+
+---
+
 ## Implementation DAG
 
 ```mermaid
@@ -190,14 +336,25 @@ graph TD
     A4[A4: Grouping Sets<br/>F301] --> E[E: Bug Fixes]
     A5 --> E
     
-    B1[B1: NULL Cases<br/>E011, E021, E101, F031] --> B8[B8: Expression Cases<br/>F031, F051]
-    B2[B2: Type Cases<br/>E011, E021, F031] --> B8
-    B3[B3: Numeric Cases<br/>E011, F031] --> B8
-    B4[B4: String Cases<br/>E021, F261] --> B8
-    B5[B5: Aggregation Cases<br/>E101, F401] --> B8
-    B6[B6: JOIN Cases<br/>F401, F411] --> B8
-    B7[B7: Subquery Cases<br/>F261, F291] --> B8
+    B1[B1: NULL Cases] --> B8[B8: Expression Cases]
+    B2[B2: Type Cases] --> B8
+    B3[B3: Numeric Cases] --> B8
+    B4[B4: String Cases] --> B8
+    B5[B5: Aggregation Cases] --> B8
+    B6[B6: JOIN Cases] --> B8
+    B7[B7: Subquery Cases] --> B8
     B8 --> E
+    
+    C1[D: Data Types] --> C10[W: Window Functions]
+    C2[G: General] --> C10
+    C3[I: Integrity] --> C10
+    C4[L: Language] --> C10
+    C5[N: NULL] --> C10
+    C6[Q: Query] --> C10
+    C7[R: Schema] --> C10
+    C8[T: Transaction] --> C10
+    C9[V: Views] --> C10
+    C10 --> E
 ```
 
 ---
@@ -208,10 +365,11 @@ graph TD
 |-------|-------|-------|
 | A: SQL:1999 Features | A1-A5 | 12h |
 | B: Edge Cases | B1-B8 | 20h |
-| Bug Fixes | As discovered | 8h |
-| Testing & Documentation | All tracks | 4h |
+| C: Complete Series | C1-C10 | 24h |
+| Bug Fixes | As discovered | 10h |
+| Testing & Documentation | All tracks | 6h |
 
-**Total:** ~44 hours
+**Total:** ~72 hours
 
 ---
 
@@ -228,41 +386,30 @@ graph TD
 |--------|--------|
 | New SQL:1999 tests | +15 |
 | New edge case tests | +48 |
-| Total test functions | 450+ |
+| New series tests | +51 |
+| Total test functions | 500+ |
 | All tests passing | 100% |
 
 ---
 
 ## Test Package Organization
 
-All edge case tests must be organized within existing feature packages:
+Complete test series to add:
 
 ```
 internal/TS/SQL1999/
-├── E011/                    # Add numeric edge cases
-│   └── *_test.go            # Type, Numeric, Overflow tests
-├── E021/                    # Add string/NULL edge cases  
-│   └── *_test.go            # Type, String, NULL tests
-├── E101/                    # Add aggregation edge cases
-│   └── *_test.go            # Aggregation, NULL tests
-├── F031/                    # Add expression edge cases
-│   └── *_test.go            # Expression, NULL, Type tests
-├── F051/                    # Add query result edge cases
-│   └── *__test.go           # DISTINCT, ORDER, Expression tests
-├── F261/                    # Add string/subquery tests
-│   └── *_test.go            # String, Subquery tests
-├── F291/                    # Add subquery edge cases
-│   └── *_test.go            # Subquery edge tests
-├── F301/                    # Add STRUCT, GROUPING SETS
-│   └── *_test.go            # STRUCT, GROUPING tests
-├── F401/                    # Add aggregation/JOIN edge
-│   └── *_test.go            # Aggregation, JOIN tests
-├── F411/                    # Add JOIN edge cases
-│   └── *_test.go            # JOIN edge tests
-├── F871/                    # Add MERGE tests
-│   └── *_test.go            # MERGE tests
-└── F291/                    # Add ARRAY tests (new directory)
-    └── *_test.go            # ARRAY tests
+├── E011-E171      # Existing: Embedded SQL - Numeric
+├── F011-F900      # Existing: Functional tests
+├── D011-D017     # NEW: Data Types
+├── G011-G013     # NEW: General Features
+├── I011-I015     # NEW: Integrity Enhancement
+├── L011-L015     # NEW: Language Elements
+├── N011-N015     # NEW: NULL Handling
+├── Q011-Q061     # NEW: Query
+├── R011-R015     # NEW: Schema
+├── T011-T015     # NEW: Transaction
+├── V011-V014     # NEW: Views
+└── W011-W016     # NEW: Window Functions
 ```
 
 ---
@@ -282,21 +429,37 @@ internal/TS/SQL1999/
 - `internal/TS/SQL1999/F411/` - Add JOIN edge cases
 - `internal/TS/SQL1999/F871/` - Add MERGE tests
 
+### New Test Packages
+- `internal/TS/SQL1999/D011-D017/` - Data Types
+- `internal/TS/SQL1999/G011-G013/` - General Features
+- `internal/TS/SQL1999/I011-I015/` - Integrity
+- `internal/TS/SQL1999/L011-L015/` - Language Elements
+- `internal/TS/SQL1999/N011-N015/` - NULL Handling
+- `internal/TS/SQL1999/Q011-Q061/` - Query
+- `internal/TS/SQL1999/R011-R015/` - Schema
+- `internal/TS/SQL1999/T011-T015/` - Transaction
+- `internal/TS/SQL1999/V011-V014/` - Views
+- `internal/TS/SQL1999/W011-W016/` - Window Functions
+
 ---
 
 ## Test Coverage Summary
 
 After v0.9.9:
 
-| Category | Before | After |
-|----------|--------|-------|
-| SQL:1999 Test Suites | 92 | 93 |
-| Test Functions | 396 | 440+ |
-| NULL Edge Cases | Partial | Complete (8+) |
-| Type Conversion | Basic | Complete (6+) |
-| Numeric Boundaries | Basic | Complete (6+) |
-| String Edge Cases | Basic | Complete (6+) |
-| Aggregation Edge | Basic | Complete (6+) |
-| JOIN Edge | Basic | Complete (6+) |
-| Subquery Edge | Basic | Complete (5+) |
-| Expression Edge | Basic | Complete (5+) |
+| Series | Before | After |
+|--------|--------|-------|
+| E - Embedded SQL | 17 | 17+ |
+| F - Functional | 75 | 80+ |
+| D - Data Types | 0 | 7+ |
+| G - General | 0 | 3+ |
+| I - Integrity | 0 | 5+ |
+| L - Language | 0 | 5+ |
+| N - NULL | 0 | 5+ |
+| Q - Query | 0 | 6+ |
+| R - Schema | 0 | 5+ |
+| T - Transaction | 0 | 5+ |
+| V - Views | 0 | 4+ |
+| W - Window Functions | 6 | 12+ |
+| **Total Test Suites** | **92** | **115+** |
+| **Total Test Functions** | **396** | **500+** |
