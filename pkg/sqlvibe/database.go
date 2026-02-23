@@ -211,10 +211,12 @@ func (db *Database) restoreSnapshot(snap *dbSnapshot) {
 }
 
 type IndexInfo struct {
-	Name    string
-	Table   string
-	Columns []string
-	Unique  bool
+	Name      string
+	Table     string
+	Columns   []string
+	Exprs     []QP.Expr // parallel to Columns; non-nil means expression index
+	Unique    bool
+	WhereExpr QP.Expr   // non-nil for partial index
 }
 
 type Conn interface {
@@ -609,14 +611,26 @@ func (db *Database) Exec(sql string) (Result, error) {
 		return result, err
 	case "UpdateStmt":
 		stmt := ast.(*QP.UpdateStmt)
-		result, err := db.execVMDML(sql, stmt.Table)
+		var result Result
+		var err error
+		if stmt.From != nil {
+			result, err = db.execUpdateFrom(stmt)
+		} else {
+			result, err = db.execVMDML(sql, stmt.Table)
+		}
 		if err == nil {
 			db.invalidateWriteCaches()
 		}
 		return result, err
 	case "DeleteStmt":
 		stmt := ast.(*QP.DeleteStmt)
-		result, err := db.execVMDML(sql, stmt.Table)
+		var result Result
+		var err error
+		if len(stmt.Using) > 0 {
+			result, err = db.execDeleteUsing(stmt)
+		} else {
+			result, err = db.execVMDML(sql, stmt.Table)
+		}
 		if err == nil {
 			db.invalidateWriteCaches()
 		}
@@ -684,10 +698,12 @@ func (db *Database) Exec(sql string) (Result, error) {
 			return Result{}, fmt.Errorf("table %s does not exist", stmt.Table)
 		}
 		db.indexes[stmt.Name] = &IndexInfo{
-			Name:    stmt.Name,
-			Table:   stmt.Table,
-			Columns: stmt.Columns,
-			Unique:  stmt.Unique,
+			Name:      stmt.Name,
+			Table:     stmt.Table,
+			Columns:   stmt.Columns,
+			Exprs:     stmt.Exprs,
+			Unique:    stmt.Unique,
+			WhereExpr: stmt.WhereExpr,
 		}
 		// Build hash index immediately from existing table data.
 		db.buildIndexData(stmt.Name)
@@ -1093,7 +1109,22 @@ func (db *Database) Query(sql string) (*Rows, error) {
 
 	// For non-SELECT DML statements (INSERT, UPDATE, DELETE) called via Query(),
 	// execute them via Exec and return empty results (matching SQLite driver behavior).
+	// Exception: statements with RETURNING clause return actual rows.
 	if isDMLStatement(ast.NodeType()) {
+		switch stmt := ast.(type) {
+		case *QP.InsertStmt:
+			if len(stmt.Returning) > 0 {
+				return db.execInsertReturning(stmt, sql)
+			}
+		case *QP.UpdateStmt:
+			if len(stmt.Returning) > 0 {
+				return db.execUpdateReturning(stmt, sql)
+			}
+		case *QP.DeleteStmt:
+			if len(stmt.Returning) > 0 {
+				return db.execDeleteReturning(stmt, sql)
+			}
+		}
 		_, err := db.Exec(sql)
 		if err != nil {
 			return nil, err
@@ -1434,11 +1465,19 @@ func (db *Database) buildIndexData(indexName string) {
 	if idx == nil || len(idx.Columns) == 0 {
 		return
 	}
-	colName := idx.Columns[0]
 	rows := db.data[idx.Table]
 	hmap := make(map[interface{}][]int, len(rows))
 	for i, row := range rows {
-		key := normalizeIndexKey(row[colName])
+		// Skip rows that don't match the partial index condition
+		if idx.WhereExpr != nil && !isTruthy(db.evalExprOnMap(idx.WhereExpr, row)) {
+			continue
+		}
+		var key interface{}
+		if len(idx.Exprs) > 0 && idx.Exprs[0] != nil {
+			key = normalizeIndexKey(db.engine.EvalExpr(row, idx.Exprs[0]))
+		} else {
+			key = normalizeIndexKey(row[idx.Columns[0]])
+		}
 		hmap[key] = append(hmap[key], i)
 	}
 	db.indexData[indexName] = hmap
@@ -1450,11 +1489,20 @@ func (db *Database) indexAdd(indexName string, rowIdx int, row map[string]interf
 	if idx == nil || len(idx.Columns) == 0 {
 		return
 	}
+	// Skip rows that don't match the partial index condition
+	if idx.WhereExpr != nil && !isTruthy(db.evalExprOnMap(idx.WhereExpr, row)) {
+		return
+	}
 	hmap := db.indexData[indexName]
 	if hmap == nil {
 		return
 	}
-	key := normalizeIndexKey(row[idx.Columns[0]])
+	var key interface{}
+	if len(idx.Exprs) > 0 && idx.Exprs[0] != nil {
+		key = normalizeIndexKey(db.engine.EvalExpr(row, idx.Exprs[0]))
+	} else {
+		key = normalizeIndexKey(row[idx.Columns[0]])
+	}
 	hmap[key] = append(hmap[key], rowIdx)
 }
 
@@ -2909,6 +2957,23 @@ func (db *Database) evalExprOnMap(expr QP.Expr, row map[string]interface{}) inte
 			return int64(1)
 		}
 		return nil
+	case *QP.CollateExpr:
+		return db.evalExprOnMap(e.Expr, row)
+	case *QP.BinaryExpr:
+		lv := db.evalExprOnMap(e.Left, row)
+		rv := db.evalExprOnMap(e.Right, row)
+		if e.Op == QP.TokenMatch {
+			lStr, lok := lv.(string)
+			rStr, rok := rv.(string)
+			if lok && rok {
+				if strings.Contains(strings.ToLower(lStr), strings.ToLower(rStr)) {
+					return int64(1)
+				}
+				return nil
+			}
+			return nil
+		}
+		return nil
 	}
 	return nil
 }
@@ -3723,6 +3788,279 @@ func substituteAliasExpr(expr QP.Expr, aliasMap map[string]QP.Expr) QP.Expr {
 	default:
 		return expr
 	}
+}
+
+// projectReturning projects RETURNING expressions over a list of rows.
+func (db *Database) projectReturning(returning []QP.Expr, rows []map[string]interface{}, tableCols []string) (*Rows, error) {
+	// Determine column names
+	var colNames []string
+	allCols := len(returning) == 1
+	if colRef, ok := returning[0].(*QP.ColumnRef); ok && colRef.Name == "*" {
+		allCols = true
+	}
+
+	if allCols {
+		colNames = tableCols
+	} else {
+		for _, expr := range returning {
+			switch e := expr.(type) {
+			case *QP.ColumnRef:
+				colNames = append(colNames, e.Name)
+			case *QP.AliasExpr:
+				colNames = append(colNames, e.Alias)
+			default:
+				colNames = append(colNames, "?")
+			}
+		}
+	}
+
+	result := make([][]interface{}, 0, len(rows))
+	for _, row := range rows {
+		var rowData []interface{}
+		if allCols {
+			for _, col := range tableCols {
+				rowData = append(rowData, row[col])
+			}
+		} else {
+			for _, expr := range returning {
+				rowData = append(rowData, db.engine.EvalExpr(row, expr))
+			}
+		}
+		result = append(result, rowData)
+	}
+	return &Rows{Columns: colNames, Data: result}, nil
+}
+
+// execInsertReturning runs an INSERT and returns the inserted rows.
+func (db *Database) execInsertReturning(stmt *QP.InsertStmt, sql string) (*Rows, error) {
+	tableName := db.resolveTableName(stmt.Table)
+	tableCols := db.columnOrder[tableName]
+
+	// Snapshot existing row count before insert
+	before := len(db.data[tableName])
+
+	// Execute the insert (strip trailing RETURNING clause by finding last occurrence)
+	retIdx := strings.LastIndex(strings.ToUpper(sql), "RETURNING")
+	_, err := db.Exec(sql[:retIdx])
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect newly inserted rows
+	afterRows := db.data[tableName]
+	inserted := afterRows[before:]
+	db.invalidateWriteCaches()
+	return db.projectReturning(stmt.Returning, inserted, tableCols)
+}
+
+// execUpdateReturning runs an UPDATE and returns the updated rows.
+func (db *Database) execUpdateReturning(stmt *QP.UpdateStmt, sql string) (*Rows, error) {
+	tableName := db.resolveTableName(stmt.Table)
+	tableCols := db.columnOrder[tableName]
+
+	// Execute the update (strip trailing RETURNING clause)
+	retIdx := strings.LastIndex(strings.ToUpper(sql), "RETURNING")
+	_, err := db.Exec(sql[:retIdx])
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect rows matching WHERE after update
+	allRows := db.data[tableName]
+	var matchedRows []map[string]interface{}
+	for _, row := range allRows {
+		if db.engine.EvalBool(row, stmt.Where) {
+			matchedRows = append(matchedRows, row)
+		}
+	}
+	db.invalidateWriteCaches()
+	return db.projectReturning(stmt.Returning, matchedRows, tableCols)
+}
+
+// execDeleteReturning collects matching rows before deleting, then deletes, then returns them.
+func (db *Database) execDeleteReturning(stmt *QP.DeleteStmt, sql string) (*Rows, error) {
+	tableName := db.resolveTableName(stmt.Table)
+	tableCols := db.columnOrder[tableName]
+
+	// Collect rows that will be deleted
+	allRows := db.data[tableName]
+	var toDelete []map[string]interface{}
+	for _, row := range allRows {
+		if db.engine.EvalBool(row, stmt.Where) {
+			// Make a copy
+			rowCopy := make(map[string]interface{}, len(row))
+			for k, v := range row {
+				rowCopy[k] = v
+			}
+			toDelete = append(toDelete, rowCopy)
+		}
+	}
+
+	// Execute the delete (strip trailing RETURNING clause)
+	retIdx := strings.LastIndex(strings.ToUpper(sql), "RETURNING")
+	_, err := db.Exec(sql[:retIdx])
+	if err != nil {
+		return nil, err
+	}
+
+	db.invalidateWriteCaches()
+	return db.projectReturning(stmt.Returning, toDelete, tableCols)
+}
+
+// execUpdateFrom handles UPDATE ... FROM t2 WHERE ... (PostgreSQL-style multi-table update).
+func (db *Database) execUpdateFrom(stmt *QP.UpdateStmt) (Result, error) {
+	tableName := db.resolveTableName(stmt.Table)
+	fromName := db.resolveTableName(stmt.From.Name)
+	fromAlias := stmt.From.Alias
+	if fromAlias == "" {
+		fromAlias = fromName
+	}
+
+	if _, exists := db.tables[tableName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName)
+	}
+	if _, exists := db.tables[fromName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", fromName)
+	}
+
+	targetRows := db.data[tableName]
+	fromRows := db.data[fromName]
+
+	ctx := newDsVmContext(db)
+	var affected int64
+
+	for i, tRow := range targetRows {
+		// Build base row snapshot for this target row
+		baseRow := make(map[string]interface{}, len(tRow)+10)
+		for k, v := range tRow {
+			baseRow[k] = v
+			baseRow[tableName+"."+k] = v
+		}
+		// Try each FROM row as join partner
+		for _, fRow := range fromRows {
+			// Rebuild joinedRow from base for each FROM row to avoid cross-contamination
+			joinedRow := make(map[string]interface{}, len(baseRow)+len(fRow)+5)
+			for k, v := range baseRow {
+				joinedRow[k] = v
+			}
+			for k, v := range fRow {
+				joinedRow[fromAlias+"."+k] = v
+				joinedRow[fromName+"."+k] = v
+			}
+			// Plain (unqualified) keys get the FROM row values last so qualified keys dominate
+			for k, v := range fRow {
+				joinedRow[k] = v
+			}
+			if !db.engine.EvalBool(joinedRow, stmt.Where) {
+				continue
+			}
+			// Apply SET clauses
+			newRow := make(map[string]interface{}, len(tRow))
+			for k, v := range tRow {
+				newRow[k] = v
+			}
+			for _, set := range stmt.Set {
+				colRef, ok := set.Column.(*QP.ColumnRef)
+				if !ok {
+					continue
+				}
+				newRow[colRef.Name] = db.engine.EvalExpr(joinedRow, set.Value)
+			}
+			db.applyTypeAffinity(tableName, newRow)
+			if err := ctx.UpdateRow(tableName, i, newRow); err != nil {
+				return Result{}, err
+			}
+			targetRows[i] = newRow
+			affected++
+			break // update each target row at most once (on first matching FROM row)
+		}
+	}
+
+	db.data[tableName] = targetRows
+	return Result{RowsAffected: affected}, nil
+}
+
+// execDeleteUsing handles DELETE FROM t1 USING t2, t3 WHERE ...
+func (db *Database) execDeleteUsing(stmt *QP.DeleteStmt) (Result, error) {
+	tableName := db.resolveTableName(stmt.Table)
+	if _, exists := db.tables[tableName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName)
+	}
+
+	// Resolve all USING tables
+	usingData := make(map[string][]map[string]interface{})
+	for _, usingTable := range stmt.Using {
+		resolved := db.resolveTableName(usingTable)
+		if _, exists := db.tables[resolved]; !exists {
+			return Result{}, fmt.Errorf("no such table: %s", usingTable)
+		}
+		usingData[resolved] = db.data[resolved]
+	}
+
+	ctx := newDsVmContext(db)
+	rows := db.data[tableName]
+	var toDeleteIdx []int
+
+	for i, row := range rows {
+		matched := false
+		// Build joined row with all USING table rows
+		joinedRow := make(map[string]interface{}, len(row)+20)
+		for k, v := range row {
+			joinedRow[k] = v
+			joinedRow[tableName+"."+k] = v
+		}
+		// For simplicity, try all combinations (nested loop)
+		// Build all combinations of USING rows
+		if len(usingData) == 0 {
+			if db.engine.EvalBool(joinedRow, stmt.Where) {
+				matched = true
+			}
+		} else {
+			// Try each combination of USING rows
+			matched = db.evalUsingCombinations(stmt.Where, joinedRow, stmt.Using, usingData, 0)
+		}
+		if matched {
+			toDeleteIdx = append(toDeleteIdx, i)
+		}
+	}
+
+	// Delete in reverse order to preserve indices
+	var affected int64
+	for j := len(toDeleteIdx) - 1; j >= 0; j-- {
+		idx := toDeleteIdx[j]
+		row := rows[idx]
+		db.removeFromIndexes(tableName, row, idx)
+		if err := ctx.DeleteRow(tableName, idx); err != nil {
+			return Result{}, err
+		}
+		rows = db.data[tableName]
+		affected++
+	}
+
+	return Result{RowsAffected: affected}, nil
+}
+
+// evalUsingCombinations evaluates WHERE condition across all combinations of USING rows.
+func (db *Database) evalUsingCombinations(where QP.Expr, baseRow map[string]interface{}, usingTables []string, usingData map[string][]map[string]interface{}, idx int) bool {
+	if idx >= len(usingTables) {
+		return db.engine.EvalBool(baseRow, where)
+	}
+	tableName := db.resolveTableName(usingTables[idx])
+	for _, uRow := range usingData[tableName] {
+		// Copy base row and merge USING row
+		merged := make(map[string]interface{}, len(baseRow)+len(uRow))
+		for k, v := range baseRow {
+			merged[k] = v
+		}
+		for k, v := range uRow {
+			merged[k] = v
+			merged[tableName+"."+k] = v
+		}
+		if db.evalUsingCombinations(where, merged, usingTables, usingData, idx+1) {
+			return true
+		}
+	}
+	return false
 }
 
 // splitStatements splits SQL on top-level semicolons (not inside strings/parens).

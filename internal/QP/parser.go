@@ -81,14 +81,17 @@ type InsertStmt struct {
 	SelectQuery *SelectStmt // Non-nil for INSERT ... SELECT
 	OnConflict  *OnConflict // nil if no ON CONFLICT clause
 	OrAction    string      // "REPLACE", "IGNORE", "ABORT", "FAIL", "ROLLBACK" or ""
+	Returning   []Expr      // nil if no RETURNING clause
 }
 
 func (i *InsertStmt) NodeType() string { return "InsertStmt" }
 
 type UpdateStmt struct {
-	Table string
-	Set   []SetClause
-	Where Expr
+	Table     string
+	Set       []SetClause
+	Where     Expr
+	From      *TableRef // nil if no FROM clause (UPDATE ... FROM t2)
+	Returning []Expr    // nil if no RETURNING clause
 }
 
 func (u *UpdateStmt) NodeType() string { return "UpdateStmt" }
@@ -99,8 +102,10 @@ type SetClause struct {
 }
 
 type DeleteStmt struct {
-	Table string
-	Where Expr
+	Table     string
+	Where     Expr
+	Using     []string // nil if no USING clause
+	Returning []Expr   // nil if no RETURNING clause
 }
 
 func (d *DeleteStmt) NodeType() string { return "DeleteStmt" }
@@ -146,6 +151,7 @@ type ColumnDef struct {
 	Check         Expr                  // CHECK constraint expression
 	IsAutoincrement bool               // AUTOINCREMENT
 	ForeignKey    *ForeignKeyConstraint // inline REFERENCES clause
+	Collation     string                // COLLATE name (e.g., NOCASE, RTRIM, BINARY)
 }
 
 // CreateTriggerStmt represents CREATE TRIGGER
@@ -209,8 +215,10 @@ type CreateIndexStmt struct {
 	Name        string
 	Table       string
 	Columns     []string
+	Exprs       []Expr   // parallel to Columns; non-nil entry means expression index on that slot
 	Unique      bool
 	IfNotExists bool
+	WhereExpr   Expr     // nil if no WHERE clause (partial index)
 }
 
 func (c *CreateIndexStmt) NodeType() string { return "CreateIndexStmt" }
@@ -397,6 +405,14 @@ type CastExpr struct {
 }
 
 func (e *CastExpr) exprNode() {}
+
+// CollateExpr represents expr COLLATE collation_name
+type CollateExpr struct {
+	Expr      Expr
+	Collation string
+}
+
+func (e *CollateExpr) exprNode() {}
 
 type Parser struct {
 	tokens     []Token
@@ -1088,7 +1104,40 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 		stmt.OnConflict = oc
 	}
 
+	// Parse optional RETURNING clause
+	returning, err := p.parseReturning()
+	if err != nil {
+		return nil, err
+	}
+	stmt.Returning = returning
+
 	return stmt, nil
+}
+
+// parseReturning parses an optional RETURNING clause.
+func (p *Parser) parseReturning() ([]Expr, error) {
+	if p.current().Type != TokenKeyword || strings.ToUpper(p.current().Literal) != "RETURNING" {
+		return nil, nil
+	}
+	p.advance()
+	// RETURNING * returns all columns (represented as a single star ColumnRef)
+	if p.current().Type == TokenAsterisk {
+		p.advance()
+		return []Expr{&ColumnRef{Name: "*"}}, nil
+	}
+	var exprs []Expr
+	for {
+		expr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		exprs = append(exprs, expr)
+		if p.current().Type != TokenComma {
+			break
+		}
+		p.advance()
+	}
+	return exprs, nil
 }
 
 func (p *Parser) parseUpdate() (*UpdateStmt, error) {
@@ -1121,6 +1170,13 @@ func (p *Parser) parseUpdate() (*UpdateStmt, error) {
 		}
 	}
 
+	// Parse optional FROM clause (PostgreSQL-style UPDATE ... FROM t2)
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "FROM" {
+		p.advance()
+		ref := p.parseTableRef()
+		stmt.From = ref
+	}
+
 	if p.current().Literal == "WHERE" {
 		p.advance()
 		where, err := p.parseExpr()
@@ -1129,6 +1185,13 @@ func (p *Parser) parseUpdate() (*UpdateStmt, error) {
 		}
 		stmt.Where = where
 	}
+
+	// Parse optional RETURNING clause
+	returning, err := p.parseReturning()
+	if err != nil {
+		return nil, err
+	}
+	stmt.Returning = returning
 
 	return stmt, nil
 }
@@ -1147,6 +1210,19 @@ func (p *Parser) parseDelete() (*DeleteStmt, error) {
 	stmt.Table = p.current().Literal
 	p.advance()
 
+	// Parse optional USING clause (multi-table DELETE)
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "USING" {
+		p.advance()
+		for {
+			stmt.Using = append(stmt.Using, p.current().Literal)
+			p.advance()
+			if p.current().Type != TokenComma {
+				break
+			}
+			p.advance()
+		}
+	}
+
 	if p.current().Literal == "WHERE" {
 		p.advance()
 		where, err := p.parseExpr()
@@ -1155,6 +1231,13 @@ func (p *Parser) parseDelete() (*DeleteStmt, error) {
 		}
 		stmt.Where = where
 	}
+
+	// Parse optional RETURNING clause
+	returning, err := p.parseReturning()
+	if err != nil {
+		return nil, err
+	}
+	stmt.Returning = returning
 
 	return stmt, nil
 }
@@ -1280,10 +1363,12 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 				}
 
 				// Parse column constraints before appending
-				for p.current().Type == TokenKeyword || p.current().Type == TokenNot {
+				for p.current().Type == TokenKeyword || p.current().Type == TokenNot || p.current().Type == TokenCollate {
 					var keyword string
 					if p.current().Type == TokenNot {
 						keyword = "NOT"
+					} else if p.current().Type == TokenCollate {
+						keyword = "COLLATE"
 					} else {
 						keyword = p.current().Literal
 					}
@@ -1335,6 +1420,11 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 						p.advance()
 					} else if keyword == "ASC" || keyword == "DESC" {
 						// Column modifier keywords - skip
+						p.advance()
+					} else if keyword == "COLLATE" {
+						// COLLATE collation_name
+						p.advance()
+						col.Collation = strings.ToUpper(p.current().Literal)
 						p.advance()
 					} else {
 						// Stop at unknown keywords or table-level constraints
@@ -1669,9 +1759,25 @@ func (p *Parser) parseCreateIndex(unique bool) (ASTNode, error) {
 		if p.current().Type == TokenLeftParen {
 			p.advance()
 			for {
-				if p.current().Type == TokenIdentifier {
-					stmt.Columns = append(stmt.Columns, p.current().Literal)
+				// Check if this is an expression index (identifier followed by '(')
+				if (p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword) &&
+					p.peek().Type == TokenLeftParen {
+					// Expression column (e.g., LOWER(col))
+					expr, err := p.parsePrimaryExpr()
+					if err != nil {
+						return nil, err
+					}
+					stmt.Columns = append(stmt.Columns, "")
+					stmt.Exprs = append(stmt.Exprs, expr)
+				} else if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+					colName := p.current().Literal
 					p.advance()
+					// Skip ASC/DESC
+					if p.current().Type == TokenKeyword && (strings.ToUpper(p.current().Literal) == "ASC" || strings.ToUpper(p.current().Literal) == "DESC") {
+						p.advance()
+					}
+					stmt.Columns = append(stmt.Columns, colName)
+					stmt.Exprs = append(stmt.Exprs, nil)
 				}
 				if p.current().Type == TokenComma {
 					p.advance()
@@ -1680,6 +1786,16 @@ func (p *Parser) parseCreateIndex(unique bool) (ASTNode, error) {
 				}
 			}
 			p.expect(TokenRightParen)
+		}
+
+		// Parse optional WHERE clause (partial index)
+		if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "WHERE" {
+			p.advance()
+			whereExpr, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			stmt.WhereExpr = whereExpr
 		}
 	}
 
@@ -1819,8 +1935,11 @@ func (p *Parser) parseAlterTable() (ASTNode, error) {
 			}
 		}
 		// Parse column constraints
-		for p.current().Type == TokenKeyword || p.current().Type == TokenNot {
+		for p.current().Type == TokenKeyword || p.current().Type == TokenNot || p.current().Type == TokenCollate {
 			keyword := strings.ToUpper(p.current().Literal)
+			if p.current().Type == TokenCollate {
+				keyword = "COLLATE"
+			}
 			if p.current().Type == TokenNot {
 				p.advance()
 				if strings.ToUpper(p.current().Literal) == "NULL" {
@@ -1852,6 +1971,10 @@ func (p *Parser) parseAlterTable() (ASTNode, error) {
 					p.advance()
 				}
 				break
+			} else if keyword == "COLLATE" {
+				p.advance()
+				col.Collation = strings.ToUpper(p.current().Literal)
+				p.advance()
 			} else {
 				break
 			}
@@ -1967,12 +2090,17 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 		return nil, err
 	}
 
-	// MATCH operator: not supported in WHERE context (matches SQLite behavior)
-	if p.current().Type == TokenIdentifier && strings.ToUpper(p.current().Literal) == "MATCH" {
-		return nil, fmt.Errorf("unable to use function MATCH in the requested context")
+	// MATCH operator: case-insensitive substring match
+	if p.current().Type == TokenMatch {
+		p.advance()
+		pattern, err := p.parseAddExpr()
+		if err != nil {
+			return nil, err
+		}
+		return &BinaryExpr{Op: TokenMatch, Left: left, Right: pattern}, nil
 	}
-	if p.current().Type == TokenNot && p.peek().Type == TokenIdentifier && strings.ToUpper(p.peek().Literal) == "MATCH" {
-		return nil, fmt.Errorf("unable to use function MATCH in the requested context")
+	if p.current().Type == TokenNot && p.peek().Type == TokenMatch {
+		return nil, fmt.Errorf("NOT MATCH is not supported")
 	}
 
 	if p.current().Type == TokenIs {
@@ -2307,6 +2435,21 @@ func (p *Parser) parseUnaryExpr() (Expr, error) {
 	}
 
 	return p.parsePrimaryExpr()
+}
+
+// parsePrimaryExprWithCollate parses a primary expression optionally followed by COLLATE name
+func (p *Parser) parsePrimaryExprWithCollate() (Expr, error) {
+	expr, err := p.parsePrimaryExpr()
+	if err != nil {
+		return nil, err
+	}
+	if p.current().Type == TokenCollate {
+		p.advance()
+		collation := strings.ToUpper(p.current().Literal)
+		p.advance()
+		return &CollateExpr{Expr: expr, Collation: collation}, nil
+	}
+	return expr, nil
 }
 
 func (p *Parser) parsePrimaryExpr() (Expr, error) {

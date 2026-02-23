@@ -729,6 +729,23 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpMatch:
+			lStr := ""
+			rStr := ""
+			if v, ok := vm.registers[inst.P1].(string); ok {
+				lStr = v
+			}
+			if v, ok := vm.registers[inst.P2].(string); ok {
+				rStr = v
+			}
+			if dst, ok := inst.P4.(int); ok {
+				vm.registers[dst] = int64(0)
+				if strings.Contains(strings.ToLower(lStr), strings.ToLower(rStr)) {
+					vm.registers[dst] = int64(1)
+				}
+			}
+			continue
+
 		case OpAbs:
 			src := vm.registers[inst.P1]
 			if dst, ok := inst.P4.(int); ok {
@@ -3441,6 +3458,9 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 			}
 		}
 		return nil
+	case *QP.CollateExpr:
+		val := vm.evaluateExprOnRow(row, columns, e.Expr)
+		return applyCollation(val, e.Collation)
 	default:
 		return nil
 	}
@@ -4267,6 +4287,16 @@ func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interfa
 		return vm.compareVals(left, right) == 0
 	case QP.TokenNe:
 		return vm.compareVals(left, right) != 0
+	case QP.TokenMatch:
+		lStr, lok := left.(string)
+		rStr, rok := right.(string)
+		if lok && rok {
+			if strings.Contains(strings.ToLower(lStr), strings.ToLower(rStr)) {
+				return true
+			}
+			return false
+		}
+		return false
 	default:
 		return nil
 	}
@@ -4833,4 +4863,20 @@ func columnarAggregate(rows []map[string]interface{}, colName string, aggType in
 		return sum / float64(count)
 	}
 	return nil
+}
+
+// applyCollation applies a collation to a value for comparison purposes.
+func applyCollation(val interface{}, collation string) interface{} {
+	str, ok := val.(string)
+	if !ok {
+		return val
+	}
+	switch strings.ToUpper(collation) {
+	case "NOCASE":
+		return strings.ToUpper(str)
+	case "RTRIM":
+		return strings.TrimRight(str, " ")
+	default: // BINARY or unknown
+		return str
+	}
 }
