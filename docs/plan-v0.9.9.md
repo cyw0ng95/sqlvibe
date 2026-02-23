@@ -398,18 +398,90 @@ Complete test series to add:
 
 ```
 internal/TS/SQL1999/
-├── E011-E171      # Existing: Embedded SQL - Numeric
-├── F011-F900      # Existing: Functional tests
-├── D011-D017     # NEW: Data Types
-├── G011-G013     # NEW: General Features
-├── I011-I015     # NEW: Integrity Enhancement
-├── L011-L015     # NEW: Language Elements
-├── N011-N015     # NEW: NULL Handling
-├── Q011-Q061     # NEW: Query
-├── R011-R015     # NEW: Schema
-├── T011-T015     # NEW: Transaction
-├── V011-V014     # NEW: Views
-└── W011-W016     # NEW: Window Functions
+├── E011/          # Existing: INTEGER types
+├── E021/          # Existing: Character types
+├── E031/          # Existing: Identifier
+├── E041/          # Existing: Table definition
+├── E051/          # Existing: Constraint
+├── E061/          # Existing: Constraint
+├── E071/          # Existing: View
+├── E081/          # Existing: Transaction
+├── E091/          # Existing: NULL
+├── E101/          # Existing: Aggregate
+├── E111/          # Existing: Scalar
+├── E121/          # Existing: Table expression
+├── E131/          # Existing: Query expression
+├── E141/          # Existing: Sequence
+├── E151/          # Existing: Distinct type
+├── E161/          # Existing: Schema
+├── E171/          # Existing: Module
+├── F011/          # Existing: View
+├── F021/          # Existing: Table
+├── F031/          # Existing: Trigger
+├── F041/          # Existing: Transaction
+├── F051/          # Existing: Query
+├── F261/          # Existing: String
+├── F291/          # Existing: Subquery
+├── F301/          # Existing: Expressions
+├── F401/          # Existing: Join
+├── F411/          # Existing: Join
+├── F871/          # Existing: Upsert
+├── F874/          # Existing: Function
+├── F875/          # Existing: UPSERT
+├── F876/          # Existing: Index
+├── F878/          # Existing: RETURNING
+├── F879/          # Existing: SAVEPOINT
+├── D011/          # NEW: VARCHAR
+├── D012/          # NEW: CHAR
+├── D013/          # NEW: BOOLEAN
+├── D014/          # NEW: DECIMAL
+├── D015/          # NEW: DateTime
+├── D016/          # NEW: BLOB
+├── D017/          # NEW: INTERVAL
+├── G011/          # NEW: Schema Definition
+├── G012/          # NEW: Catalog
+├── G013/          # NEW: Information Schema
+├── I011/          # NEW: Referential
+├── I012/          # NEW: Check Constraint
+├── I013/          # NEW: Unique Constraint
+├── I014/          # NEW: Not Null Constraint
+├── I015/          # NEW: Primary Key
+├── L011/          # NEW: Reserved Words
+├── L012/          # NEW: Identifiers
+├── L013/          # NEW: Expressions
+├── L014/          # NEW: Predicates
+├── L015/          # NEW: Functions
+├── N011/          # NEW: NULL Comparison
+├── N012/          # NEW: NULL Logic
+├── N013/          # NEW: COALESCE
+├── N014/          # NEW: NULLIF
+├── N015/          # NEW: CAST NULL
+├── Q011/          # NEW: SELECT Basic
+├── Q021/          # NEW: JOIN Syntax
+├── Q031/          # NEW: Subquery
+├── Q041/          # NEW: Set Operations
+├── Q051/          # NEW: GROUP BY
+├── Q061/          # NEW: ORDER BY
+├── R011/          # NEW: CREATE TABLE
+├── R012/          # NEW: ALTER TABLE
+├── R013/          # NEW: DROP TABLE
+├── R014/          # NEW: CREATE INDEX
+├── R015/          # NEW: DROP INDEX
+├── T011/          # NEW: Transaction Basic
+├── T012/          # NEW: Savepoint
+├── T013/          # NEW: Autocommit
+├── T014/          # NEW: Isolation
+├── T015/          # NEW: Deferred Constraint
+├── V011/          # NEW: CREATE VIEW
+├── V012/          # NEW: DROP VIEW
+├── V013/          # NEW: Updatable View
+├── V014/          # NEW: Recursive View
+├── W011/          # NEW: ROW_NUMBER
+├── W012/          # NEW: RANK
+├── W013/          # NEW: NTILE
+├── W014/          # NEW: LAG/LEAD
+├── W015/          # NEW: FIRST/LAST VALUE
+└── W016/          # NEW: NTH_VALUE
 ```
 
 ---
@@ -430,16 +502,57 @@ internal/TS/SQL1999/
 - `internal/TS/SQL1999/F871/` - Add MERGE tests
 
 ### New Test Packages
-- `internal/TS/SQL1999/D011-D017/` - Data Types
-- `internal/TS/SQL1999/G011-G013/` - General Features
-- `internal/TS/SQL1999/I011-I015/` - Integrity
-- `internal/TS/SQL1999/L011-L015/` - Language Elements
-- `internal/TS/SQL1999/N011-N015/` - NULL Handling
-- `internal/TS/SQL1999/Q011-Q061/` - Query
-- `internal/TS/SQL1999/R011-R015/` - Schema
-- `internal/TS/SQL1999/T011-T015/` - Transaction
-- `internal/TS/SQL1999/V011-V014/` - Views
-- `internal/TS/SQL1999/W011-W016/` - Window Functions
+- `internal/TS/SQL1999/D011/` - VARCHAR type
+- `internal/TS/SQL1999/D012/` - CHAR type
+- `internal/TS/SQL1999/D013/` - BOOLEAN type
+- `internal/TS/SQL1999/D014/` - DECIMAL type
+- `internal/TS/SQL1999/D015/` - DateTime type
+- `internal/TS/SQL1999/D016/` - BLOB type
+- `internal/TS/SQL1999/D017/` - INTERVAL type
+- `internal/TS/SQL1999/G011/` - Schema Definition
+- `internal/TS/SQL1999/G012/` - Catalog
+- `internal/TS/SQL1999/G013/` - Information Schema
+- `internal/TS/SQL1999/I011/` - Referential Integrity
+- `internal/TS/SQL1999/I012/` - Check Constraint
+- `internal/TS/SQL1999/I013/` - Unique Constraint
+- `internal/TS/SQL1999/I014/` - Not Null Constraint
+- `internal/TS/SQL1999/I015/` - Primary Key
+- `internal/TS/SQL1999/L011/` - Reserved Words
+- `internal/TS/SQL1999/L012/` - Identifiers
+- `internal/TS/SQL1999/L013/` - Expressions
+- `internal/TS/SQL1999/L014/` - Predicates
+- `internal/TS/SQL1999/L015/` - Functions
+- `internal/TS/SQL1999/N011/` - NULL Comparison
+- `internal/TS/SQL1999/N012/` - NULL Logic
+- `internal/TS/SQL1999/N013/` - COALESCE
+- `internal/TS/SQL1999/N014/` - NULLIF
+- `internal/TS/SQL1999/N015/` - CAST NULL
+- `internal/TS/SQL1999/Q011/` - SELECT Basic
+- `internal/TS/SQL1999/Q021/` - JOIN Syntax
+- `internal/TS/SQL1999/Q031/` - Subquery
+- `internal/TS/SQL1999/Q041/` - Set Operations
+- `internal/TS/SQL1999/Q051/` - GROUP BY
+- `internal/TS/SQL1999/Q061/` - ORDER BY
+- `internal/TS/SQL1999/R011/` - CREATE TABLE
+- `internal/TS/SQL1999/R012/` - ALTER TABLE
+- `internal/TS/SQL1999/R013/` - DROP TABLE
+- `internal/TS/SQL1999/R014/` - CREATE INDEX
+- `internal/TS/SQL1999/R015/` - DROP INDEX
+- `internal/TS/SQL1999/T011/` - Transaction Basic
+- `internal/TS/SQL1999/T012/` - Savepoint
+- `internal/TS/SQL1999/T013/` - Autocommit
+- `internal/TS/SQL1999/T014/` - Isolation
+- `internal/TS/SQL1999/T015/` - Deferred Constraint
+- `internal/TS/SQL1999/V011/` - CREATE VIEW
+- `internal/TS/SQL1999/V012/` - DROP VIEW
+- `internal/TS/SQL1999/V013/` - Updatable View
+- `internal/TS/SQL1999/V014/` - Recursive View
+- `internal/TS/SQL1999/W011/` - ROW_NUMBER
+- `internal/TS/SQL1999/W012/` - RANK
+- `internal/TS/SQL1999/W013/` - NTILE
+- `internal/TS/SQL1999/W014/` - LAG/LEAD
+- `internal/TS/SQL1999/W015/` - FIRST/LAST VALUE
+- `internal/TS/SQL1999/W016/` - NTH_VALUE
 
 ---
 
