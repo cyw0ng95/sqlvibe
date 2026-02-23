@@ -4,6 +4,19 @@
 
 This version focuses on expanding SQL:1999 test suite coverage with comprehensive edge cases and adds support for all SQL standard test series (E, F, B, C, D, G, I, J, K, L, N, O, P, Q, R, S, T, V, W).
 
+## Naming Convention
+
+All test cases must follow the unified naming format:
+
+```
+Test_SQL1999_[FeatureNo]_[Description]_L1
+```
+
+Examples:
+- `Test_SQL1999_F291_ArrayBasic_L1`
+- `Test_N011_IsNull_SQL1999_L1`
+- `Test_SQL1999_T011_TransactionBasic_L1`
+
 ---
 
 ## Track A: SQL:1999 Test Suite Expansion
@@ -14,49 +27,49 @@ Complete the remaining SQL:1999 feature tests and add comprehensive edge case co
 
 ### A1: ARRAY/LIST Type Tests (F291)
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| A1.1 | F291 Array Basic | Basic ARRAY type creation and query | High |
-| A1.2 | F291 Array Insert | INSERT with ARRAY values | High |
-| A1.3 | F291 Array Select | SELECT ARRAY elements | High |
-| A1.4 | F291 Array Functions | ARRAY_LENGTH, ARRAY_AGG | High |
-| A1.5 | F291 Nested Array | Multi-dimensional arrays | Medium |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| A1.1 | Test_SQL1999_F291_ArrayBasic_L1 | Basic ARRAY type creation and query | High |
+| A1.2 | Test_SQL1999_F291_ArrayInsert_L1 | INSERT with ARRAY values | High |
+| A1.3 | Test_SQL1999_F291_ArraySelect_L1 | SELECT ARRAY elements | High |
+| A1.4 | Test_SQL1999_F291_ArrayFunctions_L1 | ARRAY_LENGTH, ARRAY_AGG | High |
+| A1.5 | Test_SQL1999_F291_NestedArray_L1 | Multi-dimensional arrays | Medium |
 
 ### A2: STRUCT Type Tests (F301)
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| A2.1 | F301 Struct Basic | Basic STRUCT type | Medium |
-| A2.2 | F301 Struct Query | Query STRUCT fields | Medium |
-| A2.3 | F301 Struct Insert | INSERT with STRUCT | Medium |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| A2.1 | Test_SQL1999_F301_StructBasic_L1 | Basic STRUCT type | Medium |
+| A2.2 | Test_SQL1999_F301_StructQuery_L1 | Query STRUCT fields | Medium |
+| A2.3 | Test_SQL1999_F301_StructInsert_L1 | INSERT with STRUCT | Medium |
 
 ### A3: User-Defined Types (E151-E153)
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| A3.1 | E151 Type Basic | CREATE TYPE basic | Medium |
-| A3.2 | E152 Type Values | User-defined values | Low |
-| A3.3 | E153 Type Methods | Type methods | Low |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| A3.1 | Test_SQL1999_E151_TypeBasic_L1 | CREATE TYPE basic | Medium |
+| A3.2 | Test_SQL1999_E152_TypeValues_L1 | User-defined values | Low |
+| A3.3 | Test_SQL1999_E153_TypeMethods_L1 | Type methods | Low |
 
 ### A4: Advanced Query Features (F051, F301)
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| A4.1 | F051 Fetch First | FETCH FIRST n ROWS ONLY | Medium |
-| A4.2 | F051 Fetch Percent | FETCH FIRST n PERCENT | Low |
-| A4.3 | F051 Fetch Ties | FETCH FIRST n ROWS WITH TIES | Low |
-| A4.4 | F301 Grouping Sets | GROUP BY GROUPING SETS | Medium |
-| A4.5 | F301 Rollup | ROLLUP(a, b, c) | Medium |
-| A4.6 | F301 Cube | CUBE(a, b, c) | Low |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| A4.1 | Test_SQL1999_F051_FetchFirst_L1 | FETCH FIRST n ROWS ONLY | Medium |
+| A4.2 | Test_SQL1999_F051_FetchPercent_L1 | FETCH FIRST n PERCENT | Low |
+| A4.3 | Test_SQL1999_F051_FetchTies_L1 | FETCH FIRST n ROWS WITH TIES | Low |
+| A4.4 | Test_SQL1999_F301_GroupingSets_L1 | GROUP BY GROUPING SETS | Medium |
+| A4.5 | Test_SQL1999_F301_Rollup_L1 | ROLLUP(a, b, c) | Medium |
+| A4.6 | Test_SQL1999_F301_Cube_L1 | CUBE(a, b, c) | Low |
 
 ### A5: MERGE Statement (F871)
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| A5.1 | F871 Merge Basic | Basic MERGE INTO | High |
-| A5.2 | F871 Merge Update | MERGE with UPDATE | High |
-| A5.3 | F871 Merge Delete | MERGE with DELETE | High |
-| A5.4 | F871 Merge Conditions | MERGE with WHEN MATCHED/NOT MATCHED | High |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| A5.1 | Test_SQL1999_F871_MergeBasic_L1 | Basic MERGE INTO | High |
+| A5.2 | Test_SQL1999_F871_MergeUpdate_L1 | MERGE with UPDATE | High |
+| A5.3 | Test_SQL1999_F871_MergeDelete_L1 | MERGE with DELETE | High |
+| A5.4 | Test_SQL1999_F871_MergeConditions_L1 | MERGE with WHEN MATCHED/NOT MATCHED | High |
 
 ### Success Criteria
 
@@ -78,91 +91,91 @@ Add extensive edge case tests organized by SQL:1999 feature packages.
 
 ### B1: NULL Handling (E011, E021, E101, F031)
 
-| # | Test | Description | Feature |
-|---|------|-------------|---------|
-| B1.1 | E021_Null_IsNull | IS NULL / IS NOT NULL comparison | E021 |
-| B1.2 | E021_Null_Coalesce | COALESCE with multiple NULLs | E021 |
-| B1.3 | E021_Null_IfNull | IFNULL(NULL, default) behavior | E021 |
-| B1.4 | E021_Null_NullIf | NULLIF(equal values) returns NULL | E021 |
-| B1.5 | E101_Null_Aggregate | NULL handling in COUNT, SUM, AVG | E101 |
-| B1.6 | F031_Null_Expression | NULL in arithmetic (+ - * /) | F031 |
-| B1.7 | F051_Null_Distinct | DISTINCT with NULL values | F051 |
-| B1.8 | F051_Null_Order | ORDER BY NULL ordering | F051 |
+| # | Test Case | Description | Feature |
+|---|-----------|-------------|---------|
+| B1.1 | Test_SQL1999_E021_IsNull_L1 | IS NULL / IS NOT NULL comparison | E021 |
+| B1.2 | Test_SQL1999_E021_Coalesce_L1 | COALESCE with multiple NULLs | E021 |
+| B1.3 | Test_SQL1999_E021_IfNull_L1 | IFNULL(NULL, default) behavior | E021 |
+| B1.4 | Test_SQL1999_E021_NullIf_L1 | NULLIF(equal values) returns NULL | E021 |
+| B1.5 | Test_SQL1999_E101_NullAggregate_L1 | NULL handling in COUNT, SUM, AVG | E101 |
+| B1.6 | Test_SQL1999_F031_NullExpression_L1 | NULL in arithmetic (+ - * /) | F031 |
+| B1.7 | Test_SQL1999_F051_NullDistinct_L1 | DISTINCT with NULL values | F051 |
+| B1.8 | Test_SQL1999_F051_NullOrder_L1 | ORDER BY NULL ordering | F051 |
 
 ### B2: Type Conversion (E011, E021, F031)
 
-| # | Test | Description | Feature |
-|---|------|-------------|---------|
-| B2.1 | E011_Type_ImplicitNum | Implicit string to number | E011 |
-| B2.2 | E021_Type_ImplicitStr | Implicit number to string | E021 |
-| B2.3 | E011_Type_CastBoundary | CAST on boundary values | E011 |
-| B2.4 | E021_Type_Affinity | Type affinity rules | E021 |
-| B2.5 | F031_Type_Expression | Type coercion in expressions | F031 |
-| B2.6 | E011_Type_CastNull | CAST NULL behavior | E011 |
+| # | Test Case | Description | Feature |
+|---|-----------|-------------|---------|
+| B2.1 | Test_SQL1999_E011_ImplicitNum_L1 | Implicit string to number | E011 |
+| B2.2 | Test_SQL1999_E021_ImplicitStr_L1 | Implicit number to string | E021 |
+| B2.3 | Test_SQL1999_E011_CastBoundary_L1 | CAST on boundary values | E011 |
+| B2.4 | Test_SQL1999_E021_Affinity_L1 | Type affinity rules | E021 |
+| B2.5 | Test_SQL1999_F031_TypeExpression_L1 | Type coercion in expressions | F031 |
+| B2.6 | Test_SQL1999_E011_CastNull_L1 | CAST NULL behavior | E011 |
 
 ### B3: Numeric Boundaries (E011, F031)
 
-| # | Test | Description | Feature |
-|---|------|-------------|---------|
-| B3.1 | E011_Num_Overflow | Integer overflow (+1, -1) | E011 |
-| B3.2 | E011_Num_FloatPrec | Floating point precision (1.1 + 2.2) | E011 |
-| B3.3 | F031_Num_DivZero | Division by zero handling | F031 |
-| B3.4 | E011_Num_ModNegative | Negative modulo operations | E011 |
-| B3.5 | E011_Num_Extreme | MIN/MAX value boundaries | E011 |
-| B3.6 | E011_Num_Scientific | Scientific notation | E011 |
+| # | Test Case | Description | Feature |
+|---|-----------|-------------|---------|
+| B3.1 | Test_SQL1999_E011_Overflow_L1 | Integer overflow (+1, -1) | E011 |
+| B3.2 | Test_SQL1999_E011_FloatPrec_L1 | Floating point precision (1.1 + 2.2) | E011 |
+| B3.3 | Test_SQL1999_F031_DivZero_L1 | Division by zero handling | F031 |
+| B3.4 | Test_SQL1999_E011_ModNegative_L1 | Negative modulo operations | E011 |
+| B3.5 | Test_SQL1999_E011_Extreme_L1 | MIN/MAX value boundaries | E011 |
+| B3.6 | Test_SQL1999_E011_Scientific_L1 | Scientific notation | E011 |
 
 ### B4: String Edge Cases (E021, F261)
 
-| # | Test | Description | Feature |
-|---|------|-------------|---------|
-| B4.1 | E021_Str_Empty | Empty string '' behavior | E021 |
-| B4.2 | E021_Str_Whitespace | Whitespace-only strings | E021 |
-| B4.3 | F261_Str_SpecialChars | Special chars (\n, \t, ') | F261 |
-| B4.4 | F261_Str_LikeEscape | LIKE escape sequences | F261 |
-| B4.5 | F261_Str_GlobCase | GLOB case sensitivity | F261 |
-| B4.6 | E021_Str_LengthBound | String length limits | E021 |
+| # | Test Case | Description | Feature |
+|---|-----------|-------------|---------|
+| B4.1 | Test_SQL1999_E021_Empty_L1 | Empty string '' behavior | E021 |
+| B4.2 | Test_SQL1999_E021_Whitespace_L1 | Whitespace-only strings | E021 |
+| B4.3 | Test_SQL1999_F261_SpecialChars_L1 | Special chars (\n, \t, ') | F261 |
+| B4.4 | Test_SQL1999_F261_LikeEscape_L1 | LIKE escape sequences | F261 |
+| B4.5 | Test_SQL1999_F261_GlobCase_L1 | GLOB case sensitivity | F261 |
+| B4.6 | Test_SQL1999_E021_LengthBound_L1 | String length limits | E021 |
 
 ### B5: Aggregation Edge Cases (E101, F401)
 
-| # | Test | Description | Feature |
-|---|------|-------------|---------|
-| B5.1 | E101_Agg_CountDistinctNull | COUNT(DISTINCT col) with NULL | E101 |
-| B5.2 | E101_Agg_SumAvgNull | SUM/AVG with NULL values | E101 |
-| B5.3 | F401_Agg_GroupByMixed | GROUP BY with mixed NULL | F401 |
-| B5.4 | E101_Agg_EmptyTable | Aggregation on empty table | E101 |
-| B5.5 | F401_Agg_String | String aggregation functions | F401 |
-| B5.6 | F401_Agg_MultiColumn | Multi-column GROUP BY | F401 |
+| # | Test Case | Description | Feature |
+|---|-----------|-------------|---------|
+| B5.1 | Test_SQL1999_E101_CountDistinctNull_L1 | COUNT(DISTINCT col) with NULL | E101 |
+| B5.2 | Test_SQL1999_E101_SumAvgNull_L1 | SUM/AVG with NULL values | E101 |
+| B5.3 | Test_SQL1999_F401_GroupByMixed_L1 | GROUP BY with mixed NULL | F401 |
+| B5.4 | Test_SQL1999_E101_EmptyTable_L1 | Aggregation on empty table | E101 |
+| B5.5 | Test_SQL1999_F401_StringAgg_L1 | String aggregation functions | F401 |
+| B5.6 | Test_SQL1999_F401_MultiColumn_L1 | Multi-column GROUP BY | F401 |
 
 ### B6: JOIN Edge Cases (F401, F411)
 
-| # | Test | Description | Feature |
-|---|------|-------------|---------|
-| B6.1 | F411_Join_LeftNull | LEFT JOIN with NULL keys | F411 |
-| B6.2 | F401_Join_CrossEmpty | CROSS JOIN with empty table | F401 |
-| B6.3 | F401_Join_Self | Self-join behavior | F401 |
-| B6.4 | F401_Join_MultiTable | Multi-table JOIN (5+ tables) | F401 |
-| B6.5 | F411_Join_UsingOn | USING vs ON difference | F411 |
-| B6.6 | F411_Join_Natural | NATURAL JOIN behavior | F411 |
+| # | Test Case | Description | Feature |
+|---|-----------|-------------|---------|
+| B6.1 | Test_SQL1999_F411_LeftNull_L1 | LEFT JOIN with NULL keys | F411 |
+| B6.2 | Test_SQL1999_F401_CrossEmpty_L1 | CROSS JOIN with empty table | F401 |
+| B6.3 | Test_SQL1999_F401_SelfJoin_L1 | Self-join behavior | F401 |
+| B6.4 | Test_SQL1999_F401_MultiTable_L1 | Multi-table JOIN (5+ tables) | F401 |
+| B6.5 | Test_SQL1999_F411_UsingOn_L1 | USING vs ON difference | F411 |
+| B6.6 | Test_SQL1999_F411_Natural_L1 | NATURAL JOIN behavior | F411 |
 
 ### B7: Subquery Edge Cases (F261, F291)
 
-| # | Test | Description | Feature |
-|---|------|-------------|---------|
-| B7.1 | F291_Sub_ScalarMulti | Scalar subquery returning multiple rows | F291 |
-| B7.2 | F291_Sub_Correlated | Correlated subquery behavior | F291 |
-| B7.3 | F291_Sub_Exists | EXISTS / NOT EXISTS edge cases | F291 |
-| B7.4 | F291_Sub_InNull | IN / NOT IN with NULL values | F291 |
-| B7.5 | F291_Sub_NestedDepth | Deep nested subqueries | F291 |
+| # | Test Case | Description | Feature |
+|---|-----------|-------------|---------|
+| B7.1 | Test_SQL1999_F291_ScalarMulti_L1 | Scalar subquery returning multiple rows | F291 |
+| B7.2 | Test_SQL1999_F291_Correlated_L1 | Correlated subquery behavior | F291 |
+| B7.3 | Test_SQL1999_F291_Exists_L1 | EXISTS / NOT EXISTS edge cases | F291 |
+| B7.4 | Test_SQL1999_F291_InNull_L1 | IN / NOT IN with NULL values | F291 |
+| B7.5 | Test_SQL1999_F291_NestedDepth_L1 | Deep nested subqueries | F291 |
 
 ### B8: Expression Edge Cases (F031, F051)
 
-| # | Test | Description | Feature |
-|---|------|-------------|---------|
-| B8.1 | F031_Expr_ShortCircuit | Short-circuit evaluation | F031 |
-| B8.2 | F031_Expr_Precedence | Operator precedence | F031 |
-| B8.3 | F031_Expr_CaseNull | CASE WHEN with NULL | F031 |
-| B8.4 | F031_Expr_BetweenNull | BETWEEN with NULL | F031 |
-| B8.5 | F051_Expr_Complex | Complex expression combinations | F051 |
+| # | Test Case | Description | Feature |
+|---|-----------|-------------|---------|
+| B8.1 | Test_SQL1999_F031_ShortCircuit_L1 | Short-circuit evaluation | F031 |
+| B8.2 | Test_SQL1999_F031_Precedence_L1 | Operator precedence | F031 |
+| B8.3 | Test_SQL1999_F031_CaseNull_L1 | CASE WHEN with NULL | F031 |
+| B8.4 | Test_SQL1999_F031_BetweenNull_L1 | BETWEEN with NULL | F031 |
+| B8.5 | Test_SQL1999_F051_Complex_L1 | Complex expression combinations | F051 |
 
 ### Success Criteria
 
@@ -186,127 +199,106 @@ Add extensive edge case tests organized by SQL:1999 feature packages.
 
 Add support for all SQL standard test series beyond E and F.
 
-### Series Overview
-
-| Series | Description | Priority | Status |
-|--------|-------------|----------|--------|
-| **B** | SQL/CLI (Call Level Interface) | Low | [ ] |
-| **C** | SQL/Compatibility | Low | [ ] |
-| **D** | SQL/Data Types | High | [ ] |
-| **G** | SQL/General Features | Medium | [ ] |
-| **I** | SQL/Integrity Enhancement | Medium | [ ] |
-| **J** | SQL/PSM (Persistent Stored Modules) | Low | [ ] |
-| **K** | SQL/Key and Locking | Low | [ ] |
-| **L** | SQL/Language Elements | High | [ ] |
-| **N** | SQL/NULL | High | [ ] |
-| **O** | SQL/Object | Medium | [ ] |
-| **P** | SQL/PSM (Procedural) | Low | [ ] |
-| **Q** | SQL/Query | High | [ ] |
-| **R** | SQL/Schema (Reference) | Medium | [ ] |
-| **T** | SQL/Transaction | High | [ ] |
-| **V** | SQL/Views | Medium | [ ] |
-| **W** | SQL/Window Functions | High | [ ] |
-
 ### C1: D Series - Data Types
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| C1.1 | D011_Varchar | VARCHAR type support | High |
-| C1.2 | D012_Char | CHAR type and padding | High |
-| C1.3 | D013_Boolean | BOOLEAN type | High |
-| C1.4 | D014_Decimal | DECIMAL/NUMERIC type | High |
-| C1.5 | D015_DateTime | DATE, TIME, TIMESTAMP types | High |
-| C1.6 | D016_Blob | BLOB/BINARY types | Medium |
-| C1.7 | D017_Interval | INTERVAL type | Medium |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| C1.1 | Test_SQL1999_D011_Varchar_L1 | VARCHAR type support | High |
+| C1.2 | Test_SQL1999_D012_Char_L1 | CHAR type and padding | High |
+| C1.3 | Test_SQL1999_D013_Boolean_L1 | BOOLEAN type | High |
+| C1.4 | Test_SQL1999_D014_Decimal_L1 | DECIMAL/NUMERIC type | High |
+| C1.5 | Test_SQL1999_D015_DateTime_L1 | DATE, TIME, TIMESTAMP types | High |
+| C1.6 | Test_SQL1999_D016_Blob_L1 | BLOB/BINARY types | Medium |
+| C1.7 | Test_SQL1999_D017_Interval_L1 | INTERVAL type | Medium |
 
 ### C2: G Series - General Features
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| C2.1 | G011_SchemaDefinition | CREATE/ALTER/DROP SCHEMA | Medium |
-| C2.2 | G012_Catalog | Catalog operations | Low |
-| C2.3 | G013_InformationSchema | INFORMATION_SCHEMA views | High |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| C2.1 | Test_SQL1999_G011_SchemaDefinition_L1 | CREATE/ALTER/DROP SCHEMA | Medium |
+| C2.2 | Test_SQL1999_G012_Catalog_L1 | Catalog operations | Low |
+| C2.3 | Test_SQL1999_G013_InformationSchema_L1 | INFORMATION_SCHEMA views | High |
 
 ### C3: I Series - Integrity Enhancement
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| C3.1 | I011_Referential | Foreign key constraints | High |
-| C3.2 | I012_CheckConstraint | CHECK constraints | High |
-| C3.3 | I013_UniqueConstraint | UNIQUE constraints | High |
-| C3.4 | I014_NotNullConstraint | NOT NULL constraints | High |
-| C3.5 | I015_PrimaryKey | PRIMARY KEY constraints | High |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| C3.1 | Test_SQL1999_I011_Referential_L1 | Foreign key constraints | High |
+| C3.2 | Test_SQL1999_I012_CheckConstraint_L1 | CHECK constraints | High |
+| C3.3 | Test_SQL1999_I013_UniqueConstraint_L1 | UNIQUE constraints | High |
+| C3.4 | Test_SQL1999_I014_NotNullConstraint_L1 | NOT NULL constraints | High |
+| C3.5 | Test_SQL1999_I015_PrimaryKey_L1 | PRIMARY KEY constraints | High |
 
 ### C4: L Series - Language Elements
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| C4.1 | L011_ReservedWords | SQL reserved words | High |
-| C4.2 | L012_Identifiers | Identifier rules (quoted, delimited) | High |
-| C4.3 | L013_Expressions | Expression syntax | High |
-| C4.4 | L014_Predicates | Comparison predicates | High |
-| C4.5 | L015_Functions | Scalar and aggregate functions | High |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| C4.1 | Test_SQL1999_L011_ReservedWords_L1 | SQL reserved words | High |
+| C4.2 | Test_SQL1999_L012_Identifiers_L1 | Identifier rules (quoted, delimited) | High |
+| C4.3 | Test_SQL1999_L013_Expressions_L1 | Expression syntax | High |
+| C4.4 | Test_SQL1999_L014_Predicates_L1 | Comparison predicates | High |
+| C4.5 | Test_SQL1999_L015_Functions_L1 | Scalar and aggregate functions | High |
 
 ### C5: N Series - NULL Handling
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| C5.1 | N011_NullComparison | IS NULL, IS NOT NULL | High |
-| C5.2 | N012_NullLogic | NULL in AND/OR/NOT | High |
-| C5.3 | N013_NullCoalesce | COALESCE function | High |
-| C5.4 | N014_NullIf | NULLIF function | High |
-| C5.5 | N015_NullCast | CAST NULL behavior | High |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| C5.1 | Test_SQL1999_N011_NullComparison_L1 | IS NULL, IS NOT NULL | High |
+| C5.2 | Test_SQL1999_N012_NullLogic_L1 | NULL in AND/OR/NOT | High |
+| C5.3 | Test_SQL1999_N013_Coalesce_L1 | COALESCE function | High |
+| C5.4 | Test_SQL1999_N014_NullIf_L1 | NULLIF function | High |
+| C5.5 | Test_SQL1999_N015_NullCast_L1 | CAST NULL behavior | High |
 
 ### C6: Q Series - Query
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| Q1.1 | Q011_SelectBasic | Basic SELECT | High |
-| Q2.1 | Q021_JoinSyntax | JOIN syntax variants | High |
-| Q3.1 | Q031_Subquery | Subqueries | High |
-| Q4.1 | Q041_SetOperations | UNION, INTERSECT, EXCEPT | High |
-| Q5.1 | Q051_GroupBy | GROUP BY, HAVING | High |
-| Q6.1 | Q061_OrderBy | ORDER BY | High |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| C6.1 | Test_SQL1999_Q011_SelectBasic_L1 | Basic SELECT | High |
+| C6.2 | Test_SQL1999_Q021_JoinSyntax_L1 | JOIN syntax variants | High |
+| C6.3 | Test_SQL1999_Q031_Subquery_L1 | Subqueries | High |
+| C6.4 | Test_SQL1999_Q041_SetOperations_L1 | UNION, INTERSECT, EXCEPT | High |
+| C6.5 | Test_SQL1999_Q051_GroupBy_L1 | GROUP BY, HAVING | High |
+| C6.6 | Test_SQL1999_Q061_OrderBy_L1 | ORDER BY | High |
 
 ### C7: R Series - Schema
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| C7.1 | R011_CreateTable | CREATE TABLE | High |
-| C7.2 | R012_AlterTable | ALTER TABLE | High |
-| C7.3 | R013_DropTable | DROP TABLE | High |
-| C7.4 | R014_CreateIndex | CREATE INDEX | High |
-| C7.5 | R015_DropIndex | DROP INDEX | High |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| C7.1 | Test_SQL1999_R011_CreateTable_L1 | CREATE TABLE | High |
+| C7.2 | Test_SQL1999_R012_AlterTable_L1 | ALTER TABLE | High |
+| C7.3 | Test_SQL1999_R013_DropTable_L1 | DROP TABLE | High |
+| C7.4 | Test_SQL1999_R014_CreateIndex_L1 | CREATE INDEX | High |
+| C7.5 | Test_SQL1999_R015_DropIndex_L1 | DROP INDEX | High |
 
 ### C8: T Series - Transaction
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| C8.1 | T011_TransactionBasic | BEGIN/COMMIT/ROLLBACK | High |
-| C8.2 | T012_Savepoint | SAVEPOINT support | High |
-| C8.3 | T013_Autocommit | Autocommit behavior | Medium |
-| C8.4 | T014_Isolation | Transaction isolation levels | Medium |
-| C8.5 | T015_DeferredConstraint | Deferred constraints | Medium |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| C8.1 | Test_SQL1999_T011_TransactionBasic_L1 | BEGIN/COMMIT/ROLLBACK | High |
+| C8.2 | Test_SQL1999_T012_Savepoint_L1 | SAVEPOINT support | High |
+| C8.3 | Test_SQL1999_T013_Autocommit_L1 | Autocommit behavior | Medium |
+| C8.4 | Test_SQL1999_T014_Isolation_L1 | Transaction isolation levels | Medium |
+| C8.5 | Test_SQL1999_T015_DeferredConstraint_L1 | Deferred constraints | Medium |
 
 ### C9: V Series - Views
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| C9.1 | V011_CreateView | CREATE VIEW | High |
-| C9.2 | V012_DropView | DROP VIEW | High |
-| C9.3 | V013_UpdatableView | Updatable views | Medium |
-| C9.4 | V014_RecursiveView | Recursive views | Medium |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| C9.1 | Test_SQL1999_V011_CreateView_L1 | CREATE VIEW | High |
+| C9.2 | Test_SQL1999_V012_DropView_L1 | DROP VIEW | High |
+| C9.3 | Test_SQL1999_V013_UpdatableView_L1 | Updatable views | Medium |
+| C9.4 | Test_SQL1999_V014_RecursiveView_L1 | Recursive views | Medium |
 
 ### C10: W Series - Window Functions
 
-| # | Test | Description | Priority |
-|---|------|-------------|----------|
-| C10.1 | W011_RowNumber | ROW_NUMBER() | High |
-| C10.2 | W012_Rank | RANK(), DENSE_RANK() | High |
-| C10.3 | W013_Ntile | NTILE() | Medium |
-| C10.4 | W014_LagLead | LAG(), LEAD() | High |
-| C10.5 | W015_FirstLast | FIRST_VALUE(), LAST_VALUE() | High |
-| C10.6 | W016_NthValue | NTH_VALUE() | Medium |
+| # | Test Case | Description | Priority |
+|---|-----------|-------------|----------|
+| C10.1 | Test_SQL1999_W011_RowNumber_L1 | ROW_NUMBER() | High |
+| C10.2 | Test_SQL1999_W012_Rank_L1 | RANK(), DENSE_RANK() | High |
+| C10.3 | Test_SQL1999_W013_Ntile_L1 | NTILE() | Medium |
+| C10.4 | Test_SQL1999_W014_LagLead_L1 | LAG(), LEAD() | High |
+| C10.5 | Test_SQL1999_W015_FirstLast_L1 | FIRST_VALUE(), LAST_VALUE() | High |
+| C10.6 | Test_SQL1999_W016_NthValue_L1 | NTH_VALUE() | Medium |
 
 ### Success Criteria
 
@@ -398,90 +390,90 @@ Complete test series to add:
 
 ```
 internal/TS/SQL1999/
-├── E011/          # Existing: INTEGER types
-├── E021/          # Existing: Character types
-├── E031/          # Existing: Identifier
-├── E041/          # Existing: Table definition
-├── E051/          # Existing: Constraint
-├── E061/          # Existing: Constraint
-├── E071/          # Existing: View
-├── E081/          # Existing: Transaction
-├── E091/          # Existing: NULL
-├── E101/          # Existing: Aggregate
-├── E111/          # Existing: Scalar
-├── E121/          # Existing: Table expression
-├── E131/          # Existing: Query expression
-├── E141/          # Existing: Sequence
-├── E151/          # Existing: Distinct type
-├── E161/          # Existing: Schema
-├── E171/          # Existing: Module
-├── F011/          # Existing: View
-├── F021/          # Existing: Table
-├── F031/          # Existing: Trigger
-├── F041/          # Existing: Transaction
-├── F051/          # Existing: Query
-├── F261/          # Existing: String
-├── F291/          # Existing: Subquery
-├── F301/          # Existing: Expressions
-├── F401/          # Existing: Join
-├── F411/          # Existing: Join
-├── F871/          # Existing: Upsert
-├── F874/          # Existing: Function
-├── F875/          # Existing: UPSERT
-├── F876/          # Existing: Index
-├── F878/          # Existing: RETURNING
-├── F879/          # Existing: SAVEPOINT
-├── D011/          # NEW: VARCHAR
-├── D012/          # NEW: CHAR
-├── D013/          # NEW: BOOLEAN
-├── D014/          # NEW: DECIMAL
-├── D015/          # NEW: DateTime
-├── D016/          # NEW: BLOB
-├── D017/          # NEW: INTERVAL
-├── G011/          # NEW: Schema Definition
-├── G012/          # NEW: Catalog
-├── G013/          # NEW: Information Schema
-├── I011/          # NEW: Referential
-├── I012/          # NEW: Check Constraint
-├── I013/          # NEW: Unique Constraint
-├── I014/          # NEW: Not Null Constraint
-├── I015/          # NEW: Primary Key
-├── L011/          # NEW: Reserved Words
-├── L012/          # NEW: Identifiers
-├── L013/          # NEW: Expressions
-├── L014/          # NEW: Predicates
-├── L015/          # NEW: Functions
-├── N011/          # NEW: NULL Comparison
-├── N012/          # NEW: NULL Logic
-├── N013/          # NEW: COALESCE
-├── N014/          # NEW: NULLIF
-├── N015/          # NEW: CAST NULL
-├── Q011/          # NEW: SELECT Basic
-├── Q021/          # NEW: JOIN Syntax
-├── Q031/          # NEW: Subquery
-├── Q041/          # NEW: Set Operations
-├── Q051/          # NEW: GROUP BY
-├── Q061/          # NEW: ORDER BY
-├── R011/          # NEW: CREATE TABLE
-├── R012/          # NEW: ALTER TABLE
-├── R013/          # NEW: DROP TABLE
-├── R014/          # NEW: CREATE INDEX
-├── R015/          # NEW: DROP INDEX
-├── T011/          # NEW: Transaction Basic
-├── T012/          # NEW: Savepoint
-├── T013/          # NEW: Autocommit
-├── T014/          # NEW: Isolation
-├── T015/          # NEW: Deferred Constraint
-├── V011/          # NEW: CREATE VIEW
-├── V012/          # NEW: DROP VIEW
-├── V013/          # NEW: Updatable View
-├── V014/          # NEW: Recursive View
-├── W011/          # NEW: ROW_NUMBER
-├── W012/          # NEW: RANK
-├── W013/          # NEW: NTILE
-├── W014/          # NEW: LAG/LEAD
-├── W015/          # NEW: FIRST/LAST VALUE
-└── W016/          # NEW: NTH_VALUE
+├── E011/          # INTEGER types
+├── E021/          # Character types
+├── E031/          # Identifier
+├── E041/          # Table definition
+├── E051/          # Constraint
+├── E061/          # Constraint
+├── E071/          # View
+├── E081/          # Transaction
+├── E091/          # NULL
+├── E101/          # Aggregate
+├── E111/          # Scalar
+├── E121/          # Table expression
+├── E131/          # Query expression
+├── E141/          # Sequence
+├── E151/          # Distinct type
+├── E161/          # Schema
+├── E171/          # Module
+├── F011/          # View
+├── F021/          # Table
+├── F031/          # Trigger
+├── F041/          # Transaction
+├── F051/          # Query
+├── F261/          # String
+├── F291/          # Subquery
+├── F301/          # Expressions
+├── F401/          # Join
+├── F411/          # Join
+├── F871/          # Upsert
+├── F874/          # Function
+├── F875/          # UPSERT
+├── F876/          # Index
+├── F878/          # RETURNING
+├── F879/          # SAVEPOINT
+├── D011/          # VARCHAR
+├── D012/          # CHAR
+├── D013/          # BOOLEAN
+├── D014/          # DECIMAL
+├── D015/          # DateTime
+├── D016/          # BLOB
+├── D017/          # INTERVAL
+├── G011/          # Schema Definition
+├── G012/          # Catalog
+├── G013/          # Information Schema
+├── I011/          # Referential
+├── I012/          # Check Constraint
+├── I013/          # Unique Constraint
+├── I014/          # Not Null Constraint
+├── I015/          # Primary Key
+├── L011/          # Reserved Words
+├── L012/          # Identifiers
+├── L013/          # Expressions
+├── L014/          # Predicates
+├── L015/          # Functions
+├── N011/          # NULL Comparison
+├── N012/          # NULL Logic
+├── N013/          # COALESCE
+├── N014/          # NULLIF
+├── N015/          # CAST NULL
+├── Q011/          # SELECT Basic
+├── Q021/          # JOIN Syntax
+├── Q031/          # Subquery
+├── Q041/          # Set Operations
+├── Q051/          # GROUP BY
+├── Q061/          # ORDER BY
+├── R011/          # CREATE TABLE
+├── R012/          # ALTER TABLE
+├── R013/          # DROP TABLE
+├── R014/          # CREATE INDEX
+├── R015/          # DROP INDEX
+├── T011/          # Transaction Basic
+├── T012/          # Savepoint
+├── T013/          # Autocommit
+├── T014/          # Isolation
+├── T015/          # Deferred Constraint
+├── V011/          # CREATE VIEW
+├── V012/          # DROP VIEW
+├── V013/          # Updatable View
+├── V014/          # Recursive View
+├── W011/          # ROW_NUMBER
+├── W012/          # RANK
+├── W013/          # NTILE
+├── W014/          # LAG/LEAD
+├── W015/          # FIRST/LAST VALUE
+└── W016/          # NTH_VALUE
 ```
 
 ---
@@ -502,57 +494,57 @@ internal/TS/SQL1999/
 - `internal/TS/SQL1999/F871/` - Add MERGE tests
 
 ### New Test Packages
-- `internal/TS/SQL1999/D011/` - VARCHAR type
-- `internal/TS/SQL1999/D012/` - CHAR type
-- `internal/TS/SQL1999/D013/` - BOOLEAN type
-- `internal/TS/SQL1999/D014/` - DECIMAL type
-- `internal/TS/SQL1999/D015/` - DateTime type
-- `internal/TS/SQL1999/D016/` - BLOB type
-- `internal/TS/SQL1999/D017/` - INTERVAL type
-- `internal/TS/SQL1999/G011/` - Schema Definition
-- `internal/TS/SQL1999/G012/` - Catalog
-- `internal/TS/SQL1999/G013/` - Information Schema
-- `internal/TS/SQL1999/I011/` - Referential Integrity
-- `internal/TS/SQL1999/I012/` - Check Constraint
-- `internal/TS/SQL1999/I013/` - Unique Constraint
-- `internal/TS/SQL1999/I014/` - Not Null Constraint
-- `internal/TS/SQL1999/I015/` - Primary Key
-- `internal/TS/SQL1999/L011/` - Reserved Words
-- `internal/TS/SQL1999/L012/` - Identifiers
-- `internal/TS/SQL1999/L013/` - Expressions
-- `internal/TS/SQL1999/L014/` - Predicates
-- `internal/TS/SQL1999/L015/` - Functions
-- `internal/TS/SQL1999/N011/` - NULL Comparison
-- `internal/TS/SQL1999/N012/` - NULL Logic
-- `internal/TS/SQL1999/N013/` - COALESCE
-- `internal/TS/SQL1999/N014/` - NULLIF
-- `internal/TS/SQL1999/N015/` - CAST NULL
-- `internal/TS/SQL1999/Q011/` - SELECT Basic
-- `internal/TS/SQL1999/Q021/` - JOIN Syntax
-- `internal/TS/SQL1999/Q031/` - Subquery
-- `internal/TS/SQL1999/Q041/` - Set Operations
-- `internal/TS/SQL1999/Q051/` - GROUP BY
-- `internal/TS/SQL1999/Q061/` - ORDER BY
-- `internal/TS/SQL1999/R011/` - CREATE TABLE
-- `internal/TS/SQL1999/R012/` - ALTER TABLE
-- `internal/TS/SQL1999/R013/` - DROP TABLE
-- `internal/TS/SQL1999/R014/` - CREATE INDEX
-- `internal/TS/SQL1999/R015/` - DROP INDEX
-- `internal/TS/SQL1999/T011/` - Transaction Basic
-- `internal/TS/SQL1999/T012/` - Savepoint
-- `internal/TS/SQL1999/T013/` - Autocommit
-- `internal/TS/SQL1999/T014/` - Isolation
-- `internal/TS/SQL1999/T015/` - Deferred Constraint
-- `internal/TS/SQL1999/V011/` - CREATE VIEW
-- `internal/TS/SQL1999/V012/` - DROP VIEW
-- `internal/TS/SQL1999/V013/` - Updatable View
-- `internal/TS/SQL1999/V014/` - Recursive View
-- `internal/TS/SQL1999/W011/` - ROW_NUMBER
-- `internal/TS/SQL1999/W012/` - RANK
-- `internal/TS/SQL1999/W013/` - NTILE
-- `internal/TS/SQL1999/W014/` - LAG/LEAD
-- `internal/TS/SQL1999/W015/` - FIRST/LAST VALUE
-- `internal/TS/SQL1999/W016/` - NTH_VALUE
+- `internal/TS/SQL1999/D011/` - Test_SQL1999_D011_Varchar_L1
+- `internal/TS/SQL1999/D012/` - Test_SQL1999_D012_Char_L1
+- `internal/TS/SQL1999/D013/` - Test_SQL1999_D013_Boolean_L1
+- `internal/TS/SQL1999/D014/` - Test_SQL1999_D014_Decimal_L1
+- `internal/TS/SQL1999/D015/` - Test_SQL1999_D015_DateTime_L1
+- `internal/TS/SQL1999/D016/` - Test_SQL1999_D016_Blob_L1
+- `internal/TS/SQL1999/D017/` - Test_SQL1999_D017_Interval_L1
+- `internal/TS/SQL1999/G011/` - Test_SQL1999_G011_SchemaDefinition_L1
+- `internal/TS/SQL1999/G012/` - Test_SQL1999_G012_Catalog_L1
+- `internal/TS/SQL1999/G013/` - Test_SQL1999_G013_InformationSchema_L1
+- `internal/TS/SQL1999/I011/` - Test_SQL1999_I011_Referential_L1
+- `internal/TS/SQL1999/I012/` - Test_SQL1999_I012_CheckConstraint_L1
+- `internal/TS/SQL1999/I013/` - Test_SQL1999_I013_UniqueConstraint_L1
+- `internal/TS/SQL1999/I014/` - Test_SQL1999_I014_NotNullConstraint_L1
+- `internal/TS/SQL1999/I015/` - Test_SQL1999_I015_PrimaryKey_L1
+- `internal/TS/SQL1999/L011/` - Test_SQL1999_L011_ReservedWords_L1
+- `internal/TS/SQL1999/L012/` - Test_SQL1999_L012_Identifiers_L1
+- `internal/TS/SQL1999/L013/` - Test_SQL1999_L013_Expressions_L1
+- `internal/TS/SQL1999/L014/` - Test_SQL1999_L014_Predicates_L1
+- `internal/TS/SQL1999/L015/` - Test_SQL1999_L015_Functions_L1
+- `internal/TS/SQL1999/N011/` - Test_SQL1999_N011_NullComparison_L1
+- `internal/TS/SQL1999/N012/` - Test_SQL1999_N012_NullLogic_L1
+- `internal/TS/SQL1999/N013/` - Test_SQL1999_N013_Coalesce_L1
+- `internal/TS/SQL1999/N014/` - Test_SQL1999_N014_NullIf_L1
+- `internal/TS/SQL1999/N015/` - Test_SQL1999_N015_NullCast_L1
+- `internal/TS/SQL1999/Q011/` - Test_SQL1999_Q011_SelectBasic_L1
+- `internal/TS/SQL1999/Q021/` - Test_SQL1999_Q021_JoinSyntax_L1
+- `internal/TS/SQL1999/Q031/` - Test_SQL1999_Q031_Subquery_L1
+- `internal/TS/SQL1999/Q041/` - Test_SQL1999_Q041_SetOperations_L1
+- `internal/TS/SQL1999/Q051/` - Test_SQL1999_Q051_GroupBy_L1
+- `internal/TS/SQL1999/Q061/` - Test_SQL1999_Q061_OrderBy_L1
+- `internal/TS/SQL1999/R011/` - Test_SQL1999_R011_CreateTable_L1
+- `internal/TS/SQL1999/R012/` - Test_SQL1999_R012_AlterTable_L1
+- `internal/TS/SQL1999/R013/` - Test_SQL1999_R013_DropTable_L1
+- `internal/TS/SQL1999/R014/` - Test_SQL1999_R014_CreateIndex_L1
+- `internal/TS/SQL1999/R015/` - Test_SQL1999_R015_DropIndex_L1
+- `internal/TS/SQL1999/T011/` - Test_SQL1999_T011_TransactionBasic_L1
+- `internal/TS/SQL1999/T012/` - Test_SQL1999_T012_Savepoint_L1
+- `internal/TS/SQL1999/T013/` - Test_SQL1999_T013_Autocommit_L1
+- `internal/TS/SQL1999/T014/` - Test_SQL1999_T014_Isolation_L1
+- `internal/TS/SQL1999/T015/` - Test_SQL1999_T015_DeferredConstraint_L1
+- `internal/TS/SQL1999/V011/` - Test_SQL1999_V011_CreateView_L1
+- `internal/TS/SQL1999/V012/` - Test_SQL1999_V012_DropView_L1
+- `internal/TS/SQL1999/V013/` - Test_SQL1999_V013_UpdatableView_L1
+- `internal/TS/SQL1999/V014/` - Test_SQL1999_V014_RecursiveView_L1
+- `internal/TS/SQL1999/W011/` - Test_SQL1999_W011_RowNumber_L1
+- `internal/TS/SQL1999/W012/` - Test_SQL1999_W012_Rank_L1
+- `internal/TS/SQL1999/W013/` - Test_SQL1999_W013_Ntile_L1
+- `internal/TS/SQL1999/W014/` - Test_SQL1999_W014_LagLead_L1
+- `internal/TS/SQL1999/W015/` - Test_SQL1999_W015_FirstLast_L1
+- `internal/TS/SQL1999/W016/` - Test_SQL1999_W016_NthValue_L1
 
 ---
 
