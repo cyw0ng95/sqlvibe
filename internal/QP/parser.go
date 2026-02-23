@@ -2219,13 +2219,22 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 					p.advance()
 					break
 				}
+				if p.current().Type == TokenEOF {
+					break
+				}
 				expr, err := p.parseExpr()
 				if err != nil {
 					return nil, err
 				}
+				if expr == nil {
+					break
+				}
 				values = append(values, evalConstExpr(expr))
 				if p.current().Type == TokenComma {
 					p.advance()
+				} else if p.current().Type != TokenRightParen {
+					// Unexpected token - try to recover by breaking
+					break
 				}
 			}
 			return &BinaryExpr{Op: TokenIn, Left: left, Right: &Literal{Value: values}}, nil
@@ -2309,13 +2318,22 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 					p.advance()
 					break
 				}
+				if p.current().Type == TokenEOF {
+					break
+				}
 				expr, err := p.parseExpr()
 				if err != nil {
 					return nil, err
 				}
+				if expr == nil {
+					break
+				}
 				values = append(values, evalConstExpr(expr))
 				if p.current().Type == TokenComma {
 					p.advance()
+				} else if p.current().Type != TokenRightParen {
+					// Unexpected token - try to recover by breaking
+					break
 				}
 			}
 			return &BinaryExpr{Op: TokenIn, Left: left, Right: &Literal{Value: values}}, nil
