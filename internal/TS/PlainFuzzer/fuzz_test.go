@@ -1,11 +1,12 @@
 package PlainFuzzer
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
-	_ "github.com/glebarez/go-sqlite"
 	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
+	_ "github.com/glebarez/go-sqlite"
 )
 
 func FuzzSQL(f *testing.F) {
@@ -120,7 +121,11 @@ func splitStatements(sql string) []string {
 func executeSQL(db *sqlvibe.Database, query string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = r.(error)
+			if e, ok := r.(error); ok {
+				err = e
+			} else {
+				err = fmt.Errorf("panic: %v", r)
+			}
 		}
 	}()
 
