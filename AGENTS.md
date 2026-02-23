@@ -360,11 +360,10 @@ When PlainFuzzer confirms a bug, record it in `internal/TS/PlainFuzzer/HUNTINGS.
 | **Type** | Bug category |
 | **File** | affected file path |
 | **Function** | function name |
-| **Trigger** | SQL that triggers the bug |
+| **Trigger SQL** | SQL that triggers the bug |
 | **Impact** | What happens (panic, hang, wrong result) |
 | **Root Cause** | Explanation of the bug |
 | **Fix** | How it was fixed |
-| **Corpus Entry** | Fuzzer corpus ID (if applicable) |
 | **Found By** | PlainFuzzer |
 | **Date** | YYYY-MM-DD |
 ```
