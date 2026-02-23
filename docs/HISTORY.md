@@ -9,6 +9,8 @@
 - **`information_schema.referential_constraints` always empty** (`pkg/sqlvibe/database.go`): The view now returns one row per foreign key constraint referencing the parent table's primary key. Root cause: no data generation code existed for this case.
 - **`sqlite_master` SQL column returned empty column list** (`pkg/sqlvibe/database.go`): `SELECT sql FROM sqlite_master WHERE type='table'` now returns reconstructed `CREATE TABLE` SQL including all column definitions, `NOT NULL`, `PRIMARY KEY`, and `FOREIGN KEY` clauses. Root cause: the SQL was hardcoded as `CREATE TABLE name ()` with no column info.
 - **`information_schema.columns` IS_NULLABLE tracking** (`pkg/sqlvibe/database.go`): The `is_nullable` column now correctly reflects `NOT NULL` constraints tracked in `db.columnNotNull` rather than using a string search on the type string.
+### Fuzzer Bugs (PlainFuzzer)
+ **Empty tableName panic in execVMDML** (`pkg/sqlvibe/vm_exec.go`): SQLsmith-style fuzzing found that malformed SQL like `"UPDATE"` (mutated from "BEGIN") caused panic `"Assertion failed: tableName cannot be empty"`. Root cause: `execVMDML` used `util.Assert` instead of returning an error. Also fixed fuzzer recover block to handle non-error panics. Found via PlainFuzzer running 60s with 315K+ execs.
 
 ### Features
 - **`PRAGMA index_info(index_name)`** (`pkg/sqlvibe/pragma.go`): Returns `(seqno, cid, name)` rows for each column in the named index, matching SQLite's output. Returns empty for missing or unknown indexes.
