@@ -54,71 +54,71 @@ This plan implements core SQL compatibility features and performance optimizatio
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes OR REPLACE | Works | [ ] |
-| Parser recognizes OR IGNORE | Works | [ ] |
-| Execution deletes/ignores on conflict | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes OR REPLACE | Works | [x] |
+| Parser recognizes OR IGNORE | Works | [x] |
+| Execution deletes/ignores on conflict | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 2: UPSERT
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Parser recognizes ON CONFLICT | Works | [ ] |
-| DO UPDATE SET parsed | Works | [ ] |
-| DO NOTHING parsed | Works | [ ] |
-| Conflict target (column) parsed | Works | [ ] |
-| Execution applies update | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Parser recognizes ON CONFLICT | Works | [x] |
+| DO UPDATE SET parsed | Works | [x] |
+| DO NOTHING parsed | Works | [x] |
+| Conflict target (column) parsed | Works | [x] |
+| Execution applies update | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 3: REPLACE Function
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Function registered | Works | [ ] |
-| String replacement works | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Function registered | Works | [x] |
+| String replacement works | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 4: SUBSTR/SUBSTRING
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Function registered | Works | [ ] |
-| SUBSTR(str, start, len) works | Works | [ ] |
-| Negative start handled | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| Function registered | Works | [x] |
+| SUBSTR(str, start, len) works | Works | [x] |
+| Negative start handled | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 5: TRIM Functions
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| TRIM, LTRIM, RTRIM registered | Works | [ ] |
-| Character trimming works | Works | [ ] |
-| Default space trimming | Works | [ ] |
-| Test against SQLite | Match | [ ] |
+| TRIM, LTRIM, RTRIM registered | Works | [x] |
+| Character trimming works | Works | [x] |
+| Default space trimming | Works | [x] |
+| Test against SQLite | Match | [x] |
 
 ### Phase 6: SIMD Vectorization
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Integer add/multiply vectorized | Works | [ ] |
-| Float add/multiply vectorized | Works | [ ] |
-| Benchmark shows improvement | 2x faster | [ ] |
+| Integer add/multiply vectorized | Works | [x] |
+| Float add/multiply vectorized | Works | [x] |
+| Benchmark shows improvement | 2x faster | [x] |
 
 ### Phase 7: Extended Dispatch
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| Add comparison opcodes | Works | [ ] |
-| Add string opcodes | Works | [ ] |
-| Benchmark shows improvement | 20% faster | [ ] |
+| Add comparison opcodes | Works | [x] |
+| Add string opcodes | Works | [x] |
+| Benchmark shows improvement | 20% faster | [x] |
 
 ### Phase 8: Testing
 
 | Criteria | Target | Status |
 |----------|--------|--------|
-| All unit tests pass | 100% | [ ] |
-| SQLite comparison tests pass | 100% | [ ] |
-| Benchmarks updated | Done | [ ] |
+| All unit tests pass | 100% | [x] |
+| SQLite comparison tests pass | 100% | [x] |
+| Benchmarks updated | Done | [x] |
 
 ---
 

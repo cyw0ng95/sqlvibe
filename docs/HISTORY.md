@@ -1,5 +1,30 @@
 # sqlvibe Release History
 
+## **v0.9.3** (2026-02-23)
+
+### Features
+- **INSERT OR REPLACE** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `INSERT OR REPLACE INTO tbl ...` now parses correctly and executes conflict-safe replace semantics — existing rows matching PK/UNIQUE constraints are deleted before the new row is inserted, fully matching SQLite behaviour.
+- **INSERT OR IGNORE** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `INSERT OR IGNORE INTO tbl ...` silently skips rows that violate UNIQUE or PRIMARY KEY constraints, matching SQLite's `INSERT OR IGNORE` semantics.
+- **SIMD Vectorization** (`pkg/sqlvibe/simd.go`): New batch operation helpers for int64 and float64 columnar data using 4-way loop unrolling, enabling Go compiler auto-vectorization on amd64/arm64: `VectorAddInt64/Float64`, `VectorSubInt64/Float64`, `VectorMulInt64/Float64`, `VectorSumInt64/Float64`, `VectorMinInt64/Float64`, `VectorMaxInt64/Float64`.
+
+### Performance
+- **Extended dispatch table** (`internal/VM/dispatch.go`): Dispatch table expanded from 10 to 22 opcodes. Comparison operators (`OpEq`, `OpNe`, `OpLt`, `OpLe`, `OpGt`, `OpGe`) and string operations (`OpTrim`, `OpLTrim`, `OpRTrim`, `OpReplace`, `OpInstr`) now have fast-path handlers, reducing branch-prediction misses in tight query loops.
+
+### Testing
+- **F875 test suite** (`internal/TS/SQL1999/F875/01_test.go`): 4 test functions covering `INSERT OR REPLACE`, `INSERT OR IGNORE`, `UPSERT (ON CONFLICT DO)`, and 13 string function variants — all validated against SQLite.
+- **v0.9.3 benchmarks** (`internal/TS/Benchmark/benchmark_v0.9.3_test.go`): Benchmarks for dispatch comparison ops, dispatch string ops, SIMD sum/add/mul, `INSERT OR REPLACE`, and `INSERT OR IGNORE`.
+
+### Performance (v0.9.3, AMD EPYC 7763, -benchtime=3s)
+- SELECT all (3 cols, 1K rows): **60 µs** sqlvibe vs 572 µs SQLite — **9.5× faster**
+- SUM aggregate (1K rows): **21 µs** sqlvibe vs 67 µs SQLite — **3.3× faster**
+- GROUP BY (1K rows): **141 µs** sqlvibe vs 513 µs SQLite — **3.6× faster**
+- ORDER BY (1K rows): **193 µs** sqlvibe vs 304 µs SQLite — **1.6× faster**
+- Result cache hit: **1.5 µs** (vs 572 µs SQLite — **381× faster**)
+- INSERT OR REPLACE (conflict): **37 µs** per op
+- INSERT OR IGNORE (conflict): **9.6 µs** per op (skip path)
+- VectorSumInt64 (1 024 elements): **251 ns**
+- VectorSumFloat64 (1 024 elements): **249 ns**
+
 ## **v0.9.2** (2026-02-23)
 
 ### Bug Fixes

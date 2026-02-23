@@ -80,6 +80,7 @@ type InsertStmt struct {
 	UseDefaults bool        // True when using DEFAULT VALUES
 	SelectQuery *SelectStmt // Non-nil for INSERT ... SELECT
 	OnConflict  *OnConflict // nil if no ON CONFLICT clause
+	OrAction    string      // "REPLACE", "IGNORE", "ABORT", "FAIL", "ROLLBACK" or ""
 }
 
 func (i *InsertStmt) NodeType() string { return "InsertStmt" }
@@ -928,6 +929,19 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 		return nil, nil
 	}
 	p.advance()
+
+	// Handle INSERT OR <action> syntax (e.g. INSERT OR REPLACE, INSERT OR IGNORE)
+	if p.current().Type == TokenOr {
+		p.advance()
+		action := strings.ToUpper(p.current().Literal)
+		switch action {
+		case "REPLACE", "IGNORE", "ABORT", "FAIL", "ROLLBACK":
+			stmt.OrAction = action
+			p.advance()
+		default:
+			return nil, fmt.Errorf("unknown INSERT OR action: %s", p.current().Literal)
+		}
+	}
 
 	if p.current().Literal == "INTO" {
 		p.advance()
