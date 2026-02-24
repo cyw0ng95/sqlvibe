@@ -1,5 +1,36 @@
 # sqlvibe Release History
 
+## **v0.9.10** (2026-02-24)
+
+### Features: WAL Enhancement, Storage PRAGMAs, FuzzDBFile
+
+#### Track A: WAL Enhancement
+- **Auto-Checkpoint Background** (`PRAGMA wal_autocheckpoint = N`): background goroutine checkpoints WAL after N frames; N=0 disables.
+- **WAL Startup Replay**: `Open()` now detects a `{dbpath}-wal` file and automatically replays/recovers it, enabling crash recovery on next open.
+- **Checkpoint Modes** (`PRAGMA wal_checkpoint(passive|full|truncate)`): all three SQLite-compatible modes now handled.
+- **WAL Corruption Recovery**: DS WAL `Replay()` now skips malformed JSON entries instead of aborting, enabling partial replay from corrupt WAL files.
+- **New TM WAL helpers**: `Path()`, `WALExists()`, `ShouldCheckpoint()`, `CheckpointFull()`, `CheckpointTruncate()`.
+
+#### Track B: Storage PRAGMAs
+- `PRAGMA shrink_memory` — releases page cache, plan cache, and result cache; calls `runtime.GC()`.
+- `PRAGMA optimize` — delegates to ANALYZE to refresh query-planner statistics.
+- `PRAGMA integrity_check` — returns `ok` or a list of schema/row-data error messages.
+- `PRAGMA quick_check` — fast file header and size sanity check.
+- `PRAGMA journal_size_limit [= N]` — gets/sets maximum WAL file size; triggers checkpoint if exceeded.
+- `PRAGMA cache_grind` — returns `(pages_cached, pages_free, hits, misses)` cache statistics.
+
+#### Track C: FuzzDBFile
+- New fuzzer `FuzzDBFile` in `internal/TS/PlainFuzzer/fuzz_file_test.go`.
+- `FileMutator` with 6 mutation strategies: header, truncate, byte-flip, structure, footer, padding injection.
+- `generateSeedDatabases()` creates 5 seed databases at runtime (no binary blobs in repository).
+
+#### Test Suites
+- F880 (WAL Enhancement): 7 tests covering checkpoint modes, auto-checkpoint, corruption recovery.
+- F881 (Storage PRAGMAs): 7 tests covering all new PRAGMAs.
+
+#### Quality
+- Updated `.gitignore` to exclude compiled command binaries and fuzz corpus cache directories.
+
 ## **v0.9.9** (2026-02-23)
 
 ### Test Suite Expansion

@@ -94,10 +94,9 @@ func (wal *WAL) writeHeader() error {
 	binary.BigEndian.PutUint32(data[12:16], uint32(header.Salt1))
 	binary.BigEndian.PutUint32(data[16:20], uint32(header.Salt2))
 
-	cs1, cs2 := wal.checksum(data[:28])
-	binary.BigEndian.PutUint32(data[28:32], cs1)
-	binary.BigEndian.PutUint32(data[32:36], cs2)
-	_ = cs2
+	cs1, cs2 := wal.checksum(data[:20])
+	binary.BigEndian.PutUint32(data[20:24], cs1)
+	binary.BigEndian.PutUint32(data[24:28], cs2)
 
 	_, err := wal.file.WriteAt(data, 0)
 	return err
@@ -127,7 +126,6 @@ func (wal *WAL) WriteFrame(pageNum uint32, pageData []byte) error {
 	cs1, cs2 := wal.checksum(data[:offset])
 	binary.BigEndian.PutUint32(data[20:24], cs1)
 	binary.BigEndian.PutUint32(data[24:28], cs2)
-	_ = cs2
 
 	_, err := wal.file.WriteAt(data, int64(WALHeaderSize+wal.sequence*int32(WALFrameSize+wal.pageSize)))
 	return err
@@ -209,6 +207,51 @@ func (wal *WAL) FrameCount() int {
 	wal.mu.Lock()
 	defer wal.mu.Unlock()
 	return int(wal.sequence)
+}
+
+// Path returns the file path of the WAL.
+func (wal *WAL) Path() string {
+	return wal.file.Name()
+}
+
+// WALExists reports whether a WAL file exists at the given path.
+func WALExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// ShouldCheckpoint returns true when the WAL has accumulated at least
+// frameThreshold frames and a checkpoint should be triggered.
+func (wal *WAL) ShouldCheckpoint(frameThreshold int) bool {
+	if frameThreshold <= 0 {
+		return false
+	}
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
+	return int(wal.sequence) >= frameThreshold
+}
+
+// CheckpointFull performs a full exclusive checkpoint, returning
+// (busy, logRemoved, checkpointed) counts like SQLite.
+func (wal *WAL) CheckpointFull() (busy, logRemoved, checkpointed int, err error) {
+	moved, cpErr := wal.Checkpoint()
+	if cpErr != nil {
+		return 0, 0, 0, cpErr
+	}
+	return 0, moved, moved, nil
+}
+
+// CheckpointTruncate performs a full checkpoint and truncates the WAL to zero.
+func (wal *WAL) CheckpointTruncate() (busy, logRemoved, checkpointed int, err error) {
+	moved, cpErr := wal.Checkpoint()
+	if cpErr != nil {
+		return 0, 0, 0, cpErr
+	}
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
+	_ = wal.file.Truncate(int64(WALHeaderSize))
+	_, _ = wal.file.Seek(0, io.SeekStart)
+	return 0, moved, moved, nil
 }
 
 // Recover replays all committed frames in the WAL and returns the number of frames

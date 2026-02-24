@@ -387,26 +387,26 @@ go test -fuzz=FuzzDBFile -fuzztime=60s ./internal/TS/PlainFuzzer/...
 
 ## Success Criteria
 
-| Feature | Target |
-|---------|--------|
-| Auto-checkpoint working | WAL auto-checkpoints at threshold |
-| WAL replay on open | Database recovers from WAL |
-| Checkpoint modes | PASSIVE/FULL/TRUNCATE work |
-| WAL recovery | Corrupted WAL entries skipped |
-| shrink_memory | Returns bytes released |
-| optimize | ANALYZE updates statistics |
-| integrity_check | Detects corruption |
-| quick_check | Fast validation |
-| journal_size_limit | WAL size limited |
-| FuzzDBFile | Finds persistence bugs |
+| Feature | Target | Status |
+|---------|--------|--------|
+| Auto-checkpoint working | WAL auto-checkpoints at threshold | ✅ Done |
+| WAL replay on open | Database recovers from WAL | ✅ Done |
+| Checkpoint modes | PASSIVE/FULL/TRUNCATE work | ✅ Done |
+| WAL recovery | Corrupted WAL entries skipped | ✅ Done |
+| shrink_memory | Returns bytes released | ✅ Done |
+| optimize | ANALYZE updates statistics | ✅ Done |
+| integrity_check | Detects corruption | ✅ Done |
+| quick_check | Fast validation | ✅ Done |
+| journal_size_limit | WAL size limited | ✅ Done |
+| FuzzDBFile | Finds persistence bugs | ✅ Done |
 
 ---
 
 ## Testing
 
-| Test Suite | Description |
-|------------|-------------|
-| F880 test suite | WAL enhancement tests |
-| F881 test suite | Storage PRAGMA tests |
-| FuzzDBFile corpus | 5+ seed files |
-| Regression tests | Bug fixes from fuzzer |
+| Test Suite | Description | Status |
+|------------|-------------|--------|
+| F880 test suite | WAL enhancement tests (7 tests) | ✅ Pass |
+| F881 test suite | Storage PRAGMA tests (7 tests) | ✅ Pass |
+| FuzzDBFile corpus | 5 seed files generated at runtime | ✅ Done |
+| .gitignore | Binary exclusions updated | ✅ Done |

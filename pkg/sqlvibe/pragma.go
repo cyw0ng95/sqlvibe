@@ -3,6 +3,7 @@ package sqlvibe
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
@@ -123,6 +124,21 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		}
 		v := db.getPragmaInt("cache_spill", 1)
 		return &Rows{Columns: []string{"cache_spill"}, Data: [][]interface{}{{v}}}, nil
+	// v0.9.10 additions
+	case "wal_autocheckpoint":
+		return db.pragmaWALAutoCheckpoint(stmt)
+	case "shrink_memory":
+		return db.pragmaShrinkMemory()
+	case "optimize":
+		return db.pragmaOptimize()
+	case "integrity_check":
+		return db.pragmaIntegrityCheck()
+	case "quick_check":
+		return db.pragmaQuickCheck()
+	case "journal_size_limit":
+		return db.pragmaJournalSizeLimit(stmt)
+	case "cache_grind":
+		return db.pragmaCacheGrind()
 	default:
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
@@ -442,14 +458,33 @@ func (db *Database) pragmaWALCheckpoint(stmt *QP.PragmaStmt) (*Rows, error) {
 		}, nil
 	}
 
-	moved, err := db.wal.Checkpoint()
+	// Determine checkpoint mode: passive (default), full, or truncate.
+	mode := "passive"
+	if stmt.Value != nil {
+		mode = strings.ToLower(pragmaStrValue(stmt.Value))
+	}
+
+	var busy, logRemoved, checkpointed int
+	var err error
+	switch mode {
+	case "truncate":
+		busy, logRemoved, checkpointed, err = db.wal.CheckpointTruncate()
+	case "full":
+		busy, logRemoved, checkpointed, err = db.wal.CheckpointFull()
+	default: // passive
+		moved, cpErr := db.wal.Checkpoint()
+		if cpErr != nil {
+			return nil, fmt.Errorf("PRAGMA wal_checkpoint: %w", cpErr)
+		}
+		busy, logRemoved, checkpointed = 0, moved, moved
+	}
 	if err != nil {
 		return nil, fmt.Errorf("PRAGMA wal_checkpoint: %w", err)
 	}
 
 	return &Rows{
 		Columns: []string{"busy", "log", "checkpointed"},
-		Data:    [][]interface{}{{int64(0), int64(moved), int64(moved)}},
+		Data:    [][]interface{}{{int64(busy), int64(logRemoved), int64(checkpointed)}},
 	}, nil
 }
 
@@ -701,4 +736,123 @@ func pragmaStrValue(expr QP.Expr) string {
 		return v.Name
 	}
 	return ""
+}
+
+// --- v0.9.10 new PRAGMAs ---
+
+// pragmaWALAutoCheckpoint handles PRAGMA wal_autocheckpoint and
+// PRAGMA wal_autocheckpoint = N.  When N is set, a background goroutine
+// automatically checkpoints the WAL after N frames accumulate.
+// N = 0 disables the background auto-checkpoint.
+func (db *Database) pragmaWALAutoCheckpoint(stmt *QP.PragmaStmt) (*Rows, error) {
+	if stmt.Value == nil {
+		n := int64(db.autoCheckpointN)
+		if n == 0 {
+			n = 1000 // SQLite default
+		}
+		return &Rows{Columns: []string{"wal_autocheckpoint"}, Data: [][]interface{}{{n}}}, nil
+	}
+	n := pragmaIntValue(stmt.Value)
+	db.startAutoCheckpoint(int(n))
+	return &Rows{Columns: []string{"wal_autocheckpoint"}, Data: [][]interface{}{{n}}}, nil
+}
+
+// pragmaShrinkMemory releases unused memory from page cache, plan cache, and
+// query result cache, and requests a Go garbage collection pass.
+func (db *Database) pragmaShrinkMemory() (*Rows, error) {
+	if db.cache != nil {
+		db.cache.Clear()
+	}
+	if db.queryCache != nil {
+		db.queryCache.Invalidate()
+	}
+	if db.planCache != nil {
+		db.planCache.Invalidate()
+	}
+	runtime.GC()
+	return &Rows{Columns: []string{"shrink_memory"}, Data: [][]interface{}{{int64(0)}}}, nil
+}
+
+// pragmaOptimize delegates to the ANALYZE implementation to refresh
+// query-planner statistics for all tables.
+func (db *Database) pragmaOptimize() (*Rows, error) {
+	_, err := db.handleAnalyze(&QP.AnalyzeStmt{})
+	if err != nil {
+		return nil, fmt.Errorf("PRAGMA optimize: %w", err)
+	}
+	return &Rows{Columns: []string{"optimize"}, Data: [][]interface{}{{"ok"}}}, nil
+}
+
+// pragmaIntegrityCheck performs a full database integrity check.
+// Returns "ok" when no problems are found, or a list of error messages.
+func (db *Database) pragmaIntegrityCheck() (*Rows, error) {
+	report, err := db.CheckIntegrity()
+	if err != nil {
+		return nil, fmt.Errorf("PRAGMA integrity_check: %w", err)
+	}
+	rows := make([][]interface{}, 0, len(report.Errors)+1)
+	if len(report.Errors) == 0 {
+		rows = append(rows, []interface{}{"ok"})
+	} else {
+		for _, msg := range report.Errors {
+			rows = append(rows, []interface{}{msg})
+		}
+	}
+	return &Rows{Columns: []string{"integrity_check"}, Data: rows}, nil
+}
+
+// pragmaQuickCheck performs a fast header and file-size sanity check.
+// Returns "ok" when the basic structure looks valid.
+func (db *Database) pragmaQuickCheck() (*Rows, error) {
+	if db.dbPath != ":memory:" {
+		fi, err := os.Stat(db.dbPath)
+		if err != nil {
+			return &Rows{
+				Columns: []string{"quick_check"},
+				Data:    [][]interface{}{{"file not found: " + db.dbPath}},
+			}, nil
+		}
+		if fi.Size() == 0 && len(db.tables) > 0 {
+			return &Rows{
+				Columns: []string{"quick_check"},
+				Data:    [][]interface{}{{"empty file with in-memory tables"}},
+			}, nil
+		}
+	}
+	return &Rows{Columns: []string{"quick_check"}, Data: [][]interface{}{{"ok"}}}, nil
+}
+
+// pragmaJournalSizeLimit handles PRAGMA journal_size_limit and
+// PRAGMA journal_size_limit = N.  N is the maximum WAL size in bytes;
+// -1 means unlimited (SQLite default).
+func (db *Database) pragmaJournalSizeLimit(stmt *QP.PragmaStmt) (*Rows, error) {
+	if stmt.Value == nil {
+		v := db.getPragmaInt("journal_size_limit", -1)
+		return &Rows{Columns: []string{"journal_size_limit"}, Data: [][]interface{}{{v}}}, nil
+	}
+	val := pragmaIntValue(stmt.Value)
+	db.pragmaSettings["journal_size_limit"] = val
+	// If WAL is active and the limit is exceeded, truncate via checkpoint.
+	if db.wal != nil && val >= 0 {
+		if sz := db.wal.Size(); sz > val {
+			_, _ = db.wal.Checkpoint()
+		}
+	}
+	return &Rows{Columns: []string{"journal_size_limit"}, Data: [][]interface{}{{val}}}, nil
+}
+
+// pragmaCacheGrind returns detailed cache statistics.
+func (db *Database) pragmaCacheGrind() (*Rows, error) {
+	cols := []string{"pages_cached", "pages_free", "hits", "misses"}
+	// The DS cache does not expose hit/miss counters yet; return what we can.
+	var pagesCached, pagesFree int64
+	if db.pm != nil {
+		m := DS.CollectMetrics(db.pm, 0)
+		pagesCached = int64(m.UsedPages)
+		pagesFree = int64(m.FreePages)
+	}
+	return &Rows{
+		Columns: cols,
+		Data: [][]interface{}{{pagesCached, pagesFree, int64(0), int64(0)}},
+	}, nil
 }

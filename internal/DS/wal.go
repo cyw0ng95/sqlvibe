@@ -145,7 +145,8 @@ func (w *WriteAheadLog) Replay(hs *HybridStore) error {
 		}
 		var e walEntry
 		if err := json.Unmarshal(body, &e); err != nil {
-			return fmt.Errorf("unmarshal WAL entry: %w", err)
+			// Skip corrupted entries rather than aborting recovery.
+			continue
 		}
 
 		// Apply the entry to the store.
