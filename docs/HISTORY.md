@@ -24,6 +24,12 @@
 - `FileMutator` with 6 mutation strategies: header, truncate, byte-flip, structure, footer, padding injection.
 - `generateSeedDatabases()` creates 5 seed databases at runtime (no binary blobs in repository).
 
+#### Bug Fixes
+- **Parser infinite loop in window function ORDER BY** (`internal/QP/parser.go`): Malformed SQL like `SELECT A(0OVER(ORDER(.RDER FROM` caused infinite loop. Fixed by adding position check before/after parseExpr calls.
+- **Parser infinite loop in window function PARTITION BY** (`internal/QP/parser.go`): Similar issue with PARTITION BY parsing.
+- **Parser infinite loop in trigger body** (`internal/QP/parser.go`): Malformed trigger body like `BEGIN SYLECT 1; END` caused infinite loop. Fixed by adding position check before/after parseInternal calls.
+- **Bugfix in TM/wal.go**: Fixed out-of-bounds write in `writeHeader()` (was writing `data[32:36]` on 32-byte buffer).
+
 #### Test Suites
 - F880 (WAL Enhancement): 7 tests covering checkpoint modes, auto-checkpoint, corruption recovery.
 - F881 (Storage PRAGMAs): 7 tests covering all new PRAGMAs.
