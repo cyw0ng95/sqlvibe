@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 // PageBalancer handles BTree page balancing operations
@@ -23,6 +25,9 @@ func NewPageBalancer(pm *PageManager) *PageBalancer {
 // SplitLeafPage splits an overfull leaf page into two pages
 // Returns the new right page number and the divider key
 func (pb *PageBalancer) SplitLeafPage(pageNum uint32) (rightPage uint32, dividerKey []byte, err error) {
+	util.Assert(pageNum > 0, "page number cannot be zero")
+	util.AssertNotNil(pb.pm, "PageManager")
+	util.AssertNotNil(pb.om, "OverflowManager")
 	page, err := pb.pm.ReadPage(pageNum)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to read page: %w", err)
@@ -38,6 +43,10 @@ func (pb *PageBalancer) SplitLeafPage(pageNum uint32) (rightPage uint32, divider
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to read right page: %w", err)
 	}
+
+	// Validate page type
+	pageType := page.Data[0]
+	util.Assert(pageType == 0x0d || pageType == 0x02, "invalid page type for leaf split: 0x%02x", pageType)
 
 	// Parse existing cells
 	numCells := int(binary.BigEndian.Uint16(page.Data[3:5]))
@@ -56,7 +65,6 @@ func (pb *PageBalancer) SplitLeafPage(pageNum uint32) (rightPage uint32, divider
 	}
 
 	// Determine if this is a table leaf or index leaf
-	pageType := page.Data[0]
 	isTableLeaf := (pageType == 0x0d)
 
 	// Initialize right page with same type
@@ -64,13 +72,13 @@ func (pb *PageBalancer) SplitLeafPage(pageNum uint32) (rightPage uint32, divider
 	binary.BigEndian.PutUint16(rightPageData.Data[1:3], 0) // freeblock
 	binary.BigEndian.PutUint16(rightPageData.Data[3:5], uint16(numCells-splitPoint))
 	binary.BigEndian.PutUint16(rightPageData.Data[5:7], uint16(pb.pm.PageSize())) // cell content area
-	binary.BigEndian.PutUint16(rightPageData.Data[7:9], 0) // fragmented bytes
+	binary.BigEndian.PutUint16(rightPageData.Data[7:9], 0)                        // fragmented bytes
 
 	// Copy right half cells to new page
 	newContentOffset := pb.pm.PageSize()
 	for i := splitPoint; i < numCells; i++ {
 		cellOffset := int(cellPointers[i])
-		
+
 		// Determine cell size (simplified - assumes no overflow for now)
 		var cellSize int
 		if isTableLeaf {
@@ -109,7 +117,7 @@ func (pb *PageBalancer) SplitLeafPage(pageNum uint32) (rightPage uint32, divider
 	newLeftContent := pb.pm.PageSize()
 	for i := 0; i < splitPoint; i++ {
 		cellOffset := int(cellPointers[i])
-		
+
 		var cellSize int
 		if isTableLeaf {
 			payloadSize, n := GetVarint(page.Data[cellOffset:])
@@ -122,7 +130,7 @@ func (pb *PageBalancer) SplitLeafPage(pageNum uint32) (rightPage uint32, divider
 
 		newLeftContent -= cellSize
 		copy(page.Data[newLeftContent:], page.Data[cellOffset:cellOffset+cellSize])
-		
+
 		// Update cell pointer
 		pointerOffset := 8 + i*2
 		binary.BigEndian.PutUint16(page.Data[pointerOffset:pointerOffset+2], uint16(newLeftContent))
@@ -155,6 +163,9 @@ func (pb *PageBalancer) SplitLeafPage(pageNum uint32) (rightPage uint32, divider
 
 // RedistributeCells moves cells from one page to a sibling to balance them
 func (pb *PageBalancer) RedistributeCells(leftPageNum, rightPageNum uint32) error {
+	util.Assert(leftPageNum > 0, "left page number cannot be zero")
+	util.Assert(rightPageNum > 0, "right page number cannot be zero")
+	util.AssertNotNil(pb.pm, "PageManager")
 	leftPage, err := pb.pm.ReadPage(leftPageNum)
 	if err != nil {
 		return fmt.Errorf("failed to read left page: %w", err)
@@ -193,6 +204,9 @@ func (pb *PageBalancer) RedistributeCells(leftPageNum, rightPageNum uint32) erro
 
 // moveCells moves n cells from source page to destination page
 func (pb *PageBalancer) moveCells(srcPageNum, dstPageNum uint32, n int) error {
+	util.Assert(srcPageNum > 0, "source page number cannot be zero")
+	util.Assert(dstPageNum > 0, "destination page number cannot be zero")
+	util.Assert(n > 0, "number of cells to move must be positive: %d", n)
 	if n <= 0 {
 		return nil
 	}
@@ -217,11 +231,11 @@ func (pb *PageBalancer) moveCells(srcPageNum, dstPageNum uint32, n int) error {
 	for i := 0; i < n; i++ {
 		pointerOffset := 8 + i*2
 		cellOffset := int(binary.BigEndian.Uint16(srcPage.Data[pointerOffset : pointerOffset+2]))
-		
+
 		// Determine cell size
 		payloadSize, varintN := GetVarint(srcPage.Data[cellOffset:])
 		cellSize := varintN + int(payloadSize)
-		
+
 		// Copy cell data
 		cellsToMove[i] = make([]byte, cellSize)
 		copy(cellsToMove[i], srcPage.Data[cellOffset:cellOffset+cellSize])
@@ -270,6 +284,9 @@ func (pb *PageBalancer) moveCells(srcPageNum, dstPageNum uint32, n int) error {
 // MergePages merges two sibling pages into the left page
 // Returns true if merge was successful, false if pages don't fit together
 func (pb *PageBalancer) MergePages(leftPageNum, rightPageNum uint32) (bool, error) {
+	util.Assert(leftPageNum > 0, "left page number cannot be zero")
+	util.Assert(rightPageNum > 0, "right page number cannot be zero")
+	util.AssertNotNil(pb.pm, "PageManager")
 	leftPage, err := pb.pm.ReadPage(leftPageNum)
 	if err != nil {
 		return false, fmt.Errorf("failed to read left page: %w", err)
@@ -303,7 +320,7 @@ func (pb *PageBalancer) MergePages(leftPageNum, rightPageNum uint32) (bool, erro
 	for i := 0; i < rightCells; i++ {
 		pointerOffset := 8 + i*2
 		cellOffset := int(binary.BigEndian.Uint16(rightPage.Data[pointerOffset : pointerOffset+2]))
-		
+
 		// Determine cell size
 		payloadSize, n := GetVarint(rightPage.Data[cellOffset:])
 		cellSize := n + int(payloadSize)
@@ -335,6 +352,8 @@ func (pb *PageBalancer) MergePages(leftPageNum, rightPageNum uint32) (bool, erro
 
 // IsPageOverfull checks if a page needs to be split
 func (pb *PageBalancer) IsPageOverfull(pageNum uint32) (bool, error) {
+	util.Assert(pageNum > 0, "page number cannot be zero")
+	util.AssertNotNil(pb.pm, "PageManager")
 	page, err := pb.pm.ReadPage(pageNum)
 	if err != nil {
 		return false, err
@@ -356,6 +375,8 @@ func (pb *PageBalancer) IsPageOverfull(pageNum uint32) (bool, error) {
 
 // IsPageUnderfull checks if a page should be merged or redistributed
 func (pb *PageBalancer) IsPageUnderfull(pageNum uint32) (bool, error) {
+	util.Assert(pageNum > 0, "page number cannot be zero")
+	util.AssertNotNil(pb.pm, "PageManager")
 	page, err := pb.pm.ReadPage(pageNum)
 	if err != nil {
 		return false, err

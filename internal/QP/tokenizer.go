@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 // hexValTable is a lookup table for hex character values.
@@ -238,6 +240,7 @@ type Tokenizer struct {
 }
 
 func NewTokenizer(input string) *Tokenizer {
+	util.Assert(len(input) >= 0, "input length cannot be negative")
 	// Pre-allocate token slice: estimate ~1 token per 8 chars, minimum 16
 	estimated := len(input) / 8
 	if estimated < 16 {
@@ -463,6 +466,10 @@ func lookupKeyword(s string) (TokenType, bool) {
 }
 
 func (t *Tokenizer) Tokenize() ([]Token, error) {
+	util.AssertNotNil(t, "tokenizer")
+	util.AssertNotNil(t.input, "input")
+	util.Assert(t.pos >= 0, "position cannot be negative: %d", t.pos)
+	util.Assert(t.pos <= len(t.input), "position %d exceeds input length %d", t.pos, len(t.input))
 	for {
 		t.skipWhitespace()
 		if t.pos >= len(t.input) {
