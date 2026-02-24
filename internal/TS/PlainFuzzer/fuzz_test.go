@@ -15,6 +15,88 @@ const (
 	defaultTimeout = 2 * time.Second
 )
 
+type DBSchemaTracker struct {
+	Tables map[string]*TableSchema
+}
+
+func NewDBSchemaTracker() *DBSchemaTracker {
+	return &DBSchemaTracker{
+		Tables: make(map[string]*TableSchema),
+	}
+}
+
+func (t *DBSchemaTracker) UpdateFromDB(db *sqlvibe.Database) error {
+	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table'")
+	if err != nil {
+		return err
+	}
+
+	t.Tables = make(map[string]*TableSchema)
+
+	tables := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		rows.Scan(&name)
+		if name != "" {
+			tables[name] = true
+		}
+	}
+
+	for tableName := range tables {
+		infoRows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+		if err != nil {
+			continue
+		}
+
+		table := &TableSchema{
+			Name:    tableName,
+			Columns: make([]ColumnInfo, 0),
+		}
+
+		for infoRows.Next() {
+			var cid, notnull, pk int
+			var name, coltype, dflt string
+			infoRows.Scan(&cid, &name, &coltype, &notnull, &dflt, &pk)
+			colType := ColumnType(strings.ToUpper(coltype))
+			if colType == "INT" {
+				colType = ColumnTypeInteger
+			}
+			table.Columns = append(table.Columns, ColumnInfo{
+				Name: name,
+				Type: colType,
+			})
+			if pk > 0 {
+				table.PrimaryKey = len(table.Columns) - 1
+			}
+		}
+
+		if len(table.Columns) > 0 {
+			t.Tables[tableName] = table
+		}
+	}
+
+	return nil
+}
+
+func (t *DBSchemaTracker) GetRandomTable() string {
+	if len(t.Tables) == 0 {
+		return ""
+	}
+	tables := make([]string, 0, len(t.Tables))
+	for name := range t.Tables {
+		tables = append(tables, name)
+	}
+	return tables[0]
+}
+
+func (t *DBSchemaTracker) GetTable(name string) *TableSchema {
+	return t.Tables[name]
+}
+
+func (t *DBSchemaTracker) HasTables() bool {
+	return len(t.Tables) > 0
+}
+
 func FuzzSQL(f *testing.F) {
 	// Seed corpus - comprehensive SQL patterns covering edge cases
 	f.Add("CREATE TABLE t0 (c0 INTEGER, c1 TEXT)")
@@ -451,6 +533,8 @@ func FuzzSQL(f *testing.F) {
 		}
 		defer db.Close()
 
+		schema := NewDBSchemaTracker()
+
 		statements := splitStatements(query)
 		maxStmts := 10
 		if len(statements) > maxStmts {
@@ -462,7 +546,23 @@ func FuzzSQL(f *testing.F) {
 			if len(stmt) == 0 {
 				continue
 			}
-			executeSQL(db, stmt)
+			err := executeSQL(db, stmt)
+			if err != nil && strings.Contains(err.Error(), "TIMEOUT") {
+				t.Fatalf("Query timeout: %v", err)
+			}
+
+			upperStmt := strings.ToUpper(stmt)
+			if strings.HasPrefix(upperStmt, "CREATE TABLE") ||
+				strings.HasPrefix(upperStmt, "CREATE INDEX") ||
+				strings.HasPrefix(upperStmt, "DROP TABLE") ||
+				strings.HasPrefix(upperStmt, "DROP INDEX") ||
+				strings.HasPrefix(upperStmt, "ALTER TABLE") {
+				schema.UpdateFromDB(db)
+			}
+		}
+
+		if schema.HasTables() {
+			_ = generateSchemaAwareQuery(schema)
 		}
 	})
 }
@@ -536,10 +636,8 @@ func executeSQL(db *sqlvibe.Database, query string) (err error) {
 			}
 		}
 		_, err = db.Exec(query)
-		if err != nil {
-			resultCh <- result{err: err}
-			return
-		}
+		resultCh <- result{err: err}
+		return
 	}()
 
 	select {
@@ -548,4 +646,72 @@ func executeSQL(db *sqlvibe.Database, query string) (err error) {
 	case <-time.After(defaultTimeout):
 		return fmt.Errorf("TIMEOUT: query hung after %v\nQuery: %q", defaultTimeout, query)
 	}
+}
+
+func generateSchemaAwareQuery(schema *DBSchemaTracker) string {
+	tableName := schema.GetRandomTable()
+	if tableName == "" {
+		return ""
+	}
+
+	table := schema.GetTable(tableName)
+	if table == nil || len(table.Columns) == 0 {
+		return ""
+	}
+
+	queries := []func() string{
+		func() string {
+			cols := make([]string, 0, len(table.Columns))
+			for _, col := range table.Columns {
+				cols = append(cols, fmt.Sprintf("%s.%s", tableName, col.Name))
+			}
+			return fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), tableName)
+		},
+		func() string {
+			col := table.Columns[0]
+			return fmt.Sprintf("SELECT %s FROM %s WHERE %s = 1", col.Name, tableName, col.Name)
+		},
+		func() string {
+			col := table.Columns[0]
+			return fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s > 0", tableName, col.Name)
+		},
+		func() string {
+			col := table.Columns[0]
+			if len(table.Columns) > 1 {
+				col2 := table.Columns[1]
+				return fmt.Sprintf("SELECT %s, %s FROM %s", col.Name, col2.Name, tableName)
+			}
+			return fmt.Sprintf("SELECT %s FROM %s", col.Name, tableName)
+		},
+		func() string {
+			col := table.Columns[0]
+			return fmt.Sprintf("DELETE FROM %s WHERE %s = 0", tableName, col.Name)
+		},
+		func() string {
+			if len(table.Columns) > 1 {
+				col := table.Columns[1]
+				return fmt.Sprintf("UPDATE %s SET %s = 'test' WHERE %s = 1",
+					tableName, col.Name, table.Columns[0].Name)
+			}
+			return ""
+		},
+		func() string {
+			return fmt.Sprintf("SELECT * FROM %s ORDER BY %s", tableName, table.Columns[0].Name)
+		},
+		func() string {
+			return fmt.Sprintf("SELECT * FROM %s LIMIT 10", tableName)
+		},
+	}
+
+	r := 0
+	for _, fn := range queries {
+		if q := fn(); q != "" {
+			if r > 0 && r%3 == 0 {
+				return q
+			}
+			r++
+		}
+	}
+
+	return fmt.Sprintf("SELECT * FROM %s", tableName)
 }
