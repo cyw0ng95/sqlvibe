@@ -46,6 +46,19 @@ db.Exec(`INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob')`)
 
 // Query
 rows, _ := db.Query(`SELECT name FROM users WHERE id > 0`)
+
+// Parameterized queries (safe against SQL injection)
+db.ExecWithParams(`INSERT INTO users VALUES (?, ?)`, []interface{}{int64(3), "Carol"})
+rows, _ = db.QueryWithParams(`SELECT name FROM users WHERE id = ?`, []interface{}{int64(3)})
+
+// Named parameters
+db.ExecNamed(`INSERT INTO users VALUES (:id, :name)`, map[string]interface{}{"id": int64(4), "name": "Dave"})
+rows, _ = db.QueryNamed(`SELECT * FROM users WHERE name = :name`, map[string]interface{}{"name": "Dave"})
+
+// Prepared statements with parameter binding
+stmt, _ := db.Prepare(`SELECT name FROM users WHERE id = ?`)
+defer stmt.Close()
+rows, _ = stmt.Query(int64(1)) // binds ? = 1
 ```
 
 ## Extension Framework (v0.9.0)
@@ -85,28 +98,28 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.9.6)
+## Performance (v0.9.11)
 
-Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=2s`.
+Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
 `db.ClearResultCache()` so actual per-query execution cost is measured (not cache-hit
 latency). SQLite's `database/sql` driver reuses prepared statements across iterations.
 Both sides iterate all result rows end-to-end.
-(`go test ./internal/TS/Benchmark/... -bench=BenchmarkFair_ -benchtime=2s`).
+(`go test ./internal/TS/Benchmark/... -bench=BenchmarkFair_ -benchtime=3s`).
 Results may vary on different hardware.
 
 ### Query Performance (1 000-row table)
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| SELECT all (3 cols) | 60 µs | 568 µs | **sqlvibe 9.4x faster** |
-| SELECT WHERE | 285 µs | 91 µs | SQLite 3.1x faster |
-| ORDER BY (500 rows) | 197 µs | 299 µs | **sqlvibe 1.5x faster** |
-| COUNT(*) | 6.9 µs | 5.3 µs | roughly equal |
-| SUM | 19 µs | 66 µs | **sqlvibe 3.5x faster** |
-| GROUP BY | 135 µs | 499 µs | **sqlvibe 3.7x faster** |
-| JOIN (100×500 rows) | 559 µs | 230 µs | SQLite 2.4x faster |
-| BETWEEN filter | 491 µs | 185 µs | SQLite 2.7x faster |
+| SELECT all (3 cols) | 60 µs | 566 µs | **sqlvibe 9.4x faster** |
+| SELECT WHERE | 273 µs | 91 µs | SQLite 3.0x faster |
+| ORDER BY (500 rows) | 194 µs | 297 µs | **sqlvibe 1.5x faster** |
+| COUNT(*) | 6.6 µs | 5.3 µs | roughly equal |
+| SUM | 18.6 µs | 67 µs | **sqlvibe 3.6x faster** |
+| GROUP BY | 137 µs | 492 µs | **sqlvibe 3.6x faster** |
+| JOIN (100×500 rows) | 557 µs | 233 µs | SQLite 2.4x faster |
+| BETWEEN filter | 460 µs | 183 µs | SQLite 2.5x faster |
 
 ### DML Operations
 
@@ -121,9 +134,16 @@ Results may vary on different hardware.
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| Result cache hit (repeated query) | 1.5 µs | 568 µs | **sqlvibe 379x faster** |
+| Result cache hit (repeated query) | 1.5 µs | 566 µs | **sqlvibe 377x faster** |
 | LIMIT 10 no ORDER BY (10K rows) | 20.2 µs | — | fast early-termination path |
 | Expression bytecode eval | 99 ns | — | single-dispatch expression evaluation |
+
+### Parameterized Query Performance (v0.9.11)
+
+| Operation | sqlvibe | Notes |
+|-----------|--------:|-------|
+| `QueryWithParams` (WHERE id = ?) | 254 µs | includes `formatParamSQL` substitution |
+| `ExecWithParams` (INSERT single) | 3.0 µs | ~46% overhead vs plain INSERT |
 
 ### Transaction & Savepoint Performance (v0.9.6)
 
@@ -153,6 +173,25 @@ Results may vary on different hardware.
 
 v0.9.3 extends the dispatch table to 22 opcodes: comparison operators (Eq/Ne/Lt/Le/Gt/Ge)
 and extended string ops (Trim/LTrim/RTrim/Replace/Instr) now bypass the large switch statement.
+
+### v0.9.11 SQL Compatibility Features
+
+| Feature | Description |
+|---------|-------------|
+| `?` positional params | `db.ExecWithParams(sql, []interface{}{...})` — binds `?` placeholders safely |
+| `:name` / `@name` named params | `db.ExecNamed(sql, map[string]interface{}{...})` / `db.QueryNamed(...)` |
+| `Prepare` + param binding | `stmt, _ := db.Prepare(sql); stmt.Query(param1, param2)` |
+| SQL injection prevention | String params single-quote escaped; no raw SQL expansion |
+| `nil` → NULL | `nil` interface value binds as SQL `NULL` |
+| `[]byte` → BLOB | Byte slices encoded as `x'deadbeef'` hex literals |
+
+> **Analysis v0.9.11**: Core query throughput is unchanged from v0.9.6 — SELECT all at 9.4×
+> faster, SUM at 3.6× faster, GROUP BY at 3.6× faster, result cache at 377× faster.
+> The new parameterized query path (`ExecWithParams`/`QueryWithParams`) adds a lightweight
+> SQL string scan (`formatParamSQL`) that substitutes bound values as SQL-standard literals,
+> preventing injection at the formatting layer. Single INSERT via `ExecWithParams` runs at
+> ~3 µs (about 46% over plain INSERT) due to the substitution pass; SELECT WHERE with `?`
+> binding runs at ~254 µs, comparable to unparameterized `QueryWithParams` with a WHERE clause.
 
 ### v0.9.6 SQL Compatibility Features
 
