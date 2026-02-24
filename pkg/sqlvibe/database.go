@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cyw0ng95/sqlvibe/internal/CG"
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
@@ -107,6 +108,9 @@ type Database struct {
 	queryMu            sync.RWMutex                       // guards concurrent read queries
 	// v0.9.6: savepoint stack
 	savepointStack     []savepointEntry                   // named savepoints within a transaction
+	// v0.9.10: WAL auto-checkpoint
+	autoCheckpointN    int           // checkpoint WAL after this many frames (0 = disabled)
+	stopAutoChkpt      chan struct{}  // signal channel to stop background checkpoint goroutine
 }
 
 // savepointEntry holds the name and snapshot for a named savepoint.
@@ -348,7 +352,7 @@ func Open(path string) (*Database, error) {
 	engine := VM.NewQueryEngine(pm, data)
 	txMgr := TM.NewTransactionManager(pm)
 
-	return &Database{
+	db := &Database{
 		pm:             pm,
 		cache:          DS.NewCache(-2000),
 		engine:         engine,
@@ -384,7 +388,28 @@ func Open(path string) (*Database, error) {
 		pragmaSettings:     make(map[string]interface{}),
 		tableStats:         make(map[string]int64),
 		savepointStack:     nil,
-	}, nil
+	}
+
+	// A2: WAL Startup Replay - if a WAL file exists for this database, open
+	// and replay it automatically so the database reflects any uncommitted
+	// operations from a previous session.
+	if path != ":memory:" {
+		walPath := path + "-wal"
+		if TM.WALExists(walPath) {
+			wal, walErr := TM.OpenWAL(walPath, pm.PageSize())
+			if walErr == nil {
+				if _, recErr := wal.Recover(); recErr == nil {
+					db.wal = wal
+					db.journalMode = "wal"
+					_ = db.txMgr.EnableWAL(walPath, pm.PageSize())
+				} else {
+					_ = wal.Close()
+				}
+			}
+		}
+	}
+
+	return db, nil
 }
 
 func (db *Database) getOrderedColumns(tableName string) []string {
@@ -1219,11 +1244,47 @@ func isDMLStatement(nodeType string) bool {
 }
 
 func (db *Database) Close() error {
+	// Stop background auto-checkpoint goroutine if running.
+	if db.stopAutoChkpt != nil {
+		close(db.stopAutoChkpt)
+		db.stopAutoChkpt = nil
+	}
 	if db.wal != nil {
 		_ = db.wal.Close()
 		db.wal = nil
 	}
 	return db.pm.Close()
+}
+
+// startAutoCheckpoint launches a background goroutine that periodically
+// checkpoints the WAL when it has accumulated at least n frames.
+// Calling it again replaces any previously running goroutine.
+func (db *Database) startAutoCheckpoint(n int) {
+	if db.stopAutoChkpt != nil {
+		close(db.stopAutoChkpt)
+		db.stopAutoChkpt = nil
+	}
+	if n <= 0 {
+		db.autoCheckpointN = 0
+		return
+	}
+	db.autoCheckpointN = n
+	stop := make(chan struct{})
+	db.stopAutoChkpt = stop
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if db.wal != nil && db.wal.ShouldCheckpoint(n) {
+					_, _ = db.wal.Checkpoint()
+				}
+			}
+		}
+	}()
 }
 
 // ClearResultCache invalidates the in-process query result cache, forcing the
