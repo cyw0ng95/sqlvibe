@@ -57,6 +57,110 @@ A record of bugs discovered through sqlvibe's PlainFuzzer - a SQL-native fuzzer 
 
 ---
 
+## v0.9.9 (2026-02-24)
+
+### Parser infinite loop in NOT IN clause
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High (Denial of Service) |
+| **Type** | Infinite Loop |
+| **File** | `internal/QP/parser.go` |
+| **Function** | `parseCmpExpr` (NOT IN clause value parsing loops) |
+| **Trigger SQL** | `SELECT c0 NOT IN (/` |
+| **Impact** | Parser hangs indefinitely |
+| **Root Cause** | The NOT IN parsing loop had no EOF check, no nil expression check, and no unexpected token recovery. Same issue as the IN clause bug but in a different code path. |
+| **Fix** | Added guards for EOF, nil expressions, and unexpected tokens to break out of the loop, matching the fix for IN clause |
+| **Found By** | PlainFuzzer with SQL1999 integration |
+| **Date** | 2026-02-24 |
+
+---
+
+### Parser infinite loop in CTE column list
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High (Denial of Service) |
+| **Type** | Infinite Loop |
+| **File** | `internal/QP/parser.go` |
+| **Function** | `parseWithClause` (CTE column list parsing) |
+| **Trigger SQL** | `WITH ctLECT (SELECT 1 AS n) SEe AS * FROM cte` |
+| **Impact** | Parser hangs indefinitely |
+| **Root Cause** | CTE column list parsing loop had no break for unexpected tokens. When given malformed CTE like `ctLECT` (invalid identifier), the parser would loop infinitely waiting for a valid token. |
+| **Fix** | Added else clause with break to exit loop on unexpected tokens |
+| **Found By** | PlainFuzzer with SQL1999 integration |
+| **Date** | 2026-02-24 |
+
+---
+
+### Parser infinite loop in VALUES row parsing
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High (Denial of Service) |
+| **Type** | Infinite Loop |
+| **File** | `internal/QP/parser.go` |
+| **Function** | `parseTableRef` (VALUES row parsing) |
+| **Trigger SQL** | `SELECT*FROM(VALUES(0)((),` |
+| **Impact** | Parser hangs indefinitely |
+| **Root Cause** | VALUES row parsing loop had no nil expression check and no recovery for unexpected tokens. Malformed input like `(()` caused infinite loop. |
+| **Fix** | Added nil expression check and unexpected token recovery (break when not comma or right paren) |
+| **Found By** | PlainFuzzer with SQL1999 integration |
+| **Date** | 2026-02-24 |
+
+---
+
+### Parser infinite loop in VALUES column list
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High (Denial of Service) |
+| **Type** | Infinite Loop |
+| **File** | `internal/QP/parser.go` |
+| **Function** | `parseTableRef` (VALUES column list parsing) |
+| **Trigger SQL** | `SELECT*FROM(VALUES(0)((),` |
+| **Impact** | Parser hangs indefinitely |
+| **Root Cause** | VALUES column list parsing loop had no break for unexpected tokens. |
+| **Fix** | Added else clause with break to exit loop on unexpected tokens |
+| **Found By** | PlainFuzzer with SQL1999 integration |
+| **Date** | 2026-02-24 |
+
+---
+
+### Parser infinite loop in subquery recovery
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High (Denial of Service) |
+| **Type** | Infinite Loop |
+| **File** | `internal/QP/parser.go` |
+| **Function** | `parseTableRef` (subquery recovery) |
+| **Trigger SQL** | `SELECT A%FROM(.ET AS x` |
+| **Impact** | Parser hangs indefinitely |
+| **Root Cause** | When subquery parsing fails (due to malformed input like `%`), the parser didn't skip tokens to find the closing paren. The recovery code only consumed `)` if it was immediately next, causing infinite loop. |
+| **Fix** | Added recovery loop to skip tokens until finding `)`, EOF, or semicolon |
+| **Found By** | PlainFuzzer with SQL1999 integration |
+| **Date** | 2026-02-24 |
+
+---
+
+### Parser infinite loop in function argument parsing (additional case)
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High (Denial of Service) |
+| **Type** | Infinite Loop |
+| **File** | `internal/QP/parser.go` |
+| **Function** | `parsePrimaryExpr` (generic keyword function call) |
+| **Trigger SQL** | `SELECT A%FROM(.ET AS x` |
+| **Impact** | Parser hangs indefinitely |
+| **Root Cause** | Generic keyword function argument parsing loop (`DATE(...`, etc.) had no nil argument check and no unexpected token handling. When `parseExpr` returned nil, the loop continued without advancing. |
+| **Fix** | Added nil argument check with break, plus unexpected token recovery (break when not comma or right paren) |
+| **Found By** | PlainFuzzer with SQL1999 integration |
+| **Date** | 2026-02-24 |
+
+---
+
 ## Running the Fuzzer
 
 ```bash
