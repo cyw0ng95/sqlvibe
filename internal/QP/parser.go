@@ -435,6 +435,15 @@ type CollateExpr struct {
 
 func (e *CollateExpr) exprNode() {}
 
+// PlaceholderExpr represents a query parameter: '?' (positional) or ':name'/'@name' (named).
+type PlaceholderExpr struct {
+	Positional bool   // true for ?, false for :name / @name
+	Name       string // ":foo" or "@foo"; empty for positional
+	Index      int    // 0-based positional index (filled during binding)
+}
+
+func (e *PlaceholderExpr) exprNode() {}
+
 type Parser struct {
 	tokens     []Token
 	pos        int
@@ -2554,6 +2563,13 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	tok := p.current()
 
 	switch tok.Type {
+	case TokenPlaceholderPos:
+		p.advance()
+		return &PlaceholderExpr{Positional: true}, nil
+	case TokenPlaceholderNamed:
+		name := tok.Literal
+		p.advance()
+		return &PlaceholderExpr{Positional: false, Name: name}, nil
 	case TokenLeftParen:
 		p.advance()
 		if p.current().Type == TokenKeyword && p.current().Literal == "SELECT" {

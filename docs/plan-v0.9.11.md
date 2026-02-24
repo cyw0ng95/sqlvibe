@@ -177,16 +177,16 @@ Add `internal/TS/SQL1999/F882/01_test.go` covering:
 
 | Feature | Target | Status |
 |---------|--------|--------|
-| `?` positional params work end-to-end | Yes | [ ] |
-| `:name` / `@name` named params work | Yes | [ ] |
-| `nil` param → SQL NULL | Yes | [ ] |
-| `[]byte` param → BLOB | Yes | [ ] |
-| Missing param returns error | Yes | [ ] |
-| Injected SQL in param is safe | Yes | [ ] |
-| `Prepare` + bind round trip | Yes | [ ] |
-| `ExecNamed` / `QueryNamed` added | Yes | [ ] |
-| F882 suite passes | 100% | [ ] |
-| Regression suite passes | 100% | [ ] |
+| `?` positional params work end-to-end | Yes | [x] |
+| `:name` / `@name` named params work | Yes | [x] |
+| `nil` param → SQL NULL | Yes | [x] |
+| `[]byte` param → BLOB | Yes | [x] |
+| Missing param returns error | Yes | [x] |
+| Injected SQL in param is safe | Yes | [x] |
+| `Prepare` + bind round trip | Yes | [x] |
+| `ExecNamed` / `QueryNamed` added | Yes | [x] |
+| F882 suite passes | 100% | [x] |
+| Regression suite passes | 100% | [x] |
 
 ---
 

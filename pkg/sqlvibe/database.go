@@ -1,6 +1,7 @@
 package sqlvibe
 
 import (
+	"encoding/hex"
 	"fmt"
 	"hash/fnv"
 	"sort"
@@ -1406,11 +1407,37 @@ func (db *Database) sortResultsTopK(rows *Rows, orderBy []QP.OrderBy, topK int) 
 }
 
 func (db *Database) ExecWithParams(sql string, params []interface{}) (Result, error) {
-	return db.Exec(sql)
+	boundSQL, err := formatParamSQL(sql, params, nil)
+	if err != nil {
+		return Result{}, err
+	}
+	return db.Exec(boundSQL)
 }
 
 func (db *Database) QueryWithParams(sql string, params []interface{}) (*Rows, error) {
-	return db.Query(sql)
+	boundSQL, err := formatParamSQL(sql, params, nil)
+	if err != nil {
+		return nil, err
+	}
+	return db.Query(boundSQL)
+}
+
+// ExecNamed executes a SQL statement with named parameters (":name" or "@name").
+func (db *Database) ExecNamed(sql string, params map[string]interface{}) (Result, error) {
+	boundSQL, err := formatParamSQL(sql, nil, params)
+	if err != nil {
+		return Result{}, err
+	}
+	return db.Exec(boundSQL)
+}
+
+// QueryNamed executes a SQL query with named parameters (":name" or "@name").
+func (db *Database) QueryNamed(sql string, params map[string]interface{}) (*Rows, error) {
+	boundSQL, err := formatParamSQL(sql, nil, params)
+	if err != nil {
+		return nil, err
+	}
+	return db.Query(boundSQL)
 }
 
 func (db *Database) Begin() (*Transaction, error) {
@@ -1467,11 +1494,155 @@ func (db *Database) convertStringToType(val string, colType string) interface{} 
 }
 
 func (db *Database) MustExec(sql string, params ...interface{}) Result {
-	res, err := db.Exec(sql)
+	res, err := db.ExecWithParams(sql, params)
 	if err != nil {
 		panic(err)
 	}
 	return res
+}
+
+// formatParamSQL substitutes positional ('?') and named (':name', '@name') parameter
+// placeholders in sql with properly-escaped SQL literal values.
+// This prevents SQL injection: string values are single-quoted with internal quotes escaped.
+// nil → NULL, int/float → numeric literal, string → 'value', []byte → x'hex'.
+// Extra positional params beyond the number of '?' placeholders are silently ignored.
+func formatParamSQL(sql string, params []interface{}, namedParams map[string]interface{}) (string, error) {
+	var sb strings.Builder
+	sb.Grow(len(sql) + 32)
+	paramIdx := 0
+	i := 0
+	for i < len(sql) {
+		ch := sql[i]
+
+		// Skip string literals (single or double quoted)
+		if ch == '\'' || ch == '"' {
+			quote := ch
+			sb.WriteByte(ch)
+			i++
+			for i < len(sql) {
+				c := sql[i]
+				sb.WriteByte(c)
+				i++
+				if c == quote {
+					// doubled quote → escaped quote inside literal
+					if i < len(sql) && sql[i] == quote {
+						sb.WriteByte(sql[i])
+						i++
+					} else {
+						break
+					}
+				}
+			}
+			continue
+		}
+
+		// Skip line comments (-- ...)
+		if ch == '-' && i+1 < len(sql) && sql[i+1] == '-' {
+			for i < len(sql) && sql[i] != '\n' {
+				sb.WriteByte(sql[i])
+				i++
+			}
+			continue
+		}
+
+		// Skip block comments (/* ... */)
+		if ch == '/' && i+1 < len(sql) && sql[i+1] == '*' {
+			sb.WriteString("/*")
+			i += 2
+			for i+1 < len(sql) {
+				if sql[i] == '*' && sql[i+1] == '/' {
+					sb.WriteString("*/")
+					i += 2
+					break
+				}
+				sb.WriteByte(sql[i])
+				i++
+			}
+			continue
+		}
+
+		// Positional placeholder '?'
+		if ch == '?' {
+			if paramIdx >= len(params) {
+				return "", fmt.Errorf("missing required parameter at position %d (got %d parameters)", paramIdx+1, len(params))
+			}
+			sb.WriteString(formatSQLLiteral(params[paramIdx]))
+			paramIdx++
+			i++
+			continue
+		}
+
+		// Named placeholder ':name' or '@name'
+		if (ch == ':' || ch == '@') && i+1 < len(sql) && isParamIdentByte(sql[i+1]) {
+			i++ // skip ':' or '@'
+			start := i
+			for i < len(sql) && isParamIdentByte(sql[i]) {
+				i++
+			}
+			name := sql[start:i]
+			var val interface{}
+			var ok bool
+			if namedParams != nil {
+				val, ok = namedParams[name]
+			}
+			if !ok {
+				return "", fmt.Errorf("missing named parameter: %s", name)
+			}
+			sb.WriteString(formatSQLLiteral(val))
+			continue
+		}
+
+		sb.WriteByte(ch)
+		i++
+	}
+	return sb.String(), nil
+}
+
+// isParamIdentByte reports whether b is valid inside a parameter name.
+func isParamIdentByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+// formatSQLLiteral converts a Go value to a safely-quoted SQL literal string.
+func formatSQLLiteral(v interface{}) string {
+	if v == nil {
+		return "NULL"
+	}
+	switch val := v.(type) {
+	case int64:
+		return strconv.FormatInt(val, 10)
+	case int:
+		return strconv.FormatInt(int64(val), 10)
+	case int32:
+		return strconv.FormatInt(int64(val), 10)
+	case int16:
+		return strconv.FormatInt(int64(val), 10)
+	case int8:
+		return strconv.FormatInt(int64(val), 10)
+	case uint64:
+		return strconv.FormatUint(val, 10)
+	case uint:
+		return strconv.FormatUint(uint64(val), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(val), 10)
+	case float64:
+		return strconv.FormatFloat(val, 'g', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(val), 'g', -1, 64)
+	case bool:
+		if val {
+			return "1"
+		}
+		return "0"
+	case string:
+		// SQLite uses SQL-standard single-quote doubling for escaping (no backslash escapes).
+		// Doubling every single quote inside the value prevents SQL injection.
+		return "'" + strings.ReplaceAll(val, "'", "''") + "'"
+	case []byte:
+		return "x'" + hex.EncodeToString(val) + "'"
+	default:
+		return "'" + strings.ReplaceAll(fmt.Sprintf("%v", val), "'", "''") + "'"
+	}
 }
 
 func (db *Database) tryUseIndex(tableName string, where QP.Expr) []map[string]interface{} {

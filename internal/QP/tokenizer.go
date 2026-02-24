@@ -76,6 +76,8 @@ const (
 	TokenCast
 	TokenMatch
 	TokenCollate
+	TokenPlaceholderPos   // ? positional parameter
+	TokenPlaceholderNamed // :name or @name named parameter
 )
 
 var keywords = map[string]TokenType{
@@ -496,6 +498,10 @@ func (t *Tokenizer) Tokenize() ([]Token, error) {
 			if err := t.readString(); err != nil {
 				return nil, err
 			}
+		} else if (ch == ':' || ch == '@') && t.pos+1 < len(t.input) && (isIdentStartByte(t.input[t.pos+1])) {
+			if err := t.readNamedParam(ch); err != nil {
+				return nil, err
+			}
 		} else {
 			if err := t.readOperator(); err != nil {
 				return nil, err
@@ -674,6 +680,8 @@ func (t *Tokenizer) readOperator() error {
 		t.addToken(TokenDot, ".")
 	case '*':
 		t.addToken(TokenAsterisk, "*")
+	case '?':
+		t.addToken(TokenPlaceholderPos, "?")
 	case '=':
 		t.addToken(TokenEq, "=")
 	case '<':
@@ -735,6 +743,29 @@ func (t *Tokenizer) addToken(tokenType TokenType, literal string) {
 		Literal:  literal,
 		Location: t.start,
 	})
+}
+
+// isIdentStartByte returns true if b is a valid first byte of an identifier.
+func isIdentStartByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_'
+}
+
+// readNamedParam reads ':name' or '@name' and emits a TokenPlaceholderNamed token.
+func (t *Tokenizer) readNamedParam(prefix byte) error {
+	t.start = t.pos
+	t.pos++ // skip ':' or '@'
+	nameStart := t.pos
+	for t.pos < len(t.input) {
+		ch := t.input[t.pos]
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' {
+			t.pos++
+		} else {
+			break
+		}
+	}
+	name := string(prefix) + t.input[nameStart:t.pos]
+	t.addToken(TokenPlaceholderNamed, name)
+	return nil
 }
 
 func (t *Tokenizer) String() string {
