@@ -88,7 +88,11 @@ func (m *FileMutator) mutateStructure(data []byte) []byte {
 		return out
 	}
 	start := m.rng.Intn(len(out))
-	length := m.rng.Intn(len(out)-start) + 1
+	maxLength := len(out) - start
+	if maxLength <= 0 {
+		return out
+	}
+	length := m.rng.Intn(maxLength) + 1
 	for i := start; i < start+length && i < len(out); i++ {
 		out[i] = byte(m.rng.Intn(256))
 	}
@@ -136,8 +140,16 @@ func (m *FileMutator) mutateRepeatSection(data []byte) []byte {
 	if len(data) < 4 {
 		return data
 	}
-	start := m.rng.Intn(len(data) / 2)
-	end := start + m.rng.Intn(len(data)/2-start) + 1
+	half := len(data) / 2
+	if half < 1 {
+		return data
+	}
+	start := m.rng.Intn(half)
+	endRange := half - start
+	if endRange <= 0 {
+		endRange = 1
+	}
+	end := start + m.rng.Intn(endRange) + 1
 	if end > len(data) {
 		end = len(data)
 	}
@@ -171,8 +183,16 @@ func (m *FileMutator) mutateDuplicateSection(data []byte) []byte {
 	if len(data) < 4 {
 		return data
 	}
-	start := m.rng.Intn(len(data) / 2)
-	end := start + m.rng.Intn(len(data)/2-start) + 1
+	half := len(data) / 2
+	if half < 1 {
+		return data
+	}
+	start := m.rng.Intn(half)
+	endRange := half - start
+	if endRange <= 0 {
+		endRange = 1
+	}
+	end := start + m.rng.Intn(endRange) + 1
 	if end > len(data) {
 		end = len(data)
 	}
@@ -188,9 +208,15 @@ func (m *FileMutator) mutateDuplicateSection(data []byte) []byte {
 
 // mutateNegativeSize writes a negative size value at a random offset
 func (m *FileMutator) mutateNegativeSize(data []byte) []byte {
+	if len(data) < 4 {
+		return m.mutateByteFlip(data)
+	}
 	out := copyBytes(data)
-	pos := m.rng.Intn(len(out) - 3)
-	// Write a negative 32-bit integer
+	maxPos := len(out) - 4
+	if maxPos <= 0 {
+		return m.mutateByteFlip(data)
+	}
+	pos := m.rng.Intn(maxPos)
 	negativeValue := []byte{0xFF, 0xFF, 0xFF, 0xFF}
 	copy(out[pos:], negativeValue)
 	return out
@@ -202,7 +228,11 @@ func (m *FileMutator) mutateFragment(data []byte) []byte {
 		return m.mutateByteFlip(data)
 	}
 	out := copyBytes(data)
-	start := m.rng.Intn(len(out) - 8)
+	maxStart := len(out) - 8
+	if maxStart <= 0 {
+		return m.mutateByteFlip(data)
+	}
+	start := m.rng.Intn(maxStart)
 	length := m.rng.Intn(8) + 1
 	for i := start; i < start+length && i < len(out); i++ {
 		out[i] = byte(m.rng.Intn(256))
