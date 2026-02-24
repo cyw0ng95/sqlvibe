@@ -324,6 +324,53 @@ func FuzzSQL(f *testing.F) {
 	f.Add("SELECT 'München'")
 	f.Add("SELECT 'Αβγδ'")
 
+	// ===== SQL1999: Recursive CTEs (R-series) =====
+	f.Add("WITH RECURSIVE fib(a, b) AS (SELECT 0, 1 UNION ALL SELECT b, a+b FROM fib WHERE b<100) SELECT a FROM fib")
+	f.Add("WITH RECURSIVE countdown(n) AS (SELECT 10 UNION ALL SELECT n-1 FROM countdown WHERE n>0) SELECT n FROM countdown")
+
+	// ===== SQL1999: Extended Window Functions (E111/F441) =====
+	f.Add("SELECT ROW_NUMBER() OVER (ORDER BY c0) FROM t0")
+	f.Add("SELECT RANK() OVER (ORDER BY c0) FROM t0")
+	f.Add("SELECT DENSE_RANK() OVER (ORDER BY c0) FROM t0")
+	f.Add("SELECT LAG(c0) OVER (ORDER BY c0) FROM t0")
+	f.Add("SELECT LEAD(c0) OVER (ORDER BY c0) FROM t0")
+	f.Add("SELECT FIRST_VALUE(c0) OVER (ORDER BY c0) FROM t0")
+	f.Add("SELECT LAST_VALUE(c0) OVER (ORDER BY c0) FROM t0")
+	f.Add("SELECT NTILE(3) OVER (ORDER BY c0) FROM t0")
+	f.Add("SELECT PERCENT_RANK() OVER (ORDER BY c0) FROM t0")
+	f.Add("SELECT CUME_DIST() OVER (ORDER BY c0) FROM t0")
+	f.Add("SELECT SUM(c0) OVER (ORDER BY c0 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM t0")
+
+	// ===== SQL1999: Type Cast (B2_TYPECONV/F201) =====
+	f.Add("SELECT CAST('42' AS INTEGER)")
+	f.Add("SELECT CAST('3.14' AS REAL)")
+	f.Add("SELECT CAST(100 AS TEXT)")
+	f.Add("SELECT CAST(NULL AS INTEGER)")
+	f.Add("SELECT CAST('3' AS INTEGER) + 2")
+
+	// ===== SQL1999: Subqueries (B7/F291) =====
+	f.Add("SELECT * FROM t0 WHERE c0 = (SELECT MAX(c0) FROM t0)")
+	f.Add("SELECT * FROM t0 WHERE c0 IN (SELECT c1 FROM t1)")
+	f.Add("SELECT * FROM t0 WHERE EXISTS (SELECT 1 FROM t1)")
+	f.Add("SELECT * FROM t0 WHERE c0 > (SELECT AVG(c0) FROM t0 t2 WHERE t2.c1 = t0.c1)")
+	f.Add("SELECT * FROM t0 WHERE c0 > ANY (SELECT c1 FROM t1)")
+	f.Add("SELECT * FROM t0 WHERE c0 > ALL (SELECT c1 FROM t1)")
+	f.Add("SELECT * FROM (SELECT c0, COUNT(*) as cnt FROM t0 GROUP BY c0) AS subq")
+
+	// ===== SQL1999: Transaction modes (E151-E153) =====
+	f.Add("BEGIN DEFERRED")
+	f.Add("BEGIN IMMEDIATE")
+	f.Add("BEGIN EXCLUSIVE")
+	f.Add("SAVEPOINT sp1")
+	f.Add("RELEASE SAVEPOINT sp1")
+	f.Add("ROLLBACK TO SAVEPOINT sp1")
+	f.Add("BEGIN; SAVEPOINT sp1; INSERT INTO t0 VALUES(1); RELEASE SAVEPOINT sp1; COMMIT")
+
+	// ===== SQL1999: JOINs (F041/F401) =====
+	f.Add("SELECT * FROM t0 NATURAL JOIN t1")
+	f.Add("SELECT * FROM t0 JOIN t1 USING(c0)")
+	f.Add("SELECT * FROM t0 LEFT JOIN t1 USING(c0)")
+
 	f.Fuzz(func(t *testing.T, query string) {
 		if len(query) == 0 || len(query) > 3000 {
 			t.Skip()
