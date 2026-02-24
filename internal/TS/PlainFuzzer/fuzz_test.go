@@ -2,11 +2,17 @@ package PlainFuzzer
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 	_ "github.com/glebarez/go-sqlite"
+)
+
+const (
+	defaultTimeout = 5 * time.Second
 )
 
 func FuzzSQL(f *testing.F) {
@@ -500,25 +506,46 @@ func splitStatements(sql string) []string {
 }
 
 func executeSQL(db *sqlvibe.Database, query string) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			if e, ok := r.(error); ok {
-				err = e
-			} else {
-				err = fmt.Errorf("panic: %v", r)
+	type result struct {
+		err error
+	}
+	resultCh := make(chan result, 1)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, true)
+				panicInfo := fmt.Sprintf("PANIC: %v\n\nStack trace:\n%s", r, string(buf[:n]))
+				if e, ok := r.(error); ok {
+					resultCh <- result{err: fmt.Errorf("%w\n%s", e, panicInfo)}
+				} else {
+					resultCh <- result{err: fmt.Errorf("%v\n%s", r, panicInfo)}
+				}
 			}
+		}()
+
+		upperQuery := strings.ToUpper(strings.TrimSpace(query))
+
+		if len(upperQuery) >= 6 {
+			prefix := upperQuery[:6]
+			if prefix == "SELECT" || prefix == "PRAGMA" {
+				_, err = db.Query(query)
+				resultCh <- result{err: err}
+				return
+			}
+		}
+		_, err = db.Exec(query)
+		if err != nil {
+			resultCh <- result{err: err}
+			return
 		}
 	}()
 
-	upperQuery := strings.ToUpper(strings.TrimSpace(query))
-
-	if len(upperQuery) >= 6 {
-		prefix := upperQuery[:6]
-		if prefix == "SELECT" || prefix == "PRAGMA" {
-			db.Query(query)
-			return nil
-		}
+	select {
+	case res := <-resultCh:
+		return res.err
+	case <-time.After(defaultTimeout):
+		return fmt.Errorf("TIMEOUT: query hung after %v\nQuery: %q", defaultTimeout, query)
 	}
-	db.Exec(query)
-	return nil
 }
