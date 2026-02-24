@@ -161,6 +161,57 @@ A record of bugs discovered through sqlvibe's PlainFuzzer - a SQL-native fuzzer 
 
 ---
 
+### Parser infinite loop in window function ORDER BY parsing
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High (Denial of Service) |
+| **Type** | Infinite Loop |
+| **File** | `internal/QP/parser.go` |
+| **Function** | `parseWindowSpec` (ORDER BY parsing in window specification) |
+| **Trigger SQL** | `SELECT A(0OVER(ORDER(.RDER FROM` |
+| **Impact** | Parser hangs indefinitely |
+| **Root Cause** | ORDER BY parsing loop in window function spec had no safety check for when `parseExpr` doesn't advance. Malformed input like `ORDER(.RDER` caused infinite loop. |
+| **Fix** | Added position check before and after parseExpr - if position doesn't advance, break to prevent infinite loop |
+| **Found By** | PlainFuzzer |
+| **Date** | 2026-02-24 |
+
+---
+
+### Parser infinite loop in window function PARTITION BY parsing
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High (Denial of Service) |
+| **Type** | Infinite Loop |
+| **File** | `internal/QP/parser.go` |
+| **Function** | `parseWindowSpec` (PARTITION BY parsing in window specification) |
+| **Trigger SQL** | `SELECT RANK() OVER (ORDER BY ....FROM t0` |
+| **Impact** | Parser hangs indefinitely |
+| **Root Cause** | Same issue as ORDER BY - PARTITION BY parsing loop had no safety check for when parser doesn't advance. |
+| **Fix** | Added position check before and after parseExpr - if position doesn't advance, break to prevent infinite loop |
+| **Found By** | PlainFuzzer |
+| **Date** | 2026-02-24 |
+
+---
+
+### Parser infinite loop in trigger body parsing
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High (Denial of Service) |
+| **Type** | Infinite Loop |
+| **File** | `internal/QP/parser.go` |
+| **Function** | `parseCreateTrigger` (trigger body parsing) |
+| **Trigger SQL** | `CREATE TRIGGER tr1 AFTER INSERT ON t0 BEGIN SYLECT 1; END` |
+| **Impact** | Parser hangs indefinitely |
+| **Root Cause** | Trigger body parsing loop had no safety check for when `parseInternal` doesn't advance. Malformed SQL like "SYLECT" (typo for SELECT) caused infinite loop. |
+| **Fix** | Added position check before and after parseInternal - if position doesn't advance, break to prevent infinite loop |
+| **Found By** | PlainFuzzer |
+| **Date** | 2026-02-24 |
+
+---
+
 ## Running the Fuzzer
 
 ```bash

@@ -115,11 +115,11 @@ func (d *DeleteStmt) NodeType() string { return "DeleteStmt" }
 type ReferenceAction int
 
 const (
-	ReferenceNoAction  ReferenceAction = iota // NO ACTION (default)
-	ReferenceRestrict                         // RESTRICT
-	ReferenceCascade                          // CASCADE
-	ReferenceSetNull                          // SET NULL
-	ReferenceSetDefault                       // SET DEFAULT
+	ReferenceNoAction   ReferenceAction = iota // NO ACTION (default)
+	ReferenceRestrict                          // RESTRICT
+	ReferenceCascade                           // CASCADE
+	ReferenceSetNull                           // SET NULL
+	ReferenceSetDefault                        // SET DEFAULT
 )
 
 // ForeignKeyConstraint represents a FOREIGN KEY constraint.
@@ -136,35 +136,35 @@ type CreateTableStmt struct {
 	Columns     []ColumnDef
 	IfNotExists bool
 	Temporary   bool
-	AsSelect    *SelectStmt           // CREATE TABLE ... AS SELECT
-	TableChecks []Expr                // table-level CHECK constraints
+	AsSelect    *SelectStmt            // CREATE TABLE ... AS SELECT
+	TableChecks []Expr                 // table-level CHECK constraints
 	ForeignKeys []ForeignKeyConstraint // table-level FOREIGN KEY constraints
-	UniqueKeys  [][]string            // table-level UNIQUE(col, ...) constraints
+	UniqueKeys  [][]string             // table-level UNIQUE(col, ...) constraints
 }
 
 func (c *CreateTableStmt) NodeType() string { return "CreateTableStmt" }
 
 type ColumnDef struct {
-	Name          string
-	Type          string
-	PrimaryKey    bool
-	NotNull       bool
-	Unique        bool                  // UNIQUE constraint on this column
-	Default       Expr
-	Check         Expr                  // CHECK constraint expression
-	IsAutoincrement bool               // AUTOINCREMENT
-	ForeignKey    *ForeignKeyConstraint // inline REFERENCES clause
-	Collation     string                // COLLATE name (e.g., NOCASE, RTRIM, BINARY)
+	Name            string
+	Type            string
+	PrimaryKey      bool
+	NotNull         bool
+	Unique          bool // UNIQUE constraint on this column
+	Default         Expr
+	Check           Expr                  // CHECK constraint expression
+	IsAutoincrement bool                  // AUTOINCREMENT
+	ForeignKey      *ForeignKeyConstraint // inline REFERENCES clause
+	Collation       string                // COLLATE name (e.g., NOCASE, RTRIM, BINARY)
 }
 
 // CreateTriggerStmt represents CREATE TRIGGER
 type CreateTriggerStmt struct {
 	Name        string
 	TableName   string
-	Time        string   // "BEFORE", "AFTER", "INSTEAD OF"
-	Event       string   // "INSERT", "UPDATE", "DELETE"
-	Columns     []string // for UPDATE OF col1, col2
-	When        Expr     // WHEN condition (nil if absent)
+	Time        string    // "BEFORE", "AFTER", "INSTEAD OF"
+	Event       string    // "INSERT", "UPDATE", "DELETE"
+	Columns     []string  // for UPDATE OF col1, col2
+	When        Expr      // WHEN condition (nil if absent)
 	Body        []ASTNode // trigger body statements
 	IfNotExists bool
 }
@@ -218,10 +218,10 @@ type CreateIndexStmt struct {
 	Name        string
 	Table       string
 	Columns     []string
-	Exprs       []Expr   // parallel to Columns; non-nil entry means expression index on that slot
+	Exprs       []Expr // parallel to Columns; non-nil entry means expression index on that slot
 	Unique      bool
 	IfNotExists bool
-	WhereExpr   Expr     // nil if no WHERE clause (partial index)
+	WhereExpr   Expr // nil if no WHERE clause (partial index)
 }
 
 func (c *CreateIndexStmt) NodeType() string { return "CreateIndexStmt" }
@@ -275,10 +275,8 @@ type ReleaseSavepointStmt struct {
 
 func (r *ReleaseSavepointStmt) NodeType() string { return "ReleaseSavepointStmt" }
 
-
-//
-//	BACKUP DATABASE TO 'path'
-//	BACKUP INCREMENTAL TO 'path'
+// BACKUP DATABASE TO 'path'
+// BACKUP INCREMENTAL TO 'path'
 type BackupStmt struct {
 	Incremental bool   // true for BACKUP INCREMENTAL, false for BACKUP DATABASE
 	DestPath    string // destination file path
@@ -369,7 +367,7 @@ type WindowOrderBy struct {
 
 // WindowFrame represents ROWS/RANGE BETWEEN frame spec
 type WindowFrame struct {
-	Type  string     // "ROWS" or "RANGE"
+	Type  string // "ROWS" or "RANGE"
 	Start FrameBound
 	End   FrameBound
 }
@@ -570,10 +568,15 @@ func (p *Parser) parseTableRef() *TableRef {
 				p.advance() // consume (
 				var row []Expr
 				for !p.isEOF() && p.current().Type != TokenRightParen {
+					exprPos := p.pos
 					expr, e := p.parseExpr()
 					if e != nil {
 						p.parseError = e
 						return ref
+					}
+					// Safety: if parseExpr didn't advance, break to prevent infinite loop
+					if p.pos == exprPos {
+						break
 					}
 					if expr == nil {
 						break
@@ -610,10 +613,15 @@ func (p *Parser) parseTableRef() *TableRef {
 			if p.current().Type == TokenLeftParen {
 				p.advance() // consume (
 				for !p.isEOF() && p.current().Type != TokenRightParen {
+					colPos := p.pos
 					if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
 						ref.ValueCols = append(ref.ValueCols, p.current().Literal)
 						p.advance()
 					} else {
+						// Safety: if didn't advance, break to prevent infinite loop
+						if p.pos == colPos {
+							break
+						}
 						break
 					}
 					if p.current().Type == TokenComma {
@@ -1775,9 +1783,14 @@ func (p *Parser) parseCreateTrigger() (ASTNode, error) {
 				p.advance()
 				break
 			}
+			bodyPos := p.pos
 			bodyStmt, err := p.parseInternal()
 			if err != nil {
 				return nil, err
+			}
+			// Safety: if parseInternal didn't advance, break to prevent infinite loop
+			if p.pos == bodyPos {
+				break
 			}
 			if bodyStmt != nil {
 				stmt.Body = append(stmt.Body, bodyStmt)
@@ -2673,9 +2686,14 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			p.advance()
 			args := make([]Expr, 0)
 			for !p.isEOF() && p.current().Type != TokenRightParen {
+				argPos := p.pos
 				arg, err := p.parseExpr()
 				if err != nil {
 					return nil, err
+				}
+				// Safety: if parseExpr didn't advance, break to prevent infinite loop
+				if p.pos == argPos {
+					break
 				}
 				if arg == nil {
 					break
@@ -2741,9 +2759,14 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 
 				args := make([]Expr, 0)
 				for !p.isEOF() && p.current().Type != TokenRightParen {
+					argPos := p.pos
 					arg, err := p.parseExpr()
 					if err != nil {
 						return nil, err
+					}
+					// Safety: if parseExpr didn't advance, break to prevent infinite loop
+					if p.pos == argPos {
+						break
 					}
 					if arg == nil {
 						break
@@ -2799,9 +2822,14 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			p.advance()
 			args := make([]Expr, 0)
 			for !p.isEOF() && p.current().Type != TokenRightParen {
+				argPos := p.pos
 				arg, err := p.parseExpr()
 				if err != nil {
 					return nil, err
+				}
+				// Safety: if parseExpr didn't advance, break to prevent infinite loop
+				if p.pos == argPos {
+					break
 				}
 				if arg == nil {
 					break
@@ -3111,10 +3139,15 @@ func (p *Parser) parseWithClause() (ASTNode, error) {
 		if p.current().Type == TokenLeftParen {
 			p.advance() // consume (
 			for !p.isEOF() && p.current().Type != TokenRightParen {
+				colPos := p.pos
 				if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
 					cteCols = append(cteCols, p.current().Literal)
 					p.advance()
 				} else {
+					// Safety: if didn't advance, break to prevent infinite loop
+					if p.pos == colPos {
+						break
+					}
 					break
 				}
 				if p.current().Type == TokenComma {
@@ -3185,9 +3218,14 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []WindowOrderBy, f
 			if p.current().Type == TokenKeyword && p.current().Literal == "ORDER" {
 				break
 			}
+			exprPos := p.pos
 			expr, e := p.parseExpr()
 			if e != nil {
 				return nil, nil, nil, e
+			}
+			// Safety: if parseExpr didn't advance, break to prevent infinite loop
+			if p.pos == exprPos {
+				break
 			}
 			partition = append(partition, expr)
 			if p.current().Type == TokenComma {
@@ -3206,9 +3244,14 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []WindowOrderBy, f
 			if p.current().Type == TokenKeyword && (p.current().Literal == "ROWS" || p.current().Literal == "RANGE") {
 				break
 			}
+			exprPos := p.pos
 			expr, e := p.parseExpr()
 			if e != nil {
 				return nil, nil, nil, e
+			}
+			// Safety: if parseExpr didn't advance, break to prevent infinite loop
+			if p.pos == exprPos {
+				break
 			}
 			desc := false
 			if p.current().Type == TokenKeyword && (p.current().Literal == "ASC" || p.current().Literal == "DESC") {
