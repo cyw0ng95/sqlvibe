@@ -371,6 +371,14 @@ func FuzzSQL(f *testing.F) {
 	f.Add("SELECT * FROM t0 JOIN t1 USING(c0)")
 	f.Add("SELECT * FROM t0 LEFT JOIN t1 USING(c0)")
 
+	// ===== Deep Fuzzing: SQLSmith-style complex queries =====
+	// Use DeepSQLGenerator to create seeds with multiple random seeds
+	for seed := int64(12345); seed < 12400; seed += 15 {
+		deepGen := NewDeepSQLGenerator(seed)
+		for i := 0; i < 5; i++ {
+			f.Add(deepGen.DeepGenerateComplexQuery())
+		}
+	}
 	f.Fuzz(func(t *testing.T, query string) {
 		if len(query) == 0 || len(query) > 3000 {
 			t.Skip()
