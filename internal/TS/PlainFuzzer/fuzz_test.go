@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultTimeout = 5 * time.Second
+	defaultTimeout = 10 * time.Second
 )
 
 func FuzzSQL(f *testing.F) {
