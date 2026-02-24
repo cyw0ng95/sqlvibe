@@ -575,9 +575,14 @@ func (p *Parser) parseTableRef() *TableRef {
 						p.parseError = e
 						return ref
 					}
+					if expr == nil {
+						break
+					}
 					row = append(row, expr)
 					if p.current().Type == TokenComma {
 						p.advance()
+					} else if p.current().Type != TokenRightParen {
+						break
 					}
 				}
 				if p.current().Type == TokenRightParen {
@@ -608,6 +613,8 @@ func (p *Parser) parseTableRef() *TableRef {
 					if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
 						ref.ValueCols = append(ref.ValueCols, p.current().Literal)
 						p.advance()
+					} else {
+						break
 					}
 					if p.current().Type == TokenComma {
 						p.advance()
@@ -623,8 +630,12 @@ func (p *Parser) parseTableRef() *TableRef {
 		if err == nil {
 			ref.Subquery = subStmt
 		}
+		// Recovery: skip tokens until we find ) or EOF
+		for p.current().Type != TokenRightParen && p.current().Type != TokenEOF && p.current().Type != TokenSemicolon {
+			p.advance()
+		}
 		if p.current().Type == TokenRightParen {
-			p.advance() // consume )
+			p.advance()
 		}
 	} else {
 		ref.Name = p.current().Literal
@@ -2792,11 +2803,14 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				if err != nil {
 					return nil, err
 				}
-				if arg != nil {
-					args = append(args, arg)
+				if arg == nil {
+					break
 				}
+				args = append(args, arg)
 				if p.current().Type == TokenComma {
 					p.advance()
+				} else if p.current().Type != TokenRightParen {
+					break
 				}
 			}
 			p.expect(TokenRightParen)
