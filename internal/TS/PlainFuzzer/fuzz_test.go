@@ -288,6 +288,27 @@ func FuzzSQL(f *testing.F) {
 	f.Add("PRAGMA wal_autocheckpoint")
 	f.Add("PRAGMA auto_vacuum")
 
+	// ===== WAL Enhancement PRAGMAs =====
+	f.Add("PRAGMA wal_autocheckpoint = 1000")
+	f.Add("PRAGMA wal_autocheckpoint = 0")
+	f.Add("PRAGMA wal_autocheckpoint = 100")
+	f.Add("PRAGMA wal_checkpoint")
+	f.Add("PRAGMA wal_checkpoint(passive)")
+	f.Add("PRAGMA wal_checkpoint(full)")
+	f.Add("PRAGMA wal_checkpoint(truncate)")
+	f.Add("PRAGMA journal_size_limit")
+	f.Add("PRAGMA journal_size_limit = 10000")
+	f.Add("PRAGMA journal_size_limit = 0")
+
+	// ===== Storage PRAGMAs =====
+	f.Add("PRAGMA shrink_memory")
+	f.Add("PRAGMA optimize")
+	f.Add("PRAGMA integrity_check")
+	f.Add("PRAGMA quick_check")
+	f.Add("PRAGMA cache_size = 1000")
+	f.Add("PRAGMA cache_size = -2000")
+	f.Add("PRAGMA cache_grind")
+
 	// ===== EDGE CASES: Numeric edge values =====
 	f.Add("SELECT 9223372036854775807")  // INT64 max
 	f.Add("SELECT -9223372036854775808") // INT64 min
@@ -387,6 +408,31 @@ func FuzzSQL(f *testing.F) {
 	f.Add("UPDATE t0 SET c1 = t1.c1 FROM t1 WHERE t0.c0 = t1.c0")
 	f.Add("INSERT INTO t0(c0, c1) VALUES (1, 'a'), (2, 'b'), (3, 'c')")
 	f.Add("SELECT t0.c0, (SELECT COUNT(*) FROM t1 WHERE t1.c0 = t0.c0) AS cnt FROM t0")
+
+	// ===== WAL Multi-Statement Sequences =====
+	// These test WAL operations with actual data changes
+	f.Add("CREATE TABLE t1(a INT); INSERT INTO t1 VALUES(1); PRAGMA wal_checkpoint")
+	f.Add("CREATE TABLE t2(a INT); INSERT INTO t2 VALUES(1),(2); PRAGMA wal_checkpoint(passive)")
+	f.Add("CREATE TABLE t3(a INT); INSERT INTO t3 SELECT 1; PRAGMA wal_checkpoint(full)")
+	f.Add("CREATE TABLE t4(a INT); INSERT INTO t4 VALUES(1); DELETE FROM t4; PRAGMA wal_checkpoint(truncate)")
+	f.Add("CREATE TABLE t5(a INT); INSERT INTO t5 VALUES(1),(2),(3); UPDATE t5 SET a=10 WHERE a=1; PRAGMA wal_checkpoint")
+	f.Add("CREATE TABLE t6(a INT PRIMARY KEY); INSERT OR REPLACE INTO t6 VALUES(1); PRAGMA wal_checkpoint")
+	f.Add("PRAGMA wal_autocheckpoint = 500; CREATE TABLE t7(a INT); INSERT INTO t7 VALUES(1)")
+	f.Add("PRAGMA journal_size_limit = 5000; CREATE TABLE t8(a INT); INSERT INTO t8 VALUES(1)")
+	f.Add("PRAGMA shrink_memory; CREATE TABLE t9(a INT)")
+	f.Add("PRAGMA optimize; CREATE TABLE t10(a INT)")
+	f.Add("PRAGMA integrity_check; CREATE TABLE t11(a INT)")
+	f.Add("PRAGMA quick_check; CREATE TABLE t12(a INT)")
+	f.Add("PRAGMA cache_grind; CREATE TABLE t13(a INT)")
+
+	// ===== Storage PRAGMA Edge Cases =====
+	f.Add("PRAGMA cache_size = 0")
+	f.Add("PRAGMA cache_size = -100")
+	f.Add("PRAGMA cache_size = 10000")
+	f.Add("PRAGMA journal_size_limit = -1")
+	f.Add("PRAGMA journal_size_limit = 1000000")
+	f.Add("PRAGMA wal_autocheckpoint = -1")
+	f.Add("PRAGMA wal_autocheckpoint = 10000")
 
 	f.Fuzz(func(t *testing.T, query string) {
 		if len(query) == 0 || len(query) > 3000 {
