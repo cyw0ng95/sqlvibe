@@ -20,7 +20,7 @@ func (m *FileMutator) Mutate(data []byte) []byte {
 	if len(data) == 0 {
 		return data
 	}
-	strategy := m.rng.Intn(6)
+	strategy := m.rng.Intn(12)
 	switch strategy {
 	case 0:
 		return m.mutateHeader(data)
@@ -32,8 +32,20 @@ func (m *FileMutator) Mutate(data []byte) []byte {
 		return m.mutateStructure(data)
 	case 4:
 		return m.mutateFooter(data)
-	default:
+	case 5:
 		return m.mutatePadding(data)
+	case 6:
+		return m.mutateSwapBytes(data)
+	case 7:
+		return m.mutateRepeatSection(data)
+	case 8:
+		return m.mutateShift(data)
+	case 9:
+		return m.mutateDuplicateSection(data)
+	case 10:
+		return m.mutateNegativeSize(data)
+	default:
+		return m.mutateFragment(data)
 	}
 }
 
@@ -104,6 +116,97 @@ func (m *FileMutator) mutatePadding(data []byte) []byte {
 	copy(out, data[:insertAt])
 	// padLen zero bytes are already zero-initialized by make
 	copy(out[insertAt+padLen:], data[insertAt:])
+	return out
+}
+
+// mutateSwapBytes swaps two random bytes in the file
+func (m *FileMutator) mutateSwapBytes(data []byte) []byte {
+	if len(data) < 2 {
+		return m.mutateByteFlip(data)
+	}
+	out := copyBytes(data)
+	i := m.rng.Intn(len(out))
+	j := m.rng.Intn(len(out))
+	out[i], out[j] = out[j], out[i]
+	return out
+}
+
+// mutateRepeatSection repeats a section of bytes multiple times
+func (m *FileMutator) mutateRepeatSection(data []byte) []byte {
+	if len(data) < 4 {
+		return data
+	}
+	start := m.rng.Intn(len(data) / 2)
+	end := start + m.rng.Intn(len(data)/2-start) + 1
+	if end > len(data) {
+		end = len(data)
+	}
+	section := data[start:end]
+	repeat := m.rng.Intn(3) + 1 // repeat 1-3 times
+
+	out := make([]byte, 0, start+len(section)*repeat+len(data)-end)
+	out = append(out, data[:start]...)
+	for i := 0; i < repeat; i++ {
+		out = append(out, section...)
+	}
+	out = append(out, data[end:]...)
+	return out
+}
+
+// mutateShift shifts all bytes by a random offset (rotates within the file)
+func (m *FileMutator) mutateShift(data []byte) []byte {
+	if len(data) < 2 {
+		return data
+	}
+	shift := m.rng.Intn(len(data))
+	out := make([]byte, len(data))
+	for i := 0; i < len(data); i++ {
+		out[(i+shift)%len(data)] = data[i]
+	}
+	return out
+}
+
+// mutateDuplicateSection duplicates a section of bytes and inserts it
+func (m *FileMutator) mutateDuplicateSection(data []byte) []byte {
+	if len(data) < 4 {
+		return data
+	}
+	start := m.rng.Intn(len(data) / 2)
+	end := start + m.rng.Intn(len(data)/2-start) + 1
+	if end > len(data) {
+		end = len(data)
+	}
+	section := make([]byte, end-start)
+	copy(section, data[start:end])
+
+	out := make([]byte, 0, len(data)+len(section))
+	out = append(out, data[:start]...)
+	out = append(out, section...)
+	out = append(out, data[start:]...)
+	return out
+}
+
+// mutateNegativeSize writes a negative size value at a random offset
+func (m *FileMutator) mutateNegativeSize(data []byte) []byte {
+	out := copyBytes(data)
+	pos := m.rng.Intn(len(out) - 3)
+	// Write a negative 32-bit integer
+	negativeValue := []byte{0xFF, 0xFF, 0xFF, 0xFF}
+	copy(out[pos:], negativeValue)
+	return out
+}
+
+// mutateFragment replaces a section with random garbage
+func (m *FileMutator) mutateFragment(data []byte) []byte {
+	if len(data) < 8 {
+		return m.mutateByteFlip(data)
+	}
+	out := copyBytes(data)
+	start := m.rng.Intn(len(out) - 8)
+	length := m.rng.Intn(8) + 1
+	for i := start; i < start+length && i < len(out); i++ {
+		out[i] = byte(m.rng.Intn(256))
+	}
 	return out
 }
 

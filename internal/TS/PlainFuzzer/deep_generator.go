@@ -48,6 +48,10 @@ func (g *DeepSQLGenerator) DeepGenerateComplexQuery() string {
 		g.generateDeepWindow,
 		g.generateDeepSetOperation,
 		g.generateDeepInsertUpdate,
+		g.generateDeepPragma,
+		g.generateDeepTransaction,
+		g.generateDeepAlterView,
+		g.generateDeepExpression,
 	}
 
 	return queryTypes[g.rand.Intn(len(queryTypes))]()
@@ -228,7 +232,7 @@ func (g *DeepSQLGenerator) generateMultiArgFunc(colType ColumnType) string {
 
 	switch colType {
 	case ColumnTypeInteger, ColumnTypeReal:
-	return fmt.Sprintf("COALESCE(%s, %s, %s)", args[0], args[1], args[2])
+		return fmt.Sprintf("COALESCE(%s, %s, %s)", args[0], args[1], args[2])
 	case ColumnTypeText:
 		return fmt.Sprintf("COALESCE(%s, %s)", args[0], args[1])
 	default:
@@ -466,4 +470,195 @@ func (g *DeepSQLGenerator) generateString() string {
 		result[i] = chars[g.rand.Intn(len(chars))]
 	}
 	return string(result)
+}
+
+// generateDeepPragma generates complex PRAGMA statements
+func (g *DeepSQLGenerator) generateDeepPragma() string {
+	pragmaTypes := []func() string{
+		g.generateWalPragma,
+		g.generateStoragePragma,
+		g.generateCachePragma,
+	}
+	return pragmaTypes[g.rand.Intn(len(pragmaTypes))]()
+}
+
+func (g *DeepSQLGenerator) generateWalPragma() string {
+	walPragmas := []string{
+		"PRAGMA wal_autocheckpoint = 1000",
+		"PRAGMA wal_autocheckpoint = 0",
+		"PRAGMA wal_checkpoint(passive)",
+		"PRAGMA wal_checkpoint(full)",
+		"PRAGMA wal_checkpoint(truncate)",
+		"PRAGMA journal_size_limit = 10000",
+		"PRAGMA journal_size_limit = 0",
+		"PRAGMA journal_mode = wal",
+	}
+	return walPragmas[g.rand.Intn(len(walPragmas))]
+}
+
+func (g *DeepSQLGenerator) generateStoragePragma() string {
+	storagePragmas := []string{
+		"PRAGMA shrink_memory",
+		"PRAGMA optimize",
+		"PRAGMA integrity_check",
+		"PRAGMA quick_check",
+		"PRAGMA cache_size = 1000",
+		"PRAGMA cache_size = -2000",
+	}
+	return storagePragmas[g.rand.Intn(len(storagePragmas))]
+}
+
+func (g *DeepSQLGenerator) generateCachePragma() string {
+	cachePragmas := []string{
+		"PRAGMA cache_size",
+		"PRAGMA cache_grind",
+		"PRAGMA page_size",
+		"PRAGMA mmap_size = 0",
+		"PRAGMA read_uncommitted = 1",
+	}
+	return cachePragmas[g.rand.Intn(len(cachePragmas))]
+}
+
+// generateDeepTransaction generates transaction statements
+func (g *DeepSQLGenerator) generateDeepTransaction() string {
+	txTypes := []func() string{
+		g.generateBasicTransaction,
+		g.generateSavepointTransaction,
+		g.generateDeferTransaction,
+	}
+	return txTypes[g.rand.Intn(len(txTypes))]()
+}
+
+func (g *DeepSQLGenerator) generateBasicTransaction() string {
+	txs := []string{
+		"BEGIN; INSERT INTO t0 VALUES(1); COMMIT",
+		"BEGIN; UPDATE t0 SET c0 = c0 + 1; ROLLBACK",
+		"BEGIN IMMEDIATE; INSERT INTO t0 VALUES(1); COMMIT",
+		"BEGIN EXCLUSIVE; INSERT INTO t0 VALUES(1); COMMIT",
+	}
+	return txs[g.rand.Intn(len(txs))]
+}
+
+func (g *DeepSQLGenerator) generateSavepointTransaction() string {
+	sps := []string{
+		"SAVEPOINT sp1; INSERT INTO t0 VALUES(1); RELEASE SAVEPOINT sp1",
+		"SAVEPOINT sp1; UPDATE t0 SET c0 = 1; ROLLBACK TO SAVEPOINT sp1",
+		"SAVEPOINT a; SAVEPOINT b; RELEASE SAVEPOINT a",
+	}
+	return sps[g.rand.Intn(len(sps))]
+}
+
+func (g *DeepSQLGenerator) generateDeferTransaction() string {
+	defs := []string{
+		"BEGIN DEFERRED; SELECT 1; COMMIT",
+		"BEGIN; CREATE TABLE tx(a INT); ROLLBACK",
+		"BEGIN; DROP TABLE IF EXISTS t1; COMMIT",
+	}
+	return defs[g.rand.Intn(len(defs))]
+}
+
+// generateDeepAlterView generates ALTER and VIEW statements
+func (g *DeepSQLGenerator) generateDeepAlterView() string {
+	avTypes := []func() string{
+		g.generateViewStatement,
+		g.generateAlterTable,
+		g.generateIndexStatement,
+	}
+	return avTypes[g.rand.Intn(len(avTypes))]()
+}
+
+func (g *DeepSQLGenerator) generateViewStatement() string {
+	views := []string{
+		"CREATE VIEW v1 AS SELECT 1 AS a",
+		"CREATE VIEW IF NOT EXISTS v2 AS SELECT c0, c1 FROM t0",
+		"DROP VIEW IF EXISTS v1",
+		"CREATE TEMP VIEW temp_v AS SELECT 1",
+	}
+	return views[g.rand.Intn(len(views))]
+}
+
+func (g *DeepSQLGenerator) generateAlterTable() string {
+	alters := []string{
+		"ALTER TABLE t0 ADD COLUMN new_col TEXT",
+		"ALTER TABLE t0 RENAME TO t1",
+		"ALTER TABLE t0 RENAME COLUMN c0 TO c1",
+	}
+	return alters[g.rand.Intn(len(alters))]
+}
+
+func (g *DeepSQLGenerator) generateIndexStatement() string {
+	indexes := []string{
+		"CREATE INDEX idx1 ON t0(c0)",
+		"CREATE INDEX IF NOT EXISTS idx2 ON t0(c1 DESC)",
+		"CREATE UNIQUE INDEX idx3 ON t0(c0, c1)",
+		"CREATE INDEX idx4 ON t0(c0) WHERE c0 > 0",
+		"DROP INDEX IF EXISTS idx1",
+		"REINDEX",
+		"REINDEX t0",
+	}
+	return indexes[g.rand.Intn(len(indexes))]
+}
+
+// generateDeepExpression generates complex expressions
+func (g *DeepSQLGenerator) generateDeepExpression() string {
+	exprTypes := []func() string{
+		g.generateMathExpression,
+		g.generateStringExpression,
+		g.generateNULLExpression,
+		g.generateCastExpression,
+	}
+	return exprTypes[g.rand.Intn(len(exprTypes))]()
+}
+
+func (g *DeepSQLGenerator) generateMathExpression() string {
+	mathExprs := []string{
+		"SELECT ABS(-1 * c0) FROM t0",
+		"SELECT c0 + c1 * 2 FROM t0",
+		"SELECT (c0 + c1) / c2 FROM t0",
+		"SELECT c0 % 10 FROM t0",
+		"SELECT c0 | c1 FROM t0",
+		"SELECT c0 & 255 FROM t0",
+		"SELECT ~c0 FROM t0",
+		"SELECT (c0 << 2) FROM t0",
+	}
+	return mathExprs[g.rand.Intn(len(mathExprs))]
+}
+
+func (g *DeepSQLGenerator) generateStringExpression() string {
+	strExprs := []string{
+		"SELECT UPPER(c0) FROM t0",
+		"SELECT LOWER(c0) FROM t0",
+		"SELECT LENGTH(c0) FROM t0",
+		"SELECT SUBSTR(c0, 1, 5) FROM t0",
+		"SELECT TRIM(c0) FROM t0",
+		"SELECT REPLACE(c0, 'a', 'b') FROM t0",
+		"SELECT INSTR(c0, 'test') FROM t0",
+		"SELECT c0 || c1 FROM t0",
+	}
+	return strExprs[g.rand.Intn(len(strExprs))]
+}
+
+func (g *DeepSQLGenerator) generateNULLExpression() string {
+	nullExprs := []string{
+		"SELECT COALESCE(NULL, c0, 1) FROM t0",
+		"SELECT IFNULL(NULL, 'default') FROM t0",
+		"SELECT NULLIF(c0, 0) FROM t0",
+		"SELECT IIF(c0 IS NULL, 'yes', 'no') FROM t0",
+		"SELECT c0 + NULL FROM t0",
+		"SELECT NULL = NULL",
+		"SELECT NULL OR 1",
+	}
+	return nullExprs[g.rand.Intn(len(nullExprs))]
+}
+
+func (g *DeepSQLGenerator) generateCastExpression() string {
+	castExprs := []string{
+		"SELECT CAST(c0 AS TEXT) FROM t0",
+		"SELECT CAST('123' AS INTEGER) FROM t0",
+		"SELECT CAST(1.5 AS INTEGER) FROM t0",
+		"SELECT CAST('1.5' AS REAL) FROM t0",
+		"SELECT CAST(c0 AS BLOB) FROM t0",
+		"SELECT CAST(X'414243' AS TEXT)",
+	}
+	return castExprs[g.rand.Intn(len(castExprs))]
 }
