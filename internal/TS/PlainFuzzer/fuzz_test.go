@@ -379,6 +379,15 @@ func FuzzSQL(f *testing.F) {
 			f.Add(deepGen.DeepGenerateComplexQuery())
 		}
 	}
+
+	// Complex multi-feature queries
+	f.Add("SELECT t.c0, t.rn FROM (SELECT c0, ROW_NUMBER() OVER (ORDER BY c0) AS rn FROM t0) t JOIN t1 ON t.c0 = t1.c0")
+	f.Add("WITH cte AS (SELECT c0, SUM(c1) AS total FROM t0 GROUP BY c0) SELECT c0, total, ROW_NUMBER() OVER (ORDER BY total DESC) FROM cte")
+	f.Add("WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM cnt WHERE x < 10) SELECT x FROM cnt")
+	f.Add("UPDATE t0 SET c1 = t1.c1 FROM t1 WHERE t0.c0 = t1.c0")
+	f.Add("INSERT INTO t0(c0, c1) VALUES (1, 'a'), (2, 'b'), (3, 'c')")
+	f.Add("SELECT t0.c0, (SELECT COUNT(*) FROM t1 WHERE t1.c0 = t0.c0) AS cnt FROM t0")
+
 	f.Fuzz(func(t *testing.T, query string) {
 		if len(query) == 0 || len(query) > 3000 {
 			t.Skip()
