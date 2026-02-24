@@ -2186,13 +2186,21 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 					p.advance()
 					break
 				}
+				if p.current().Type == TokenEOF {
+					break
+				}
 				expr, err := p.parseExpr()
 				if err != nil {
 					return nil, err
 				}
+				if expr == nil {
+					break
+				}
 				values = append(values, evalConstExpr(expr))
 				if p.current().Type == TokenComma {
 					p.advance()
+				} else if p.current().Type != TokenRightParen {
+					break
 				}
 			}
 			return &BinaryExpr{Op: TokenNotIn, Left: left, Right: &Literal{Value: values}}, nil
@@ -3092,6 +3100,8 @@ func (p *Parser) parseWithClause() (ASTNode, error) {
 				if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
 					cteCols = append(cteCols, p.current().Literal)
 					p.advance()
+				} else {
+					break
 				}
 				if p.current().Type == TokenComma {
 					p.advance()
