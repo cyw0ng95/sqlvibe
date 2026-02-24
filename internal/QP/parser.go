@@ -735,6 +735,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				return nil, err
 			}
 			if col == nil {
+				break
 			}
 
 			// Check for column alias: expr AS alias OR expr alias (implicit alias)

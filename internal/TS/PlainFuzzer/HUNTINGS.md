@@ -233,3 +233,22 @@ When a new bug is found:
 1. Add an entry to this file with all relevant details
 2. Add a regression test in `internal/TS/Regression/`
 3. Do NOT add to HISTORY.md - HUNTINGS.md is the source of truth for fuzzer bugs
+
+---
+
+## v0.9.10 (2026-02-24)
+
+### Parser/VM infinite loop with malformed JOIN
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High (Denial of Service) |
+| **Type** | Infinite Loop |
+| **File** | `internal/QP/parser.go` |
+| **Function** | `parseSelect` (column list parsing loop) |
+| **Trigger SQL** | `SELECT A FROM(SELECT,)t JOIN t JOIN` |
+| **Impact** | Query hangs indefinitely |
+| **Root Cause** | When `parseExpr()` returns `nil` for malformed input like `(SELECT,)` (empty column before comma), the code at line 737-738 did nothing with nil. This caused an infinite loop because the parser never advanced. |
+| **Fix** | Added `break` statement when `col == nil` to exit the column parsing loop |
+| **Found By** | PlainFuzzer |
+| **Date** | 2026-02-24
