@@ -1,5 +1,41 @@
 # sqlvibe Release History
 
+## **v0.9.14** (2026-02-25)
+
+### Features: ALTER TABLE Extensions, SQL Compliance, Import/Export
+
+#### Track A: ALTER TABLE Extensions
+- `ALTER TABLE … DROP COLUMN col`: validates column exists and is not a PRIMARY KEY; drops column from schema, metadata maps (`columnOrder`, `columnDefaults`, `columnNotNull`, `columnChecks`), all existing rows, and any single-column index covering only the dropped column. Multi-column indexes containing the dropped column return `SVDB_ALTER_CONFLICT` to prevent silent corruption.
+- `ALTER TABLE … RENAME COLUMN old TO new` (also `RENAME old TO new` without the optional `COLUMN` keyword): renames column in schema, metadata maps, all existing rows, and index definitions.
+- `ALTER TABLE … ADD CONSTRAINT name CHECK (expr)`: registers a named CHECK expression in `columnChecks`.
+- `ALTER TABLE … ADD CONSTRAINT name UNIQUE (cols)`: registers a named UNIQUE index via the existing `indexes` map.
+- New error code `SVDB_ALTER_CONFLICT = 273` (extended SCHEMA code) returned when a DROP COLUMN is blocked by a multi-column index or PRIMARY KEY membership.
+
+#### Track B: SQL Compliance Gaps
+- `FETCH FIRST n ROWS ONLY` / `FETCH NEXT n ROWS ONLY` (SQL:2003 row limiting): parsed after ORDER BY and mapped to the existing `Limit` field. Also accepts `ROW` singular and `WITH TIES` (treated as `ONLY`).
+- `EXCEPT ALL` bug fix: the previous implementation incorrectly used a boolean set for multiset subtraction. Replaced with a count map so that each matching `right` row removes exactly one occurrence from `left`.
+- `VALUES (v1), (v2)` as a standalone top-level statement: a new `parseStandaloneValues` parser entry converts it to a `SelectStmt` with a `FROM (VALUES …)` derived table.
+- `CAST(NULL AS type)` already returned `NULL` correctly in both VM paths; verified by new test.
+- `GROUP BY` alias resolution already functional; verified by new test.
+- `INTERSECT ALL` was already correct; verified by new test.
+
+#### Track C: Import / Export Utilities
+- New `pkg/sqlvibe/import.go`: `ImportCSV(tableName, r, opts CSVImportOptions) (int, error)` — reads CSV with configurable delimiter, header flag, and null-string; infers int64/float64/string literals; inserts via normal INSERT path so constraints are enforced. `CSVImportOptions.CreateTable` auto-creates table with `TEXT` columns if set.
+- New `pkg/sqlvibe/export.go`: `ExportCSV(w, sql, opts CSVExportOptions) error` — executes SQL, streams rows as CSV with configurable delimiter and null representation. `ExportJSON(w, sql) error` — outputs a JSON array of objects; NULL values are JSON `null` literals.
+
+#### Track D: Tests
+- `internal/TS/SQL1999/F885/01_test.go`: 12 tests covering DROP COLUMN, DROP COLUMN PK rejection, RENAME COLUMN, ADD CONSTRAINT CHECK, FETCH FIRST, FETCH NEXT, INTERSECT ALL, EXCEPT ALL, CAST(NULL), standalone VALUES, GROUP BY alias.
+- `internal/TS/Regression/regression_v0.9.14_test.go`: 5 tests covering DROP COLUMN + INSERT round-trip, RENAME COLUMN schema reflection, RENAME COLUMN index update, CSV round-trip, JSON null export.
+
+#### Track E: PlainFuzzer Updates
+- `GenerateAlterTable` extended with DROP COLUMN, RENAME COLUMN, ADD CONSTRAINT patterns.
+- `GenerateSetOperation` extended with INTERSECT ALL and EXCEPT ALL.
+- `GenerateLimitOffset` extended with FETCH FIRST / FETCH NEXT patterns.
+- New `GenerateStandaloneValues` added (standalone VALUES statements).
+- `generator_sql1999.go`: new `GenerateSQL1999AlterTable`, `GenerateSQL1999FetchFirst`, `GenerateSQL1999SetOpAll` generators; all registered in `GenerateSQL1999RandomSQL`.
+
+---
+
 ## **v0.9.13** (2026-02-25)
 
 ### Features: Context API & Query Timeouts

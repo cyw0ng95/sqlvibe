@@ -3854,6 +3854,171 @@ func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 		db.hybridStoresDirty[stmt.NewName] = true
 		delete(db.hybridStoresDirty, stmt.Table)
 		return Result{}, nil
+
+	case "DROP_COLUMN":
+		if _, exists := db.tables[stmt.Table]; !exists {
+			return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
+		}
+		colName := stmt.Column.Name
+		if _, colExists := db.tables[stmt.Table][colName]; !colExists {
+			return Result{}, fmt.Errorf("no such column: %s", colName)
+		}
+		// Cannot drop a primary key column
+		for _, pkCol := range db.primaryKeys[stmt.Table] {
+			if pkCol == colName {
+				return Result{}, NewError(SVDB_ALTER_CONFLICT, fmt.Sprintf("cannot drop PRIMARY KEY column: %s", colName))
+			}
+		}
+		// Cannot drop a column used in a multi-column index
+		for idxName, idx := range db.indexes {
+			if idx.Table != stmt.Table {
+				continue
+			}
+			usedInIdx := false
+			for _, c := range idx.Columns {
+				if c == colName {
+					usedInIdx = true
+				}
+			}
+			if usedInIdx && len(idx.Columns) > 1 {
+				return Result{}, NewError(SVDB_ALTER_CONFLICT, fmt.Sprintf("column %s is used in multi-column index %s", colName, idxName))
+			}
+		}
+		// Remove from schema
+		delete(db.tables[stmt.Table], colName)
+		// Remove from columnOrder
+		order := db.columnOrder[stmt.Table]
+		newOrder := make([]string, 0, len(order)-1)
+		for _, c := range order {
+			if c != colName {
+				newOrder = append(newOrder, c)
+			}
+		}
+		db.columnOrder[stmt.Table] = newOrder
+		// Remove from metadata maps
+		if db.columnDefaults[stmt.Table] != nil {
+			delete(db.columnDefaults[stmt.Table], colName)
+		}
+		if db.columnNotNull[stmt.Table] != nil {
+			delete(db.columnNotNull[stmt.Table], colName)
+		}
+		if db.columnChecks[stmt.Table] != nil {
+			delete(db.columnChecks[stmt.Table], colName)
+		}
+		// Remove the column key from every existing row
+		for i := range db.data[stmt.Table] {
+			delete(db.data[stmt.Table][i], colName)
+		}
+		// Drop any index that only covers the dropped column
+		for idxName, idx := range db.indexes {
+			if idx.Table != stmt.Table {
+				continue
+			}
+			for _, c := range idx.Columns {
+				if c == colName {
+					delete(db.indexes, idxName)
+					delete(db.indexData, idxName)
+					break
+				}
+			}
+		}
+		db.engine.RegisterTable(stmt.Table, db.buildSchema(stmt.Table))
+		db.hybridStoresDirty[stmt.Table] = true
+		return Result{}, nil
+
+	case "RENAME_COLUMN":
+		if _, exists := db.tables[stmt.Table]; !exists {
+			return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
+		}
+		oldName := stmt.Column.Name
+		newName := stmt.NewName
+		if _, colExists := db.tables[stmt.Table][oldName]; !colExists {
+			return Result{}, fmt.Errorf("no such column: %s", oldName)
+		}
+		if _, taken := db.tables[stmt.Table][newName]; taken {
+			return Result{}, fmt.Errorf("column already exists: %s", newName)
+		}
+		// Rename in schema (type map)
+		colType := db.tables[stmt.Table][oldName]
+		db.tables[stmt.Table][newName] = colType
+		delete(db.tables[stmt.Table], oldName)
+		// Rename in columnOrder
+		for i, c := range db.columnOrder[stmt.Table] {
+			if c == oldName {
+				db.columnOrder[stmt.Table][i] = newName
+				break
+			}
+		}
+		// Rename in metadata maps
+		if db.columnDefaults[stmt.Table] != nil {
+			if v, ok := db.columnDefaults[stmt.Table][oldName]; ok {
+				db.columnDefaults[stmt.Table][newName] = v
+				delete(db.columnDefaults[stmt.Table], oldName)
+			}
+		}
+		if db.columnNotNull[stmt.Table] != nil {
+			if v, ok := db.columnNotNull[stmt.Table][oldName]; ok {
+				db.columnNotNull[stmt.Table][newName] = v
+				delete(db.columnNotNull[stmt.Table], oldName)
+			}
+		}
+		if db.columnChecks[stmt.Table] != nil {
+			if v, ok := db.columnChecks[stmt.Table][oldName]; ok {
+				db.columnChecks[stmt.Table][newName] = v
+				delete(db.columnChecks[stmt.Table], oldName)
+			}
+		}
+		// Rename the key in every existing row
+		for i := range db.data[stmt.Table] {
+			if v, ok := db.data[stmt.Table][i][oldName]; ok {
+				db.data[stmt.Table][i][newName] = v
+				delete(db.data[stmt.Table][i], oldName)
+			}
+		}
+		// Rename column reference in indexes
+		for _, idx := range db.indexes {
+			if idx.Table != stmt.Table {
+				continue
+			}
+			for i, c := range idx.Columns {
+				if c == oldName {
+					idx.Columns[i] = newName
+				}
+			}
+		}
+		db.engine.RegisterTable(stmt.Table, db.buildSchema(stmt.Table))
+		db.hybridStoresDirty[stmt.Table] = true
+		return Result{}, nil
+
+	case "ADD_CONSTRAINT":
+		if _, exists := db.tables[stmt.Table]; !exists {
+			return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
+		}
+		if stmt.CheckExpr != nil {
+			// Register CHECK constraint
+			if db.columnChecks[stmt.Table] == nil {
+				db.columnChecks[stmt.Table] = make(map[string]QP.Expr)
+			}
+			name := stmt.ConstraintName
+			if name == "" {
+				name = fmt.Sprintf("__check_%d__", len(db.columnChecks[stmt.Table]))
+			}
+			db.columnChecks[stmt.Table][name] = stmt.CheckExpr
+		} else if len(stmt.UniqueColumns) > 0 {
+			// Register UNIQUE constraint as an index
+			idxName := stmt.ConstraintName
+			if idxName == "" {
+				idxName = fmt.Sprintf("__unique_%s_%s__", stmt.Table, strings.Join(stmt.UniqueColumns, "_"))
+			}
+			db.indexes[idxName] = &IndexInfo{
+				Name:    idxName,
+				Table:   stmt.Table,
+				Columns: stmt.UniqueColumns,
+				Unique:  true,
+			}
+			db.buildIndexData(idxName)
+		}
+		return Result{}, nil
 	}
 	return Result{}, nil
 }

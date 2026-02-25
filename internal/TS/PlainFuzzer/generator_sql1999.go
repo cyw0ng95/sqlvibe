@@ -187,6 +187,44 @@ func (g *SQLGenerator) GenerateSQL1999RandomSQL() string {
 		g.GenerateSQL1999Aggregate,
 		g.GenerateCTE,
 		g.GenerateWindowFunction,
+		g.GenerateSQL1999AlterTable,
+		g.GenerateSQL1999FetchFirst,
+		g.GenerateSQL1999SetOpAll,
 	}
 	return generators[g.rand.Intn(len(generators))]()
+}
+
+// GenerateSQL1999AlterTable generates v0.9.14 ALTER TABLE patterns.
+func (g *SQLGenerator) GenerateSQL1999AlterTable() string {
+	alters := []string{
+		"ALTER TABLE t0 DROP COLUMN c1",
+		"ALTER TABLE t0 RENAME COLUMN c0 TO col0",
+		"ALTER TABLE t0 RENAME c1 TO renamed_col",
+		"ALTER TABLE t0 ADD CONSTRAINT chk_pos CHECK (c0 >= 0)",
+		"ALTER TABLE t0 ADD CONSTRAINT uq_c1 UNIQUE (c1)",
+	}
+	return alters[g.rand.Intn(len(alters))]
+}
+
+// GenerateSQL1999FetchFirst generates FETCH FIRST/NEXT patterns.
+func (g *SQLGenerator) GenerateSQL1999FetchFirst() string {
+	queries := []string{
+		"SELECT * FROM t0 ORDER BY c0 FETCH FIRST 1 ROW ONLY",
+		"SELECT * FROM t0 ORDER BY c0 FETCH FIRST 5 ROWS ONLY",
+		"SELECT * FROM t0 ORDER BY c0 FETCH NEXT 3 ROWS ONLY",
+		"SELECT c0 FROM t0 FETCH FIRST 10 ROWS ONLY",
+	}
+	return queries[g.rand.Intn(len(queries))]
+}
+
+// GenerateSQL1999SetOpAll generates INTERSECT ALL / EXCEPT ALL patterns.
+func (g *SQLGenerator) GenerateSQL1999SetOpAll() string {
+	queries := []string{
+		"SELECT c0 FROM t0 INTERSECT ALL SELECT c0 FROM t1",
+		"SELECT c0 FROM t0 EXCEPT ALL SELECT c0 FROM t1",
+		"SELECT 1 INTERSECT ALL SELECT 1",
+		"SELECT 1 EXCEPT ALL SELECT 1",
+		"SELECT 2 EXCEPT ALL SELECT 1",
+	}
+	return queries[g.rand.Intn(len(queries))]
 }
