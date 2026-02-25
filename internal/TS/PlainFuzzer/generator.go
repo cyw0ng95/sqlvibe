@@ -899,6 +899,11 @@ func (g *SQLGenerator) GenerateAlterTable() string {
 	alters := []string{
 		"ALTER TABLE t0 ADD COLUMN new_col TEXT",
 		"ALTER TABLE t0 RENAME TO t1",
+		"ALTER TABLE t0 DROP COLUMN c1",
+		"ALTER TABLE t0 RENAME COLUMN c0 TO col0",
+		"ALTER TABLE t0 RENAME c1 TO col1",
+		"ALTER TABLE t0 ADD CONSTRAINT chk1 CHECK (c0 > 0)",
+		"ALTER TABLE t0 ADD CONSTRAINT uq1 UNIQUE (c0)",
 	}
 	return alters[g.rand.Intn(len(alters))]
 }
@@ -930,7 +935,10 @@ func (g *SQLGenerator) GenerateSetOperation() string {
 		"SELECT 1 UNION SELECT 2",
 		"SELECT 1 UNION ALL SELECT 2",
 		"SELECT 1 INTERSECT SELECT 2",
+		"SELECT 1 INTERSECT ALL SELECT 1",
 		"SELECT 1 EXCEPT SELECT 2",
+		"SELECT 1 EXCEPT ALL SELECT 1",
+		"SELECT 1 UNION ALL SELECT 1 UNION ALL SELECT 2",
 	}
 	return sets[g.rand.Intn(len(sets))]
 }
@@ -1503,6 +1511,20 @@ func (g *SQLGenerator) GenerateLimitOffset() string {
 		fmt.Sprintf("SELECT * FROM t0 LIMIT %d OFFSET %d", limit, offset),
 		fmt.Sprintf("SELECT * FROM t0 ORDER BY c0 LIMIT %d", limit),
 		fmt.Sprintf("SELECT * FROM t0 LIMIT %d, %d", offset, limit),
+		fmt.Sprintf("SELECT * FROM t0 ORDER BY c0 FETCH FIRST %d ROWS ONLY", limit+1),
+		fmt.Sprintf("SELECT * FROM t0 ORDER BY c0 FETCH NEXT %d ROW ONLY", limit+1),
+	}
+	return queries[g.rand.Intn(len(queries))]
+}
+
+// GenerateStandaloneValues generates VALUES (...) standalone statements.
+func (g *SQLGenerator) GenerateStandaloneValues() string {
+	queries := []string{
+		"VALUES (1)",
+		"VALUES (1, 'a')",
+		"VALUES (1, 'a'), (2, 'b')",
+		"VALUES (1, 2, 3)",
+		"VALUES (NULL, 0, 'x')",
 	}
 	return queries[g.rand.Intn(len(queries))]
 }
@@ -1671,6 +1693,7 @@ func (g *SQLGenerator) GenerateExtendedRandomSQL() string {
 		g.GenerateCorrelatedSubquery,
 		g.GenerateAdvancedWindow,
 		g.GenerateMalformed,
+		g.GenerateStandaloneValues,
 	}
 	return generators[g.rand.Intn(len(generators))]()
 }

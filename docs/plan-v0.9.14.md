@@ -215,18 +215,18 @@ Add `internal/TS/Regression/regression_v0.9.14_test.go`:
 
 | Feature | Target | Status |
 |---------|--------|--------|
-| `ALTER TABLE DROP COLUMN` | Yes | [ ] |
-| `ALTER TABLE RENAME COLUMN` | Yes | [ ] |
-| `ALTER TABLE ADD CONSTRAINT CHECK` | Yes | [ ] |
-| `FETCH FIRST n ROWS ONLY` | Yes | [ ] |
-| `INTERSECT ALL` / `EXCEPT ALL` | Yes | [ ] |
-| `CAST(NULL AS type)` returns NULL | Yes | [ ] |
-| `VALUES` as standalone statement | Yes | [ ] |
-| `GROUP BY` alias resolution | Yes | [ ] |
-| CSV Import / Export | Yes | [ ] |
-| JSON Export | Yes | [ ] |
-| F885 suite passes | 100% | [ ] |
-| Regression v0.9.14 passes | 100% | [ ] |
+| `ALTER TABLE DROP COLUMN` | Yes | [x] |
+| `ALTER TABLE RENAME COLUMN` | Yes | [x] |
+| `ALTER TABLE ADD CONSTRAINT CHECK` | Yes | [x] |
+| `FETCH FIRST n ROWS ONLY` | Yes | [x] |
+| `INTERSECT ALL` / `EXCEPT ALL` | Yes | [x] |
+| `CAST(NULL AS type)` returns NULL | Yes | [x] |
+| `VALUES` as standalone statement | Yes | [x] |
+| `GROUP BY` alias resolution | Yes | [x] |
+| CSV Import / Export | Yes | [x] |
+| JSON Export | Yes | [x] |
+| F885 suite passes | 100% | [x] |
+| Regression v0.9.14 passes | 100% | [x] |
 
 ---
 
@@ -234,5 +234,5 @@ Add `internal/TS/Regression/regression_v0.9.14_test.go`:
 
 | Test Suite | Description | Status |
 |------------|-------------|--------|
-| F885 suite | ALTER TABLE + SQL compliance tests (10+ tests) | [ ] |
-| Regression v0.9.14 | ALTER TABLE safety + import/export regressions (5+ tests) | [ ] |
+| F885 suite | ALTER TABLE + SQL compliance tests (12 tests) | [x] |
+| Regression v0.9.14 | ALTER TABLE safety + import/export regressions (5 tests) | [x] |

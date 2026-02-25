@@ -144,6 +144,9 @@ const (
 
 	// NOMEM extended codes (memory limit exceeded)
 	SVDB_OOM_LIMIT ErrorCode = 263 // 7 | (1 << 8)
+
+	// SCHEMA extended codes (ALTER TABLE conflicts)
+	SVDB_ALTER_CONFLICT ErrorCode = 273 // 17 | (1 << 8)
 )
 
 // primaryCodeNames maps primary code values to their string names.
@@ -257,6 +260,7 @@ var extendedCodeNames = map[ErrorCode]string{
 	SVDB_AUTH_USER:               "SVDB_AUTH_USER",
 	SVDB_QUERY_TIMEOUT:           "SVDB_QUERY_TIMEOUT",
 	SVDB_OOM_LIMIT:               "SVDB_OOM_LIMIT",
+	SVDB_ALTER_CONFLICT:          "SVDB_ALTER_CONFLICT",
 }
 
 // String returns the string representation of the error code.
