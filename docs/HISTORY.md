@@ -1,6 +1,32 @@
 # sqlvibe Release History
 
-## **v0.9.10** (2026-02-24)
+## **v0.9.11** (2026-02-24)
+
+### Features: Parameterized Queries & Prepared Statement Binding
+
+#### Track A: Tokenizer & Parser — Placeholder Tokens
+- Added `TokenPlaceholderPos` (`?`) and `TokenPlaceholderNamed` (`:name`, `@name`) token types to `internal/QP/tokenizer.go`.
+- Added `PlaceholderExpr` AST node to `internal/QP/parser.go` with `Positional`, `Name`, and `Index` fields.
+- `parsePrimaryExpr` now parses `?`, `:name`, and `@name` into `PlaceholderExpr` nodes.
+
+#### Track B: Parameter Binder & Execution
+- New `internal/QP/binder.go`: `BindParams(node, params, namedParams)` recursively walks the AST replacing `PlaceholderExpr` nodes with concrete `Literal` values. Returns `ErrMissingParam` on missing positional/named params.
+- `pkg/sqlvibe/database.go`:
+  - `ExecWithParams` / `QueryWithParams` now fully bind `?` positional parameters.
+  - `Statement.Exec(params...)` / `Statement.Query(params...)` now bind params before execution.
+  - New `formatParamSQL` helper safely substitutes params as SQL literals (prevents SQL injection).
+  - New `formatSQLLiteral` converts Go values to SQL literals: `nil`→`NULL`, integers→numeric, strings→single-quoted (escaped), `[]byte`→`x'hex'`.
+
+#### Track C: Named Parameter Helpers
+- New `ExecNamed(sql, map[string]interface{}) (Result, error)` for `:name`/`@name` named params.
+- New `QueryNamed(sql, map[string]interface{}) (*Rows, error)` for named params.
+- `MustExec` now passes variadic params through to `ExecWithParams`.
+
+#### Track D: Tests
+- `internal/TS/Regression/regression_v0.9.11_test.go`: 9 tests covering positional binding, SQL injection safety, named params (`:name`/`@name`), missing param error, `nil`→NULL, `[]byte` BLOB, `Prepare`+`Query` round trip, extra params silently ignored.
+- `internal/TS/SQL1999/F882/01_test.go`: 6 tests covering `SELECT ? + 1`, `INSERT VALUES (?,?)`, `SELECT WHERE id = ?`, `SELECT WHERE name = :name`, `Prepare` + `stmt.Query`, multi-row parameterized insert.
+
+
 
 ### Features: WAL Enhancement, Storage PRAGMAs, FuzzDBFile
 
