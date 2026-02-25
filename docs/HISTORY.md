@@ -1,5 +1,28 @@
 # sqlvibe Release History
 
+## **v0.9.12** (2026-02-25)
+
+### Features: database/sql Driver Interface
+
+#### Track A: Driver Package
+- New `driver/` package implementing the full Go `database/sql` driver interface.
+- `driver.go`: Registers `"sqlvibe"` with `database/sql` via `sql.Register` in `init()`. Use with `import _ "github.com/cyw0ng95/sqlvibe/driver"` + `sql.Open("sqlvibe", path)`.
+- `conn.go`: `Conn` implements `driver.Conn`, `driver.ConnBeginTx`, `driver.ExecerContext`, and `driver.QueryerContext`. `BeginTx` / `ExecContext` / `QueryContext` all respect `ctx.Done()` via goroutine+select.
+- `stmt.go`: `Stmt` implements `driver.Stmt`, `driver.StmtExecContext`, and `driver.StmtQueryContext` with context cancellation.
+- `rows.go`: `Rows` implements `driver.Rows`. `Next(dest)` calls `sqlvibe.Rows.Scan()` via `*interface{}` and converts results with `toDriverValue`.
+- `result.go`: `Result` implements `driver.Result` with `LastInsertId()` and `RowsAffected()`.
+- `tx.go`: `Tx` implements `driver.Tx` using SQL `BEGIN`/`COMMIT`/`ROLLBACK` so that the existing snapshot-based rollback mechanism is properly engaged.
+- `value.go`: `toDriverValue` converts sqlvibe values (nil, int/int32/int64, float32/float64, string, []byte, bool, time.Time) to `driver.Value`. `fromNamedValues` converts `[]driver.NamedValue` to positional `[]interface{}` and named `map[string]interface{}`.
+
+#### Track B: Context Cancellation
+- `ExecContext`, `QueryContext`, `BeginTx`, `StmtExecContext`, `StmtQueryContext` all run the underlying sqlvibe call in a goroutine and select on `ctx.Done()`, returning `ctx.Err()` on cancellation.
+
+#### Track C: Tests
+- `internal/TS/SQL1999/F883/01_test.go`: 7 tests covering `sql.Open`, DDL round-trip, `QueryRow` with `?` params, `Query`+scan, `Begin`/`Commit`, `Begin`/`Rollback`, `Prepare`/`stmt.QueryRow`/`stmt.Close`.
+- `internal/TS/Regression/regression_v0.9.12_test.go`: 6 tests covering int64/float64/string/[]byte/nil type round-trips, NULL via `sql.NullString`, named params via `sql.Named`, concurrent reads with `SetMaxOpenConns(1)`, closed-stmt error, context cancellation.
+
+---
+
 ## **v0.9.11** (2026-02-24)
 
 ### Features: Parameterized Queries & Prepared Statement Binding
