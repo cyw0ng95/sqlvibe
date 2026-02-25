@@ -1,247 +1,476 @@
-# Plan v0.9.16 - Final Stability, API Hardening & Release Candidate 2
+# Plan v0.9.17 - JSON Extension Enhancement
 
 ## Summary
 
-This is the release-candidate milestone before v1.0.0. The focus is on production
-hardening: eliminating remaining panics, stabilising the public API surface, running an
-extended fuzzing campaign, and verifying performance is at or better than the v0.9.6
-baseline. No new SQL features are added in this release — correctness, stability, and
-API clarity are the sole objectives.
+This version extends the JSON extension with table-valued functions (`json_each`, `json_tree`),
+aggregate functions (`json_group_array`, `json_group_object`), and the JSONB binary format
+support from SQLite. The existing JSON extension in `ext/json/` provides scalar functions;
+this version adds the remaining SQLite JSON1 functions for full compatibility.
 
 ---
 
 ## Background
 
-At this point the database supports:
-- Full parameterized queries and `database/sql` driver (v0.9.11–12)
-- `context.Context` cancellation and query timeouts (v0.9.13)
-- `ALTER TABLE DROP/RENAME COLUMN`, `FETCH FIRST`, `INTERSECT ALL`, CSV/JSON I/O (v0.9.14)
-- 149+ SQL:1999 test suites passing
-- WAL + crash recovery, MVCC, FK enforcement, triggers, savepoints, window functions
+The current JSON extension (`ext/json/json.go`) provides 13 scalar functions:
+- `json`, `json_array`, `json_extract`, `json_invalid`, `json_isvalid`
+- `json_length`, `json_object`, `json_quote`, `json_remove`
+- `json_replace`, `json_set`, `json_type`, `json_update`
 
-What remains before v1.0.0:
-1. No known panics on any SQL input (fuzzer-verified)
-2. Stable, documented public API (no internal symbols in `pkg/sqlvibe`)
-3. Correct error codes for all failure modes
-4. Passing all existing test suites without regression
-5. Performance at least matching the v0.9.6 numbers (60 µs SELECT, 9.4× vs SQLite)
+SQLite's JSON1 extension includes additional functions and operators:
+- Table-valued functions: `json_each()`, `json_tree()` (and `jsonb_` variants)
+- Aggregate functions: `json_group_array()`, `json_group_object()` (and `jsonb_` variants)
+- JSONB binary format: `jsonb()`, `jsonb_object()`, `jsonb_array()`, etc.
+- Additional functions: `json_pretty()`, `json_array_insert()`, `json_patch()`
+- Operators: `->`, `->>`
 
 ---
 
-## Track A: Extended Fuzzing Campaign
+## Track A: Table-Valued Functions
 
-### A1. PlainFuzzer — 10-Minute Run
+### A1. Extend Extension Interface
 
-Run `FuzzSQL` for at least 10 minutes, triage every crash, fix every panic:
-
-```bash
-go test -fuzz=FuzzSQL -fuzztime=10m ./internal/TS/PlainFuzzer/...
-```
-
-**Bug fix protocol**: for every panic found:
-1. Add a minimal reproduction to `internal/TS/PlainFuzzer/testdata/corpus/`
-2. Fix the root cause
-3. Add a regression test in `internal/TS/Regression/regression_v0.9.16_test.go`
-4. Record in `internal/TS/PlainFuzzer/HUNTINGS.md`
-
-### A2. FuzzDBFile — 10-Minute Run
-
-```bash
-go test -fuzz=FuzzDBFile -fuzztime=10m ./internal/TS/PlainFuzzer/...
-```
-
-Same protocol as A1 for any panics found during file-level fuzzing.
-
-### A3. Zero-Panic Guarantee
-
-After the fuzzing campaign, execute all corpus entries in CI to confirm no panics:
-
-```bash
-go test -run=FuzzSQL/. ./internal/TS/PlainFuzzer/...
-go test -run=FuzzDBFile/. ./internal/TS/PlainFuzzer/...
-```
-
-Add these invocations to the Makefile as `make fuzz-regression`.
-
----
-
-## Track B: Public API Stabilisation
-
-### B1. API Audit
-
-Review `pkg/sqlvibe/database.go` and identify:
-- Methods that should be unexported (helpers leaked as public)
-- Methods with inconsistent naming (e.g. `MustExec` vs `Exec`)
-- Methods that duplicate functionality (e.g. `ExecWithParams` vs `ExecContextWithParams`)
-
-Document the **stable public API** in `pkg/sqlvibe/API.md`:
-
-```
-Open(path) (*Database, error)
-Database.Exec(sql) (Result, error)
-Database.ExecContext(ctx, sql) (Result, error)
-Database.ExecWithParams(sql, params) (Result, error)
-Database.ExecContextWithParams(ctx, sql, params) (Result, error)
-Database.ExecNamed(sql, params) (Result, error)
-Database.MustExec(sql, params...) Result
-Database.Query(sql) (*Rows, error)
-Database.QueryContext(ctx, sql) (*Rows, error)
-Database.QueryWithParams(sql, params) (*Rows, error)
-Database.QueryContextWithParams(ctx, sql, params) (*Rows, error)
-Database.QueryNamed(sql, params) (*Rows, error)
-Database.Prepare(sql) (*Statement, error)
-Database.Begin() (*Transaction, error)
-Database.Close() error
-Database.ClearResultCache()
-Database.ImportCSV(table, r, opts) (int, error)
-Database.ExportCSV(w, sql, opts) error
-Database.ExportJSON(w, sql) error
-```
-
-### B2. Deprecation of Stubs
-
-Deprecated stubs that remain for backward compatibility get a `//Deprecated:` doc comment
-directing callers to the replacement. No stubs are removed — they stay until v1.1.0.
-
-### B3. `pkg/sqlvibe` Export Leaks
-
-Use `go vet` and `staticcheck` to confirm no unexported type is reachable through
-an exported interface.
-
----
-
-## Track C: Error Code Completeness
-
-### C1. Error Code Audit
-
-Every `fmt.Errorf` in `pkg/sqlvibe/` that is returned to callers should instead use
-`NewError(code, ...)` with a specific `ErrorCode`. Audit and convert the top 20
-most-common error paths:
-
-| Error Path | Current | Target |
-|------------|---------|--------|
-| Table not found | raw fmt.Errorf | `SVDB_TABLE_NOT_FOUND` |
-| Column not found | raw fmt.Errorf | `SVDB_COLUMN_NOT_FOUND` |
-| Constraint violation | raw fmt.Errorf | `SVDB_CONSTRAINT_VIOLATION` |
-| Syntax error | raw fmt.Errorf | `SVDB_SYNTAX_ERROR` |
-| No active transaction | raw fmt.Errorf | `SVDB_NO_TRANSACTION` |
-| Duplicate savepoint | raw fmt.Errorf | `SVDB_DUPLICATE_SAVEPOINT` |
-| Parse error | raw fmt.Errorf | `SVDB_PARSE_ERROR` |
-| Type mismatch | raw fmt.Errorf | `SVDB_TYPE_MISMATCH` |
-| Index already exists | raw fmt.Errorf | `SVDB_INDEX_EXISTS` |
-| View not found | raw fmt.Errorf | `SVDB_VIEW_NOT_FOUND` |
-
-### C2. `IsErrorCode` Helper Usage Docs
-
-Add examples in `pkg/sqlvibe/error.go` showing how callers use `IsErrorCode`:
+The `Extension` interface in `ext/extension.go` needs a new method for table functions:
 
 ```go
-rows, err := db.Query("SELECT * FROM missing_table")
-if sqlvibe.IsErrorCode(err, sqlvibe.SVDB_TABLE_NOT_FOUND) {
-    // handle gracefully
+type Extension interface {
+    // ... existing methods ...
+    
+    // TableFunctions returns SQL table-valued functions this extension provides.
+    TableFunctions() []TableFunction
+}
+
+type TableFunction struct {
+    Name      string
+    MinArgs   int
+    MaxArgs   int // -1 for unlimited
+    Rows      func(args []interface{}) ([]map[string]interface{}, error)
+}
+```
+
+### A2. json_each() Implementation
+
+`json_each(json)` iterates top-level elements of a JSON array or object.
+Returns columns: `key`, `value`, `type`, `atom`, `id`, `parent`, `fullkey`, `path`.
+
+```go
+// ext/json/json.go
+func (e *JSONExtension) TableFunctions() []TableFunction {
+    return []TableFunction{
+        {Name: "json_each", MinArgs: 1, MaxArgs: 2, Rows: e.jsonEachRows},
+        {Name: "jsonb_each", MinArgs: 1, MaxArgs: 2, Rows: e.jsonbEachRows},
+        {Name: "json_tree", MinArgs: 1, MaxArgs: 2, Rows: e.jsonTreeRows},
+        {Name: "jsonb_tree", MinArgs: 1, MaxArgs: 2, Rows: e.jsonbTreeRows},
+    }
+}
+
+func (e *JSONExtension) jsonEachRows(args []interface{}) ([]map[string]interface{}, error) {
+    // Parse JSON string
+    jsonStr, ok := toStringArg(args, 0)
+    if !ok {
+        return nil, nil
+    }
+    v, valid := parseJSON(jsonStr)
+    if !valid {
+        return nil, nil
+    }
+    
+    // Optional path argument
+    var pathFilter string
+    if len(args) >= 2 {
+        pathFilter, _ = toStringArg(args, 1)
+    }
+    
+    var rows []map[string]interface{}
+    var idCounter int
+    
+    switch node := v.(type) {
+    case []interface{}:
+        for i, elem := range node {
+            idCounter++
+            rows = append(rows, map[string]interface{}{
+                "key":     i,
+                "value":   sqlValueToJSON(elem),
+                "type":    jsonTypeStr(elem),
+                "atom":    elem,
+                "id":      idCounter,
+                "parent":  nil,
+                "fullkey": fmt.Sprintf("$[%d]", i),
+                "path":    "$",
+            })
+        }
+    case map[string]interface{}:
+        for k, elem := range node {
+            idCounter++
+            rows = append(rows, map[string]interface{}{
+                "key":     k,
+                "value":   sqlValueToJSON(elem),
+                "type":    jsonTypeStr(elem),
+                "atom":    elem,
+                "id":      idCounter,
+                "parent":  nil,
+                "fullkey": fmt.Sprintf("$.%s", k),
+                "path":    "$",
+            })
+        }
+    default:
+        // Primitive value - return single row
+        rows = append(rows, map[string]interface{}{
+            "key":     nil,
+            "value":   sqlValueToJSON(v),
+            "type":    jsonTypeStr(v),
+            "atom":    v,
+            "id":      1,
+            "parent":  nil,
+            "fullkey": "$",
+            "path":    "$",
+        })
+    }
+    
+    return rows, nil
+}
+```
+
+### A3. json_tree() Implementation
+
+`json_tree(json)` recursively walks the entire JSON structure.
+Returns the same columns as `json_each` but with recursive traversal.
+
+```go
+func (e *JSONExtension) jsonTreeRows(args []interface{}) ([]map[string]interface{}, error) {
+    jsonStr, ok := toStringArg(args, 0)
+    if !ok {
+        return nil, nil
+    }
+    v, valid := parseJSON(jsonStr)
+    if !valid {
+        return nil, nil
+    }
+    
+    var rows []map[string]interface{}
+    var idCounter int
+    
+    var walk func(path string, parentID interface{}, node interface{})
+    walk = func(path string, parentID interface{}, node interface{}) {
+        idCounter++
+        currentID := idCounter
+        
+        rows = append(rows, map[string]interface{}{
+            "key":     getKeyFromPath(path),
+            "value":   sqlValueToJSON(node),
+            "type":    jsonTypeStr(node),
+            "atom":    node,
+            "id":      currentID,
+            "parent":  parentID,
+            "fullkey": path,
+            "path":    getContainerPath(path),
+        })
+        
+        switch child := node.(type) {
+        case map[string]interface{}:
+            for k, val := range child {
+                walk(fmt.Sprintf("%s.%s", path, k), currentID, val)
+            }
+        case []interface{}:
+            for i, val := range child {
+                walk(fmt.Sprintf("%s[%d]", path, i), currentID, val)
+            }
+        }
+    }
+    
+    walk("$", nil, v)
+    return rows, nil
+}
+
+func getKeyFromPath(path string) string {
+    // Extract last component: $.a.b[0] -> b, $[0] -> 0
+    if idx := strings.LastIndex(path, "."); idx >= 0 {
+        return path[idx+1:]
+    }
+    if idx := strings.LastIndex(path, "["); idx >= 0 {
+        return path[idx+1 : len(path)-1]
+    }
+    return ""
+}
+
+func getContainerPath(path string) string {
+    // $.a.b[0] -> $.a.b, $[0] -> $
+    if idx := strings.LastIndex(path, "."); idx >= 0 {
+        return path[:idx]
+    }
+    if idx := strings.LastIndex(path, "["); idx >= 0 {
+        return path[:idx]
+    }
+    return "$"
+}
+```
+
+### A4. jsonb_each() and jsonb_tree()
+
+Same as above but the `value` column returns JSONB binary format instead of text JSON.
+For now, we can return the same format - full JSONB support would require a separate
+binary representation in sqlvibe.
+
+---
+
+## Track B: Aggregate Functions
+
+### B1. json_group_array()
+
+Aggregate function that returns a JSON array of all values:
+
+```go
+// ext/json/json.go
+func (e *JSONExtension) CallFunc(name string, args []interface{}) interface{} {
+    switch strings.ToUpper(name) {
+    // ... existing cases ...
+    case "JSON_GROUP_ARRAY":
+        return evalJSONGroupArray(args)
+    case "JSONB_GROUP_ARRAY":
+        return evalJSONBGroupArray(args)
+    case "JSON_GROUP_OBJECT":
+        return evalJSONGroupObject(args)
+    case "JSONB_GROUP_OBJECT":
+        return evalJSONBGroupObject(args)
+    }
+    return nil
+}
+
+func evalJSONGroupArray(args []interface{}) interface{} {
+    if len(args) == 0 || args[0] == nil {
+        return "[]"
+    }
+    arr := make([]interface{}, 0)
+    for _, arg := range args {
+        arr = append(arr, sqlValueToJSON(arg))
+    }
+    return marshalJSON(arr)
+}
+
+func evalJSONGroupObject(args []interface{}) interface{} {
+    if len(args) < 2 || len(args)%2 != 0 {
+        return "{}"
+    }
+    obj := make(map[string]interface{})
+    for i := 0; i+1 < len(args); i += 2 {
+        key := fmt.Sprintf("%v", args[i])
+        obj[key] = sqlValueToJSON(args[i+1])
+    }
+    return marshalJSON(obj)
+}
+```
+
+### B2. VM Integration for Aggregates
+
+Aggregate functions need to work with GROUP BY. The VM already has aggregate support;
+we need to register these functions as aggregates in the extension:
+
+```go
+func (e *JSONExtension) Aggregates() []AggregateFunction {
+    return []AggregateFunction{
+        {Name: "json_group_array", Step: jsonGroupArrayStep, Final: jsonGroupArrayFinal},
+        {Name: "jsonb_group_array", Step: jsonGroupArrayStep, Final: jsonGroupArrayFinal},
+        {Name: "json_group_object", Step: jsonGroupObjectStep, Final: jsonGroupObjectFinal},
+        {Name: "jsonb_group_object", Step: jsonGroupObjectStep, Final: jsonGroupObjectFinal},
+    }
 }
 ```
 
 ---
 
-## Track D: Performance Verification
+## Track C: JSONB Functions
 
-### D1. Baseline Benchmark Run
+### C1. jsonb() Function
 
-Run the full benchmark suite and confirm no regression vs v0.9.6:
+Convert JSON text to JSONB binary format. Since sqlvibe doesn't have a native JSONB
+type, we can store it as a special internal representation or simply return text:
 
-```bash
-go test ./internal/TS/Benchmark/... -bench=BenchmarkFair_ -benchtime=2s
+```go
+func evalJSONB(args []interface{}) interface{} {
+    s, ok := toStringArg(args, 0)
+    if !ok {
+        return nil
+    }
+    v, valid := parseJSON(s)
+    if !valid {
+        return nil
+    }
+    // For now, return the same as json() - full JSONB would require
+    // a separate binary representation
+    return marshalJSON(v)
+}
 ```
 
-Target (AMD EPYC 7763):
-- SELECT all (1K rows): ≤ 70 µs (baseline 60 µs + 15% tolerance)
-- SUM aggregate: ≤ 25 µs (baseline 19 µs)
-- GROUP BY: ≤ 160 µs (baseline 135 µs)
-- Result cache hit: ≤ 2 µs (baseline 1.5 µs)
+### C2. jsonb_array(), jsonb_object(), jsonb_set(), etc.
 
-### D2. New Benchmark: Parameterized Query
+Similar to their `json_` counterparts but return JSONB format:
 
-Add `BenchmarkFair_PreparedStmt` to `internal/TS/Benchmark/benchmark_v0.9.16_test.go`:
+```go
+func evalJSONBArray(args []interface{}) interface{} {
+    // Same as json_array but mark as JSONB
+    arr := make([]interface{}, len(args))
+    for i, arg := range args {
+        arr[i] = sqlValueToJSON(arg)
+    }
+    return marshalJSON(arr) // Return as-is for now
+}
 
-```
-Prepare once, then Query 1000× with different ? params.
-Measures: param binding overhead on top of pure query execution.
-```
-
-### D3. New Benchmark: database/sql Driver Overhead
-
-```
-Measure overhead of the driver layer relative to direct API:
-  direct: db.Query("SELECT ...") → rows
-  driver: sql.DB.Query("SELECT ...") → rows
-Target: driver overhead < 5 µs per query.
+func evalJSONBObject(args []interface{}) interface{} {
+    if len(args)%2 != 0 {
+        return nil
+    }
+    obj := make(map[string]interface{}, len(args)/2)
+    for i := 0; i < len(args); i += 2 {
+        key := fmt.Sprintf("%v", args[i])
+        obj[key] = sqlValueToJSON(args[i+1])
+    }
+    return marshalJSON(obj)
+}
 ```
 
 ---
 
-## Track E: Final Test Suite Pass
+## Track D: Additional Functions
 
-### E1. Run All SQL:1999 Suites
+### D1. json_pretty()
 
-```bash
-go test ./internal/TS/SQL1999/... -timeout 120s
+```go
+func evalJSONPretty(args []interface{}) interface{} {
+    s, ok := toStringArg(args, 0)
+    if !ok {
+        return nil
+    }
+    v, valid := parseJSON(s)
+    if !valid {
+        return nil
+    }
+    // Use json.MarshalIndent for pretty printing
+    b, err := json.MarshalIndent(v, "", "    ")
+    if err != nil {
+        return nil
+    }
+    return string(b)
+}
 ```
 
-All 149+ suites must pass. Any new failures introduced by v0.9.11–14 changes must be
-fixed before tagging v0.9.16.
+### D2. json_array_insert()
 
-### E2. F887 SQL1999 Suite — Release Candidate 2 Smoke Test
+Insert a value into a JSON array at a specific position:
 
-Add `internal/TS/SQL1999/F887/01_test.go` as an end-to-end integration test covering
-all major features added in v0.9.11–v0.9.14:
+```go
+func evalJSONArrayInsert(args []interface{}) interface{} {
+    if len(args) < 3 {
+        return nil
+    }
+    s, ok := toStringArg(args, 0)
+    if !ok {
+        return nil
+    }
+    pathStr, ok := toStringArg(args, 1)
+    if !ok {
+        return nil
+    }
+    
+    v, valid := parseJSON(s)
+    if !valid {
+        return nil
+    }
+    
+    // Parse path and insert
+    // Similar to setAtPath but inserts rather than replaces
+    newVal := sqlValueToJSON(args[2])
+    result := insertAtPath(v, pathStr, newVal)
+    
+    return marshalJSON(result)
+}
+```
 
-- Parameterized `INSERT` + `SELECT`
-- `database/sql` driver round-trip
-- `ExecContext` with timeout
-- `ALTER TABLE DROP COLUMN` + subsequent query
-- `ALTER TABLE RENAME COLUMN` + subsequent query
-- CSV import → query → CSV export round-trip
-- Full transaction: BEGIN → INSERT → SAVEPOINT → rollback to savepoint → COMMIT
+### D3. json_patch()
 
-### E3. Regression Suite v0.9.16
+RFC 7396 MergePatch implementation:
 
-Add `internal/TS/Regression/regression_v0.9.16_test.go` with all panic reproductions
-found during the fuzzing campaign.
+```go
+func evalJSONPatch(args []interface{}) interface{} {
+    if len(args) < 2 {
+        return nil
+    }
+    targetStr, _ := toStringArg(args, 0)
+    patchStr, _ := toStringArg(args, 1)
+    
+    target, _ := parseJSON(targetStr)
+    patch, _ := parseJSON(patchStr)
+    
+    if target == nil || patch == nil {
+        return nil
+    }
+    
+    result := mergePatch(target, patch)
+    return marshalJSON(result)
+}
+
+func mergePatch(target, patch interface{}) interface{} {
+    patchMap, ok := patch.(map[string]interface{})
+    if !ok {
+        return patch
+    }
+    
+    targetMap, ok := target.(map[string]interface{})
+    if !ok {
+        return patch
+    }
+    
+    result := make(map[string]interface{})
+    for k, v := range targetMap {
+        result[k] = v
+    }
+    
+    for k, v := range patchMap {
+        if v == nil {
+            delete(result, k)
+        } else if m, ok := v.(map[string]interface{}); ok {
+            if t, ok := result[k].(map[string]interface{}); ok {
+                result[k] = mergePatch(t, m)
+            } else {
+                result[k] = m
+            }
+        } else {
+            result[k] = v
+        }
+    }
+    
+    return result
+}
+```
 
 ---
 
-## Track F: Release Preparation
+## Track E: Testing
 
-### F1. Version Bump
+### E1. F886 JSON Extension Suite
 
-```
-pkg/sqlvibe/version.go:
-  const Version = "v0.9.16"
-```
+Add `internal/TS/SQL1999/F886/01_test.go`:
 
-### F2. HISTORY.md
+- `json_each()` on JSON array
+- `json_each()` on JSON object
+- `json_each()` with path argument
+- `json_tree()` recursive walk
+- `json_tree()` with path argument
+- `json_group_array()` with GROUP BY
+- `json_group_object()` with GROUP BY
+- `jsonb()` conversion
+- `json_pretty()` formatting
+- `json_patch()` MergePatch
+- `json_array_insert()` array insertion
+- Operators `->` and `->>`
 
-Add v0.9.16 entry documenting:
-- Bugs fixed via fuzzing
-- API stabilisation changes
-- Performance numbers from Track D benchmarks
+### E2. Regression Suite v0.9.17
 
-### F3. README Update
+Add `internal/TS/Regression/regression_v0.9.17_test.go`:
 
-- Update "Stable Releases" table to include v0.9.11–v0.9.16
-- Update performance section with v0.9.16 benchmark numbers
-- Add "database/sql Driver" section with usage example
-- Add "Parameterized Queries" section with `?` and `:name` examples
-- Add "Query Timeout" section with `context.WithTimeout` example
-- Add "CSV / JSON Import-Export" section
-
-### F4. Tag
-
-```bash
-git tag -a v0.9.16 -m "Release v0.9.16: Release Candidate 2"
-git push origin v0.9.16
-```
+- json_each() returns correct columns
+- json_tree() recursive traversal
+- json_group_array() aggregate
+- json_group_object() aggregate
+- JSON round-trip through table functions
 
 ---
 
@@ -249,18 +478,14 @@ git push origin v0.9.16
 
 | File | Action |
 |------|--------|
-| `internal/TS/PlainFuzzer/testdata/corpus/` | Add any new panic-reproducing corpus entries |
-| `internal/TS/PlainFuzzer/HUNTINGS.md` | Document all bugs found in fuzzing campaign |
-| `internal/TS/Regression/regression_v0.9.16_test.go` | **NEW** — panic reproductions from fuzzing |
-| `internal/TS/SQL1999/F887/01_test.go` | **NEW** — RC integration smoke test |
-| `internal/TS/Benchmark/benchmark_v0.9.16_test.go` | **NEW** — prepared stmt + driver overhead benchmarks |
-| `pkg/sqlvibe/API.md` | **NEW** — stable public API surface documentation |
-| `pkg/sqlvibe/version.go` | Bump to `v0.9.16` |
-| `pkg/sqlvibe/error_code.go` | Add missing error codes from audit |
-| `pkg/sqlvibe/database.go` | Convert raw `fmt.Errorf` calls to typed errors |
-| `Makefile` | Add `fuzz-regression` target |
-| `docs/HISTORY.md` | Add v0.9.16 entry |
-| `README.md` | Update stable releases, perf numbers, new feature sections |
+| `ext/extension.go` | Add `TableFunction` struct and `TableFunctions()` method to interface |
+| `ext/json/json.go` | Add table-valued functions, aggregate functions, JSONB functions |
+| `internal/CG/compiler.go` | Detect table functions in FROM clause |
+| `internal/VM/exec.go` | Add `OpTableFunction` opcode for table function execution |
+| `pkg/sqlvibe/database.go` | Route table function queries to extension |
+| `internal/TS/SQL1999/F886/01_test.go` | **NEW** — JSON extension tests |
+| `internal/TS/Regression/regression_v0.9.17_test.go` | **NEW** — JSON regressions |
+| `docs/HISTORY.md` | Add v0.9.17 entry |
 
 ---
 
@@ -268,16 +493,20 @@ git push origin v0.9.16
 
 | Feature | Target | Status |
 |---------|--------|--------|
-| Zero panics after 10-min FuzzSQL | Yes | [ ] |
-| Zero panics after 10-min FuzzDBFile | Yes | [ ] |
-| All 149+ SQL:1999 suites pass | 100% | [ ] |
-| F887 RC smoke test passes | 100% | [ ] |
-| SELECT all ≤ 70 µs (no regression) | Yes | [ ] |
-| Stable public API documented in API.md | Yes | [ ] |
-| Top 10 error paths use typed error codes | Yes | [ ] |
-| Version bumped to v0.9.16 | Yes | [ ] |
-| README updated with v0.9.16 numbers | Yes | [ ] |
-| v0.9.16 tag created | Yes | [ ] |
+| `json_each()` table function | Yes | [ ] |
+| `json_tree()` table function | Yes | [ ] |
+| `jsonb_each()` table function | Yes | [ ] |
+| `jsonb_tree()` table function | Yes | [ ] |
+| `json_group_array()` aggregate | Yes | [ ] |
+| `json_group_object()` aggregate | Yes | [ ] |
+| `jsonb_group_array()` aggregate | Yes | [ ] |
+| `jsonb_group_object()` aggregate | Yes | [ ] |
+| `jsonb()` function | Yes | [ ] |
+| `json_pretty()` function | Yes | [ ] |
+| `json_patch()` function | Yes | [ ] |
+| `json_array_insert()` function | Yes | [ ] |
+| F886 suite passes | 100% | [ ] |
+| Regression v0.9.17 passes | 100% | [ ] |
 
 ---
 
@@ -285,7 +514,5 @@ git push origin v0.9.16
 
 | Test Suite | Description | Status |
 |------------|-------------|--------|
-| F887 suite | RC integration smoke test (7+ tests) | [ ] |
-| Regression v0.9.16 | Fuzzing-campaign panic reproductions | [ ] |
-| BenchmarkFair v0.9.16 | Performance non-regression | [ ] |
-| Full SQL:1999 run | All 149+ suites | [ ] |
+| F886 suite | JSON table functions + aggregates (12+ tests) | [ ] |
+| Regression v0.9.17 | JSON extension safety (5 tests) | [ ] |
