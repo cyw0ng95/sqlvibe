@@ -30,9 +30,16 @@ func (ec *ExprCompiler) compile(expr QP.Expr) {
 	case *QP.ColumnRef:
 		idx, ok := ec.colIndices[e.Name]
 		if !ok {
-			idx = -1
+			// Column not found in inner table - this might be a correlated reference
+			// to the outer query. Encode the column name as a negative index marker
+			// and add the column name as a constant so runtime can try outer context.
+			// Use -1 to signal "not found, check constant for column name"
+			constIdx := ec.bytecode.AddConst(e.Name)
+			// Encode: negative index = column not found, use constant for name
+			ec.bytecode.Emit(VM.EOpLoadColumn, int16(-1), constIdx)
+		} else {
+			ec.bytecode.Emit(VM.EOpLoadColumn, int16(idx))
 		}
-		ec.bytecode.Emit(VM.EOpLoadColumn, int16(idx))
 
 	case *QP.Literal:
 		idx := ec.bytecode.AddConst(e.Value)
@@ -80,7 +87,6 @@ func (ec *ExprCompiler) compile(expr QP.Expr) {
 		} else if e.Op == QP.TokenMinus {
 			ec.bytecode.Emit(VM.EOpNeg)
 		}
-
 
 	case *QP.AliasExpr:
 		ec.compile(e.Expr)

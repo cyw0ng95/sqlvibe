@@ -119,8 +119,10 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 		return reg
 	}
 
+	// Column not found in any schema - emit a column reference anyway
+	// so the VM can try to resolve it at runtime (e.g., for correlated subqueries)
 	if colIdx == -1 {
-		c.program.EmitLoadConst(reg, nil)
+		c.program.EmitColumnWithTable(reg, cursorID, -1, col.Name)
 		return reg
 	}
 
@@ -547,7 +549,7 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 		}
 	case "RANDOM":
 		c.program.EmitOpWithDst(VM.OpRandom, 0, 0, dst)
-		case "ROUND":
+	case "ROUND":
 		if len(argRegs) >= 2 {
 			c.program.EmitOp(VM.OpRound, int32(argRegs[0]), int32(argRegs[1]))
 			c.program.Instructions[len(c.program.Instructions)-1].P4 = dst
@@ -780,16 +782,16 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 }
 
 func (c *Compiler) compileAnyAllExpr(e *QP.AnyAllExpr) int {
-// Compile the left side into a register
-leftReg := c.compileExpr(e.Left)
-// Allocate result register
-dstReg := c.ra.Alloc()
-// Emit OpAnyAllSubquery: P1=dstReg, P2=leftReg, P4=AnyAllExpr
-c.program.Instructions = append(c.program.Instructions, VM.Instruction{
-Op: VM.OpAnyAllSubquery,
-P1: int32(dstReg),
-P2: int32(leftReg),
-P4: e,
-})
-return dstReg
+	// Compile the left side into a register
+	leftReg := c.compileExpr(e.Left)
+	// Allocate result register
+	dstReg := c.ra.Alloc()
+	// Emit OpAnyAllSubquery: P1=dstReg, P2=leftReg, P4=AnyAllExpr
+	c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+		Op: VM.OpAnyAllSubquery,
+		P1: int32(dstReg),
+		P2: int32(leftReg),
+		P4: e,
+	})
+	return dstReg
 }

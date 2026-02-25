@@ -12,9 +12,19 @@ func (eb *ExprBytecode) Eval(row []interface{}) interface{} {
 		case EOpLoadColumn:
 			colIdx := int(eb.args[argIdx])
 			argIdx++
+			// Check if there's a second arg (column name for outer reference)
+			// Negative index means column not found, use constant for name
+			if argIdx < len(eb.args) && eb.args[argIdx] < 0 {
+				constIdx := int(eb.args[argIdx])
+				argIdx++
+				// For expr_eval we can't resolve outer refs, so just skip
+				_ = constIdx
+			}
 			if colIdx >= 0 && colIdx < len(row) {
 				stack = append(stack, row[colIdx])
 			} else {
+				// Column not found - for expr_eval we can't resolve outer refs
+				// This path is for simple expressions, not correlated subqueries
 				stack = append(stack, nil)
 			}
 
@@ -117,7 +127,8 @@ func (eb *ExprBytecode) Eval(row []interface{}) interface{} {
 			default:
 				stack = append(stack, nil)
 			}
-		}	}
+		}
+	}
 
 	if len(stack) > 0 {
 		return stack[len(stack)-1]

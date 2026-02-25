@@ -1051,6 +1051,47 @@ func (vm *VM) Exec(ctx interface{}) error {
 			dst := inst.P4
 			cursor := vm.cursors.Get(cursorID)
 
+			// Special case: colIdx=-1 means column was not found in inner table
+			// This is likely a correlated reference to outer query's column
+			// Try outer context regardless of table qualifier
+			if colIdx == -1 && vm.ctx != nil {
+				type OuterContextProvider interface {
+					GetOuterRowValue(columnName string) (interface{}, bool)
+				}
+
+				if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
+					colName := ""
+					// If tableQualifier is in "table.column" format, extract column name
+					if tableQualifier != "" {
+						parts := strings.Split(tableQualifier, ".")
+						if len(parts) == 2 {
+							colName = parts[1]
+						}
+					}
+					// If we have a table-qualified reference, use the column name from it
+					// Otherwise, we need to find the column name from the expression somehow
+					// For now, try using tableQualifier directly if it's not empty
+					if colName == "" && tableQualifier != "" {
+						colName = tableQualifier
+					}
+					if colName != "" {
+						if val, found := outerCtx.GetOuterRowValue(colName); found {
+							if dstReg, ok := dst.(int); ok {
+								vm.registers[dstReg] = val
+								continue
+							}
+						}
+					}
+					// For truly unqualified column references (colIdx=-1, tableQualifier=""),
+					// we can't determine the column name here - it would need to be passed
+					// separately. For now, emit NULL.
+					if dstReg, ok := dst.(int); ok {
+						vm.registers[dstReg] = nil
+					}
+					continue
+				}
+			}
+
 			// Special case: colIdx=-1 means this is definitely an outer reference
 			// P3 contains "table.column" format
 			if colIdx == -1 && tableQualifier != "" && vm.ctx != nil {
@@ -1120,12 +1161,34 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 
 			// Default: load from current cursor
+			// For correlated subqueries with unqualified column references:
+			// if column not found in inner table, try outer context
+			foundInInner := false
 			if cursor != nil && cursor.Data != nil && cursor.Index >= 0 && cursor.Index < len(cursor.Data) {
 				row := cursor.Data[cursor.Index]
 				if colIdx >= 0 && colIdx < len(cursor.Columns) {
 					colName := cursor.Columns[colIdx]
 					if dstReg, ok := dst.(int); ok {
 						vm.registers[dstReg] = row[colName]
+						foundInInner = true
+					}
+				}
+			}
+
+			// If not found in inner table and we have outer context, try outer context
+			// This handles correlated subqueries with unqualified column references
+			if !foundInInner && tableQualifier == "" && vm.ctx != nil {
+				type OuterContextProvider interface {
+					GetOuterRowValue(columnName string) (interface{}, bool)
+				}
+				if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
+					if cursor != nil && colIdx >= 0 && colIdx < len(cursor.Columns) {
+						colName := cursor.Columns[colIdx]
+						if val, found := outerCtx.GetOuterRowValue(colName); found {
+							if dstReg, ok := dst.(int); ok {
+								vm.registers[dstReg] = val
+							}
+						}
 					}
 				}
 			}
@@ -3387,7 +3450,21 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 		if idx := strings.LastIndex(name, "."); idx >= 0 {
 			name = name[idx+1:]
 		}
-		return row[name]
+		if val, ok := row[name]; ok {
+			return val
+		}
+		// Column not found in inner row - try outer context for correlated subqueries
+		if vm.ctx != nil {
+			type OuterContextProvider interface {
+				GetOuterRowValue(columnName string) (interface{}, bool)
+			}
+			if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
+				if val, found := outerCtx.GetOuterRowValue(e.Name); found {
+					return val
+				}
+			}
+		}
+		return nil
 	case *QP.AliasExpr:
 		return vm.evaluateExprOnRow(row, columns, e.Expr)
 	case *QP.UnaryExpr:

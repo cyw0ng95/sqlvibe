@@ -385,12 +385,19 @@ func (g *Generator) genSubquery() string {
 
 	isExists := g.lcg.Intn(2) == 0
 	if isExists {
+		otherCol := tm2.nonNullIntCols()[0]
 		return fmt.Sprintf("SELECT %s FROM %s WHERE EXISTS (SELECT 1 FROM %s WHERE %s = %s.%s) LIMIT 10",
-			tm1.columns[0].name, tm1.name, tm2.name, tm1.name, tm2.name, intCols[0])
+			tm1.columns[0].name, tm1.name, tm2.name, col, tm2.name, otherCol)
 	}
 
+	// For IN subquery, select a column that exists in tm2
+	tm2IntCols := tm2.nonNullIntCols()
+	if len(tm2IntCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	tm2Col := g.lcg.Choice(tm2IntCols)
 	return fmt.Sprintf("SELECT %s FROM %s WHERE %s IN (SELECT %s FROM %s) LIMIT 10",
-		tm1.columns[0].name, tm1.name, col, intCols[0], tm2.name)
+		tm1.columns[0].name, tm1.name, col, tm2Col, tm2.name)
 }
 
 // genHaving generates: SELECT <col>, COUNT(*) FROM <table> GROUP BY <col> HAVING COUNT(*) > n

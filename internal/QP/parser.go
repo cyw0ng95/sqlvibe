@@ -203,8 +203,8 @@ type AlterTableStmt struct {
 	Action         string // "ADD_COLUMN", "RENAME_TO", "DROP_COLUMN", "RENAME_COLUMN", "ADD_CONSTRAINT"
 	Column         *ColumnDef
 	NewName        string
-	ConstraintName string // for ADD CONSTRAINT
-	CheckExpr      Expr   // for ADD CONSTRAINT CHECK
+	ConstraintName string   // for ADD CONSTRAINT
+	CheckExpr      Expr     // for ADD CONSTRAINT CHECK
 	UniqueColumns  []string // for ADD CONSTRAINT UNIQUE
 }
 
@@ -958,6 +958,11 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				p.advance()
 			}
 		}
+	}
+
+	// ORDER BY before UNION/EXCEPT/INTERSECT is invalid SQL
+	if p.current().Literal == "UNION" || p.current().Literal == "EXCEPT" || p.current().Literal == "INTERSECT" {
+		return nil, fmt.Errorf("ORDER BY clause should come after %s not before", p.current().Literal)
 	}
 
 	if p.current().Literal == "LIMIT" {
@@ -2217,7 +2222,6 @@ func (p *Parser) parseStandaloneValues() (ASTNode, error) {
 	}
 	return stmt, nil
 }
-
 
 func (p *Parser) parsePragma() (ASTNode, error) {
 	p.advance()
