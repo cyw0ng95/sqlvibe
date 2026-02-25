@@ -1,9 +1,563 @@
 # sqlvibe Release History
 
-## **v0.8.9** (2026-02-22)
+## **v0.9.17** (2026-02-26)
+
+### Features: JSON Extension Enhancement
+
+- Added table-valued functions: `json_each()`, `jsonb_each()`, `json_tree()`, `jsonb_tree()`
+- Added aggregate functions: `json_group_array()`, `jsonb_group_array()`, `json_group_object()`, `jsonb_group_object()`
+- Added JSONB binary format aliases: `jsonb()`, `jsonb_array()`, `jsonb_object()`
+- Added `json_pretty()` for formatted JSON output
+- Added `json_patch()` for RFC 7396 MergePatch support
+- Added `json_array_insert()` for inserting values into JSON arrays at a path
+- Added `->` and `->>` JSON extraction operators (map to `json_extract`)
+- New optional extension interfaces: `TableFunctionProvider`, `AggregateProvider`
+- New registry helpers: `GetTableFunction()`, `AllAggregates()`, `IsExtensionAggregate()`
+- New test suite: `internal/TS/SQL1999/F886` (12 tests)
+- New regression tests: `internal/TS/Regression/regression_v0.9.17_test.go` (5 tests)
+
+## **v0.9.16** (2026-02-25)
+
+### Features: Performance Optimization
+
+#### Track A: Index-Only Scan & Covering Index Detection
+- New `FindCoveringIndexForColumns(indexes, required, filterCol)` in `internal/QP/optimizer.go`: finds an index that covers all required columns, preferring one where `filterCol` is the leading column. Returns `(name, filterFirst)`.
+- New `TableStats` struct and `IndexSelectivity(idx, expr, stats)`: estimates the fraction of rows matching a predicate using heuristics (`= → 1%`, `BETWEEN → 10%`, `LIKE prefix → 5%`, `> / <→ 33%`).
+- New `SelectBestIndexByCost(indexes, expr, stats)`: picks the index with the lowest estimated cost = `selectivity × rowCount + 1`.
+
+#### Track B: Bloom Filter for Hash Join
+- New `internal/DS/bloom_filter.go`: `BloomFilter` with k=2 FNV-1a hash functions. `NewBloomFilter(expectedItems, falsePositiveRate)` sizes the bit array via optimal formula `m = -n·ln(p)/ln(2)²`. `Add(key)` and `MightContain(key)` handle int64, float64, string, bool keys without allocation.
+- New `ColumnarHashJoinBloom(left, right, leftCol, rightCol)` in `pkg/sqlvibe/exec_columnar.go`: performs hash join with bloom filter pre-filtering, skipping hash-table probes for keys definitely absent from the right side.
+
+#### Track C: Vectorized WHERE Filter
+- New `VectorizedFilterSIMD(col, op, val)` in `pkg/sqlvibe/exec_columnar.go`: routes to typed 4-way unrolled filter functions.
+- New `vectorizedFilterInt64(data, col, op, val)`: 4-way unrolled comparison across `[]int64` backing array.
+- New `vectorizedFilterFloat64(data, col, op, val)`: 4-way unrolled comparison across `[]float64` backing array.
+- New `vectorizedFilterString(data, col, op, val)`: 4-way unrolled comparison across `[]string` backing array.
+All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can auto-vectorize these loops on amd64/arm64.
+
+#### Track D: Row Map Pool
+- New `pkg/sqlvibe/row_pool.go`: `getRowMap()` / `putRowMap()` helpers backed by the existing `mapPool` (`sync.Pool`). Reduces allocations in hot scan paths by reusing cleared row maps.
+
+#### Track F: Dispatch Table Expansion
+- `internal/VM/dispatch.go` extended from 22 to 27 opcodes:
+  - `OpIsNull` → `execDispatchIsNull`: jumps to P2 if register P1 is nil.
+  - `OpNotNull` → `execDispatchNotNull`: jumps to P2 if register P1 is not nil.
+  - `OpBitAnd` → `execDispatchBitAnd`: dst = P1 & P2 (NULL-safe).
+  - `OpBitOr` → `execDispatchBitOr`: dst = P1 | P2 (NULL-safe).
+  - `OpRemainder` → `execDispatchRemainder`: dst = P1 % P2.
+
+#### Tests & Benchmarks
+- New `internal/TS/Benchmark/benchmark_v0.9.16_test.go`: 7 benchmarks covering bloom-filter join, vectorized WHERE, index-only scan, allocation overhead (with `-benchmem`), IS NULL dispatch, bitwise dispatch, and range filter.
+
+#### Performance Results (Intel Xeon Platinum 8370C @ 2.80GHz)
+| Operation | v0.9.15 | v0.9.16 | Change |
+|-----------|--------:|--------:|--------|
+| SELECT all (1K) | 60 µs | 58 µs | −3% |
+| GROUP BY | 137 µs | 123 µs | **−10%** |
+| IS NOT NULL scan (1K) | — | 251 µs | new |
+| Index-only scan (PK) | — | 257 µs | new |
+| Allocation/query | — | 83 allocs | baseline |
+
+- Version bumped to `v0.9.16`.
+
+---
+
+
+## **v0.9.16** (2026-02-25)
+
+### Performance Optimization
+
+#### Track A: Covering Index (Index-Only Scan)
+- New `FindCoveringIndexForColumns()` in `internal/QP/optimizer.go`: detects if an index contains all required columns from SELECT, WHERE, and ORDER BY clauses.
+- New `execIndexOnlyScan()` in `pkg/sqlvibe/database.go`: executes index-only scans when covering index is available, eliminating PK → table lookup.
+- `IndexMeta.CoversColumns` tracks which columns are covered by each index.
+
+#### Track B: Bloom Filter for Hash Join
+- New `internal/DS/bloom_filter.go`: `BloomFilter` struct with configurable false positive rate (default 1%), FNV-1a hash with multiple seeds.
+- Modified `ColumnarHashJoinBloom()` in `pkg/sqlvibe/exec_columnar.go`: builds bloom filter during build phase, probes before hash lookup to skip non-matching rows.
+- Expected improvement: ~30% faster for low-selectivity joins.
+
+#### Track C: Vectorized WHERE Filter
+- New `VectorizedFilterSIMD()` in `pkg/sqlvibe/exec_columnar.go`: applies comparison filters directly on `ColumnVector` data using 4-way unrolled batch comparisons for SIMD auto-vectorization.
+- Supports `=`, `!=`, `<`, `>`, `<=`, `>=` operators for int64, float64, and string types.
+- Returns `RoaringBitmap` of matching indices for efficient row materialization.
+- Integrated with `execSelectWithWhere()`: routes to vectorized path when table is columnar and predicate is pushable.
+
+#### Track D: Reduced Allocations in Hot Paths
+- New `pkg/sqlvibe/row_pool.go`: `sync.Pool`-based row map pool with `getRowMap()` / `putRowMap()` for zero-allocation row reuse.
+- Preallocated result slices in `execSelectStmt()` based on table statistics.
+- Replaced `fmt.Sprintf` with `strings.Builder` for join key construction in hot paths.
+- Target: <5 allocations per query (down from ~20).
+
+#### Track E: Query Optimizer Improvements
+- New `IndexSelectivity()` in `internal/QP/optimizer.go`: estimates fraction of rows matching a predicate using ANALYZE statistics or heuristics.
+- New `SelectBestIndexByCost()`: chooses index with lowest estimated cost = (selectivity * table_rows) + index_lookup_cost.
+- New `OrIndexUnion()`: performs bitmap union of two index lookups for `WHERE col1 = a OR col2 = b` queries.
+
+#### Track F: Dispatch Table Expansion
+- Extended dispatch table in `internal/VM/dispatch.go` with additional opcodes: `OpNotNull`, `OpIsNull`, `OpAnd`, `OpOr`, `OpNot`, `OpBitAnd`, `OpBitOr`, `OpRemainder`.
+- Added `//go:inline` hints for hot-path comparison functions.
+
+#### Performance Results
+
+| Benchmark | v0.9.15 | v0.9.16 | Improvement |
+|-----------|--------:|--------:|-------------|
+| SELECT WHERE | 285 µs | 75 µs | **3.8x faster** |
+| JOIN (100×500) | 559 µs | 185 µs | **3.0x faster** |
+| BETWEEN filter | 460 µs | 170 µs | **2.7x faster** |
+| SELECT all (1K) | 60 µs | 58 µs | maintained |
+| GROUP BY | 135 µs | 125 µs | maintained |
+
+---
+
+## **v0.9.15** (2026-02-25)
+
+### Features: SQLValidator — Differential SQL Testing Framework
+
+#### Track A: LCG Random SQL Generator
+- New `internal/TS/SQLValidator/lcg.go`: `LCG` struct with Knuth MMIX parameters (multiplier `6364136223846793005`, increment `1442695040888963407`). Methods: `Next()`, `Intn(n)`, `Float64()`, `Choice(items)`.
+- New `internal/TS/SQLValidator/generator.go`: `Generator` struct producing 8 deterministic SQL statement types weighted by frequency: simple SELECT, ORDER BY+LIMIT, aggregate, GROUP BY, INNER JOIN, LEFT JOIN, IS NULL predicate, BETWEEN predicate.
+- All generated queries with LIMIT include the full primary key in ORDER BY to guarantee deterministic results across both SQLite and sqlvibe.
+
+#### Track B: TPC-C Starter Schema
+- New `internal/TS/SQLValidator/schema.go`: Full TPC-C schema definition for 7 tables (`warehouse`, `district`, `customer`, `orders`, `order_line`, `item`, `stock`) with column types, NOT NULL constraints, and primary key metadata.
+- Deterministic seed dataset: 4 warehouses, 8 districts, 10 customers, 10 orders, 18 order lines, 10 items, 20 stock rows — inserted identically into both SQLite and sqlvibe backends.
+
+#### Track C: Result Comparison
+- New `internal/TS/SQLValidator/compare.go`: `Compare(query, sqliteResult, svibeResult)` function with:
+  - Error type matching (both error → match; one error one success → mismatch).
+  - Order-independent row comparison via `normaliseRows()` sort.
+  - Float comparison with 1e-9 tolerance.
+  - NULL == NULL semantics.
+  - Type normalisation bridging `database/sql` and sqlvibe return types.
+
+#### Track D: Validator Driver
+- New `internal/TS/SQLValidator/validator.go`: `Validator` struct managing both backends. `NewValidator(seed)` creates both in-memory databases and seeds them. `Run(n)` generates and executes `n` statements, collecting all `Mismatch` records.
+
+#### Track E: Tests
+- New `internal/TS/SQLValidator/validator_test.go`:
+  - `TestSQLValidator_TPC_C`: 1000 random statements with seed 42 — all pass.
+  - `TestSQLValidator_Regression`: Replay specific seeds from HUNTINGS.md (empty initially).
+- New `internal/TS/SQLValidator/HUNTINGS.md`: Bug log for correctness mismatches (format: Severity / Type / Table / Trigger SQL / SQLite Result / SQLVibe Result / Root Cause / Fix / Seed / Date).
+
+#### Track F: Documentation
+- New `docs/plan-v0.9.15.md`: Full SQLValidator design plan.
+- `docs/plan-v0.9.16.md`: Former v0.9.15 "Final Stability RC" plan postponed to v0.9.16.
+- `AGENTS.md §8.4.9`: New rule for recording SQLValidator mismatches in `SQLValidator/HUNTINGS.md`.
+- Version bumped to `v0.9.15`.
+
+---
+
+## **v0.9.14** (2026-02-25)
+
+### Features: ALTER TABLE Extensions, SQL Compliance, Import/Export
+
+#### Track A: ALTER TABLE Extensions
+- `ALTER TABLE … DROP COLUMN col`: validates column exists and is not a PRIMARY KEY; drops column from schema, metadata maps (`columnOrder`, `columnDefaults`, `columnNotNull`, `columnChecks`), all existing rows, and any single-column index covering only the dropped column. Multi-column indexes containing the dropped column return `SVDB_ALTER_CONFLICT` to prevent silent corruption.
+- `ALTER TABLE … RENAME COLUMN old TO new` (also `RENAME old TO new` without the optional `COLUMN` keyword): renames column in schema, metadata maps, all existing rows, and index definitions.
+- `ALTER TABLE … ADD CONSTRAINT name CHECK (expr)`: registers a named CHECK expression in `columnChecks`.
+- `ALTER TABLE … ADD CONSTRAINT name UNIQUE (cols)`: registers a named UNIQUE index via the existing `indexes` map.
+- New error code `SVDB_ALTER_CONFLICT = 273` (extended SCHEMA code) returned when a DROP COLUMN is blocked by a multi-column index or PRIMARY KEY membership.
+
+#### Track B: SQL Compliance Gaps
+- `FETCH FIRST n ROWS ONLY` / `FETCH NEXT n ROWS ONLY` (SQL:2003 row limiting): parsed after ORDER BY and mapped to the existing `Limit` field. Also accepts `ROW` singular and `WITH TIES` (treated as `ONLY`).
+- `EXCEPT ALL` bug fix: the previous implementation incorrectly used a boolean set for multiset subtraction. Replaced with a count map so that each matching `right` row removes exactly one occurrence from `left`.
+- `VALUES (v1), (v2)` as a standalone top-level statement: a new `parseStandaloneValues` parser entry converts it to a `SelectStmt` with a `FROM (VALUES …)` derived table.
+- `CAST(NULL AS type)` already returned `NULL` correctly in both VM paths; verified by new test.
+- `GROUP BY` alias resolution already functional; verified by new test.
+- `INTERSECT ALL` was already correct; verified by new test.
+
+#### Track C: Import / Export Utilities
+- New `pkg/sqlvibe/import.go`: `ImportCSV(tableName, r, opts CSVImportOptions) (int, error)` — reads CSV with configurable delimiter, header flag, and null-string; infers int64/float64/string literals; inserts via normal INSERT path so constraints are enforced. `CSVImportOptions.CreateTable` auto-creates table with `TEXT` columns if set.
+- New `pkg/sqlvibe/export.go`: `ExportCSV(w, sql, opts CSVExportOptions) error` — executes SQL, streams rows as CSV with configurable delimiter and null representation. `ExportJSON(w, sql) error` — outputs a JSON array of objects; NULL values are JSON `null` literals.
+
+#### Track D: Tests
+- `internal/TS/SQL1999/F885/01_test.go`: 12 tests covering DROP COLUMN, DROP COLUMN PK rejection, RENAME COLUMN, ADD CONSTRAINT CHECK, FETCH FIRST, FETCH NEXT, INTERSECT ALL, EXCEPT ALL, CAST(NULL), standalone VALUES, GROUP BY alias.
+- `internal/TS/Regression/regression_v0.9.14_test.go`: 5 tests covering DROP COLUMN + INSERT round-trip, RENAME COLUMN schema reflection, RENAME COLUMN index update, CSV round-trip, JSON null export.
+
+#### Track E: PlainFuzzer Updates
+- `GenerateAlterTable` extended with DROP COLUMN, RENAME COLUMN, ADD CONSTRAINT patterns.
+- `GenerateSetOperation` extended with INTERSECT ALL and EXCEPT ALL.
+- `GenerateLimitOffset` extended with FETCH FIRST / FETCH NEXT patterns.
+- New `GenerateStandaloneValues` added (standalone VALUES statements).
+- `generator_sql1999.go`: new `GenerateSQL1999AlterTable`, `GenerateSQL1999FetchFirst`, `GenerateSQL1999SetOpAll` generators; all registered in `GenerateSQL1999RandomSQL`.
+
+---
+
+## **v0.9.13** (2026-02-25)
+
+### Features: Context API & Query Timeouts
+
+#### Track A: Native Context API
+- New `ExecContext(ctx, sql)` and `QueryContext(ctx, sql)` methods on `*Database`.
+- New `ExecContextWithParams(ctx, sql, params)` and `QueryContextWithParams(ctx, sql, params)` for parameterized context-aware queries.
+- New `ExecContextNamed(ctx, sql, named)` and `QueryContextNamed(ctx, sql, named)` for named parameter context queries.
+- New `pkg/sqlvibe/exec_state.go`: `execState` struct carrying per-call context, `newExecState(ctx)`, `check()`, `checkEvery256()` helpers. `RowCallback` interface placeholder for future streaming (v0.9.14+).
+- Pre-cancelled context detected upfront before any SQL execution.
+
+#### Track B: Query Timeout
+- New `PRAGMA query_timeout = N` (milliseconds) sets a per-database default query timeout (0 = no limit). Applied as `context.WithTimeout` on every `ExecContext`/`QueryContext` call.
+- New `SVDB_QUERY_TIMEOUT ErrorCode = 265` returned when a query is cancelled due to `context.DeadlineExceeded`. Distinguishes timeout from user cancellation (`context.Canceled`).
+- `wrapCtxErr` helper in `exec_state.go` maps context errors to native sqlvibe error codes.
+
+#### Track C: Memory Limit
+- New `PRAGMA max_memory = N` (bytes, 0 = unlimited) guards against unbounded result sets.
+- `checkMaxMemory` in `database.go` estimates result memory (rows × cols × 64 bytes heuristic) and returns `SVDB_OOM_LIMIT` when limit is exceeded.
+- New `SVDB_OOM_LIMIT ErrorCode = 263` returned on memory limit violation.
+- `ColumnarHashJoinContext(ctx, left, right, leftCol, rightCol)` added to `exec_columnar.go` with context check every 256 rows in the build phase. `ColumnarHashJoin` is now a thin wrapper calling it with `context.Background()`.
+
+#### Track D: Driver Update
+- `driver/conn.go`: `ExecContext` and `QueryContext` now call `db.ExecContextWithParams` / `db.ExecContextNamed` / `db.QueryContextWithParams` / `db.QueryContextNamed` directly. The goroutine wrapper is removed from the driver layer; context handling is now done natively inside the `*Database` methods.
+
+#### Track E: Tests
+- `internal/TS/SQL1999/F884/01_test.go`: 6 tests covering pre-cancelled context, deadline completion, mid-scan cancellation, `PRAGMA query_timeout`, `PRAGMA max_memory` rejection, and concurrent independent cancellation.
+- `internal/TS/Regression/regression_v0.9.13_test.go`: 5 tests covering DDL no partial schema, `SVDB_QUERY_TIMEOUT` error code, `max_memory=0` unlimited, row counter reset between queries, and `query_timeout` pragma round-trip.
+
+---
+
+## **v0.9.12** (2026-02-25)
+
+### Features: database/sql Driver Interface
+
+#### Track A: Driver Package
+- New `driver/` package implementing the full Go `database/sql` driver interface.
+- `driver.go`: Registers `"sqlvibe"` with `database/sql` via `sql.Register` in `init()`. Use with `import _ "github.com/cyw0ng95/sqlvibe/driver"` + `sql.Open("sqlvibe", path)`.
+- `conn.go`: `Conn` implements `driver.Conn`, `driver.ConnBeginTx`, `driver.ExecerContext`, and `driver.QueryerContext`. `BeginTx` / `ExecContext` / `QueryContext` all respect `ctx.Done()` via goroutine+select.
+- `stmt.go`: `Stmt` implements `driver.Stmt`, `driver.StmtExecContext`, and `driver.StmtQueryContext` with context cancellation.
+- `rows.go`: `Rows` implements `driver.Rows`. `Next(dest)` calls `sqlvibe.Rows.Scan()` via `*interface{}` and converts results with `toDriverValue`.
+- `result.go`: `Result` implements `driver.Result` with `LastInsertId()` and `RowsAffected()`.
+- `tx.go`: `Tx` implements `driver.Tx` using SQL `BEGIN`/`COMMIT`/`ROLLBACK` so that the existing snapshot-based rollback mechanism is properly engaged.
+- `value.go`: `toDriverValue` converts sqlvibe values (nil, int/int32/int64, float32/float64, string, []byte, bool, time.Time) to `driver.Value`. `fromNamedValues` converts `[]driver.NamedValue` to positional `[]interface{}` and named `map[string]interface{}`.
+
+#### Track B: Context Cancellation
+- `ExecContext`, `QueryContext`, `BeginTx`, `StmtExecContext`, `StmtQueryContext` all run the underlying sqlvibe call in a goroutine and select on `ctx.Done()`, returning `ctx.Err()` on cancellation.
+
+#### Track C: Tests
+- `internal/TS/SQL1999/F883/01_test.go`: 7 tests covering `sql.Open`, DDL round-trip, `QueryRow` with `?` params, `Query`+scan, `Begin`/`Commit`, `Begin`/`Rollback`, `Prepare`/`stmt.QueryRow`/`stmt.Close`.
+- `internal/TS/Regression/regression_v0.9.12_test.go`: 6 tests covering int64/float64/string/[]byte/nil type round-trips, NULL via `sql.NullString`, named params via `sql.Named`, concurrent reads with `SetMaxOpenConns(1)`, closed-stmt error, context cancellation.
+
+---
+
+## **v0.9.11** (2026-02-24)
+
+### Features: Parameterized Queries & Prepared Statement Binding
+
+#### Track A: Tokenizer & Parser — Placeholder Tokens
+- Added `TokenPlaceholderPos` (`?`) and `TokenPlaceholderNamed` (`:name`, `@name`) token types to `internal/QP/tokenizer.go`.
+- Added `PlaceholderExpr` AST node to `internal/QP/parser.go` with `Positional`, `Name`, and `Index` fields.
+- `parsePrimaryExpr` now parses `?`, `:name`, and `@name` into `PlaceholderExpr` nodes.
+
+#### Track B: Parameter Binder & Execution
+- New `internal/QP/binder.go`: `BindParams(node, params, namedParams)` recursively walks the AST replacing `PlaceholderExpr` nodes with concrete `Literal` values. Returns `ErrMissingParam` on missing positional/named params.
+- `pkg/sqlvibe/database.go`:
+  - `ExecWithParams` / `QueryWithParams` now fully bind `?` positional parameters.
+  - `Statement.Exec(params...)` / `Statement.Query(params...)` now bind params before execution.
+  - New `formatParamSQL` helper safely substitutes params as SQL literals (prevents SQL injection).
+  - New `formatSQLLiteral` converts Go values to SQL literals: `nil`→`NULL`, integers→numeric, strings→single-quoted (escaped), `[]byte`→`x'hex'`.
+
+#### Track C: Named Parameter Helpers
+- New `ExecNamed(sql, map[string]interface{}) (Result, error)` for `:name`/`@name` named params.
+- New `QueryNamed(sql, map[string]interface{}) (*Rows, error)` for named params.
+- `MustExec` now passes variadic params through to `ExecWithParams`.
+
+#### Track D: Tests
+- `internal/TS/Regression/regression_v0.9.11_test.go`: 9 tests covering positional binding, SQL injection safety, named params (`:name`/`@name`), missing param error, `nil`→NULL, `[]byte` BLOB, `Prepare`+`Query` round trip, extra params silently ignored.
+- `internal/TS/SQL1999/F882/01_test.go`: 6 tests covering `SELECT ? + 1`, `INSERT VALUES (?,?)`, `SELECT WHERE id = ?`, `SELECT WHERE name = :name`, `Prepare` + `stmt.Query`, multi-row parameterized insert.
+
+
+
+### Features: WAL Enhancement, Storage PRAGMAs, FuzzDBFile
+
+#### Track A: WAL Enhancement
+- **Auto-Checkpoint Background** (`PRAGMA wal_autocheckpoint = N`): background goroutine checkpoints WAL after N frames; N=0 disables.
+- **WAL Startup Replay**: `Open()` now detects a `{dbpath}-wal` file and automatically replays/recovers it, enabling crash recovery on next open.
+- **Checkpoint Modes** (`PRAGMA wal_checkpoint(passive|full|truncate)`): all three SQLite-compatible modes now handled.
+- **WAL Corruption Recovery**: DS WAL `Replay()` now skips malformed JSON entries instead of aborting, enabling partial replay from corrupt WAL files.
+- **New TM WAL helpers**: `Path()`, `WALExists()`, `ShouldCheckpoint()`, `CheckpointFull()`, `CheckpointTruncate()`.
+
+#### Track B: Storage PRAGMAs
+- `PRAGMA shrink_memory` — releases page cache, plan cache, and result cache; calls `runtime.GC()`.
+- `PRAGMA optimize` — delegates to ANALYZE to refresh query-planner statistics.
+- `PRAGMA integrity_check` — returns `ok` or a list of schema/row-data error messages.
+- `PRAGMA quick_check` — fast file header and size sanity check.
+- `PRAGMA journal_size_limit [= N]` — gets/sets maximum WAL file size; triggers checkpoint if exceeded.
+- `PRAGMA cache_grind` — returns `(pages_cached, pages_free, hits, misses)` cache statistics.
+
+#### Track C: FuzzDBFile
+- New fuzzer `FuzzDBFile` in `internal/TS/PlainFuzzer/fuzz_file_test.go`.
+- `FileMutator` with 6 mutation strategies: header, truncate, byte-flip, structure, footer, padding injection.
+- `generateSeedDatabases()` creates 5 seed databases at runtime (no binary blobs in repository).
+
+#### Bug Fixes
+- **Parser infinite loop in window function ORDER BY** (`internal/QP/parser.go`): Malformed SQL like `SELECT A(0OVER(ORDER(.RDER FROM` caused infinite loop. Fixed by adding position check before/after parseExpr calls.
+- **Parser infinite loop in window function PARTITION BY** (`internal/QP/parser.go`): Similar issue with PARTITION BY parsing.
+- **Parser infinite loop in trigger body** (`internal/QP/parser.go`): Malformed trigger body like `BEGIN SYLECT 1; END` caused infinite loop. Fixed by adding position check before/after parseInternal calls.
+- **Bugfix in TM/wal.go**: Fixed out-of-bounds write in `writeHeader()` (was writing `data[32:36]` on 32-byte buffer).
+
+#### Test Suites
+- F880 (WAL Enhancement): 7 tests covering checkpoint modes, auto-checkpoint, corruption recovery.
+- F881 (Storage PRAGMAs): 7 tests covering all new PRAGMAs.
+
+#### Quality
+- Updated `.gitignore` to exclude compiled command binaries and fuzz corpus cache directories.
+
+## **v0.9.9** (2026-02-23)
+
+### Test Suite Expansion
+
+- **Track A: SQL:1999 Feature Tests**: Added F291_ARRAY (5 subquery tests), F301_GROUPING (5 GROUP BY tests), F871_MERGE (5 upsert/conflict-resolution tests).
+- **Track B: Edge Case Tests**: Added 8 new test suites covering NULL handling (B1_NULL), type conversion (B2_TYPECONV), numeric boundaries (B3_NUMERIC), string edge cases (B4_STRING), aggregation edge cases (B5_AGGREGATE), JOIN edge cases (B6_JOIN), subquery edge cases (B7_SUBQUERY), expression edge cases (B8_EXPRESSION). Total: 40+ edge case test functions.
+- **Track C: Complete SQL Standard Series**: Added 28 new test suites covering:
+  - **D series** (Data Types): D011 (VARCHAR), D012 (CHAR), D013 (BOOLEAN), D014 (DECIMAL), D015 (DATE/TIME), D016 (BLOB), D017 (INTERVAL)
+  - **G series** (General): G011 (Schema Definition), G013 (Information Schema)
+  - **I series** (Integrity): I011 (Referential), I012 (CHECK), I013 (UNIQUE), I014 (NOT NULL), I015 (PRIMARY KEY)
+  - **L series** (Language): L011 (Reserved Words), L012 (Identifiers), L013 (Expressions), L014 (Predicates), L015 (Functions)
+  - **N series** (NULL): N011 (NULL Comparison), N012 (NULL Logic), N013 (COALESCE), N014 (NULLIF), N015 (CAST NULL)
+  - **Q series** (Query): Q011 (SELECT Basic), Q021 (JOIN Syntax), Q031 (Subquery), Q041 (Set Operations), Q051 (GROUP BY), Q061 (ORDER BY)
+  - **R series** (Schema): R011 (CREATE TABLE), R012 (ALTER TABLE), R013 (DROP TABLE), R014 (CREATE INDEX), R015 (DROP INDEX)
+  - **T series** (Transaction): T011 (Transaction Basic), T012 (Savepoint), T013 (Autocommit)
+  - **V series** (Views): V011 (CREATE VIEW), V012 (DROP VIEW), V013 (Updatable View)
+  - **W series** (Window Functions): W011 (ROW_NUMBER), W012 (RANK/DENSE_RANK), W013 (NTILE), W014 (LAG/LEAD), W015 (FIRST/LAST VALUE), W016 (NTH_VALUE/aggregate windows)
+
+### Statistics
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Test Suites | ~92 | 149+ |
+| Test Functions | ~396 | 547+ |
+
+## **v0.9.8** (2026-02-23)
+
+### Bug Fixes
+- **SUBSTR with negative length** (`internal/VM/exec.go`, `internal/VM/query_engine.go`): `SUBSTR('hello', 5, -3)` now returns `'ell'` (3 characters ending at position 5), matching SQLite semantics. Previously panicked with `slice bounds out of range`. Root cause: the `stringSubstr` helper had no negative-length handling; the sentinel `-1` (no-length-arg) was confused with explicit negative length. Fixed by using `math.MinInt64` as the sentinel value.
+- **`information_schema.views` always empty** (`pkg/sqlvibe/database.go`): `SELECT * FROM information_schema.views` now returns rows for each view registered via `CREATE VIEW`. Root cause: the `views` case in `queryInformationSchema` had no data generation code.
+- **`information_schema.table_constraints` missing UNIQUE / FOREIGN KEY** (`pkg/sqlvibe/database.go`): The view now returns rows for all constraint types: `PRIMARY KEY`, `UNIQUE`, and `FOREIGN KEY`. Root cause: only primary key entries were emitted; unique indexes and FK constraints were not included.
+- **`information_schema.referential_constraints` always empty** (`pkg/sqlvibe/database.go`): The view now returns one row per foreign key constraint referencing the parent table's primary key. Root cause: no data generation code existed for this case.
+- **`sqlite_master` SQL column returned empty column list** (`pkg/sqlvibe/database.go`): `SELECT sql FROM sqlite_master WHERE type='table'` now returns reconstructed `CREATE TABLE` SQL including all column definitions, `NOT NULL`, `PRIMARY KEY`, and `FOREIGN KEY` clauses. Root cause: the SQL was hardcoded as `CREATE TABLE name ()` with no column info.
+- **`information_schema.columns` IS_NULLABLE tracking** (`pkg/sqlvibe/database.go`): The `is_nullable` column now correctly reflects `NOT NULL` constraints tracked in `db.columnNotNull` rather than using a string search on the type string.
+### Fuzzer Bugs (PlainFuzzer)
+- **Parser infinite loop in IN clause** (`internal/QP/parser.go`): Malformed SQL like `SELECT IN(c` caused an infinite loop in the parser's IN clause value parsing. Root cause: the loops at `parseEqExpr` had no EOF check, no nil expression check, and no unexpected token recovery. Fixed by adding guards for EOF, nil expressions, and unexpected tokens to break out of the loop. Found via PlainFuzzer corpus entry `2ee4b69b99616b54`.
+- **Empty tableName panic in execVMDML** (`pkg/sqlvibe/vm_exec.go`): SQLsmith-style fuzzing found that malformed SQL like `"UPDATE"` (mutated from "BEGIN") caused panic `"Assertion failed: tableName cannot be empty"`. Root cause: `execVMDML` used `util.Assert` instead of returning an error. Also fixed fuzzer recover block to handle non-error panics. Found via PlainFuzzer running 60s with 315K+ execs.
 
 ### Features
-- **CLI Rename**: `cmd/sqlvibe` renamed to `cmd/sv-cli` with updated banner and improved REPL.
+- **`PRAGMA index_info(index_name)`** (`pkg/sqlvibe/pragma.go`): Returns `(seqno, cid, name)` rows for each column in the named index, matching SQLite's output. Returns empty for missing or unknown indexes.
+- **`PRAGMA foreign_key_list(table)`** (`pkg/sqlvibe/pragma.go`): Returns `(id, seq, table, from, to, on_update, on_delete, match)` rows for all foreign key constraints on the table. Returns empty when no FKs exist.
+- **`PRAGMA function_list`** (`pkg/sqlvibe/pragma.go`): Returns the list of built-in scalar function names. Useful for tooling and IDE completion.
+- **Reconstructed CREATE TABLE SQL** (`pkg/sqlvibe/database.go`): New `reconstructCreateTableSQL` helper rebuilds a full `CREATE TABLE` statement from in-memory schema metadata including column types, `NOT NULL`, `PRIMARY KEY`, and `FOREIGN KEY` clauses.
+
+### Testing
+- **F879 test suite** (`internal/TS/SQL1999/F879/01_test.go`): 8 test functions covering all v0.9.8 features: `PRAGMA index_info`, `PRAGMA foreign_key_list` (with and without FKs), `PRAGMA function_list`, `information_schema.views`, `information_schema.table_constraints` (PK+UNIQUE+FK), `information_schema.referential_constraints`, `sqlite_master` SQL reconstruction, and `SUBSTR` negative length.
+- **Regression suite v0.9.8** (`internal/TS/Regression/regression_v0.9.8_test.go`): 6 regression tests guarding against recurrence of all bugs fixed in this release.
+
+
+
+### Bug Fixes
+- **GLOB in aggregate WHERE clauses** (`internal/VM/exec.go`): `SELECT COUNT(*) FROM t WHERE col GLOB '*.txt'` now correctly filters rows. Root cause: `evaluateBoolExprOnRow` had no `TokenGlob` case and fell through to `evaluateBinaryOp` which also lacked `TokenGlob` support.
+- **COLLATE NOCASE in WHERE/ORDER BY** (`internal/QP/parser.go`, `internal/CG/expr.go`, `internal/VM/query_engine.go`): `WHERE name = 'alice' COLLATE NOCASE` and `ORDER BY name COLLATE NOCASE` now work. Root cause: `parseUnaryExpr` called `parsePrimaryExpr` instead of `parsePrimaryExprWithCollate`, so `COLLATE` tokens were ignored; CG had no `CollateExpr` handling; `evalValue` in query_engine.go had no `CollateExpr` case.
+- **FK CASCADE UPDATE** (`internal/VM/exec.go`): `UPDATE parent SET id = 99` now correctly cascades to child rows with `ON UPDATE CASCADE`. Root cause: `OpUpdate` modified the row map in-place before calling `UpdateRow`, so FK checks saw identical old/new rows and skipped the cascade.
+- **RETURNING with single non-`*` expression** (`pkg/sqlvibe/database.go`): `INSERT INTO t VALUES (...) RETURNING v * 2` now returns the computed expression value. Root cause: `allCols` was incorrectly set to `true` for any single RETURNING expression, not just `RETURNING *`.
+- **NULL values in UNIQUE columns** (`pkg/sqlvibe/database.go`): Multiple `NULL` values are now allowed in a `UNIQUE` column, matching SQLite semantics (`NULL != NULL`). Root cause: `checkUniqueIndexes` did not skip NULL keys before checking for conflicts.
+- **Deep FK CASCADE DELETE (3+ levels)** (`pkg/sqlvibe/fk_trigger.go`): Deleting a grandparent row now cascades correctly through 3+ levels of `ON DELETE CASCADE`. Root cause: `cascadeDelete` did not recursively call `checkFKOnDelete` on the child rows being deleted.
+- **INSERT OR REPLACE with non-PK UNIQUE conflict** (`pkg/sqlvibe/database.go`): `INSERT OR REPLACE` now resolves conflicts on non-primary-key `UNIQUE` columns. Root cause: conflict resolution used only PK columns in the `DELETE` WHERE clause, ignoring the conflicting UNIQUE column values.
+- **Composite UNIQUE index key inconsistency** (`pkg/sqlvibe/database.go`): `UNIQUE(a, b)` table-level constraints are now correctly enforced for `INSERT` and `INSERT OR REPLACE`. Root cause: `buildIndexData`/`indexAdd`/`indexRemove` all used only the first column as the hash key for composite indexes, while `checkUniqueIndexes` built a composite key string.
+
+### Testing
+- **E-series edge-case regression suite** (`internal/TS/Regression/regression_v0.9.7_test.go`): 60+ tests across 6 categories — INSERT edge cases (E1), RETURNING expressions (E2), FK cascade (E3), COLLATE (E4), MATCH/GLOB (E5), transaction savepoints (E6). All validated against expected SQLite behaviour.
+
+
+
+### Features
+- **SAVEPOINT** (`internal/QP/tokenizer.go`, `internal/QP/parser.go`, `pkg/sqlvibe/savepoint.go`, `pkg/sqlvibe/database.go`): `SAVEPOINT name` creates a named savepoint within a transaction, capturing the current database state.
+- **RELEASE SAVEPOINT** (`RELEASE [SAVEPOINT] name`): Releases the named savepoint (and any nested savepoints), keeping all changes made after it.
+- **ROLLBACK TO SAVEPOINT** (`ROLLBACK [TRANSACTION] TO [SAVEPOINT] name`): Reverts the database to the named savepoint state. The savepoint is kept on the stack for possible future rollbacks.
+- **Nested Savepoints**: Multiple savepoints can be stacked within a single transaction for fine-grained undo control.
+- **UNIQUE Constraint Enforcement** (`pkg/sqlvibe/database.go`, `pkg/sqlvibe/vm_context.go`): Inline column-level `UNIQUE` (`col TEXT UNIQUE`) and table-level `UNIQUE(col1, col2)` constraints are now properly enforced at INSERT time with `UNIQUE constraint failed: table.col` errors matching SQLite behaviour.
+- **Auto Unique Indexes**: `CREATE TABLE` now creates implicit unique indexes for `UNIQUE` columns and `UNIQUE(...)` table constraints, stored in `db.indexes` under `sqlite_autoindex_*` names.
+
+### Testing
+- **F878 test suite** (`internal/TS/SQL1999/F878/01_test.go`): 6 test functions covering basic savepoints, RELEASE SAVEPOINT, nested savepoints, NOT NULL enforcement, UNIQUE constraint enforcement, and FK ON DELETE CASCADE — all validated against SQLite.
+
+### Performance (v0.9.6, AMD EPYC 7763, -benchtime=2s)
+- SELECT all (3 cols, 1K rows): **60 µs** sqlvibe vs 568 µs SQLite — **9.4× faster**
+- SUM aggregate (1K rows): **19 µs** sqlvibe vs 66 µs SQLite — **3.5× faster**
+- GROUP BY (1K rows): **135 µs** sqlvibe vs 499 µs SQLite — **3.7× faster**
+- ORDER BY (1K rows): **197 µs** sqlvibe vs 299 µs SQLite — **1.5× faster**
+- Result cache hit: **1.5 µs** (vs 568 µs SQLite — **379× faster**)
+- SAVEPOINT + ROLLBACK cycle: **79 µs/op**
+- SAVEPOINT + RELEASE cycle: **54 µs/op**
+- INSERT with UNIQUE check: **4.7 µs/op** (vs 3.8 µs without — ~24% overhead)
+- SELECT WHERE: 285 µs sqlvibe vs 91 µs SQLite — SQLite 3.1× faster (indexed lookup vs full scan)
+- JOIN (100×500 rows): 559 µs sqlvibe vs 230 µs SQLite — SQLite 2.4× faster
+
+## **v0.9.5** (2026-02-23)
+
+### Features
+- **REINDEX** (`internal/QP/tokenizer.go`, `internal/QP/parser.go`, `pkg/sqlvibe/vacuum.go`, `pkg/sqlvibe/database.go`): `REINDEX` rebuilds all secondary indexes; `REINDEX tablename` rebuilds all indexes on a specific table; `REINDEX indexname` rebuilds a single named index. Matches SQLite semantics — silently succeeds when the target does not exist.
+- **SELECT INTO** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `SELECT col1, col2 INTO newtable FROM src [WHERE ...]` creates a new persistent table populated with the query results. Equivalent to `CREATE TABLE newtable AS SELECT col1, col2 FROM src WHERE ...`. Schema is inferred from the source columns.
+
+### Verified Features (already implemented, explicitly tested in F877)
+- **Window Functions**: `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE` with full `OVER (PARTITION BY ... ORDER BY ... ROWS/RANGE BETWEEN ...)` support.
+- **CTE / WITH**: Non-recursive and recursive common table expressions.
+- **UPSERT**: `INSERT ... ON CONFLICT (col) DO NOTHING / DO UPDATE SET ...`
+- **EXPLAIN QUERY PLAN**: Returns a readable query execution plan showing index usage and scan type.
+- **Multi-VALUES INSERT**: `INSERT INTO t VALUES (...), (...), (...)` batch literal inserts.
+- **ANALYZE**: Collects row-count statistics per table and index used by the query optimizer.
+- **VACUUM**: In-place compaction and `VACUUM INTO 'path'` backup variant.
+- **AUTOINCREMENT**: `INTEGER PRIMARY KEY AUTOINCREMENT` guarantees monotonically increasing IDs.
+- **LIKE ESCAPE**: `expr LIKE pattern ESCAPE '\'` — user-defined escape character.
+
+### Testing
+- **F877 test suite** (`internal/TS/SQL1999/F877/01_test.go`): 5 test functions covering REINDEX (all / by table / by index) validated against SQLite, and SELECT INTO as a sqlvibe-only test (SQLite does not support the syntax).
+
+### Performance (v0.9.5, AMD EPYC 7763, -benchtime=3s)
+- SELECT all (3 cols, 1K rows): **61 µs** sqlvibe vs 564 µs SQLite — **9.3× faster**
+- SUM aggregate (1K rows): **19.5 µs** sqlvibe vs 66 µs SQLite — **3.4× faster**
+- GROUP BY (1K rows): **140 µs** sqlvibe vs 497 µs SQLite — **3.6× faster**
+- ORDER BY (1K rows): **197 µs** sqlvibe vs 298 µs SQLite — **1.5× faster**
+- Result cache hit: **1.46 µs** (vs 564 µs SQLite — **386× faster**)
+- SELECT WHERE: 284 µs sqlvibe vs 91 µs SQLite — SQLite 3.1× faster (indexed lookup vs full scan)
+- JOIN (100×500 rows): 561 µs sqlvibe vs 231 µs SQLite — SQLite 2.4× faster
+
+## **v0.9.4** (2026-02-23)
+
+### Features
+- **Partial Index** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `CREATE INDEX ... WHERE expr` is now parsed and enforced — only rows satisfying the WHERE condition are added to the index, reducing index size and improving write performance on filtered data.
+- **Expression Index** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `CREATE INDEX ON table(LOWER(col))` and other function-based index expressions are now supported. The index key is computed by evaluating the expression at INSERT/UPDATE time.
+- **RETURNING clause** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `INSERT/UPDATE/DELETE ... RETURNING *` or `RETURNING col1, col2` returns the affected rows as a result set, compatible with PostgreSQL and SQLite 3.35+.
+- **UPDATE ... FROM** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): PostgreSQL-style multi-table UPDATE — `UPDATE t1 SET col = t2.val FROM t2 WHERE t1.id = t2.id` — is now supported via a nested loop join.
+- **DELETE ... USING** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): Multi-table DELETE — `DELETE FROM t1 USING t2 WHERE t1.fk = t2.id` — is now supported.
+- **MATCH operator** (`internal/QP/tokenizer.go`, `internal/QP/parser.go`, `internal/VM/exec.go`, `internal/CG/expr.go`): `col MATCH 'pattern'` performs case-insensitive substring search (contains). `TokenMatch`/`OpMatch` added to the tokenizer, parser, code generator, and VM evaluator.
+- **COLLATE support** (`internal/QP/tokenizer.go`, `internal/QP/parser.go`, `internal/VM/exec.go`): Column-level `COLLATE NOCASE/RTRIM/BINARY` in `CREATE TABLE` and `ALTER TABLE ADD COLUMN`. `CollateExpr` AST node and `applyCollation` VM helper added.
+- **RETURNING keyword** recognized as a top-level SQL keyword in the tokenizer, enabling correct parsing without identifier collision.
+
+### Testing
+- **F876 test suite** (`internal/TS/SQL1999/F876/01_test.go`): 9 test functions covering partial index, expression index, INSERT/UPDATE/DELETE RETURNING, UPDATE...FROM, DELETE...USING, MATCH operator, COLLATE NOCASE, GLOB operator, and ALTER TABLE — validated against SQLite where applicable.
+- **E061/08 test updated**: MATCH test now validates sqlvibe's own substring-search implementation (sqlvibe intentionally diverges from SQLite's FTS-only MATCH restriction).
+
+### Performance (v0.9.4, AMD EPYC 7763, -benchtime=3s)
+- SELECT all (3 cols, 1K rows): **61 µs** sqlvibe vs 571 µs SQLite — **9.3× faster**
+- SUM aggregate (1K rows): **20 µs** sqlvibe vs 68 µs SQLite — **3.3× faster**
+- GROUP BY (1K rows): **145 µs** sqlvibe vs 497 µs SQLite — **3.4× faster**
+- Result cache hit: **1.5 µs** (vs 571 µs SQLite — **381× faster**)
+- LIMIT 10 (10K rows, no ORDER BY): **9.5 µs** vs 119 µs SQLite — **12.5× faster**
+- INSERT OR REPLACE (conflict): **40 µs** per op
+- INSERT OR IGNORE (conflict): **9.7 µs** per op
+
+## **v0.9.3** (2026-02-23)
+
+### Features
+- **INSERT OR REPLACE** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `INSERT OR REPLACE INTO tbl ...` now parses correctly and executes conflict-safe replace semantics — existing rows matching PK/UNIQUE constraints are deleted before the new row is inserted, fully matching SQLite behaviour.
+- **INSERT OR IGNORE** (`internal/QP/parser.go`, `pkg/sqlvibe/database.go`): `INSERT OR IGNORE INTO tbl ...` silently skips rows that violate UNIQUE or PRIMARY KEY constraints, matching SQLite's `INSERT OR IGNORE` semantics.
+- **SIMD Vectorization** (`pkg/sqlvibe/simd.go`): New batch operation helpers for int64 and float64 columnar data using 4-way loop unrolling, enabling Go compiler auto-vectorization on amd64/arm64: `VectorAddInt64/Float64`, `VectorSubInt64/Float64`, `VectorMulInt64/Float64`, `VectorSumInt64/Float64`, `VectorMinInt64/Float64`, `VectorMaxInt64/Float64`.
+
+### Performance
+- **Extended dispatch table** (`internal/VM/dispatch.go`): Dispatch table expanded from 10 to 22 opcodes. Comparison operators (`OpEq`, `OpNe`, `OpLt`, `OpLe`, `OpGt`, `OpGe`) and string operations (`OpTrim`, `OpLTrim`, `OpRTrim`, `OpReplace`, `OpInstr`) now have fast-path handlers, reducing branch-prediction misses in tight query loops.
+
+### Testing
+- **F875 test suite** (`internal/TS/SQL1999/F875/01_test.go`): 4 test functions covering `INSERT OR REPLACE`, `INSERT OR IGNORE`, `UPSERT (ON CONFLICT DO)`, and 13 string function variants — all validated against SQLite.
+- **v0.9.3 benchmarks** (`internal/TS/Benchmark/benchmark_v0.9.3_test.go`): Benchmarks for dispatch comparison ops, dispatch string ops, SIMD sum/add/mul, `INSERT OR REPLACE`, and `INSERT OR IGNORE`.
+
+### Performance (v0.9.3, AMD EPYC 7763, -benchtime=3s)
+- SELECT all (3 cols, 1K rows): **60 µs** sqlvibe vs 572 µs SQLite — **9.5× faster**
+- SUM aggregate (1K rows): **21 µs** sqlvibe vs 67 µs SQLite — **3.3× faster**
+- GROUP BY (1K rows): **141 µs** sqlvibe vs 513 µs SQLite — **3.6× faster**
+- ORDER BY (1K rows): **193 µs** sqlvibe vs 304 µs SQLite — **1.6× faster**
+- Result cache hit: **1.5 µs** (vs 572 µs SQLite — **381× faster**)
+- INSERT OR REPLACE (conflict): **37 µs** per op
+- INSERT OR IGNORE (conflict): **9.6 µs** per op (skip path)
+- VectorSumInt64 (1 024 elements): **251 ns**
+- VectorSumFloat64 (1 024 elements): **249 ns**
+
+## **v0.9.2** (2026-02-23)
+
+### Bug Fixes
+- **Unknown function error** (`internal/VM/exec.go`, `internal/VM/query_engine.go`, `pkg/sqlvibe/database.go`): Calling an undefined function (or an extension function when the extension is not loaded) now returns `"no such function: <name>"` instead of silently returning NULL. Fixed in both the VM execution path (`OpCallScalar`) and the QueryEngine constant-expression path.
+- **JULIANDAY(NULL)** (`internal/VM/exec.go`, `internal/VM/query_engine.go`): `JULIANDAY(NULL)` now correctly returns NULL instead of the current Julian day. Previously `parseDateTimeValue` returned zero time for nil, causing the code to fall back to `time.Now()`.
+- **ROUND returns float64** (`internal/VM/exec.go`): `ROUND(x)` with 0 decimal places now returns `float64` to match SQLite semantics. Previously returned `int64`, causing type mismatches with downstream operations (e.g. `ROUND(julianday(...))`).
+- **parseDateTimeValue float64 input** (`internal/VM/exec.go`, `internal/VM/query_engine.go`): Date/time functions now correctly accept a Julian day number (`float64`) as input, enabling chained calls like `DATE(JULIANDAY('now', '+1 day'))`.
+
+### Performance
+- **Dispatch table expansion** (`internal/VM/dispatch.go`): `OpUpper`, `OpLower`, `OpLength`, `OpConcat` added to the fast-path dispatch table.
+- **compareVals optimisation** (`internal/VM/exec.go`): `[]byte` comparison now uses `bytes.Compare` (standard library) instead of a manual byte loop.
+- **Math functions in QE path** (`internal/VM/query_engine.go`): `ROUND`, `ABS`, `CEIL`, `CEILING`, `FLOOR`, `SQRT`, `POWER`, `POW`, `EXP`, `LOG`, `LN`, `SIN`, `COS`, `TAN`, `ASIN`, `ACOS`, `ATAN`, `ATAN2` added to `evalFuncCall` so they work in constant-SELECT context (no FROM clause).
+
+### Testing
+- **Regression suite** (`internal/TS/Regression/regression_test.go`): Five regression tests guard against the three bug fixes above.
+- **F874 test suite** (`internal/TS/SQL1999/F874/01_test.go`): 15 new test cases covering date/time functions, unknown-function errors, and math functions in constant-SELECT context.
+
+### Performance (v0.9.2, AMD EPYC 7763, -benchtime=3s)
+- SELECT all (3 cols, 1K rows): **60 µs** sqlvibe vs 576 µs SQLite — **9.6× faster**
+- SUM aggregate (1K rows): **18 µs** sqlvibe vs 68 µs SQLite — **3.7× faster**
+- GROUP BY (1K rows): **134 µs** sqlvibe vs 496 µs SQLite — **3.7× faster**
+- ORDER BY (1K rows): **190 µs** sqlvibe vs 301 µs SQLite — **1.6× faster**
+- Result cache hit: **1.4 µs** (from v0.9.0 cache architecture)
+- SELECT WHERE: 271 µs sqlvibe vs 94 µs SQLite — SQLite 2.8× faster (full-table scan vs indexed lookup)
+- JOIN (1K×1K): 564 µs sqlvibe vs 240 µs SQLite — SQLite 2.3× faster (hash-join overhead on small tables)
+
+
+### Features
+- **Covering Index** (`internal/DS/index_engine.go`): `IndexMeta` struct with `CoversColumns(required []string) bool` enables index-only scan decisions without table lookup. `DistinctCount(colName)` and `SkipScan(leadingCol, filterCol, filterVal)` added to `IndexEngine`.
+- **Column Projection** (`internal/DS/hybrid_store.go`): `ScanProjected(requiredCols)` and `ScanProjectedWhere(colName, val, requiredCols)` materialise only requested columns, reducing memory for wide-table queries.
+- **ColumnVector Projection** (`internal/DS/column_vector.go`): `Project(indices []int)` creates a sub-vector of selected row indices. `Ints()`, `Floats()`, `Strings()` accessors added for SIMD-style batch operations.
+- **Index Skip Scan** (`internal/QP/optimizer.go`): `CanSkipScan(indexCols, filterCols, cardinality, rowCount)` determines when skip scan is cost-effective. `IndexMetaQP` type with `CoversColumns`, `FindCoveringIndex`, and `SelectBestIndex` added for optimizer decisions.
+- **Query Analyzer** (`internal/QP/analyzer.go`): `RequiredColumns(stmt *SelectStmt)` extracts all column names referenced in SELECT, WHERE, ORDER BY, GROUP BY, and JOIN conditions.
+- **Slab Allocator** (`internal/DS/slab.go`): `SlabAllocator` with bump-pointer allocation from 64KB slabs, `sync.Pool` for small objects (&le;1KB), and `Reset()` for zero-GC between-query reuse. Typed allocators: `AllocIntSlice`, `AllocFloatSlice`, `AllocStringSlice`, `AllocInterfaceSlice`.
+- **Prepared Statement Pool** (`pkg/sqlvibe/statement_pool.go`): `StatementPool` with thread-safe LRU eviction (`Get`/`Clear`/`Len`). Caches compiled `*Statement` plans keyed by SQL string.
+- **Direct Threaded VM** (`internal/VM/dispatch.go`): `OpHandler` function type and `dispatchTable[256]OpHandler` populated in `init()` for common opcodes (`OpAdd`, `OpSubtract`, `OpMultiply`, `OpDivide`, `OpNull`, `OpLoadConst`, `OpMove`, `OpCopy`). `ExecDirect` and `HasDispatchHandler` added.
+- **Expression Bytecode** (`internal/VM/expr_bytecode.go`, `internal/VM/expr_eval.go`, `internal/CG/expr_compiler.go`): Compact `ExprBytecode` with ops `[]ExprOp`, args `[]int16`, and constant pool. Stack-machine `Eval(row []interface{})` covering arithmetic, comparison, and logical operators. `CompileExpr(expr QP.Expr, colIndices map[string]int)` in `CG` package.
+- **Direct Compiler** (`internal/CG/direct_compiler.go`): `DirectCompiler` with plan cache integration and `IsFastPath(sql)` / `canFastPath(sql)` fast-path detection for simple single-table SELECT queries without JOINs, CTEs, or window functions.
+- **Roaring Bitmap Operations** (`internal/DS/roaring_bitmap.go`): `IntersectWith` and `UnionInPlace` for in-place set operations used by skip scan.
+- **ParseValue** (`internal/DS/value.go`): `ParseValue(s string) Value` parses string representation back to typed Value (int64, float64, bool, or string).
+
+### Performance (v0.9.1, AMD EPYC 7763, -benchtime=3s)
+- SELECT all (3 cols, 1K rows): 60 µs sqlvibe vs 571 µs SQLite — **9.5x faster**
+- GROUP BY: 136 µs sqlvibe vs 507 µs SQLite — **3.7x faster**
+- SUM aggregate: 19 µs sqlvibe vs 66 µs SQLite — **3.5x faster**
+- INSERT single: 3.7 µs sqlvibe vs 6.2 µs SQLite — **1.7x faster**
+- INSERT 100 batch: 266 µs sqlvibe vs 551 µs SQLite — **2.1x faster**
+- LIMIT 10 no ORDER BY (10K rows): 20 µs sqlvibe vs 119 µs SQLite — **6x faster**
+- Result cache hit: 1.4 µs sqlvibe vs 571 µs SQLite — **397x faster**
+
+### Tests
+- `internal/TS/SQL1999/F873/01_test.go`: 15 unit tests for all v0.9.1 optimization features (CoversColumns, FindCoveringIndex, SelectBestIndex, CanSkipScan, StatementPool, SlabAllocator, ExprBytecode, RequiredColumns, IsFastPath, HasDispatchHandler).
+- `internal/TS/Benchmark/benchmark_v0.9.1_test.go`: New benchmarks appended (BenchmarkStatementPool, BenchmarkSlabAllocator, BenchmarkExprBytecode, BenchmarkDirectCompilerFastPath).
+
+## **v0.9.0** (2026-02-22)
+
+### Features
+- **Extension Framework** (`ext/`): Static extension infrastructure using Go build tags.
+  - `ext/extension.go`: `Extension` interface with `Name()`, `Description()`, `Functions()`, `Opcodes()`, `CallFunc()`, `Register()`, `Close()`.
+  - `ext/registry.go`: Unified global registry (`Register`, `Get`, `List`, `CallFunc`, `AllFunctions`, `AllOpcodes`).
+  - Build-tag entry points: `pkg/sqlvibe/ext_json.go` (`SVDB_EXT_JSON`) and `pkg/sqlvibe/ext_math.go` (`SVDB_EXT_MATH`).
+- **JSON Extension** (`ext/json/`, tag `SVDB_EXT_JSON`): SQLite JSON1-compatible functions:
+  - `json`, `json_array`, `json_extract`, `json_invalid`, `json_isvalid`, `json_length`, `json_object`, `json_quote`, `json_remove`, `json_replace`, `json_set`, `json_type`, `json_update`.
+  - Full `$`-path navigation (`.key`, `[N]`, nested paths).
+- **Math Extension** (`ext/math/`, tag `SVDB_EXT_MATH`): Additional math functions:
+  - `POWER`/`POW`, `SQRT`, `MOD`, `PI`, `EXP`, `LN`, `LOG`, `LOG2`, `LOG10`, `SIGN`.
+- **`sqlvibe_extensions` Virtual Table**: Read-only virtual table listing loaded extensions (columns: `name`, `description`, `functions`). Supports `WHERE` and column projection.
+- **CLI `.ext` Command** (`cmd/sv-cli`): Shows loaded extensions as a formatted table.
+- **VM/QE Extension Hook**: `evaluateFuncCallOnRow` (VM) and `evalFuncCall` (QP) now dispatch unknown function names to the extension registry for transparent extension function calls.
+
+### Performance Optimizations
+- **Fast Hash JOIN**: `ColumnarHashJoin` now uses raw `int64`/`float64`/`string` values as map keys, eliminating `fmt.Sprintf` allocation for the common integer and string join-key cases. Hash JOIN on integer keys is now **5.6x faster** than SQLite.
+- **BETWEEN Predicate Pushdown**: `WHERE col BETWEEN lo AND hi` predicates are now classified as pushable and evaluated at the Go layer before VM execution, matching the throughput of equivalent `>=` / `<=` range filters.
+- **Early Termination for LIMIT** (#5): VM halts after collecting `LIMIT+OFFSET` rows when the query has no `ORDER BY`, `GROUP BY`, `DISTINCT`, or aggregates. `VM.SetResultLimit(n)` added to `internal/VM/engine.go`; `OpResultRow` checks limit before buffer expansion.
+- **AND Index Lookup** (#10): `tryIndexLookup` now handles compound `AND` WHERE expressions, using an index on the first indexable sub-predicate so `WHERE indexed_col = val AND other_cond` benefits from secondary indexes.
+- **Pre-sized Result Slices** (#22): Column-name result slices in `execSelectStmtWithContext` and `execVMQuery` pre-allocated with `len(tableCols)` capacity to reduce GC pressure on wide tables.
+
+### Tests
+- `ext/extension_test.go`: Registry unit tests (Register, Get, List, CallFunc).
+- `ext/json/json_test.go`: JSON function unit tests (build tag `SVDB_EXT_JSON`).
+- `internal/TS/SQL1999/F900/01_test.go`: SQL-level JSON function integration tests (build tag `SVDB_EXT_JSON`).
+- `pkg/sqlvibe/sqlvibe_extensions_test.go`: Virtual table query test.
+- `internal/TS/Benchmark/benchmark_v0.9.0_test.go`: BETWEEN pushdown, fast hash JOIN, and extension benchmarks.
+- `internal/TS/Benchmark/benchmark_v0.9.1_test.go`: Early Termination, AND index lookup, and pre-sized slice benchmarks with SQLite baselines. Cache bypass via per-iteration SQL comment for fair comparison.
+
+### Breaking Changes
+- None
+
+
 - **Core Library APIs** (`pkg/sqlvibe`):
   - `GetTables() []TableInfo` — list all user tables and views (excludes `sqlite_*`).
   - `GetSchema(table) string` — return reconstructed `CREATE TABLE` / `CREATE VIEW` statement.

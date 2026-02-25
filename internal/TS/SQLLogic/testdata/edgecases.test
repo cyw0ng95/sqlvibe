@@ -1,0 +1,369 @@
+# edgecases.test - Edge case and boundary condition tests
+
+# ----- Empty table operations -----
+
+statement ok
+CREATE TABLE empty (id INTEGER PRIMARY KEY, val TEXT)
+
+query I
+SELECT COUNT(*) FROM empty
+----
+0
+
+query I
+SELECT SUM(id) FROM empty
+----
+NULL
+
+query I
+SELECT MAX(id) FROM empty
+----
+NULL
+
+statement ok
+DROP TABLE empty
+
+# ----- Single row table -----
+
+statement ok
+CREATE TABLE single (id INTEGER PRIMARY KEY, val TEXT)
+
+statement ok
+INSERT INTO single VALUES (1, 'only')
+
+query I
+SELECT COUNT(*) FROM single
+----
+1
+
+query T
+SELECT val FROM single
+----
+only
+
+query I
+SELECT MIN(id) FROM single
+----
+1
+
+query I
+SELECT MAX(id) FROM single
+----
+1
+
+statement ok
+DROP TABLE single
+
+# ----- Large integers -----
+
+statement ok
+CREATE TABLE bigints (id INTEGER PRIMARY KEY, big INTEGER)
+
+statement ok
+INSERT INTO bigints VALUES (1, 9223372036854775807)
+
+statement ok
+INSERT INTO bigints VALUES (2, -9223372036854775808)
+
+statement ok
+INSERT INTO bigints VALUES (3, 0)
+
+query II rowsort
+SELECT id, big FROM bigints
+----
+1  9223372036854775807
+2  -9223372036854775808
+3  0
+
+query I
+SELECT MAX(big) FROM bigints
+----
+9223372036854775807
+
+query I
+SELECT MIN(big) FROM bigints
+----
+-9223372036854775808
+
+statement ok
+DROP TABLE bigints
+
+# ----- Float precision -----
+
+statement ok
+CREATE TABLE floats (id INTEGER PRIMARY KEY, f REAL)
+
+statement ok
+INSERT INTO floats VALUES (1, 0.1)
+
+statement ok
+INSERT INTO floats VALUES (2, 0.2)
+
+statement ok
+INSERT INTO floats VALUES (3, 0.3)
+
+query R rowsort
+SELECT f FROM floats
+----
+0.1
+0.2
+0.3
+
+query R
+SELECT SUM(f) FROM floats
+----
+0.6
+
+statement ok
+DROP TABLE floats
+
+# ----- Empty strings -----
+
+statement ok
+CREATE TABLE emptystr (id INTEGER PRIMARY KEY, s TEXT)
+
+statement ok
+INSERT INTO emptystr VALUES (1, '')
+
+statement ok
+INSERT INTO emptystr VALUES (2, 'not empty')
+
+statement ok
+INSERT INTO emptystr VALUES (3, '')
+
+query TI rowsort
+SELECT id, LENGTH(s) FROM emptystr
+----
+1  0
+2  9
+3  0
+
+query I
+SELECT COUNT(*) FROM emptystr WHERE s = ''
+----
+2
+
+statement ok
+DROP TABLE emptystr
+
+# ----- Whitespace strings -----
+
+statement ok
+CREATE TABLE whitespace (id INTEGER PRIMARY KEY, s TEXT)
+
+statement ok
+INSERT INTO whitespace VALUES (1, '   ')
+
+statement ok
+INSERT INTO whitespace VALUES (2, ' x ')
+
+statement ok
+INSERT INTO whitespace VALUES (3, '   y')
+
+query TI rowsort
+SELECT id, LENGTH(s) FROM whitespace
+----
+1  3
+2  3
+3  4
+
+statement ok
+DROP TABLE whitespace
+
+# ----- Special characters -----
+
+statement ok
+CREATE TABLE special (id INTEGER PRIMARY KEY, s TEXT)
+
+statement ok
+INSERT INTO special VALUES (1, 'hello''world')
+
+statement ok
+INSERT INTO special VALUES (2, 'hello"world')
+
+statement ok
+INSERT INTO special VALUES (3, 'hello%world')
+
+statement ok
+INSERT INTO special VALUES (4, 'hello_world')
+
+query T rowsort
+SELECT s FROM special WHERE s LIKE 'hello''world'
+----
+hello'world
+
+query T rowsort
+SELECT s FROM special WHERE s LIKE 'hello%world'
+----
+hello%world
+hello'world
+hello"world
+hello_world
+
+query T
+SELECT s FROM special WHERE s LIKE 'hello\_world' ESCAPE '\'
+----
+hello_world
+
+statement ok
+DROP TABLE special
+
+# ----- NULL comparisons -----
+# Note: val = NULL and val != NULL should return 0 rows in standard SQL
+# since NULL comparisons always return NULL (not true/false)
+
+statement ok
+CREATE TABLE nullcomp (id INTEGER PRIMARY KEY, val INTEGER)
+
+statement ok
+INSERT INTO nullcomp VALUES (1, 1)
+
+statement ok
+INSERT INTO nullcomp VALUES (2, NULL)
+
+statement ok
+INSERT INTO nullcomp VALUES (3, 3)
+
+query I
+SELECT COUNT(*) FROM nullcomp WHERE val IS NULL
+----
+1
+
+query I
+SELECT COUNT(*) FROM nullcomp WHERE val IS NOT NULL
+----
+2
+
+statement ok
+DROP TABLE nullcomp
+
+# ----- Division edge cases -----
+
+statement ok
+CREATE TABLE division (a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO division VALUES (10, 3)
+
+statement ok
+INSERT INTO division VALUES (10, 0)
+
+statement ok
+INSERT INTO division VALUES (0, 10)
+
+statement ok
+INSERT INTO division VALUES (0, 0)
+
+query R rowsort
+SELECT a / b FROM division WHERE b != 0
+----
+0
+3
+
+query R rowsort
+SELECT a / b FROM division WHERE b != 0 AND a != 0
+----
+3
+
+statement ok
+DROP TABLE division
+
+# ----- ORDER BY with NULL -----
+
+statement ok
+CREATE TABLE nullorder (id INTEGER PRIMARY KEY, val INTEGER)
+
+statement ok
+INSERT INTO nullorder VALUES (1, 3)
+
+statement ok
+INSERT INTO nullorder VALUES (2, NULL)
+
+statement ok
+INSERT INTO nullorder VALUES (3, 1)
+
+statement ok
+INSERT INTO nullorder VALUES (4, NULL)
+
+query I
+SELECT val FROM nullorder ORDER BY val
+----
+NULL
+NULL
+1
+3
+
+query I
+SELECT val FROM nullorder ORDER BY val DESC
+----
+3
+1
+NULL
+NULL
+
+statement ok
+DROP TABLE nullorder
+
+# ----- Duplicate handling -----
+
+statement ok
+CREATE TABLE dups (id INTEGER, val TEXT)
+
+statement ok
+INSERT INTO dups VALUES (1, 'a')
+
+statement ok
+INSERT INTO dups VALUES (1, 'a')
+
+statement ok
+INSERT INTO dups VALUES (1, 'a')
+
+statement ok
+INSERT INTO dups VALUES (2, 'b')
+
+query I
+SELECT COUNT(*) FROM dups
+----
+4
+
+query I rowsort
+SELECT DISTINCT id FROM dups
+----
+1
+2
+
+query I
+SELECT COUNT(DISTINCT id) FROM dups
+----
+2
+
+statement ok
+DROP TABLE dups
+
+# ----- Boolean expressions -----
+
+statement ok
+CREATE TABLE bools (id INTEGER PRIMARY KEY, a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO bools VALUES (1, 1, 1)
+
+statement ok
+INSERT INTO bools VALUES (2, 1, 0)
+
+statement ok
+INSERT INTO bools VALUES (3, 0, 1)
+
+statement ok
+INSERT INTO bools VALUES (4, 0, 0)
+
+query III rowsort
+SELECT id, a AND b, a OR b FROM bools
+----
+1  1  1
+2  0  1
+3  0  1
+4  0  0
+
+statement ok
+DROP TABLE bools

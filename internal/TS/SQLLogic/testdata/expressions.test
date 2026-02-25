@@ -1,0 +1,308 @@
+# expressions.test - Expression and operator tests
+
+# ----- Setup -----
+
+statement ok
+CREATE TABLE nums (a INTEGER, b INTEGER, c REAL)
+
+statement ok
+INSERT INTO nums VALUES (10, 5, 2.5)
+
+statement ok
+INSERT INTO nums VALUES (20, 3, 4.0)
+
+statement ok
+INSERT INTO nums VALUES (30, 10, 1.5)
+
+statement ok
+INSERT INTO nums VALUES (-5, 2, 3.0)
+
+statement ok
+INSERT INTO nums VALUES (NULL, 5, NULL)
+
+# ----- Arithmetic operators -----
+
+query I rowsort
+SELECT a + b FROM nums WHERE a IS NOT NULL
+----
+15
+23
+40
+-3
+
+query I rowsort
+SELECT a - b FROM nums WHERE a IS NOT NULL
+----
+5
+17
+20
+-7
+
+query I rowsort
+SELECT a * b FROM nums WHERE a IS NOT NULL
+----
+-10
+50
+60
+300
+
+query R rowsort
+SELECT a / b FROM nums WHERE a IS NOT NULL AND b != 0
+----
+2
+6
+3
+-2
+
+# ----- Modulo -----
+
+query I rowsort
+SELECT a % b FROM nums WHERE a IS NOT NULL AND b != 0
+----
+0
+2
+0
+-1
+
+# ----- Comparison operators -----
+
+query I rowsort
+SELECT a FROM nums WHERE a > 15
+----
+20
+30
+
+query I rowsort
+SELECT a FROM nums WHERE a >= 10
+----
+10
+20
+30
+
+query I rowsort
+SELECT a FROM nums WHERE a < 10
+----
+-5
+
+query I rowsort
+SELECT a FROM nums WHERE a <= 10
+----
+10
+-5
+
+query I rowsort
+SELECT a FROM nums WHERE a = 20
+----
+20
+
+query I rowsort
+SELECT a FROM nums WHERE a != 20 AND a IS NOT NULL
+----
+10
+30
+-5
+
+# ----- Logical operators -----
+
+query I rowsort
+SELECT a FROM nums WHERE a > 0 AND b > 3
+----
+10
+30
+
+query I rowsort
+SELECT a FROM nums WHERE a > 20 OR b < 3
+----
+-5
+30
+
+query I rowsort
+SELECT a FROM nums WHERE NOT (a > 20) AND a IS NOT NULL
+----
+10
+20
+-5
+
+# ----- BETWEEN -----
+
+query I rowsort
+SELECT a FROM nums WHERE a BETWEEN 5 AND 25
+----
+10
+20
+
+query I rowsort
+SELECT a FROM nums WHERE a NOT BETWEEN 5 AND 25
+----
+30
+-5
+
+# ----- NULL handling in expressions -----
+
+query I
+SELECT a + NULL FROM nums WHERE a = 10
+----
+NULL
+
+query I
+SELECT NULL + b FROM nums WHERE a = 10
+----
+NULL
+
+query I
+SELECT a FROM nums WHERE a IS NULL
+----
+NULL
+
+query I rowsort
+SELECT a FROM nums WHERE a IS NOT NULL
+----
+10
+20
+30
+-5
+
+# ----- CASE expressions -----
+
+query T rowsort
+SELECT CASE WHEN a > 20 THEN 'big' WHEN a > 0 THEN 'medium' ELSE 'small' END FROM nums WHERE a IS NOT NULL
+----
+big
+medium
+medium
+small
+
+query I rowsort
+SELECT CASE a WHEN 10 THEN 1 WHEN 20 THEN 2 WHEN 30 THEN 3 ELSE 0 END FROM nums WHERE a IS NOT NULL
+----
+1
+2
+3
+0
+
+# ----- COALESCE and NULLIF -----
+
+query II rowsort
+SELECT a, COALESCE(a, 0) FROM nums
+----
+-5   -5
+10   10
+20   20
+30   30
+NULL  0
+
+query II rowsort
+SELECT b, NULLIF(b, 5) FROM nums
+----
+2   2
+3   3
+5   NULL
+5   NULL
+10  10
+
+# ----- ABS function -----
+
+query I rowsort
+SELECT ABS(a) FROM nums WHERE a IS NOT NULL
+----
+5
+10
+20
+30
+
+# ----- ROUND function -----
+
+query R rowsort
+SELECT ROUND(c, 1) FROM nums WHERE c IS NOT NULL
+----
+1.5
+2.5
+3
+4
+
+# ----- String operations -----
+
+statement ok
+CREATE TABLE strings (s TEXT)
+
+statement ok
+INSERT INTO strings VALUES ('hello')
+
+statement ok
+INSERT INTO strings VALUES ('world')
+
+statement ok
+INSERT INTO strings VALUES ('hello')
+
+statement ok
+INSERT INTO strings VALUES (NULL)
+
+query T rowsort
+SELECT UPPER(s) FROM strings WHERE s IS NOT NULL
+----
+HELLO
+HELLO
+WORLD
+
+query T rowsort
+SELECT LOWER(s) FROM strings WHERE s IS NOT NULL
+----
+hello
+hello
+world
+
+query I rowsort
+SELECT LENGTH(s) FROM strings WHERE s IS NOT NULL
+----
+5
+5
+5
+
+query T rowsort
+SELECT s || '!' FROM strings WHERE s IS NOT NULL
+----
+hello!
+hello!
+world!
+
+# ----- LIKE and GLOB -----
+
+query T rowsort
+SELECT s FROM strings WHERE s LIKE 'h%'
+----
+hello
+hello
+
+query T rowsort
+SELECT s FROM strings WHERE s LIKE '%o'
+----
+hello
+hello
+
+query T rowsort
+SELECT s FROM strings WHERE s GLOB '*o'
+----
+hello
+hello
+
+# ----- IN with value list -----
+
+query I rowsort
+SELECT a FROM nums WHERE a IN (10, 20, 30)
+----
+10
+20
+30
+
+query I rowsort
+SELECT a FROM nums WHERE a NOT IN (10, 20, 30)
+----
+-5
+
+# ----- Cleanup -----
+
+statement ok
+DROP TABLE nums
+
+statement ok
+DROP TABLE strings

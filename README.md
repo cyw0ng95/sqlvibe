@@ -6,13 +6,16 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v0.8.9** | 2026-02-22 | CLI tools (sv-cli, sv-check), Info APIs, Integrity check |
+| **v0.9.17** | 2026-02-26 | JSON Extension Enhancement: Table-valued functions (json_each, json_tree), Aggregates (json_group_array, json_group_object), JSONB format |
 
 ## Features
 
 - **SQL:1999 compatibility** — 84+ test suites passing (added F870/F871/F872)
 - **In-memory databases** — `:memory:` URI for fast, ephemeral storage
 - **Comprehensive SQL**: DDL, DML, JOINs, Subqueries, Aggregates, Window functions (ROW_NUMBER/RANK/LAG/LEAD/NTILE/PERCENT_RANK/CUME_DIST), CTEs (recursive), VALUES derived tables, ANY/ALL subqueries, GROUP_CONCAT, etc.
+- **Extension Framework** — Pluggable extensions via build tags (`SVDB_EXT_JSON`, `SVDB_EXT_MATH`); query via `sqlvibe_extensions` virtual table
+- **JSON Extension** — Full SQLite JSON1-compatible functions: `json()`, `json_array()`, `json_extract()`, `json_object()`, `json_set()`, `json_type()`, `json_length()`, and more (requires `-tags SVDB_EXT_JSON`)
+- **Math Extension** — Advanced math functions: `POWER()`, `SQRT()`, `MOD()`, trigonometric, exponential (requires `-tags SVDB_EXT_MATH`)
 - **VIEW Support** — `CREATE VIEW`, `DROP VIEW`, query views like tables, INSTEAD OF triggers for updatable views
 - **VACUUM** — `VACUUM` (in-place compaction) and `VACUUM INTO 'path'` (snapshot to file)
 - **ANALYZE** — `ANALYZE` collects table/index statistics accessible via `sqlite_stat1`
@@ -43,6 +46,46 @@ db.Exec(`INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob')`)
 
 // Query
 rows, _ := db.Query(`SELECT name FROM users WHERE id > 0`)
+
+// Parameterized queries (safe against SQL injection)
+db.ExecWithParams(`INSERT INTO users VALUES (?, ?)`, []interface{}{int64(3), "Carol"})
+rows, _ = db.QueryWithParams(`SELECT name FROM users WHERE id = ?`, []interface{}{int64(3)})
+
+// Named parameters
+db.ExecNamed(`INSERT INTO users VALUES (:id, :name)`, map[string]interface{}{"id": int64(4), "name": "Dave"})
+rows, _ = db.QueryNamed(`SELECT * FROM users WHERE name = :name`, map[string]interface{}{"name": "Dave"})
+
+// Prepared statements with parameter binding
+stmt, _ := db.Prepare(`SELECT name FROM users WHERE id = ?`)
+defer stmt.Close()
+rows, _ = stmt.Query(int64(1)) // binds ? = 1
+```
+
+## Extension Framework (v0.9.0)
+
+Extensions are compiled in via build tags:
+
+```bash
+# Default (no extensions)
+go build ./...
+
+# With JSON extension (SQLite JSON1-compatible)
+go build -tags "SVDB_EXT_JSON" ./...
+
+# With Math extension
+go build -tags "SVDB_EXT_MATH" ./...
+
+# Both
+go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" ./...
+```
+
+Query which extensions are loaded:
+
+```sql
+SELECT * FROM sqlvibe_extensions;
+-- name | description       | functions
+-- json | JSON extension    | json,json_array,json_extract,...
+-- math | Math extension    | POWER,SQRT,MOD,...
 ```
 
 ## Architecture
@@ -51,62 +94,215 @@ rows, _ := db.Query(`SELECT name FROM users WHERE id > 0`)
 - **Query Processing**: Tokenizer → Parser → Optimizer → Compiler
 - **Execution**: Register-based VM with vectorized execution
 - **Memory**: Arena allocator + sync.Pool for zero-GC query execution
+- **Extensions**: Build-tag controlled, statically linked, auto-registered at startup
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.8.9)
+## Performance (v0.9.12)
 
-Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3x` (3 runs averaged).
-**Methodology**: both sides iterate all result rows end-to-end for a fair comparison
-(`go test ./internal/TS/Benchmark/... -bench=. -benchtime=3x`).
-Results may vary on different hardware; relative ordering reflects the algorithmic advantages
-of sqlvibe's in-memory columnar engine.
+Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3s`.
+**Methodology**: the result cache is cleared before each sqlvibe iteration via
+`db.ClearResultCache()` so actual per-query execution cost is measured (not cache-hit
+latency). SQLite's `database/sql` driver reuses prepared statements across iterations.
+Both sides iterate all result rows end-to-end.
+(`go test ./internal/TS/Benchmark/... -bench=BenchmarkFair_ -benchtime=3s`).
+Results may vary on different hardware.
 
 ### Query Performance (1 000-row table)
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| SELECT all | 22 µs | 590 µs | **sqlvibe 27x faster** |
-| SELECT WHERE | 101 µs | 120 µs | **sqlvibe 1.2x faster** |
-| ORDER BY | 72 µs | 328 µs | **sqlvibe 4.5x faster** |
-| COUNT(*) | 4.4 µs | 28 µs | **sqlvibe 6.4x faster** |
-| SUM | 3.9 µs | 100 µs | **sqlvibe 26x faster** |
-| GROUP BY | 50 µs | 564 µs | **sqlvibe 11x faster** |
-| JOIN | 182 µs | 275 µs | **sqlvibe 1.5x faster** |
+| SELECT all (3 cols) | 60 µs | 566 µs | **sqlvibe 9.4x faster** |
+| SELECT WHERE | 273 µs | 91 µs | SQLite 3.0x faster |
+| ORDER BY (500 rows) | 194 µs | 297 µs | **sqlvibe 1.5x faster** |
+| COUNT(*) | 6.6 µs | 5.3 µs | roughly equal |
+| SUM | 18.6 µs | 67 µs | **sqlvibe 3.6x faster** |
+| GROUP BY | 137 µs | 492 µs | **sqlvibe 3.6x faster** |
+| JOIN (100×500 rows) | 557 µs | 233 µs | SQLite 2.4x faster |
+| BETWEEN filter | 460 µs | 183 µs | SQLite 2.5x faster |
 
 ### DML Operations
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| INSERT single | 9.6 µs | 50 µs | **sqlvibe 5x faster** |
-| INSERT 100 (batch) | 311 µs | 741 µs | **sqlvibe 2.4x faster** |
+| INSERT single | 6.5 µs | 6.2 µs | roughly equal |
+| INSERT 100 (batch) | 564 µs | 572 µs | roughly equal |
+| INSERT OR REPLACE | 40 µs | — | conflict + delete + re-insert |
+| INSERT OR IGNORE | 9.7 µs | — | conflict silently skipped |
 
 ### Special-case Performance
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| Result cache hit (repeated query) | 2 µs | 190 µs | **sqlvibe 95x faster** |
-| TOP-N LIMIT 10 (10K rows) | 571 µs | 1.23 ms | **sqlvibe 2.2x faster** |
-| COUNT(*) via index (1K, PK table) | 84 µs | 30 µs | SQLite 2.8x faster |
-| Full scan + filter (10K, no index) | 1.87 ms | 1.52 ms | SQLite 1.2x faster |
+| Result cache hit (repeated query) | 1.5 µs | 566 µs | **sqlvibe 377x faster** |
+| LIMIT 10 no ORDER BY (10K rows) | 20.2 µs | — | fast early-termination path |
+| Expression bytecode eval | 99 ns | — | single-dispatch expression evaluation |
 
-> **Note**: sqlvibe is an in-memory engine optimised for query throughput on small-to-medium
-> tables. SQLite's B-Tree index scans remain faster for COUNT(*) on indexed columns, and raw
-> sequential scans on very large tables benefit from SQLite's lower per-row overhead.
+### Parameterized Query Performance (v0.9.11)
+
+| Operation | sqlvibe | Notes |
+|-----------|--------:|-------|
+| `QueryWithParams` (WHERE id = ?) | 254 µs | includes `formatParamSQL` substitution |
+| `ExecWithParams` (INSERT single) | 3.0 µs | ~46% overhead vs plain INSERT |
+
+### Transaction & Savepoint Performance (v0.9.6)
+
+| Operation | sqlvibe | Notes |
+|-----------|--------:|-------|
+| SAVEPOINT + ROLLBACK TO cycle | 79 µs | snapshot capture + restore |
+| SAVEPOINT + RELEASE cycle | 54 µs | snapshot capture + discard |
+| INSERT with UNIQUE constraint | 4.7 µs | ~24% overhead vs plain INSERT |
+| INSERT with NOT NULL constraint | 3.8 µs | negligible overhead |
+
+### SIMD Vectorization (v0.9.3)
+
+| Operation | 256 elems | 1 024 elems | 4 096 elems |
+|-----------|----------:|------------:|------------:|
+| VectorSumInt64 | 70 ns | 251 ns | 988 ns |
+| VectorSumFloat64 | 69 ns | 249 ns | 969 ns |
+| VectorAddInt64 (1 024) | — | 567 ns | — |
+| VectorMulFloat64 (1 024) | — | 503 ns | — |
+
+4-way loop unrolling enables the Go compiler to auto-vectorize on amd64/arm64 (SSE2/NEON).
+
+### Dispatch Table (v0.9.3)
+
+| Opcode group | Before | After (v0.9.3) |
+|--------------|-------:|---------------:|
+| Opcodes in dispatch table | 10 | 22 |
+
+v0.9.3 extends the dispatch table to 22 opcodes: comparison operators (Eq/Ne/Lt/Le/Gt/Ge)
+and extended string ops (Trim/LTrim/RTrim/Replace/Instr) now bypass the large switch statement.
+
+### v0.9.12 database/sql Driver
+
+| Feature | Description |
+|---------|-------------|
+| `sql.Open("sqlvibe", path)` | Standard Go `database/sql` entry point |
+| `db.Exec` / `db.Query` | DDL + DML via stdlib interface |
+| `db.QueryRow` + scan | Typed scan into `int64`, `float64`, `string`, `[]byte`, `sql.NullString` |
+| `db.Prepare` + `stmt.Query` | Prepared statements with parameter binding |
+| `db.Begin` / `tx.Commit` / `tx.Rollback` | Full transaction support using `BEGIN`/`COMMIT`/`ROLLBACK` SQL |
+| `?` positional params | `db.Exec(sql, arg1, arg2)` — bound via `database/sql` `driver.NamedValue` |
+| `sql.Named("name", val)` | Named params routed to `ExecNamed`/`QueryNamed` |
+| `context.Context` cancellation | `ExecContext`/`QueryContext`/`BeginTx` respect `ctx.Done()` |
+| Type round-trips | nil → NULL, int64, float64, string, []byte, bool → int64 |
+
+> **Analysis v0.9.12**: The `driver/` package adds zero overhead to core query throughput —
+> all existing benchmarks remain identical to v0.9.11 (SELECT all 9.4× faster, SUM 3.6×,
+> GROUP BY 3.6×, result cache 377× faster). The driver layer is a thin adapter: `Conn.QueryContext`
+> spawns one goroutine per query to support context cancellation; for non-cancelled queries the
+> goroutine completes synchronously before the channel receive returns. `driver.Rows.Next`
+> delegates directly to `sqlvibe.Rows.Scan` with `*interface{}` pointers for zero-copy value
+> extraction. The `database/sql` connection pool works correctly with `:memory:` databases when
+> `db.SetMaxOpenConns(1)` is used, ensuring all operations share the same in-memory instance.
+
+### v0.9.11 SQL Compatibility Features
+
+| Feature | Description |
+|---------|-------------|
+| `?` positional params | `db.ExecWithParams(sql, []interface{}{...})` — binds `?` placeholders safely |
+| `:name` / `@name` named params | `db.ExecNamed(sql, map[string]interface{}{...})` / `db.QueryNamed(...)` |
+| `Prepare` + param binding | `stmt, _ := db.Prepare(sql); stmt.Query(param1, param2)` |
+| SQL injection prevention | String params single-quote escaped; no raw SQL expansion |
+| `nil` → NULL | `nil` interface value binds as SQL `NULL` |
+| `[]byte` → BLOB | Byte slices encoded as `x'deadbeef'` hex literals |
+
+> **Analysis v0.9.11**: Core query throughput is unchanged from v0.9.6 — SELECT all at 9.4×
+> faster, SUM at 3.6× faster, GROUP BY at 3.6× faster, result cache at 377× faster.
+> The new parameterized query path (`ExecWithParams`/`QueryWithParams`) adds a lightweight
+> SQL string scan (`formatParamSQL`) that substitutes bound values as SQL-standard literals,
+> preventing injection at the formatting layer. Single INSERT via `ExecWithParams` runs at
+> ~3 µs (about 46% over plain INSERT) due to the substitution pass; SELECT WHERE with `?`
+> binding runs at ~254 µs, comparable to unparameterized `QueryWithParams` with a WHERE clause.
+
+### v0.9.6 SQL Compatibility Features
+
+| Feature | Description |
+|---------|-------------|
+| SAVEPOINT | `SAVEPOINT name` — create named savepoint within transaction |
+| RELEASE SAVEPOINT | `RELEASE [SAVEPOINT] name` — discard savepoint, keep changes |
+| ROLLBACK TO SAVEPOINT | `ROLLBACK TO [SAVEPOINT] name` — revert to savepoint, keep it on stack |
+| Nested Savepoints | Multiple savepoints stacked within a single transaction |
+| UNIQUE (inline) | `col TEXT UNIQUE` — inline column-level unique constraint enforced at insert |
+| UNIQUE (table-level) | `UNIQUE(col1, col2)` — composite unique constraint enforced at insert |
+| NOT NULL (verified) | `col TEXT NOT NULL` — NULL rejection on INSERT/UPDATE |
+| REFERENCES (verified) | `col INTEGER REFERENCES parent(id)` — FK constraint with ON DELETE/UPDATE |
+| ON DELETE CASCADE (verified) | Deleting parent row cascades to child rows |
+| ON DELETE RESTRICT (verified) | Prevents parent deletion when child rows exist |
+| BEGIN (verified) | `BEGIN [DEFERRED\|IMMEDIATE\|EXCLUSIVE]` — start transaction |
+| COMMIT (verified) | `COMMIT` — persist transaction changes |
+| ROLLBACK (verified) | `ROLLBACK` — revert all transaction changes |
+
+> **Analysis**: sqlvibe v0.9.6 adds SAVEPOINT support (create/release/rollback-to) and fixes
+> UNIQUE constraint enforcement for inline and table-level UNIQUE declarations. Core query
+> throughput is stable — SELECT all at 9.4× faster, SUM at 3.5× faster, GROUP BY at 3.7×
+> faster, and result cache at 379× faster. The UNIQUE constraint check adds ~24% overhead to
+> INSERT (4.7 µs vs 3.8 µs without), a single index lookup per unique column. SQLite retains
+> its advantage for filtered WHERE scans and range queries (indexed lookup vs. full-table scan).
+
+### v0.9.5 SQL Compatibility Features
+
+| Feature | Description |
+|---------|-------------|
+| REINDEX | `REINDEX` / `REINDEX table` / `REINDEX index` — rebuild all or named indexes |
+| SELECT INTO | `SELECT col1, col2 INTO newtable FROM src [WHERE ...]` — create table from query |
+| Window Functions (verified) | `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()` with `OVER (PARTITION BY ... ORDER BY ...)` |
+| CTE / WITH (verified) | Non-recursive and recursive `WITH ... AS (SELECT ...)` fully functional |
+| UPSERT (verified) | `INSERT ... ON CONFLICT (col) DO NOTHING / DO UPDATE SET ...` |
+| EXPLAIN QUERY PLAN (verified) | `EXPLAIN QUERY PLAN SELECT ...` shows index usage and scan strategy |
+| Multi-VALUES INSERT (verified) | `INSERT INTO t VALUES (...), (...), (...)` batch literal insert |
+| ANALYZE (verified) | `ANALYZE [table]` collects row-count statistics for the optimizer |
+| VACUUM (verified) | `VACUUM` compact in-place; `VACUUM INTO 'path'` backup variant |
+| AUTOINCREMENT (verified) | `INTEGER PRIMARY KEY AUTOINCREMENT` monotonically increasing IDs |
+| LIKE ESCAPE (verified) | `expr LIKE pattern ESCAPE '\'` — custom escape character |
+
+### v0.9.4 SQL Compatibility Features
+
+| Feature | Description |
+|---------|-------------|
+| Partial Index | `CREATE INDEX ... WHERE expr` — index filtered by a predicate |
+| Expression Index | `CREATE INDEX ON t(LOWER(col))` — index on computed expression |
+| RETURNING clause | `INSERT/UPDATE/DELETE ... RETURNING col1, col2, *` |
+| UPDATE ... FROM | `UPDATE t SET ... FROM t2 WHERE ...` (PostgreSQL-style) |
+| DELETE ... USING | `DELETE FROM t USING t2 WHERE ...` (PostgreSQL-style) |
+| MATCH operator | `expr MATCH pattern` — case-insensitive substring matching |
+| COLLATE support | `COLLATE NOCASE / RTRIM / BINARY` in column defs and expressions |
+| CHECK (verified) | `CHECK(expr)` constraints enforced on INSERT and UPDATE |
+| GLOB (verified) | `expr GLOB pattern` case-sensitive wildcard matching (`*`, `?`, `[...]`) |
+| ALTER TABLE (verified) | `ADD COLUMN` and `RENAME TO` fully functional |
 
 ### Key Optimizations
 
 - **Columnar storage**: Fast full table scans via vectorised SIMD-friendly layouts
 - **Hybrid row/column**: Adaptive switching for best performance per workload
-- **Result cache**: Near-zero latency for repeated identical queries (FNV-1a keyed)
-- **Predicate pushdown**: WHERE conditions evaluated before VM for fast filtered scans
+- **Result cache**: Near-zero latency for repeated identical queries (FNV-1a keyed, 381x vs SQLite)
+- **Predicate pushdown**: WHERE/BETWEEN conditions evaluated before VM for fast filtered scans
 - **Plan cache**: Skip tokenise/parse/codegen for cached query plans
 - **Batch INSERT fast path**: Literal multi-row INSERT bypasses VM entirely
+- **Fast Hash JOIN**: Integer/string join keys bypass `fmt.Sprintf` allocation (v0.9.0)
+- **BETWEEN pushdown**: Range predicates pushed to Go layer before VM (v0.9.0)
+- **Early termination for LIMIT**: VM halts after collecting N rows when no ORDER BY (v0.9.0)
+- **AND index lookup**: Compound `WHERE col=val AND cond` uses secondary index (v0.9.0)
+- **LIMIT-aware pre-allocation**: Flat result buffer capped at LIMIT rows to avoid over-allocation (v0.9.0)
+- **Pre-sized result slices**: Column-name slices pre-allocated to reduce GC pressure (v0.9.0)
+- **Covering Index**: `IndexMeta.CoversColumns` enables index-only scans with zero table lookup (v0.9.1)
+- **Column Projection**: `ScanProjected`/`ScanProjectedWhere` materialise only required columns (v0.9.1)
+- **Index Skip Scan**: `SkipScan` enables range scans on non-leading index columns (v0.9.1)
+- **Slab Allocator**: Bump-pointer slab with `sync.Pool` for small objects reduces GC pressure (v0.9.1)
+- **Prepared Statement Pool**: LRU-evicting `StatementPool` caches compiled plans for parameterized queries (v0.9.1)
+- **Direct Threaded VM**: Dispatch table (22 opcodes: arith + comparison + string) reduces branch misprediction (v0.9.1–v0.9.3)
+- **Expression Bytecode**: Compact `ExprBytecode` stack machine for single-call expression evaluation (v0.9.1)
+- **Direct Compiler**: `DirectCompiler` with fast-path detection for simple SELECT patterns (v0.9.1)
+- **bytes.Compare**: `[]byte` comparison uses stdlib `bytes.Compare` (v0.9.2)
+- **SIMD Vectorization**: 4-way unrolled batch ops for int64/float64 (VectorSum/Add/Sub/Mul/Min/Max) (v0.9.3)
 - **sync.Pool allocation reduction**: Pooled schema maps reduce per-query allocations
+- **VM constant folding**: Arithmetic on compile-time constants folded at compile time
+- **Strength reduction**: `x*1` → copy, `x*0` → 0, `x*2` → add (VM optimizer)
 
 ## SQL:1999 Compatibility
 
-84+ test suites passing
+89+ test suites passing
 
 ## Building
 
@@ -116,6 +312,36 @@ go test ./...
 go test ./internal/TS/Benchmark/... -bench . -benchmem
 ```
 
+## Build Config Flags
+
+Configure extensions at build time using `-tags`:
+
+| Flag | Extensions | Description |
+|------|------------|-------------|
+| `SVDB_EXT_JSON` | JSON extension | SQLite JSON1 functions |
+| `SVDB_EXT_MATH` | Math extension | ABS, CEIl, FLOOR, ROUND, POWER, SQRT, MOD, EXP, LN, LOG, etc. |
+
+### Examples
+
+```bash
+# With JSON extension
+go build -tags "SVDB_EXT_JSON" -o sqlvibe .
+
+# With Math extension
+go build -tags "SVDB_EXT_MATH" -o sqlvibe .
+
+# With multiple extensions
+go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
+```
+
+### Checking Extensions
+
+```sql
+-- Query loaded extensions
+SELECT * FROM sqlvibe_extensions;
+```
+
 ## License
 
 See LICENSE file.
+

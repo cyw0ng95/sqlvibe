@@ -27,6 +27,7 @@ type SelectStmt struct {
 	SetOpAll   bool
 	SetOpRight *SelectStmt
 	CTEs       []CTEClause // WITH ... AS (...) clauses
+	IntoTable  string      // non-empty for SELECT ... INTO tablename
 }
 
 // CTEClause represents a single CTE definition: name AS (SELECT ...)
@@ -46,13 +47,15 @@ type OrderBy struct {
 }
 
 type TableRef struct {
-	Schema    string
-	Name      string
-	Alias     string
-	Join      *Join
-	Subquery  *SelectStmt // derived table: FROM (SELECT ...) AS alias
-	Values    [][]Expr    // non-nil for VALUES table constructor
-	ValueCols []string    // column names from AS t(col1, col2)
+	Schema        string
+	Name          string
+	Alias         string
+	Join          *Join
+	Subquery      *SelectStmt // derived table: FROM (SELECT ...) AS alias
+	Values        [][]Expr    // non-nil for VALUES table constructor
+	ValueCols     []string    // column names from AS t(col1, col2)
+	TableFunc     *FuncCall   // non-nil for table-valued function: FROM json_each(...)
+	TableFuncCols []string    // column names from AS t(col1, col2) for table func
 }
 
 func (t *TableRef) NodeType() string { return "TableRef" }
@@ -80,14 +83,18 @@ type InsertStmt struct {
 	UseDefaults bool        // True when using DEFAULT VALUES
 	SelectQuery *SelectStmt // Non-nil for INSERT ... SELECT
 	OnConflict  *OnConflict // nil if no ON CONFLICT clause
+	OrAction    string      // "REPLACE", "IGNORE", "ABORT", "FAIL", "ROLLBACK" or ""
+	Returning   []Expr      // nil if no RETURNING clause
 }
 
 func (i *InsertStmt) NodeType() string { return "InsertStmt" }
 
 type UpdateStmt struct {
-	Table string
-	Set   []SetClause
-	Where Expr
+	Table     string
+	Set       []SetClause
+	Where     Expr
+	From      *TableRef // nil if no FROM clause (UPDATE ... FROM t2)
+	Returning []Expr    // nil if no RETURNING clause
 }
 
 func (u *UpdateStmt) NodeType() string { return "UpdateStmt" }
@@ -98,8 +105,10 @@ type SetClause struct {
 }
 
 type DeleteStmt struct {
-	Table string
-	Where Expr
+	Table     string
+	Where     Expr
+	Using     []string // nil if no USING clause
+	Returning []Expr   // nil if no RETURNING clause
 }
 
 func (d *DeleteStmt) NodeType() string { return "DeleteStmt" }
@@ -108,11 +117,11 @@ func (d *DeleteStmt) NodeType() string { return "DeleteStmt" }
 type ReferenceAction int
 
 const (
-	ReferenceNoAction  ReferenceAction = iota // NO ACTION (default)
-	ReferenceRestrict                         // RESTRICT
-	ReferenceCascade                          // CASCADE
-	ReferenceSetNull                          // SET NULL
-	ReferenceSetDefault                       // SET DEFAULT
+	ReferenceNoAction   ReferenceAction = iota // NO ACTION (default)
+	ReferenceRestrict                          // RESTRICT
+	ReferenceCascade                           // CASCADE
+	ReferenceSetNull                           // SET NULL
+	ReferenceSetDefault                        // SET DEFAULT
 )
 
 // ForeignKeyConstraint represents a FOREIGN KEY constraint.
@@ -129,32 +138,35 @@ type CreateTableStmt struct {
 	Columns     []ColumnDef
 	IfNotExists bool
 	Temporary   bool
-	AsSelect    *SelectStmt           // CREATE TABLE ... AS SELECT
-	TableChecks []Expr                // table-level CHECK constraints
+	AsSelect    *SelectStmt            // CREATE TABLE ... AS SELECT
+	TableChecks []Expr                 // table-level CHECK constraints
 	ForeignKeys []ForeignKeyConstraint // table-level FOREIGN KEY constraints
+	UniqueKeys  [][]string             // table-level UNIQUE(col, ...) constraints
 }
 
 func (c *CreateTableStmt) NodeType() string { return "CreateTableStmt" }
 
 type ColumnDef struct {
-	Name          string
-	Type          string
-	PrimaryKey    bool
-	NotNull       bool
-	Default       Expr
-	Check         Expr                  // CHECK constraint expression
-	IsAutoincrement bool               // AUTOINCREMENT
-	ForeignKey    *ForeignKeyConstraint // inline REFERENCES clause
+	Name            string
+	Type            string
+	PrimaryKey      bool
+	NotNull         bool
+	Unique          bool // UNIQUE constraint on this column
+	Default         Expr
+	Check           Expr                  // CHECK constraint expression
+	IsAutoincrement bool                  // AUTOINCREMENT
+	ForeignKey      *ForeignKeyConstraint // inline REFERENCES clause
+	Collation       string                // COLLATE name (e.g., NOCASE, RTRIM, BINARY)
 }
 
 // CreateTriggerStmt represents CREATE TRIGGER
 type CreateTriggerStmt struct {
 	Name        string
 	TableName   string
-	Time        string   // "BEFORE", "AFTER", "INSTEAD OF"
-	Event       string   // "INSERT", "UPDATE", "DELETE"
-	Columns     []string // for UPDATE OF col1, col2
-	When        Expr     // WHEN condition (nil if absent)
+	Time        string    // "BEFORE", "AFTER", "INSTEAD OF"
+	Event       string    // "INSERT", "UPDATE", "DELETE"
+	Columns     []string  // for UPDATE OF col1, col2
+	When        Expr      // WHEN condition (nil if absent)
 	Body        []ASTNode // trigger body statements
 	IfNotExists bool
 }
@@ -189,10 +201,13 @@ func (d *DropViewStmt) NodeType() string { return "DropViewStmt" }
 
 // AlterTableStmt represents ALTER TABLE
 type AlterTableStmt struct {
-	Table   string
-	Action  string // "ADD_COLUMN" or "RENAME_TO"
-	Column  *ColumnDef
-	NewName string
+	Table          string
+	Action         string // "ADD_COLUMN", "RENAME_TO", "DROP_COLUMN", "RENAME_COLUMN", "ADD_CONSTRAINT"
+	Column         *ColumnDef
+	NewName        string
+	ConstraintName string   // for ADD CONSTRAINT
+	CheckExpr      Expr     // for ADD CONSTRAINT CHECK
+	UniqueColumns  []string // for ADD CONSTRAINT UNIQUE
 }
 
 func (a *AlterTableStmt) NodeType() string { return "AlterTableStmt" }
@@ -208,8 +223,10 @@ type CreateIndexStmt struct {
 	Name        string
 	Table       string
 	Columns     []string
+	Exprs       []Expr // parallel to Columns; non-nil entry means expression index on that slot
 	Unique      bool
 	IfNotExists bool
+	WhereExpr   Expr // nil if no WHERE clause (partial index)
 }
 
 func (c *CreateIndexStmt) NodeType() string { return "CreateIndexStmt" }
@@ -246,14 +263,25 @@ type CommitStmt struct {
 func (c *CommitStmt) NodeType() string { return "CommitStmt" }
 
 type RollbackStmt struct {
+	Savepoint string // if non-empty: ROLLBACK TO [SAVEPOINT] sp_name
 }
 
 func (r *RollbackStmt) NodeType() string { return "RollbackStmt" }
 
-// BackupStmt represents:
-//
-//	BACKUP DATABASE TO 'path'
-//	BACKUP INCREMENTAL TO 'path'
+type SavepointStmt struct {
+	Name string
+}
+
+func (s *SavepointStmt) NodeType() string { return "SavepointStmt" }
+
+type ReleaseSavepointStmt struct {
+	Name string
+}
+
+func (r *ReleaseSavepointStmt) NodeType() string { return "ReleaseSavepointStmt" }
+
+// BACKUP DATABASE TO 'path'
+// BACKUP INCREMENTAL TO 'path'
 type BackupStmt struct {
 	Incremental bool   // true for BACKUP INCREMENTAL, false for BACKUP DATABASE
 	DestPath    string // destination file path
@@ -274,6 +302,13 @@ type AnalyzeStmt struct {
 }
 
 func (a *AnalyzeStmt) NodeType() string { return "AnalyzeStmt" }
+
+// ReindexStmt represents REINDEX [table_or_index]
+type ReindexStmt struct {
+	Target string // empty = all indexes
+}
+
+func (r *ReindexStmt) NodeType() string { return "ReindexStmt" }
 
 type Expr interface {
 	exprNode()
@@ -337,7 +372,7 @@ type WindowOrderBy struct {
 
 // WindowFrame represents ROWS/RANGE BETWEEN frame spec
 type WindowFrame struct {
-	Type  string     // "ROWS" or "RANGE"
+	Type  string // "ROWS" or "RANGE"
 	Start FrameBound
 	End   FrameBound
 }
@@ -397,6 +432,23 @@ type CastExpr struct {
 
 func (e *CastExpr) exprNode() {}
 
+// CollateExpr represents expr COLLATE collation_name
+type CollateExpr struct {
+	Expr      Expr
+	Collation string
+}
+
+func (e *CollateExpr) exprNode() {}
+
+// PlaceholderExpr represents a query parameter: '?' (positional) or ':name'/'@name' (named).
+type PlaceholderExpr struct {
+	Positional bool   // true for ?, false for :name / @name
+	Name       string // ":foo" or "@foo"; empty for positional
+	Index      int    // 0-based positional index (filled during binding)
+}
+
+func (e *PlaceholderExpr) exprNode() {}
+
 type Parser struct {
 	tokens     []Token
 	pos        int
@@ -453,6 +505,10 @@ func (p *Parser) parseInternal() (ASTNode, error) {
 			return p.parseCommit()
 		case "ROLLBACK":
 			return p.parseRollback()
+		case "SAVEPOINT":
+			return p.parseSavepoint()
+		case "RELEASE":
+			return p.parseRelease()
 		case "ALTER":
 			return p.parseAlterTable()
 		case "WITH":
@@ -463,6 +519,10 @@ func (p *Parser) parseInternal() (ASTNode, error) {
 			return p.parseVacuum()
 		case "ANALYZE":
 			return p.parseAnalyze()
+		case "REINDEX":
+			return p.parseReindex()
+		case "VALUES":
+			return p.parseStandaloneValues()
 		}
 	case TokenExplain:
 		return p.parseExplain()
@@ -504,6 +564,34 @@ func (p *Parser) isEOF() bool {
 	return p.pos >= len(p.tokens) || p.current().Type == TokenEOF
 }
 
+// parseFuncArgList parses a parenthesized function argument list, consuming the parens.
+func (p *Parser) parseFuncArgList() ([]Expr, error) {
+	p.advance() // consume (
+	var args []Expr
+	for p.current().Type != TokenRightParen && !p.isEOF() {
+		argPos := p.pos
+		arg, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if p.pos == argPos {
+			break
+		}
+		if arg != nil {
+			args = append(args, arg)
+		}
+		if p.current().Type == TokenComma {
+			p.advance()
+		} else if p.current().Type != TokenRightParen {
+			break
+		}
+	}
+	if p.current().Type == TokenRightParen {
+		p.advance()
+	}
+	return args, nil
+}
+
 // parseTableRef parses a table reference which may be:
 //   - a regular table: tablename [AS alias]
 //   - a subquery: (SELECT ...) [AS alias]
@@ -524,14 +612,24 @@ func (p *Parser) parseTableRef() *TableRef {
 				p.advance() // consume (
 				var row []Expr
 				for !p.isEOF() && p.current().Type != TokenRightParen {
+					exprPos := p.pos
 					expr, e := p.parseExpr()
 					if e != nil {
 						p.parseError = e
 						return ref
 					}
+					// Safety: if parseExpr didn't advance, break to prevent infinite loop
+					if p.pos == exprPos {
+						break
+					}
+					if expr == nil {
+						break
+					}
 					row = append(row, expr)
 					if p.current().Type == TokenComma {
 						p.advance()
+					} else if p.current().Type != TokenRightParen {
+						break
 					}
 				}
 				if p.current().Type == TokenRightParen {
@@ -559,9 +657,16 @@ func (p *Parser) parseTableRef() *TableRef {
 			if p.current().Type == TokenLeftParen {
 				p.advance() // consume (
 				for !p.isEOF() && p.current().Type != TokenRightParen {
+					colPos := p.pos
 					if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
 						ref.ValueCols = append(ref.ValueCols, p.current().Literal)
 						p.advance()
+					} else {
+						// Safety: if didn't advance, break to prevent infinite loop
+						if p.pos == colPos {
+							break
+						}
+						break
 					}
 					if p.current().Type == TokenComma {
 						p.advance()
@@ -577,12 +682,50 @@ func (p *Parser) parseTableRef() *TableRef {
 		if err == nil {
 			ref.Subquery = subStmt
 		}
+		// Recovery: skip tokens until we find ) or EOF
+		for p.current().Type != TokenRightParen && p.current().Type != TokenEOF && p.current().Type != TokenSemicolon {
+			p.advance()
+		}
 		if p.current().Type == TokenRightParen {
-			p.advance() // consume )
+			p.advance()
 		}
 	} else {
 		ref.Name = p.current().Literal
 		p.advance()
+
+		// Check for table-valued function: name(args...) [AS alias]
+		if p.current().Type == TokenLeftParen {
+			args, err := p.parseFuncArgList()
+			if err != nil {
+				p.parseError = err
+				return ref
+			}
+			ref.TableFunc = &FuncCall{Name: ref.Name, Args: args}
+			ref.Name = ""
+			// Parse optional AS alias(cols)
+			if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+				p.advance()
+			}
+			if p.current().Type == TokenIdentifier || (p.current().Type == TokenKeyword) {
+				ref.Alias = p.current().Literal
+				p.advance()
+				// Optional column list: (col1, col2, ...)
+				if p.current().Type == TokenLeftParen {
+					p.advance()
+					for p.current().Type != TokenRightParen && !p.isEOF() {
+						ref.TableFuncCols = append(ref.TableFuncCols, p.current().Literal)
+						p.advance()
+						if p.current().Type == TokenComma {
+							p.advance()
+						}
+					}
+					if p.current().Type == TokenRightParen {
+						p.advance()
+					}
+				}
+			}
+			return ref
+		}
 
 		// Check for schema.table notation
 		if p.current().Type == TokenDot {
@@ -670,6 +813,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				return nil, err
 			}
 			if col == nil {
+				break
 			}
 
 			// Check for column alias: expr AS alias OR expr alias (implicit alias)
@@ -699,7 +843,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 				if p.current().Type == TokenKeyword {
 					lit := p.current().Literal
 					litUpper := strings.ToUpper(lit)
-					if litUpper == "FROM" || litUpper == "WHERE" || litUpper == "ORDER" || litUpper == "GROUP" || litUpper == "HAVING" || litUpper == "LIMIT" {
+					if litUpper == "FROM" || litUpper == "INTO" || litUpper == "WHERE" || litUpper == "ORDER" || litUpper == "GROUP" || litUpper == "HAVING" || litUpper == "LIMIT" {
 						break
 					}
 				}
@@ -707,6 +851,13 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 			}
 			p.advance()
 		}
+	}
+
+	// Handle SELECT ... INTO tablename (SELECT INTO creates a new table)
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "INTO" {
+		p.advance() // consume INTO
+		stmt.IntoTable = p.current().Literal
+		p.advance() // consume table name
 	}
 
 	if p.current().Literal == "FROM" {
@@ -873,6 +1024,11 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 
+	// ORDER BY before UNION/EXCEPT/INTERSECT is invalid SQL
+	if stmt.OrderBy != nil && (p.current().Literal == "UNION" || p.current().Literal == "EXCEPT" || p.current().Literal == "INTERSECT") {
+		return nil, fmt.Errorf("ORDER BY clause should come after %s not before", p.current().Literal)
+	}
+
 	if p.current().Literal == "LIMIT" {
 		p.advance()
 		limit, err := p.parseExpr()
@@ -886,6 +1042,40 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 		offset, err := p.parseExpr()
 		if err == nil {
 			stmt.Offset = offset
+		}
+	}
+
+	// SQL:2003 FETCH FIRST / FETCH NEXT syntax (equivalent to LIMIT)
+	if strings.ToUpper(p.current().Literal) == "FETCH" {
+		p.advance() // consume FETCH
+		// accept FIRST or NEXT
+		kw := strings.ToUpper(p.current().Literal)
+		if kw == "FIRST" || kw == "NEXT" {
+			p.advance()
+		}
+		if stmt.Limit == nil {
+			limit, err := p.parseExpr()
+			if err == nil {
+				stmt.Limit = limit
+			}
+		} else {
+			// skip the count expression
+			p.parseExpr() //nolint
+		}
+		// accept ROW or ROWS
+		kw = strings.ToUpper(p.current().Literal)
+		if kw == "ROW" || kw == "ROWS" {
+			p.advance()
+		}
+		// accept ONLY or WITH TIES (WITH TIES not yet fully supported — treat as ONLY)
+		kw = strings.ToUpper(p.current().Literal)
+		if kw == "ONLY" {
+			p.advance()
+		} else if kw == "WITH" {
+			p.advance()
+			if strings.ToUpper(p.current().Literal) == "TIES" {
+				p.advance()
+			}
 		}
 	}
 
@@ -928,6 +1118,19 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 		return nil, nil
 	}
 	p.advance()
+
+	// Handle INSERT OR <action> syntax (e.g. INSERT OR REPLACE, INSERT OR IGNORE)
+	if p.current().Type == TokenOr {
+		p.advance()
+		action := strings.ToUpper(p.current().Literal)
+		switch action {
+		case "REPLACE", "IGNORE", "ABORT", "FAIL", "ROLLBACK":
+			stmt.OrAction = action
+			p.advance()
+		default:
+			return nil, fmt.Errorf("unknown INSERT OR action: %s", p.current().Literal)
+		}
+	}
 
 	if p.current().Literal == "INTO" {
 		p.advance()
@@ -1074,7 +1277,40 @@ func (p *Parser) parseInsert() (*InsertStmt, error) {
 		stmt.OnConflict = oc
 	}
 
+	// Parse optional RETURNING clause
+	returning, err := p.parseReturning()
+	if err != nil {
+		return nil, err
+	}
+	stmt.Returning = returning
+
 	return stmt, nil
+}
+
+// parseReturning parses an optional RETURNING clause.
+func (p *Parser) parseReturning() ([]Expr, error) {
+	if p.current().Type != TokenKeyword || strings.ToUpper(p.current().Literal) != "RETURNING" {
+		return nil, nil
+	}
+	p.advance()
+	// RETURNING * returns all columns (represented as a single star ColumnRef)
+	if p.current().Type == TokenAsterisk {
+		p.advance()
+		return []Expr{&ColumnRef{Name: "*"}}, nil
+	}
+	var exprs []Expr
+	for {
+		expr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		exprs = append(exprs, expr)
+		if p.current().Type != TokenComma {
+			break
+		}
+		p.advance()
+	}
+	return exprs, nil
 }
 
 func (p *Parser) parseUpdate() (*UpdateStmt, error) {
@@ -1107,6 +1343,13 @@ func (p *Parser) parseUpdate() (*UpdateStmt, error) {
 		}
 	}
 
+	// Parse optional FROM clause (PostgreSQL-style UPDATE ... FROM t2)
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "FROM" {
+		p.advance()
+		ref := p.parseTableRef()
+		stmt.From = ref
+	}
+
 	if p.current().Literal == "WHERE" {
 		p.advance()
 		where, err := p.parseExpr()
@@ -1115,6 +1358,13 @@ func (p *Parser) parseUpdate() (*UpdateStmt, error) {
 		}
 		stmt.Where = where
 	}
+
+	// Parse optional RETURNING clause
+	returning, err := p.parseReturning()
+	if err != nil {
+		return nil, err
+	}
+	stmt.Returning = returning
 
 	return stmt, nil
 }
@@ -1133,6 +1383,19 @@ func (p *Parser) parseDelete() (*DeleteStmt, error) {
 	stmt.Table = p.current().Literal
 	p.advance()
 
+	// Parse optional USING clause (multi-table DELETE)
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "USING" {
+		p.advance()
+		for {
+			stmt.Using = append(stmt.Using, p.current().Literal)
+			p.advance()
+			if p.current().Type != TokenComma {
+				break
+			}
+			p.advance()
+		}
+	}
+
 	if p.current().Literal == "WHERE" {
 		p.advance()
 		where, err := p.parseExpr()
@@ -1141,6 +1404,13 @@ func (p *Parser) parseDelete() (*DeleteStmt, error) {
 		}
 		stmt.Where = where
 	}
+
+	// Parse optional RETURNING clause
+	returning, err := p.parseReturning()
+	if err != nil {
+		return nil, err
+	}
+	stmt.Returning = returning
 
 	return stmt, nil
 }
@@ -1266,10 +1536,12 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 				}
 
 				// Parse column constraints before appending
-				for p.current().Type == TokenKeyword || p.current().Type == TokenNot {
+				for p.current().Type == TokenKeyword || p.current().Type == TokenNot || p.current().Type == TokenCollate {
 					var keyword string
 					if p.current().Type == TokenNot {
 						keyword = "NOT"
+					} else if p.current().Type == TokenCollate {
+						keyword = "COLLATE"
 					} else {
 						keyword = p.current().Literal
 					}
@@ -1286,7 +1558,7 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 							p.advance()
 						}
 					} else if keyword == "UNIQUE" {
-						col.Type += " UNIQUE"
+						col.Unique = true
 						p.advance()
 					} else if keyword == "DEFAULT" {
 						// Parse DEFAULT value
@@ -1321,6 +1593,11 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 						p.advance()
 					} else if keyword == "ASC" || keyword == "DESC" {
 						// Column modifier keywords - skip
+						p.advance()
+					} else if keyword == "COLLATE" {
+						// COLLATE collation_name
+						p.advance()
+						col.Collation = strings.ToUpper(p.current().Literal)
 						p.advance()
 					} else {
 						// Stop at unknown keywords or table-level constraints
@@ -1373,11 +1650,22 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 					} else if kw == "UNIQUE" {
 						p.advance()
 						if p.current().Type == TokenLeftParen {
+							p.advance()
+							var ukCols []string
 							for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+								if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+									ukCols = append(ukCols, p.current().Literal)
+								}
 								p.advance()
+								if p.current().Type == TokenComma {
+									p.advance()
+								}
 							}
 							if p.current().Type == TokenRightParen {
 								p.advance()
+							}
+							if len(ukCols) > 0 {
+								stmt.UniqueKeys = append(stmt.UniqueKeys, ukCols)
 							}
 						}
 					} else if kw == "CHECK" {
@@ -1613,9 +1901,14 @@ func (p *Parser) parseCreateTrigger() (ASTNode, error) {
 				p.advance()
 				break
 			}
+			bodyPos := p.pos
 			bodyStmt, err := p.parseInternal()
 			if err != nil {
 				return nil, err
+			}
+			// Safety: if parseInternal didn't advance, break to prevent infinite loop
+			if p.pos == bodyPos {
+				break
 			}
 			if bodyStmt != nil {
 				stmt.Body = append(stmt.Body, bodyStmt)
@@ -1655,9 +1948,25 @@ func (p *Parser) parseCreateIndex(unique bool) (ASTNode, error) {
 		if p.current().Type == TokenLeftParen {
 			p.advance()
 			for {
-				if p.current().Type == TokenIdentifier {
-					stmt.Columns = append(stmt.Columns, p.current().Literal)
+				// Check if this is an expression index (identifier followed by '(')
+				if (p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword) &&
+					p.peek().Type == TokenLeftParen {
+					// Expression column (e.g., LOWER(col))
+					expr, err := p.parsePrimaryExpr()
+					if err != nil {
+						return nil, err
+					}
+					stmt.Columns = append(stmt.Columns, "")
+					stmt.Exprs = append(stmt.Exprs, expr)
+				} else if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+					colName := p.current().Literal
 					p.advance()
+					// Skip ASC/DESC
+					if p.current().Type == TokenKeyword && (strings.ToUpper(p.current().Literal) == "ASC" || strings.ToUpper(p.current().Literal) == "DESC") {
+						p.advance()
+					}
+					stmt.Columns = append(stmt.Columns, colName)
+					stmt.Exprs = append(stmt.Exprs, nil)
 				}
 				if p.current().Type == TokenComma {
 					p.advance()
@@ -1666,6 +1975,16 @@ func (p *Parser) parseCreateIndex(unique bool) (ASTNode, error) {
 				}
 			}
 			p.expect(TokenRightParen)
+		}
+
+		// Parse optional WHERE clause (partial index)
+		if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "WHERE" {
+			p.advance()
+			whereExpr, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			stmt.WhereExpr = whereExpr
 		}
 	}
 
@@ -1781,76 +2100,189 @@ func (p *Parser) parseAlterTable() (ASTNode, error) {
 
 	kw := strings.ToUpper(p.current().Literal)
 	switch kw {
-	case "ADD":
-		p.advance() // consume "ADD"
-		// Optional COLUMN keyword
-		if strings.ToUpper(p.current().Literal) == "COLUMN" {
-			p.advance()
-		}
-		col := &ColumnDef{
-			Name: p.current().Literal,
-		}
-		p.advance()
-		if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
-			col.Type = p.current().Literal
-			p.advance()
-			// Parse type modifiers
-			if p.current().Type == TokenLeftParen {
-				for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
-					p.advance()
-				}
-				if p.current().Type == TokenRightParen {
-					p.advance()
-				}
-			}
-		}
-		// Parse column constraints
-		for p.current().Type == TokenKeyword || p.current().Type == TokenNot {
-			keyword := strings.ToUpper(p.current().Literal)
-			if p.current().Type == TokenNot {
-				p.advance()
-				if strings.ToUpper(p.current().Literal) == "NULL" {
-					col.NotNull = true
-					p.advance()
-				}
-			} else if keyword == "NOT" {
-				p.advance()
-				if strings.ToUpper(p.current().Literal) == "NULL" {
-					col.NotNull = true
-					p.advance()
-				}
-			} else if keyword == "DEFAULT" {
-				p.advance()
-				defExpr, err := p.parseExpr()
-				if err != nil {
-					break
-				}
-				col.Default = defExpr
-			} else if keyword == "PRIMARY" {
-				col.PrimaryKey = true
-				p.advance()
-				if strings.ToUpper(p.current().Literal) == "KEY" {
-					p.advance()
-				}
-			} else if keyword == "UNIQUE" || keyword == "REFERENCES" || keyword == "CHECK" {
-				// Skip for simplicity
-				for p.current().Type != TokenEOF && p.current().Type != TokenComma {
-					p.advance()
-				}
-				break
-			} else {
-				break
-			}
-		}
-		stmt.Action = "ADD_COLUMN"
-		stmt.Column = col
 	case "RENAME":
 		p.advance() // consume "RENAME"
-		if strings.ToUpper(p.current().Literal) == "TO" {
+		kw2 := strings.ToUpper(p.current().Literal)
+		if kw2 == "TO" {
+			p.advance()
+			stmt.Action = "RENAME_TO"
+			stmt.NewName = p.current().Literal
+		} else if kw2 == "COLUMN" {
+			p.advance() // consume optional COLUMN
+			stmt.Column = &ColumnDef{Name: p.current().Literal}
+			p.advance() // consume old column name
+			if strings.ToUpper(p.current().Literal) == "TO" {
+				p.advance()
+			}
+			stmt.NewName = p.current().Literal
+			stmt.Action = "RENAME_COLUMN"
+		} else {
+			// RENAME <colname> TO <newname> (without COLUMN keyword)
+			stmt.Column = &ColumnDef{Name: p.current().Literal}
+			p.advance() // consume old column name
+			if strings.ToUpper(p.current().Literal) == "TO" {
+				p.advance()
+			}
+			stmt.NewName = p.current().Literal
+			stmt.Action = "RENAME_COLUMN"
+		}
+	case "DROP":
+		p.advance() // consume "DROP"
+		if strings.ToUpper(p.current().Literal) == "COLUMN" {
+			p.advance() // consume optional COLUMN keyword
+		}
+		stmt.Action = "DROP_COLUMN"
+		stmt.Column = &ColumnDef{Name: p.current().Literal}
+	case "ADD":
+		p.advance() // consume "ADD"
+		// Optional COLUMN keyword or CONSTRAINT keyword
+		kw2 := strings.ToUpper(p.current().Literal)
+		if kw2 == "CONSTRAINT" {
+			p.advance() // consume CONSTRAINT
+			stmt.ConstraintName = p.current().Literal
+			p.advance() // consume constraint name
+			kw3 := strings.ToUpper(p.current().Literal)
+			if kw3 == "CHECK" {
+				p.advance() // consume CHECK
+				if p.current().Type == TokenLeftParen {
+					p.advance()
+					expr, err := p.parseExpr()
+					if err == nil {
+						stmt.CheckExpr = expr
+					}
+					if p.current().Type == TokenRightParen {
+						p.advance()
+					}
+				}
+				stmt.Action = "ADD_CONSTRAINT"
+			} else if kw3 == "UNIQUE" {
+				p.advance() // consume UNIQUE
+				if p.current().Type == TokenLeftParen {
+					p.advance()
+					for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+						if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+							stmt.UniqueColumns = append(stmt.UniqueColumns, p.current().Literal)
+						}
+						p.advance()
+						if p.current().Type == TokenComma {
+							p.advance()
+						}
+					}
+					if p.current().Type == TokenRightParen {
+						p.advance()
+					}
+				}
+				stmt.Action = "ADD_CONSTRAINT"
+			}
+		} else {
+			if kw2 == "COLUMN" {
+				p.advance()
+			}
+			col := &ColumnDef{
+				Name: p.current().Literal,
+			}
+			p.advance()
+			if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
+				col.Type = p.current().Literal
+				p.advance()
+				// Parse type modifiers
+				if p.current().Type == TokenLeftParen {
+					for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+						p.advance()
+					}
+					if p.current().Type == TokenRightParen {
+						p.advance()
+					}
+				}
+			}
+			// Parse column constraints
+			for p.current().Type == TokenKeyword || p.current().Type == TokenNot || p.current().Type == TokenCollate {
+				keyword := strings.ToUpper(p.current().Literal)
+				if p.current().Type == TokenCollate {
+					keyword = "COLLATE"
+				}
+				if p.current().Type == TokenNot {
+					p.advance()
+					if strings.ToUpper(p.current().Literal) == "NULL" {
+						col.NotNull = true
+						p.advance()
+					}
+				} else if keyword == "NOT" {
+					p.advance()
+					if strings.ToUpper(p.current().Literal) == "NULL" {
+						col.NotNull = true
+						p.advance()
+					}
+				} else if keyword == "DEFAULT" {
+					p.advance()
+					defExpr, err := p.parseExpr()
+					if err != nil {
+						break
+					}
+					col.Default = defExpr
+				} else if keyword == "PRIMARY" {
+					col.PrimaryKey = true
+					p.advance()
+					if strings.ToUpper(p.current().Literal) == "KEY" {
+						p.advance()
+					}
+				} else if keyword == "UNIQUE" || keyword == "REFERENCES" || keyword == "CHECK" {
+					// Skip for simplicity
+					for p.current().Type != TokenEOF && p.current().Type != TokenComma {
+						p.advance()
+					}
+					break
+				} else if keyword == "COLLATE" {
+					p.advance()
+					col.Collation = strings.ToUpper(p.current().Literal)
+					p.advance()
+				} else {
+					break
+				}
+			}
+			stmt.Action = "ADD_COLUMN"
+			stmt.Column = col
+		}
+	}
+	return stmt, nil
+}
+
+// parseStandaloneValues parses a standalone VALUES (v1,...), (v2,...) statement,
+// converting it into a SelectStmt with a VALUES table in the FROM clause.
+func (p *Parser) parseStandaloneValues() (ASTNode, error) {
+	p.advance() // consume VALUES
+	var rows [][]Expr
+	for {
+		if p.current().Type != TokenLeftParen {
+			break
+		}
+		p.advance() // consume (
+		var row []Expr
+		for !p.isEOF() && p.current().Type != TokenRightParen {
+			expr, e := p.parseExpr()
+			if e != nil {
+				return nil, e
+			}
+			if expr == nil {
+				break
+			}
+			row = append(row, expr)
+			if p.current().Type == TokenComma {
+				p.advance()
+			}
+		}
+		if p.current().Type == TokenRightParen {
 			p.advance()
 		}
-		stmt.Action = "RENAME_TO"
-		stmt.NewName = p.current().Literal
+		rows = append(rows, row)
+		if p.current().Type != TokenComma {
+			break
+		}
+		p.advance() // consume comma between rows
+	}
+	stmt := &SelectStmt{
+		Columns: []Expr{&ColumnRef{Name: "*"}},
+		From:    &TableRef{Values: rows, Alias: "__values__"},
 	}
 	return stmt, nil
 }
@@ -1953,12 +2385,17 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 		return nil, err
 	}
 
-	// MATCH operator: not supported in WHERE context (matches SQLite behavior)
-	if p.current().Type == TokenIdentifier && strings.ToUpper(p.current().Literal) == "MATCH" {
-		return nil, fmt.Errorf("unable to use function MATCH in the requested context")
+	// MATCH operator: case-insensitive substring match
+	if p.current().Type == TokenMatch {
+		p.advance()
+		pattern, err := p.parseAddExpr()
+		if err != nil {
+			return nil, err
+		}
+		return &BinaryExpr{Op: TokenMatch, Left: left, Right: pattern}, nil
 	}
-	if p.current().Type == TokenNot && p.peek().Type == TokenIdentifier && strings.ToUpper(p.peek().Literal) == "MATCH" {
-		return nil, fmt.Errorf("unable to use function MATCH in the requested context")
+	if p.current().Type == TokenNot && p.peek().Type == TokenMatch {
+		return nil, fmt.Errorf("NOT MATCH is not supported")
 	}
 
 	if p.current().Type == TokenIs {
@@ -1997,13 +2434,21 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 					p.advance()
 					break
 				}
+				if p.current().Type == TokenEOF {
+					break
+				}
 				expr, err := p.parseExpr()
 				if err != nil {
 					return nil, err
 				}
+				if expr == nil {
+					break
+				}
 				values = append(values, evalConstExpr(expr))
 				if p.current().Type == TokenComma {
 					p.advance()
+				} else if p.current().Type != TokenRightParen {
+					break
 				}
 			}
 			return &BinaryExpr{Op: TokenNotIn, Left: left, Right: &Literal{Value: values}}, nil
@@ -2030,13 +2475,22 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 					p.advance()
 					break
 				}
+				if p.current().Type == TokenEOF {
+					break
+				}
 				expr, err := p.parseExpr()
 				if err != nil {
 					return nil, err
 				}
+				if expr == nil {
+					break
+				}
 				values = append(values, evalConstExpr(expr))
 				if p.current().Type == TokenComma {
 					p.advance()
+				} else if p.current().Type != TokenRightParen {
+					// Unexpected token - try to recover by breaking
+					break
 				}
 			}
 			return &BinaryExpr{Op: TokenIn, Left: left, Right: &Literal{Value: values}}, nil
@@ -2120,13 +2574,22 @@ func (p *Parser) parseCmpExpr() (Expr, error) {
 					p.advance()
 					break
 				}
+				if p.current().Type == TokenEOF {
+					break
+				}
 				expr, err := p.parseExpr()
 				if err != nil {
 					return nil, err
 				}
+				if expr == nil {
+					break
+				}
 				values = append(values, evalConstExpr(expr))
 				if p.current().Type == TokenComma {
 					p.advance()
+				} else if p.current().Type != TokenRightParen {
+					// Unexpected token - try to recover by breaking
+					break
 				}
 			}
 			return &BinaryExpr{Op: TokenIn, Left: left, Right: &Literal{Value: values}}, nil
@@ -2240,14 +2703,20 @@ func (p *Parser) parseAddExpr() (Expr, error) {
 		return nil, err
 	}
 
-	for p.current().Type == TokenPlus || p.current().Type == TokenMinus || p.current().Type == TokenConcat {
+	for p.current().Type == TokenPlus || p.current().Type == TokenMinus || p.current().Type == TokenConcat ||
+		p.current().Type == TokenArrow || p.current().Type == TokenArrowText {
 		op := p.current().Type
 		p.advance()
 		right, err := p.parseMulExpr()
 		if err != nil {
 			return nil, err
 		}
-		left = &BinaryExpr{Op: op, Left: left, Right: right}
+		if op == TokenArrow || op == TokenArrowText {
+			// a -> b  and  a ->> b  both map to json_extract(a, b)
+			left = &FuncCall{Name: "json_extract", Args: []Expr{left, right}}
+		} else {
+			left = &BinaryExpr{Op: op, Left: left, Right: right}
+		}
 	}
 
 	return left, nil
@@ -2292,13 +2761,35 @@ func (p *Parser) parseUnaryExpr() (Expr, error) {
 		return &UnaryExpr{Op: op, Expr: expr}, nil
 	}
 
-	return p.parsePrimaryExpr()
+	return p.parsePrimaryExprWithCollate()
+}
+
+// parsePrimaryExprWithCollate parses a primary expression optionally followed by COLLATE name
+func (p *Parser) parsePrimaryExprWithCollate() (Expr, error) {
+	expr, err := p.parsePrimaryExpr()
+	if err != nil {
+		return nil, err
+	}
+	if p.current().Type == TokenCollate {
+		p.advance()
+		collation := strings.ToUpper(p.current().Literal)
+		p.advance()
+		return &CollateExpr{Expr: expr, Collation: collation}, nil
+	}
+	return expr, nil
 }
 
 func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	tok := p.current()
 
 	switch tok.Type {
+	case TokenPlaceholderPos:
+		p.advance()
+		return &PlaceholderExpr{Positional: true}, nil
+	case TokenPlaceholderNamed:
+		name := tok.Literal
+		p.advance()
+		return &PlaceholderExpr{Positional: false, Name: name}, nil
 	case TokenLeftParen:
 		p.advance()
 		if p.current().Type == TokenKeyword && p.current().Literal == "SELECT" {
@@ -2432,13 +2923,24 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			p.advance()
 			args := make([]Expr, 0)
 			for !p.isEOF() && p.current().Type != TokenRightParen {
+				argPos := p.pos
 				arg, err := p.parseExpr()
 				if err != nil {
 					return nil, err
 				}
+				// Safety: if parseExpr didn't advance, break to prevent infinite loop
+				if p.pos == argPos {
+					break
+				}
+				if arg == nil {
+					break
+				}
 				args = append(args, arg)
 				if p.current().Type == TokenComma {
 					p.advance()
+				} else if p.current().Type != TokenRightParen {
+					// Unexpected token - try to recover by breaking
+					break
 				}
 			}
 			p.expect(TokenRightParen)
@@ -2494,13 +2996,23 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 
 				args := make([]Expr, 0)
 				for !p.isEOF() && p.current().Type != TokenRightParen {
+					argPos := p.pos
 					arg, err := p.parseExpr()
 					if err != nil {
 						return nil, err
 					}
+					// Safety: if parseExpr didn't advance, break to prevent infinite loop
+					if p.pos == argPos {
+						break
+					}
+					if arg == nil {
+						break
+					}
 					args = append(args, arg)
 					if p.current().Type == TokenComma {
 						p.advance()
+					} else if p.current().Type != TokenRightParen {
+						break
 					}
 				}
 				p.expect(TokenRightParen)
@@ -2547,15 +3059,23 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			p.advance()
 			args := make([]Expr, 0)
 			for !p.isEOF() && p.current().Type != TokenRightParen {
+				argPos := p.pos
 				arg, err := p.parseExpr()
 				if err != nil {
 					return nil, err
 				}
-				if arg != nil {
-					args = append(args, arg)
+				// Safety: if parseExpr didn't advance, break to prevent infinite loop
+				if p.pos == argPos {
+					break
 				}
+				if arg == nil {
+					break
+				}
+				args = append(args, arg)
 				if p.current().Type == TokenComma {
 					p.advance()
+				} else if p.current().Type != TokenRightParen {
+					break
 				}
 			}
 			p.expect(TokenRightParen)
@@ -2703,12 +3223,52 @@ func (p *Parser) parseCommit() (ASTNode, error) {
 func (p *Parser) parseRollback() (ASTNode, error) {
 	p.advance() // consume ROLLBACK
 
+	stmt := &RollbackStmt{}
+
 	// Optional TRANSACTION keyword
 	if p.current().Type == TokenKeyword && p.current().Literal == "TRANSACTION" {
 		p.advance()
 	}
 
-	return &RollbackStmt{}, nil
+	// ROLLBACK TO [SAVEPOINT] sp_name
+	if p.current().Type == TokenKeyword && p.current().Literal == "TO" {
+		p.advance() // consume TO
+		// Optional SAVEPOINT keyword
+		if p.current().Type == TokenKeyword && p.current().Literal == "SAVEPOINT" {
+			p.advance()
+		}
+		if p.current().Type != TokenIdentifier && p.current().Type != TokenKeyword {
+			return nil, fmt.Errorf("expected savepoint name after ROLLBACK TO")
+		}
+		stmt.Savepoint = p.current().Literal
+		p.advance()
+	}
+
+	return stmt, nil
+}
+
+func (p *Parser) parseSavepoint() (ASTNode, error) {
+	p.advance() // consume SAVEPOINT
+	if p.current().Type != TokenIdentifier && p.current().Type != TokenKeyword {
+		return nil, fmt.Errorf("expected savepoint name after SAVEPOINT")
+	}
+	name := p.current().Literal
+	p.advance()
+	return &SavepointStmt{Name: name}, nil
+}
+
+func (p *Parser) parseRelease() (ASTNode, error) {
+	p.advance() // consume RELEASE
+	// Optional SAVEPOINT keyword
+	if p.current().Type == TokenKeyword && p.current().Literal == "SAVEPOINT" {
+		p.advance()
+	}
+	if p.current().Type != TokenIdentifier && p.current().Type != TokenKeyword {
+		return nil, fmt.Errorf("expected savepoint name after RELEASE")
+	}
+	name := p.current().Literal
+	p.advance()
+	return &ReleaseSavepointStmt{Name: name}, nil
 }
 
 // parseBackup parses:
@@ -2781,6 +3341,17 @@ func (p *Parser) parseAnalyze() (ASTNode, error) {
 	return stmt, nil
 }
 
+func (p *Parser) parseReindex() (ASTNode, error) {
+	p.advance() // consume REINDEX
+	stmt := &ReindexStmt{}
+	cur := p.current()
+	if cur.Type == TokenIdentifier || cur.Type == TokenKeyword {
+		stmt.Target = cur.Literal
+		p.advance()
+	}
+	return stmt, nil
+}
+
 // parseWithClause parses a WITH ... AS (...) SELECT statement (CTE)
 func (p *Parser) parseWithClause() (ASTNode, error) {
 	p.advance() // consume WITH
@@ -2805,9 +3376,16 @@ func (p *Parser) parseWithClause() (ASTNode, error) {
 		if p.current().Type == TokenLeftParen {
 			p.advance() // consume (
 			for !p.isEOF() && p.current().Type != TokenRightParen {
+				colPos := p.pos
 				if p.current().Type == TokenIdentifier || p.current().Type == TokenKeyword {
 					cteCols = append(cteCols, p.current().Literal)
 					p.advance()
+				} else {
+					// Safety: if didn't advance, break to prevent infinite loop
+					if p.pos == colPos {
+						break
+					}
+					break
 				}
 				if p.current().Type == TokenComma {
 					p.advance()
@@ -2877,9 +3455,14 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []WindowOrderBy, f
 			if p.current().Type == TokenKeyword && p.current().Literal == "ORDER" {
 				break
 			}
+			exprPos := p.pos
 			expr, e := p.parseExpr()
 			if e != nil {
 				return nil, nil, nil, e
+			}
+			// Safety: if parseExpr didn't advance, break to prevent infinite loop
+			if p.pos == exprPos {
+				break
 			}
 			partition = append(partition, expr)
 			if p.current().Type == TokenComma {
@@ -2898,9 +3481,14 @@ func (p *Parser) parseWindowSpec() (partition []Expr, orderBy []WindowOrderBy, f
 			if p.current().Type == TokenKeyword && (p.current().Literal == "ROWS" || p.current().Literal == "RANGE") {
 				break
 			}
+			exprPos := p.pos
 			expr, e := p.parseExpr()
 			if e != nil {
 				return nil, nil, nil, e
+			}
+			// Safety: if parseExpr didn't advance, break to prevent infinite loop
+			if p.pos == exprPos {
+				break
 			}
 			desc := false
 			if p.current().Type == TokenKeyword && (p.current().Literal == "ASC" || p.current().Literal == "DESC") {

@@ -6,12 +6,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cyw0ng95/sqlvibe/ext"
 	"github.com/cyw0ng95/sqlvibe/internal/CG"
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
-	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 	"github.com/cyw0ng95/sqlvibe/internal/VM"
-
 )
 
 func (db *Database) ExecVM(sql string) (*Rows, error) {
@@ -130,6 +129,11 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 		return db.execDerivedTableQuery(stmt)
 	}
 
+	// Handle table-valued function: FROM json_each(...) AS t
+	if stmt.From.TableFunc != nil {
+		return db.execTableFuncQuery(stmt)
+	}
+
 	// Delegate to execVMQuery which handles ORDER BY + LIMIT correctly
 	// (including ORDER BY columns not in SELECT via extraOrderByCols mechanism).
 	rows, err := db.execVMQuery("", stmt)
@@ -172,6 +176,11 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	if strings.ToLower(stmt.From.Schema) == "information_schema" {
 		fullName := stmt.From.Schema + "." + tableName
 		return db.queryInformationSchema(stmt, fullName)
+	}
+
+	// Handle sqlvibe_extensions virtual table
+	if tableName == "sqlvibe_extensions" {
+		return db.querySqlvibeExtensions(stmt)
 	}
 
 	if tableName != "" {
@@ -245,6 +254,16 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 	vm := VM.NewVMWithContext(program, ctx)
 
+	// Early termination: when the query has a plain LIMIT without ORDER BY /
+	// GROUP BY / DISTINCT / aggregates, instruct the VM to stop collecting rows
+	// once the limit is satisfied.  This avoids scanning the entire table.
+	if stmt.Limit != nil && len(stmt.OrderBy) == 0 && !stmt.Distinct &&
+		stmt.GroupBy == nil && !CG.HasAggregates(stmt) {
+		if n := extractLimitInt(stmt.Limit, stmt.Offset); n > 0 {
+			vm.SetResultLimit(n)
+		}
+	}
+
 	// Reset VM state before opening cursor manually
 	vm.Reset()
 	vm.SetPC(0)
@@ -281,8 +300,14 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 
 	// Pre-allocate flat result buffer to avoid per-row allocations.
+	// Cap at the result limit (LIMIT+OFFSET) to avoid over-allocating for queries
+	// that request only a small number of rows from a large table.
 	if stmt.From.Join == nil && len(tableCols) > 0 && len(tableData) > 0 {
-		vm.PreallocResultsFlat(len(tableData), len(tableCols))
+		preallocRows := len(tableData)
+		if n := extractLimitInt(stmt.Limit, stmt.Offset); n > 0 && n < preallocRows {
+			preallocRows = n
+		}
+		vm.PreallocResultsFlat(preallocRows, len(tableCols))
 	}
 
 	// Execute without calling Reset again (use Exec instead of Run)
@@ -298,8 +323,11 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 
 	results := vm.Results()
 
-	// Apply DISTINCT deduplication if requested
-	if stmt.Distinct {
+	// Apply DISTINCT deduplication if requested.
+	// When ORDER BY references extra non-SELECT columns (extraOrderByCols), those
+	// columns are appended to each row for sorting; defer DISTINCT until after strip
+	// so only the projected SELECT columns are used as the dedup key.
+	if stmt.Distinct && len(extraOrderByCols) == 0 {
 		results = deduplicateRows(results)
 	}
 
@@ -316,8 +344,17 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 			}
 		}
 		allCols := append(projCols, extraOrderByCols...)
+		// When DISTINCT is active, do a full sort before dedup so we see all rows;
+		// the top-K optimization would prematurely discard rows needed for dedup.
 		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		if stmt.Distinct {
+			topK = 0 // full sort; LIMIT applied after dedup below
+		}
 		results = db.engine.SortRowsTopK(results, stmt.OrderBy, allCols, topK)
+		// Apply DISTINCT after sort so the dedup key uses only projected columns.
+		if stmt.Distinct {
+			results = deduplicateRowsN(results, numSelectCols)
+		}
 		if stmt.Limit != nil {
 			if limited, err2 := db.applyLimit(&Rows{Data: results}, stmt.Limit, stmt.Offset); err2 == nil {
 				results = limited.Data
@@ -336,7 +373,7 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 	}
 
 	// Get column names from SELECT
-	cols := make([]string, 0)
+	cols := make([]string, 0, len(tableCols))
 	for i, col := range stmt.Columns {
 		switch e := col.(type) {
 		case *QP.ColumnRef:
@@ -409,6 +446,15 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	// Fast path: simple aggregate (COUNT(*), SUM, MIN, MAX) without JOIN/GROUP BY.
 	// Routes directly to HybridStore vectorized aggregates, bypassing VM.
 	if rows := db.tryAggregateFastPath(stmt); rows != nil {
+		return rows, nil
+	}
+
+	// Fast path: vectorized WHERE filter on columnar storage.
+	// Uses SIMD-friendly columnar operations when:
+	// - Single table (no JOIN)
+	// - Simple WHERE: column op literal (=, !=, <, <=, >, >=)
+	// - No subqueries in WHERE
+	if rows := db.tryVectorizedFilterFastPath(stmt); rows != nil {
 		return rows, nil
 	}
 
@@ -605,15 +651,31 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	ctx := newDsVmContext(db)
 	vm := VM.NewVMWithContext(program, ctx)
 
+	// Early termination: when the query has a plain LIMIT without ORDER BY /
+	// GROUP BY / DISTINCT / aggregates, instruct the VM to stop collecting rows
+	// once the limit is satisfied.  This avoids scanning the entire table.
+	if stmt.Limit != nil && len(stmt.OrderBy) == 0 && !stmt.Distinct &&
+		stmt.GroupBy == nil && !CG.HasAggregates(stmt) {
+		if n := extractLimitInt(stmt.Limit, stmt.Offset); n > 0 {
+			vm.SetResultLimit(n)
+		}
+	}
+
 	// Pre-allocate result slice based on estimated table size to reduce reallocations.
+	// Cap at the result limit (LIMIT+OFFSET) when set to avoid over-allocating for
+	// queries that request only a small number of rows from a large table.
 	if stmt.From.Join == nil && tableName != "" {
 		if tableData, ok := db.data[tableName]; ok {
+			preallocRows := len(tableData)
+			if n := extractLimitInt(stmt.Limit, stmt.Offset); n > 0 && n < preallocRows {
+				preallocRows = n
+			}
 			if len(tableCols) > 0 {
 				// Full flat-buffer pre-allocation: eliminates per-row allocations.
-				vm.PreallocResultsFlat(len(tableData), len(tableCols))
+				vm.PreallocResultsFlat(preallocRows, len(tableCols))
 			} else {
 				// Zero-column schema: pre-allocate result header only.
-				vm.PreallocResults(len(tableData))
+				vm.PreallocResults(preallocRows)
 			}
 		}
 	}
@@ -625,8 +687,10 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 
 	results := vm.Results()
 
-	// Apply DISTINCT deduplication if requested
-	if stmt.Distinct {
+	// Apply DISTINCT deduplication if requested.
+	// When ORDER BY references extra non-SELECT columns (extraOrderByCols), those
+	// columns are appended to each row for sorting; defer DISTINCT until after strip.
+	if stmt.Distinct && len(extraOrderByCols) == 0 {
 		results = deduplicateRows(results)
 	}
 
@@ -730,7 +794,7 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		}
 	}
 
-	cols := make([]string, 0)
+	cols := make([]string, 0, len(tableCols))
 	for i, col := range stmt.Columns {
 		if colRef, ok := col.(*QP.ColumnRef); ok {
 			// Handle SELECT * - expand to table columns
@@ -807,9 +871,17 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	if len(extraOrderByCols) > 0 {
 		// Build full columns list (SELECT columns + extra ORDER BY cols)
 		fullCols := append(cols, extraOrderByCols...)
-		// Sort using full column set (use top-K heap when limit is known)
+		// When DISTINCT is active, do a full sort before dedup so we see all rows;
+		// the top-K optimization would prematurely discard rows needed for dedup.
 		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		if stmt.Distinct {
+			topK = 0 // full sort; LIMIT applied after dedup below
+		}
 		results = db.engine.SortRowsTopK(results, stmt.OrderBy, fullCols, topK)
+		// Apply DISTINCT after sort so only projected columns form the dedup key.
+		if stmt.Distinct {
+			results = deduplicateRowsN(results, len(cols))
+		}
 		// Apply LIMIT/OFFSET if present (to avoid database.go re-applying with wrong cols)
 		if stmt.Limit != nil {
 			rows := &Rows{Columns: fullCols, Data: results}
@@ -1019,6 +1091,221 @@ func (db *Database) tryAggregateFastPath(stmt *QP.SelectStmt) *Rows {
 		return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
 	}
 	return nil
+}
+
+// filterInfo holds extracted WHERE clause information for vectorized filtering.
+type filterInfo struct {
+	colName string
+	op      string
+	value   DS.Value
+}
+
+// isVectorizedFilterEligible checks if WHERE clause can use vectorized filter.
+func isVectorizedFilterEligible(stmt *QP.SelectStmt) bool {
+	if stmt == nil || stmt.From == nil {
+		return false
+	}
+	if stmt.From.Join != nil || stmt.From.Subquery != nil {
+		return false
+	}
+	if stmt.Where == nil {
+		return false
+	}
+	if stmt.GroupBy != nil || stmt.Having != nil || stmt.Distinct {
+		return false
+	}
+
+	// Check that SELECT columns are simple: either * or column references only.
+	// Function calls, expressions, etc. should fall through to VM.
+	for _, col := range stmt.Columns {
+		switch col.(type) {
+		case *QP.ColumnRef:
+			// OK - either * or column name
+		case *QP.AliasExpr:
+			// Alias is OK as long as the underlying expression is simple
+			if _, ok := col.(*QP.AliasExpr).Expr.(*QP.ColumnRef); !ok {
+				return false
+			}
+		default:
+			// Function calls, expressions, etc. - not eligible
+			return false
+		}
+	}
+
+	bin, ok := stmt.Where.(*QP.BinaryExpr)
+	if !ok {
+		return false
+	}
+
+	switch bin.Op {
+	case QP.TokenEq, QP.TokenNe, QP.TokenLt, QP.TokenLe, QP.TokenGt, QP.TokenGe:
+	default:
+		return false
+	}
+
+	_, ok = bin.Left.(*QP.ColumnRef)
+	if !ok {
+		return false
+	}
+
+	_, ok = bin.Right.(*QP.Literal)
+	if !ok {
+		return false
+	}
+
+	return true
+}
+
+// extractFilterInfo extracts column name, operator, and value from WHERE clause.
+func extractFilterInfo(stmt *QP.SelectStmt) *filterInfo {
+	bin := stmt.Where.(*QP.BinaryExpr)
+	col := bin.Left.(*QP.ColumnRef)
+	lit := bin.Right.(*QP.Literal)
+
+	var op string
+	switch bin.Op {
+	case QP.TokenEq:
+		op = "="
+	case QP.TokenNe:
+		op = "!="
+	case QP.TokenLt:
+		op = "<"
+	case QP.TokenLe:
+		op = "<="
+	case QP.TokenGt:
+		op = ">"
+	case QP.TokenGe:
+		op = ">="
+	}
+
+	var val DS.Value
+	switch v := lit.Value.(type) {
+	case int64:
+		val = DS.IntValue(v)
+	case float64:
+		val = DS.FloatValue(v)
+	case string:
+		val = DS.StringValue(v)
+	case bool:
+		if v {
+			val = DS.IntValue(1)
+		} else {
+			val = DS.IntValue(0)
+		}
+	default:
+		return nil
+	}
+
+	return &filterInfo{
+		colName: col.Name,
+		op:      op,
+		value:   val,
+	}
+}
+
+// tryVectorizedFilterFastPath handles simple WHERE queries using vectorized operations.
+func (db *Database) tryVectorizedFilterFastPath(stmt *QP.SelectStmt) *Rows {
+	if !isVectorizedFilterEligible(stmt) {
+		return nil
+	}
+
+	if stmt.OrderBy != nil || stmt.Limit != nil {
+		return nil
+	}
+
+	tableName := stmt.From.Name
+	if tableName == "" {
+		return nil
+	}
+
+	hs := db.GetHybridStore(tableName)
+	if hs == nil {
+		return nil
+	}
+
+	info := extractFilterInfo(stmt)
+	if info == nil {
+		return nil
+	}
+
+	colVec := hs.ColStore().GetColumn(info.colName)
+	if colVec == nil {
+		return nil
+	}
+
+	// Only apply fast path for supported column types (int, float, string)
+	// Skip boolean and other types that may have type conversion issues
+	colType := colVec.Type
+	if colType != DS.TypeInt && colType != DS.TypeFloat && colType != DS.TypeString {
+		return nil
+	}
+
+	rb := VectorizedFilter(colVec, info.op, info.value)
+	if rb == nil {
+		return nil
+	}
+
+	indices := rb.ToSlice()
+	if len(indices) == 0 {
+		return &Rows{Columns: nil, Data: [][]interface{}{}}
+	}
+
+	var colNames []string
+	if len(stmt.Columns) == 1 {
+		if cr, ok := stmt.Columns[0].(*QP.ColumnRef); ok && cr.Name == "*" {
+			colNames = db.columnOrder[tableName]
+		} else {
+			for _, col := range stmt.Columns {
+				if a, ok := col.(*QP.AliasExpr); ok {
+					colNames = append(colNames, a.Alias)
+				} else if c, ok := col.(*QP.ColumnRef); ok {
+					colNames = append(colNames, c.Name)
+				}
+			}
+		}
+	} else {
+		for _, col := range stmt.Columns {
+			if a, ok := col.(*QP.AliasExpr); ok {
+				colNames = append(colNames, a.Alias)
+			} else if c, ok := col.(*QP.ColumnRef); ok {
+				colNames = append(colNames, c.Name)
+			}
+		}
+	}
+
+	results := make([][]interface{}, len(indices))
+	colIdxMap := make(map[string]int)
+	for i, c := range hs.Columns() {
+		colIdxMap[c] = i
+	}
+
+	for i, idx := range indices {
+		row := make([]interface{}, len(colNames))
+		for j, colName := range colNames {
+			ci, ok := colIdxMap[colName]
+			if !ok {
+				continue
+			}
+			vec := hs.ColStore().GetColumnByIdx(ci)
+			if vec == nil {
+				continue
+			}
+			v := vec.Get(int(idx))
+			switch v.Type {
+			case DS.TypeInt:
+				row[j] = v.Int
+			case DS.TypeFloat:
+				row[j] = v.Float
+			case DS.TypeString:
+				row[j] = v.Str
+			default:
+				row[j] = nil
+			}
+		}
+		results[i] = row
+	}
+
+	return &Rows{Columns: colNames, Data: results}
 }
 
 // execSelectStarFast materialises all rows of a single table without running
@@ -1273,8 +1560,12 @@ func exprToSQL(expr QP.Expr) string {
 }
 
 func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
-	util.Assert(sql != "", "sql cannot be empty")
-	util.Assert(tableName != "", "tableName cannot be empty")
+	if sql == "" {
+		return Result{}, fmt.Errorf("sql cannot be empty")
+	}
+	if tableName == "" {
+		return Result{}, fmt.Errorf("tableName cannot be empty")
+	}
 	// Check if table exists (strip schema prefix if present)
 	checkName := tableName
 	if idx := strings.Index(tableName, "."); idx >= 0 {
@@ -1373,7 +1664,53 @@ func deduplicateRows(rows [][]interface{}) [][]interface{} {
 	return result
 }
 
-// collectColumnRefs collects all unqualified column names referenced in an expression.
+// deduplicateRowsN is like deduplicateRows but uses only the first n columns as the
+// dedup key. This is used when rows have extra ORDER BY columns appended beyond the
+// projected SELECT columns; only the SELECT columns should determine uniqueness.
+func deduplicateRowsN(rows [][]interface{}, n int) [][]interface{} {
+	seen := make(map[string]struct{}, len(rows))
+	result := make([][]interface{}, 0, len(rows))
+	var b strings.Builder
+	for _, row := range rows {
+		b.Reset()
+		limit := n
+		if limit > len(row) {
+			limit = len(row)
+		}
+		for i, v := range row[:limit] {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			switch val := v.(type) {
+			case int64:
+				b.WriteString(strconv.FormatInt(val, 10))
+			case float64:
+				b.WriteString(strconv.FormatFloat(val, 'f', -1, 64))
+			case string:
+				b.WriteString(val)
+			case bool:
+				if val {
+					b.WriteString("true")
+				} else {
+					b.WriteString("false")
+				}
+			case []byte:
+				b.WriteString(string(val))
+			case nil:
+				b.WriteString("<nil>")
+			default:
+				fmt.Fprintf(&b, "%v", val)
+			}
+		}
+		key := b.String()
+		if _, dup := seen[key]; !dup {
+			seen[key] = struct{}{}
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
 func collectColumnRefs(expr QP.Expr) []string {
 	if expr == nil {
 		return nil
@@ -1483,77 +1820,231 @@ func (db *Database) execJoinAggregate(stmt *QP.SelectStmt) (*Rows, error) {
 	stmt.Offset = nil
 
 	info := extractHashJoinInfo(stmt)
+
+	// For non-INNER joins (e.g. LEFT JOIN) that extractHashJoinInfo rejects,
+	// attempt direct materialization when the join condition is a simple equi-join.
+	var joinedRows []map[string]interface{}
+	var hashCols []string
+	var leftName, leftAlias, rightName, rightAlias string
+	var leftCols, rightCols []string
+
 	if info == nil {
-		// Restore before returning
+		// Try to handle LEFT JOIN directly.
+		join := stmt.From.Join
+		if join == nil || (strings.ToUpper(join.Type) != "LEFT" && join.Type != "") {
+			stmt.Columns = origCols
+			stmt.GroupBy = origGroupBy
+			stmt.Having = origHaving
+			stmt.OrderBy = origOrderBy
+			stmt.Limit = origLimit
+			stmt.Offset = origOffset
+			return nil, nil
+		}
+		// Must be a simple equi-join with two real tables.
+		if join.Right == nil || join.Right.Join != nil || join.Right.Subquery != nil || stmt.From.Subquery != nil {
+			stmt.Columns = origCols
+			stmt.GroupBy = origGroupBy
+			stmt.Having = origHaving
+			stmt.OrderBy = origOrderBy
+			stmt.Limit = origLimit
+			stmt.Offset = origOffset
+			return nil, nil
+		}
+		binExpr, ok := join.Cond.(*QP.BinaryExpr)
+		if !ok || binExpr.Op != QP.TokenEq {
+			stmt.Columns = origCols
+			stmt.GroupBy = origGroupBy
+			stmt.Having = origHaving
+			stmt.OrderBy = origOrderBy
+			stmt.Limit = origLimit
+			stmt.Offset = origOffset
+			return nil, nil
+		}
+		leftRef, lOk := binExpr.Left.(*QP.ColumnRef)
+		rightRef, rOk := binExpr.Right.(*QP.ColumnRef)
+		if !lOk || !rOk {
+			stmt.Columns = origCols
+			stmt.GroupBy = origGroupBy
+			stmt.Having = origHaving
+			stmt.OrderBy = origOrderBy
+			stmt.Limit = origLimit
+			stmt.Offset = origOffset
+			return nil, nil
+		}
+
+		leftName = db.resolveTableName(stmt.From.Name)
+		leftAlias = stmt.From.Alias
+		if leftAlias == "" {
+			leftAlias = leftName
+		}
+		rightName = db.resolveTableName(join.Right.Name)
+		rightAlias = join.Right.Alias
+		if rightAlias == "" {
+			rightAlias = rightName
+		}
+
+		// Determine join key columns from the equi-join condition.
+		leftRef2 := strings.ToLower(leftRef.Table)
+		rightRef2 := strings.ToLower(rightRef.Table)
+		lRef := strings.ToLower(leftAlias)
+		rRef := strings.ToLower(rightAlias)
+		var leftJoinKey, rightJoinKey string
+		switch {
+		case (leftRef2 == "" || leftRef2 == lRef || leftRef2 == strings.ToLower(leftName)) &&
+			(rightRef2 == "" || rightRef2 == rRef || rightRef2 == strings.ToLower(rightName)):
+			leftJoinKey = leftRef.Name
+			rightJoinKey = rightRef.Name
+		case (leftRef2 == rRef || leftRef2 == strings.ToLower(rightName)) &&
+			(rightRef2 == "" || rightRef2 == lRef || rightRef2 == strings.ToLower(leftName)):
+			leftJoinKey = rightRef.Name
+			rightJoinKey = leftRef.Name
+		default:
+			stmt.Columns = origCols
+			stmt.GroupBy = origGroupBy
+			stmt.Having = origHaving
+			stmt.OrderBy = origOrderBy
+			stmt.Limit = origLimit
+			stmt.Offset = origOffset
+			return nil, nil
+		}
+
+		leftCols = db.columnOrder[leftName]
+		rightCols = db.columnOrder[rightName]
+		if leftCols == nil || rightCols == nil {
+			stmt.Columns = origCols
+			stmt.GroupBy = origGroupBy
+			stmt.Having = origHaving
+			stmt.OrderBy = origOrderBy
+			stmt.Limit = origLimit
+			stmt.Offset = origOffset
+			return nil, nil
+		}
+
+		leftData := db.data[leftName]
+		rightData := db.data[rightName]
+
+		// Build hash table from right table.
+		hashTable := make(map[interface{}][]map[string]interface{}, len(rightData))
+		for _, row := range rightData {
+			joinVal := row[rightJoinKey]
+			if joinVal == nil {
+				continue
+			}
+			key := normalizeJoinKey(joinVal)
+			hashTable[key] = append(hashTable[key], row)
+		}
+
+		// Probe: for each left row, emit matched or null-extended rows.
+		nLeft := len(leftCols)
+		hashCols = append(append([]string{}, leftCols...), rightCols...)
+		joinedRows = make([]map[string]interface{}, 0, len(leftData))
+		nullRight := make(map[string]interface{})
+		for _, col := range rightCols {
+			nullRight[col] = nil
+		}
+		for _, lRow := range leftData {
+			joinVal := lRow[leftJoinKey]
+			var matches []map[string]interface{}
+			if joinVal != nil {
+				matches = hashTable[normalizeJoinKey(joinVal)]
+			}
+			if len(matches) == 0 {
+				// Left join: emit left row with NULLs for right side.
+				m := make(map[string]interface{}, len(hashCols)+nLeft+len(rightCols))
+				for _, c := range leftCols {
+					m[c] = lRow[c]
+					m[leftAlias+"."+c] = lRow[c]
+					if leftAlias != leftName {
+						m[leftName+"."+c] = lRow[c]
+					}
+				}
+				for _, c := range rightCols {
+					m[c] = nil
+					m[rightAlias+"."+c] = nil
+					if rightAlias != rightName {
+						m[rightName+"."+c] = nil
+					}
+				}
+				joinedRows = append(joinedRows, m)
+			} else {
+				for _, rRow := range matches {
+					m := buildJoinMergedRow(lRow, leftName, leftAlias, leftCols, rRow, rightName, rightAlias, rightCols)
+					joinedRows = append(joinedRows, m)
+				}
+			}
+		}
+
 		stmt.Columns = origCols
 		stmt.GroupBy = origGroupBy
 		stmt.Having = origHaving
 		stmt.OrderBy = origOrderBy
 		stmt.Limit = origLimit
 		stmt.Offset = origOffset
-		return nil, nil
-	}
+	} else {
+		// INNER JOIN: use the existing execHashJoin path.
+		hashRows, hCols, ok := db.execHashJoin(stmt)
 
-	hashRows, hashCols, ok := db.execHashJoin(stmt)
+		stmt.Columns = origCols
+		stmt.GroupBy = origGroupBy
+		stmt.Having = origHaving
+		stmt.OrderBy = origOrderBy
+		stmt.Limit = origLimit
+		stmt.Offset = origOffset
 
-	stmt.Columns = origCols
-	stmt.GroupBy = origGroupBy
-	stmt.Having = origHaving
-	stmt.OrderBy = origOrderBy
-	stmt.Limit = origLimit
-	stmt.Offset = origOffset
+		if !ok {
+			return nil, nil
+		}
 
-	if !ok {
-		return nil, nil
-	}
+		leftName = db.resolveTableName(info.leftTable)
+		leftAlias = info.leftAlias
+		if leftAlias == "" {
+			leftAlias = leftName
+		}
+		rightName = db.resolveTableName(info.rightTable)
+		rightAlias = info.rightAlias
+		if rightAlias == "" {
+			rightAlias = rightName
+		}
 
-	leftName := db.resolveTableName(info.leftTable)
-	leftAlias := info.leftAlias
-	if leftAlias == "" {
-		leftAlias = leftName
-	}
-	rightName := db.resolveTableName(info.rightTable)
-	rightAlias := info.rightAlias
-	if rightAlias == "" {
-		rightAlias = rightName
-	}
+		leftCols = db.columnOrder[leftName]
+		rightCols = db.columnOrder[rightName]
+		nLeft := len(leftCols)
+		hashCols = hCols
 
-	leftCols := db.columnOrder[leftName]
-	rightCols := db.columnOrder[rightName]
-	nLeft := len(leftCols)
-
-	// Build rows keyed by both unqualified and table-qualified column names so
-	// that expressions like "d.name" and "e.id" resolve to the correct table's value.
-	joinedRows := make([]map[string]interface{}, len(hashRows))
-	for i, row := range hashRows {
-		m := make(map[string]interface{}, len(hashCols)+nLeft+len(rightCols))
-		for j, col := range hashCols {
-			if j >= len(row) {
-				break
-			}
-			val := row[j]
-			m[col] = val // unqualified (last write wins for shared names)
-			if j < nLeft {
-				m[leftAlias+"."+leftCols[j]] = val
-				if leftAlias != leftName {
-					m[leftName+"."+leftCols[j]] = val
+		// Build rows keyed by both unqualified and table-qualified column names so
+		// that expressions like "d.name" and "e.id" resolve to the correct table's value.
+		joinedRows = make([]map[string]interface{}, len(hashRows))
+		for i, row := range hashRows {
+			m := make(map[string]interface{}, len(hashCols)+nLeft+len(rightCols))
+			for j, col := range hashCols {
+				if j >= len(row) {
+					break
 				}
-			} else {
-				rj := j - nLeft
-				if rj < len(rightCols) {
-					m[rightAlias+"."+rightCols[rj]] = val
-					if rightAlias != rightName {
-						m[rightName+"."+rightCols[rj]] = val
+				val := row[j]
+				m[col] = val // unqualified (last write wins for shared names)
+				if j < nLeft {
+					m[leftAlias+"."+leftCols[j]] = val
+					if leftAlias != leftName {
+						m[leftName+"."+leftCols[j]] = val
+					}
+				} else {
+					rj := j - nLeft
+					if rj < len(rightCols) {
+						m[rightAlias+"."+rightCols[rj]] = val
+						if rightAlias != rightName {
+							m[rightName+"."+rightCols[rj]] = val
+						}
 					}
 				}
 			}
+			joinedRows[i] = m
 		}
-		joinedRows[i] = m
 	}
 
 	// Compile the aggregate query.
 	cg := CG.NewCompiler()
 	combinedCols := append(append([]string{}, leftCols...), rightCols...)
+	nLeft := len(leftCols)
 	leftSchema := make(map[string]int, len(leftCols))
 	for i, c := range leftCols {
 		leftSchema[c] = i
@@ -1563,9 +2054,9 @@ func (db *Database) execJoinAggregate(stmt *QP.SelectStmt) (*Rows, error) {
 		rightSchema[c] = nLeft + i
 	}
 	multiSchemas := map[string]map[string]int{
-		leftName:  leftSchema,
-		leftAlias: leftSchema,
-		rightName: rightSchema,
+		leftName:   leftSchema,
+		leftAlias:  leftSchema,
+		rightName:  rightSchema,
 		rightAlias: rightSchema,
 	}
 	cg.SetMultiTableSchema(multiSchemas, combinedCols)
@@ -1603,4 +2094,78 @@ func (db *Database) execJoinAggregate(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 
 	return &Rows{Columns: cols, Data: results}, nil
+}
+
+// execTableFuncQuery handles SELECT ... FROM table_func(args) [AS alias] ...
+func (db *Database) execTableFuncQuery(stmt *QP.SelectStmt) (*Rows, error) {
+fromRef := stmt.From
+tf := fromRef.TableFunc
+
+// Evaluate function arguments as constants
+evalArgs := make([]interface{}, len(tf.Args))
+for i, arg := range tf.Args {
+evalArgs[i] = evalLiteralExpr(arg)
+}
+
+// Look up table function in extension registry
+tableFn, ok := ext.GetTableFunction(tf.Name)
+if !ok {
+return nil, fmt.Errorf("no such table function: %s", tf.Name)
+}
+
+// Call the table function
+rowMaps, err := tableFn.Rows(evalArgs)
+if err != nil {
+return nil, err
+}
+
+// Standard column order for json_each/json_tree style table functions
+stdCols := []string{"key", "value", "type", "atom", "id", "parent", "fullkey", "path"}
+
+if len(rowMaps) == 0 {
+cols := fromRef.TableFuncCols
+if len(cols) == 0 {
+cols = stdCols
+}
+return &Rows{Columns: cols, Data: [][]interface{}{}}, nil
+}
+
+// Determine column order
+cols := fromRef.TableFuncCols
+if len(cols) == 0 {
+cols = stdCols
+}
+
+alias := fromRef.Alias
+if alias == "" {
+alias = strings.ToLower(tf.Name)
+}
+
+// Materialize rows as temp table
+colTypes := make(map[string]string)
+for _, col := range cols {
+colTypes[col] = "TEXT"
+}
+db.tables[alias] = colTypes
+db.columnOrder[alias] = cols
+rows := make([]map[string]interface{}, len(rowMaps))
+for i, rm := range rowMaps {
+row := make(map[string]interface{})
+for _, col := range cols {
+row[col] = rm[col]
+}
+rows[i] = row
+}
+db.data[alias] = rows
+
+origFrom := stmt.From
+stmt.From = &QP.TableRef{Name: alias, Alias: alias}
+result, execErr := db.execSelectStmt(stmt)
+stmt.From = origFrom
+
+delete(db.tables, alias)
+delete(db.columnOrder, alias)
+delete(db.data, alias)
+
+return result, execErr
 }

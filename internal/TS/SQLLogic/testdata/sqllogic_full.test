@@ -1,0 +1,209 @@
+# sqllogic_full.test - Comprehensive SQL tests covering many SQL features
+# Based on SQLite SQLLogicTest format
+
+# ----- DDL -----
+
+statement ok
+CREATE TABLE t1 (a INTEGER, b INTEGER, c INTEGER)
+
+statement ok
+CREATE TABLE t2 (x INTEGER, y INTEGER, z INTEGER)
+
+statement ok
+CREATE INDEX t1_a_b ON t1(a, b)
+
+statement ok
+CREATE INDEX t1_c ON t1(c)
+
+statement ok
+INSERT INTO t1 VALUES (1, 2, 3)
+
+statement ok
+INSERT INTO t1 VALUES (4, 5, 6)
+
+statement ok
+INSERT INTO t1 VALUES (7, 8, 9)
+
+# t2.x matches t1.a so equi-joins on t1.a = t2.x produce results.
+statement ok
+INSERT INTO t2 VALUES (1, 30, 10)
+
+statement ok
+INSERT INTO t2 VALUES (4, 60, 40)
+
+statement ok
+INSERT INTO t2 VALUES (7, 90, 70)
+
+# ----- Simple joins -----
+
+query III rowsort
+SELECT t1.a, t1.b, t2.y FROM t1 INNER JOIN t2 ON t1.a = t2.x
+----
+1  2  30
+4  5  60
+7  8  90
+
+query III rowsort
+SELECT t1.a, t1.b, t2.y FROM t1 INNER JOIN t2 ON t1.b < t2.y
+----
+1  2  30
+1  2  60
+1  2  90
+4  5  30
+4  5  60
+4  5  90
+7  8  30
+7  8  60
+7  8  90
+
+# ----- Three-way joins -----
+
+statement ok
+CREATE TABLE t3 (p INTEGER, q INTEGER)
+
+# t3.p values match t1.b values (2 and 5).
+statement ok
+INSERT INTO t3 VALUES (2, 100)
+
+statement ok
+INSERT INTO t3 VALUES (2, 200)
+
+statement ok
+INSERT INTO t3 VALUES (5, 300)
+
+query III rowsort
+SELECT t1.a, t2.y, t3.q FROM t1 INNER JOIN t2 ON t1.a = t2.x INNER JOIN t3 ON t1.b = t3.p
+----
+1  30  100
+1  30  200
+4  60  300
+
+# ----- Aggregates -----
+
+query I
+SELECT SUM(t1.b) FROM t1
+----
+15
+
+query R
+SELECT AVG(t1.c) FROM t1
+----
+6
+
+# ----- DISTINCT -----
+
+query I rowsort
+SELECT DISTINCT a FROM t1
+----
+1
+4
+7
+
+# ----- GROUP BY -----
+
+query II rowsort
+SELECT t1.a, COUNT(*) FROM t1 GROUP BY t1.a
+----
+1  1
+4  1
+7  1
+
+# ----- ORDER BY with aggregate -----
+
+query II
+SELECT t1.a, COUNT(*) FROM t1 GROUP BY t1.a ORDER BY t1.a
+----
+1  1
+4  1
+7  1
+
+# ----- LIMIT with ORDER BY -----
+
+query I
+SELECT t1.a FROM t1 ORDER BY t1.a LIMIT 3
+----
+1
+4
+7
+
+# ----- Subqueries -----
+
+query I rowsort
+SELECT a FROM t1 WHERE a IN (SELECT x FROM t2)
+----
+1
+4
+7
+
+query I rowsort
+SELECT a FROM t1 WHERE a NOT IN (SELECT x FROM t2)
+----
+
+query I rowsort
+SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE t2.x = t1.a)
+----
+1
+4
+7
+
+# ----- Scalar subquery -----
+
+query II rowsort
+SELECT a, (SELECT MAX(b) FROM t1 t2 WHERE t2.a = t1.a) FROM t1
+----
+1  2
+4  5
+7  8
+
+# ----- NULL handling -----
+
+statement ok
+CREATE TABLE nulls (a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO nulls VALUES (NULL, 1)
+
+statement ok
+INSERT INTO nulls VALUES (2, NULL)
+
+statement ok
+INSERT INTO nulls VALUES (NULL, NULL)
+
+query I
+SELECT COUNT(*) FROM nulls
+----
+3
+
+query I
+SELECT COUNT(a) FROM nulls
+----
+1
+
+query I
+SELECT COUNT(b) FROM nulls
+----
+1
+
+query II rowsort
+SELECT a, COALESCE(a, 0) FROM nulls
+----
+NULL  0
+NULL  0
+2  2
+
+# ----- Cleanup -----
+
+statement ok
+DROP TABLE t1
+
+statement ok
+DROP TABLE t2
+
+statement ok
+DROP TABLE t3
+
+statement ok
+DROP TABLE nulls
+
+
+

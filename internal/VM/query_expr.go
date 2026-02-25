@@ -4,7 +4,6 @@ import (
 	"math"
 	"math/big"
 	"strconv"
-
 )
 
 type ExprEvaluator struct {

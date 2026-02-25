@@ -119,8 +119,10 @@ func (c *Compiler) compileColumnRef(col *QP.ColumnRef) int {
 		return reg
 	}
 
+	// Column not found in any schema - emit a column reference anyway
+	// so the VM can try to resolve it at runtime (e.g., for correlated subqueries)
 	if colIdx == -1 {
-		c.program.EmitLoadConst(reg, nil)
+		c.program.EmitColumnWithTable(reg, cursorID, -1, col.Name)
 		return reg
 	}
 
@@ -171,8 +173,40 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		}
 	}
 
-	leftReg := c.compileExpr(expr.Left)
-	rightReg := c.compileExpr(expr.Right)
+	// Detect COLLATE on either operand; compile the inner expression (not the
+	// CollateExpr wrapper) and apply the collation transform to both compiled
+	// values so that comparisons are collation-aware at the bytecode level.
+	var collation string
+	leftExpr := QP.Expr(expr.Left)
+	rightExpr := QP.Expr(expr.Right)
+	if ce, ok := rightExpr.(*QP.CollateExpr); ok {
+		collation = ce.Collation
+		rightExpr = ce.Expr
+	} else if ce, ok := leftExpr.(*QP.CollateExpr); ok {
+		collation = ce.Collation
+		leftExpr = ce.Expr
+	}
+
+	leftReg := c.compileExpr(leftExpr)
+	rightReg := c.compileExpr(rightExpr)
+
+	// Apply collation transform to both operands.
+	if collation != "" {
+		switch strings.ToUpper(collation) {
+		case "NOCASE":
+			lc := c.ra.Alloc()
+			c.program.EmitOpWithDst(VM.OpUpper, int32(leftReg), 0, lc)
+			rc := c.ra.Alloc()
+			c.program.EmitOpWithDst(VM.OpUpper, int32(rightReg), 0, rc)
+			leftReg, rightReg = lc, rc
+		case "RTRIM":
+			lc := c.ra.Alloc()
+			c.program.EmitOpWithDst(VM.OpRTrim, int32(leftReg), 0, lc)
+			rc := c.ra.Alloc()
+			c.program.EmitOpWithDst(VM.OpRTrim, int32(rightReg), 0, rc)
+			leftReg, rightReg = lc, rc
+		}
+	}
 
 	dst := c.ra.Alloc()
 
@@ -232,6 +266,9 @@ func (c *Compiler) compileBinaryExpr(expr *QP.BinaryExpr) int {
 		return dst
 	case QP.TokenGlob:
 		c.program.EmitOpWithDst(VM.OpGlob, int32(leftReg), int32(rightReg), dst)
+		return dst
+	case QP.TokenMatch:
+		c.program.EmitOpWithDst(VM.OpMatch, int32(leftReg), int32(rightReg), dst)
 		return dst
 	case QP.TokenNotLike:
 		c.program.EmitOpWithDst(VM.OpNotLike, int32(leftReg), int32(rightReg), dst)
@@ -512,7 +549,7 @@ func (c *Compiler) compileFuncCall(call *QP.FuncCall) int {
 		}
 	case "RANDOM":
 		c.program.EmitOpWithDst(VM.OpRandom, 0, 0, dst)
-		case "ROUND":
+	case "ROUND":
 		if len(argRegs) >= 2 {
 			c.program.EmitOp(VM.OpRound, int32(argRegs[0]), int32(argRegs[1]))
 			c.program.Instructions[len(c.program.Instructions)-1].P4 = dst
@@ -745,16 +782,16 @@ func (c *Compiler) expandStarColumns(columns []QP.Expr) []QP.Expr {
 }
 
 func (c *Compiler) compileAnyAllExpr(e *QP.AnyAllExpr) int {
-// Compile the left side into a register
-leftReg := c.compileExpr(e.Left)
-// Allocate result register
-dstReg := c.ra.Alloc()
-// Emit OpAnyAllSubquery: P1=dstReg, P2=leftReg, P4=AnyAllExpr
-c.program.Instructions = append(c.program.Instructions, VM.Instruction{
-Op: VM.OpAnyAllSubquery,
-P1: int32(dstReg),
-P2: int32(leftReg),
-P4: e,
-})
-return dstReg
+	// Compile the left side into a register
+	leftReg := c.compileExpr(e.Left)
+	// Allocate result register
+	dstReg := c.ra.Alloc()
+	// Emit OpAnyAllSubquery: P1=dstReg, P2=leftReg, P4=AnyAllExpr
+	c.program.Instructions = append(c.program.Instructions, VM.Instruction{
+		Op: VM.OpAnyAllSubquery,
+		P1: int32(dstReg),
+		P2: int32(leftReg),
+		P4: e,
+	})
+	return dstReg
 }

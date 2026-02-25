@@ -2,6 +2,7 @@ package DS
 
 import (
 	"github.com/cyw0ng95/sqlvibe/internal/PB"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 type PageManager struct {
@@ -13,6 +14,10 @@ type PageManager struct {
 }
 
 func NewPageManager(file PB.File, pageSize int) (*PageManager, error) {
+	util.AssertNotNil(file, "file")
+	util.Assert(pageSize > 0, "page size must be positive: %d", pageSize)
+	util.Assert(pageSize >= MinPageSize, "page size must be at least %d", MinPageSize)
+	util.Assert(pageSize <= MaxPageSize, "page size must be at most %d", MaxPageSize)
 	pm := &PageManager{
 		file:     file,
 		pageSize: pageSize,
@@ -54,6 +59,9 @@ func (pm *PageManager) Header() *DatabaseHeader {
 }
 
 func (pm *PageManager) ReadPage(pageNum uint32) (*Page, error) {
+	util.Assert(pageNum > 0, "page number cannot be zero")
+	util.AssertNotNil(pm, "PageManager")
+	util.AssertNotNil(pm.file, "file")
 	if pageNum == 0 || pageNum > pm.numPages {
 		return nil, ErrInvalidPage
 	}
@@ -81,6 +89,10 @@ func (pm *PageManager) ReadPage(pageNum uint32) (*Page, error) {
 }
 
 func (pm *PageManager) WritePage(page *Page) error {
+	util.AssertNotNil(pm, "PageManager")
+	util.AssertNotNil(pm.file, "file")
+	util.AssertNotNil(page, "page")
+	util.Assert(page.Num > 0, "page number cannot be zero")
 	offset := int64(page.Num-1) * int64(pm.pageSize)
 	_, err := pm.file.WriteAt(page.Data, offset)
 	if err != nil {
@@ -91,6 +103,8 @@ func (pm *PageManager) WritePage(page *Page) error {
 }
 
 func (pm *PageManager) AllocatePage() (uint32, error) {
+	util.AssertNotNil(pm, "PageManager")
+	util.AssertNotNil(pm.file, "file")
 	if len(pm.freeList) > 0 {
 		pageNum := pm.freeList[len(pm.freeList)-1]
 		pm.freeList = pm.freeList[:len(pm.freeList)-1]
@@ -115,6 +129,8 @@ func (pm *PageManager) AllocatePage() (uint32, error) {
 }
 
 func (pm *PageManager) FreePage(pageNum uint32) error {
+	util.Assert(pageNum > 0, "page number cannot be zero: %d", pageNum)
+	util.AssertNotNil(pm, "PageManager")
 	if pageNum == 0 || pageNum > pm.numPages {
 		return ErrInvalidPage
 	}

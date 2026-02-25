@@ -1,0 +1,174 @@
+# subquery.test - Subquery tests (IN, EXISTS, scalar subqueries)
+
+# ----- Setup -----
+
+statement ok
+CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, total REAL)
+
+statement ok
+CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT, active INTEGER)
+
+statement ok
+INSERT INTO customers VALUES (1, 'Alice', 1)
+
+statement ok
+INSERT INTO customers VALUES (2, 'Bob', 1)
+
+statement ok
+INSERT INTO customers VALUES (3, 'Charlie', 0)
+
+statement ok
+INSERT INTO customers VALUES (4, 'Diana', 1)
+
+statement ok
+INSERT INTO orders VALUES (1, 1, 100.0)
+
+statement ok
+INSERT INTO orders VALUES (2, 1, 200.0)
+
+statement ok
+INSERT INTO orders VALUES (3, 2, 150.0)
+
+statement ok
+INSERT INTO orders VALUES (4, 4, 300.0)
+
+# ----- IN subquery -----
+
+query I rowsort
+SELECT id FROM customers WHERE id IN (SELECT customer_id FROM orders)
+----
+1
+2
+4
+
+query T rowsort
+SELECT name FROM customers WHERE id IN (SELECT customer_id FROM orders WHERE total > 100)
+----
+Alice
+Bob
+Diana
+
+# ----- NOT IN subquery -----
+
+query T rowsort
+SELECT name FROM customers WHERE id NOT IN (SELECT customer_id FROM orders)
+----
+Charlie
+
+query I
+SELECT COUNT(*) FROM customers WHERE id NOT IN (SELECT customer_id FROM orders WHERE total < 200)
+----
+2
+
+# ----- EXISTS subquery -----
+
+query I rowsort
+SELECT id FROM customers c WHERE EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id)
+----
+1
+2
+4
+
+query T rowsort
+SELECT name FROM customers c WHERE EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id AND o.total > 150)
+----
+Alice
+Diana
+
+# ----- NOT EXISTS subquery -----
+
+query T rowsort
+SELECT name FROM customers c WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id)
+----
+Charlie
+
+# ----- Scalar subquery in SELECT -----
+
+query TI
+SELECT name, (SELECT COUNT(*) FROM orders WHERE customer_id = customers.id) AS order_count FROM customers ORDER BY id
+----
+Alice    2
+Bob      1
+Charlie  0
+Diana    1
+
+query TR
+SELECT name, (SELECT SUM(total) FROM orders WHERE customer_id = customers.id) AS total_spent FROM customers ORDER BY id
+----
+Alice    300
+Bob      150
+Charlie  NULL
+Diana    300
+
+# ----- Scalar subquery in WHERE -----
+
+query T rowsort
+SELECT name FROM customers WHERE (SELECT COUNT(*) FROM orders WHERE customer_id = customers.id) > 0
+----
+Alice
+Bob
+Diana
+
+query T rowsort
+SELECT name FROM customers WHERE (SELECT SUM(total) FROM orders WHERE customer_id = customers.id) >= 200
+----
+Alice
+Diana
+
+# ----- Correlated subquery -----
+
+query TI rowsort
+SELECT c.name, (SELECT MAX(total) FROM orders WHERE customer_id = c.id) AS max_order FROM customers c
+----
+Alice    200
+Bob      150
+Charlie  NULL
+Diana    300
+
+# ----- Subquery with LIMIT -----
+
+query I rowsort
+SELECT id FROM customers WHERE id IN (SELECT customer_id FROM orders ORDER BY total DESC LIMIT 2)
+----
+1
+4
+
+# ----- Nested subquery -----
+
+query I rowsort
+SELECT id FROM customers WHERE id IN (SELECT customer_id FROM orders WHERE total > (SELECT AVG(total) FROM orders))
+----
+1
+4
+
+# ----- Subquery returning multiple columns -----
+
+statement ok
+CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, price REAL)
+
+statement ok
+INSERT INTO items VALUES (1, 'Widget', 10.0)
+
+statement ok
+INSERT INTO items VALUES (2, 'Gadget', 20.0)
+
+statement ok
+INSERT INTO items VALUES (3, 'Doohickey', 15.0)
+
+query TT rowsort
+SELECT name, (SELECT name FROM items WHERE price = (SELECT MAX(price) FROM items)) AS most_expensive FROM items
+----
+Doohickey  Gadget
+Gadget     Gadget
+Widget     Gadget
+
+# ----- Cleanup -----
+
+statement ok
+DROP TABLE orders
+
+statement ok
+DROP TABLE customers
+
+statement ok
+DROP TABLE items

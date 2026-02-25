@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	dbPath     = flag.String("db", "test.db", "Database file path")
-	echoMode   = flag.Bool("echo", false, "Echo SQL statements")
+	dbPath      = flag.String("db", "test.db", "Database file path")
+	echoMode    = flag.Bool("echo", false, "Echo SQL statements")
 	showHeaders = flag.Bool("headers", true, "Show column headers")
 )
 
@@ -111,6 +111,28 @@ func formatRow(row []interface{}) []string {
 	return result
 }
 
+// showExtensions prints the list of loaded extensions.
+func showExtensions(db *sqlvibe.Database) {
+	rows, err := db.Query("SELECT * FROM sqlvibe_extensions")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return
+	}
+	if rows == nil || len(rows.Columns) == 0 {
+		fmt.Println("No extensions loaded.")
+		return
+	}
+	// Print header
+	fmt.Println(strings.Join(rows.Columns, " | "))
+	fmt.Println(strings.Repeat("-", len(strings.Join(rows.Columns, " | "))))
+	for _, row := range rows.Data {
+		fmt.Println(strings.Join(formatRow(row), " | "))
+	}
+	if len(rows.Data) == 0 {
+		fmt.Println("No extensions loaded.")
+	}
+}
+
 // handleMetaCommand processes dot commands. Returns true to exit the shell.
 func handleMetaCommand(db *sqlvibe.Database, line string) bool {
 	parts := strings.Fields(line)
@@ -124,6 +146,7 @@ func handleMetaCommand(db *sqlvibe.Database, line string) bool {
 		fmt.Println(".tables              List all tables")
 		fmt.Println(".schema [table]      Show CREATE statement(s)")
 		fmt.Println(".indexes [table]     Show indexes")
+		fmt.Println(".ext                 List loaded extensions")
 		fmt.Println(".headers on|off      Toggle column headers")
 		fmt.Println(".exit, .quit         Exit the shell")
 
@@ -175,6 +198,9 @@ func handleMetaCommand(db *sqlvibe.Database, line string) bool {
 			fmt.Printf("CREATE %sINDEX %s ON %s (%s);\n",
 				unique, idx.Name, idx.Table, strings.Join(idx.Columns, ", "))
 		}
+
+	case ".ext":
+		showExtensions(db)
 
 	case ".headers":
 		if len(parts) > 1 {

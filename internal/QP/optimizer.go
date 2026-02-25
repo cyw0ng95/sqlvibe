@@ -71,17 +71,29 @@ func IsPushableExpr(expr Expr) bool {
 	}
 	switch bin.Op {
 	case TokenEq, TokenNe, TokenLt, TokenLe, TokenGt, TokenGe:
-	default:
-		return false
+		_, lCol := bin.Left.(*ColumnRef)
+		_, rLit := bin.Right.(*Literal)
+		if lCol && rLit {
+			return true
+		}
+		_, lLit := bin.Left.(*Literal)
+		_, rCol := bin.Right.(*ColumnRef)
+		return lLit && rCol
+	case TokenBetween:
+		// col BETWEEN low AND high — both bounds must be literals
+		_, isCol := bin.Left.(*ColumnRef)
+		if !isCol {
+			return false
+		}
+		rangeBin, ok := bin.Right.(*BinaryExpr)
+		if !ok || rangeBin.Op != TokenAnd {
+			return false
+		}
+		_, loLit := rangeBin.Left.(*Literal)
+		_, hiLit := rangeBin.Right.(*Literal)
+		return loLit && hiLit
 	}
-	_, lCol := bin.Left.(*ColumnRef)
-	_, rLit := bin.Right.(*Literal)
-	if lCol && rLit {
-		return true
-	}
-	_, lLit := bin.Left.(*Literal)
-	_, rCol := bin.Right.(*ColumnRef)
-	return lLit && rCol
+	return false
 }
 
 // EvalPushdown evaluates a single pushable predicate against row.
@@ -89,6 +101,19 @@ func IsPushableExpr(expr Expr) bool {
 // Callers must only pass expressions where IsPushableExpr(expr) is true.
 func EvalPushdown(expr Expr, row map[string]interface{}) bool {
 	bin := expr.(*BinaryExpr)
+
+	// Handle BETWEEN separately: col BETWEEN lo AND hi
+	if bin.Op == TokenBetween {
+		colRef := bin.Left.(*ColumnRef)
+		rangeBin := bin.Right.(*BinaryExpr)
+		lo := rangeBin.Left.(*Literal).Value
+		hi := rangeBin.Right.(*Literal).Value
+		val := row[colRef.Name]
+		if val == nil {
+			return false
+		}
+		return pdCompare(val, lo) >= 0 && pdCompare(val, hi) <= 0
+	}
 
 	var colRef *ColumnRef
 	var lit *Literal
@@ -245,4 +270,143 @@ func pdToStr(v interface{}) string {
 		return "0"
 	}
 	return ""
+}
+
+// IndexMetaQP mirrors DS.IndexMeta but in the QP package to avoid circular deps.
+type IndexMetaQP struct {
+	Name      string
+	TableName string
+	Columns   []string
+}
+
+// CoversColumns returns true if all required columns are present in this index.
+func (im *IndexMetaQP) CoversColumns(required []string) bool {
+	colSet := make(map[string]bool, len(im.Columns))
+	for _, c := range im.Columns {
+		colSet[c] = true
+	}
+	for _, r := range required {
+		if !colSet[r] {
+			return false
+		}
+	}
+	return true
+}
+
+// FindCoveringIndex returns the first index that covers all required columns, or nil.
+func FindCoveringIndex(indexes []*IndexMetaQP, required []string) *IndexMetaQP {
+	for _, idx := range indexes {
+		if idx.CoversColumns(required) {
+			return idx
+		}
+	}
+	return nil
+}
+
+// SelectBestIndex picks the best index for a query given a filter column and
+// required output columns.
+func SelectBestIndex(indexes []*IndexMetaQP, filterCol string, required []string) *IndexMetaQP {
+	for _, idx := range indexes {
+		if len(idx.Columns) > 0 && idx.Columns[0] == filterCol && idx.CoversColumns(required) {
+			return idx
+		}
+	}
+	for _, idx := range indexes {
+		if len(idx.Columns) > 0 && idx.Columns[0] == filterCol {
+			return idx
+		}
+	}
+	return FindCoveringIndex(indexes, required)
+}
+
+// FindCoveringIndexForColumns finds an index that covers all required columns,
+// preferring one where filterCol is the leading column.
+// Returns (indexName, filterFirst) where filterFirst is true when the filter
+// column is the leading column of the chosen index.
+func FindCoveringIndexForColumns(indexes []*IndexMetaQP, required []string, filterCol string) (name string, filterFirst bool) {
+	// First pass: prefer index where filterCol is leading AND covers all required
+	for _, idx := range indexes {
+		if len(idx.Columns) > 0 && idx.Columns[0] == filterCol && idx.CoversColumns(required) {
+			return idx.Name, true
+		}
+	}
+	// Second pass: any covering index
+	for _, idx := range indexes {
+		if idx.CoversColumns(required) {
+			return idx.Name, false
+		}
+	}
+	return "", false
+}
+
+// TableStats holds simple cardinality information about a table used by the
+// cost-based index selector.
+type TableStats struct {
+	RowCount int
+}
+
+// IndexSelectivity estimates the fraction of rows matching a predicate on an index.
+// Uses ANALYZE statistics if available; otherwise falls back to heuristics.
+func IndexSelectivity(idx *IndexMetaQP, expr Expr, stats *TableStats) float64 {
+	bin, ok := expr.(*BinaryExpr)
+	if !ok {
+		return 1.0
+	}
+	switch bin.Op {
+	case TokenEq:
+		return 0.01 // col = const → ~1% match
+	case TokenLt, TokenGt:
+		return 0.33 // range → ~33% match
+	case TokenLe, TokenGe:
+		return 0.35
+	case TokenBetween:
+		return 0.10 // col BETWEEN a AND b
+	case TokenLike:
+		// Simple heuristic: prefix LIKE 'foo%' → 5%
+		return 0.05
+	}
+	return 1.0
+}
+
+// SelectBestIndexByCost chooses the index with the lowest estimated cost for a
+// query given the WHERE expression and table statistics.
+// Cost = selectivity * tableRows + 1 (constant for index-lookup overhead).
+func SelectBestIndexByCost(indexes []*IndexMetaQP, expr Expr, stats *TableStats) *IndexMetaQP {
+	rowCount := 1000
+	if stats != nil && stats.RowCount > 0 {
+		rowCount = stats.RowCount
+	}
+	var best *IndexMetaQP
+	bestCost := float64(rowCount) + 1 // full scan cost as baseline
+	for _, idx := range indexes {
+		sel := IndexSelectivity(idx, expr, stats)
+		cost := sel*float64(rowCount) + 1
+		if cost < bestCost {
+			bestCost = cost
+			best = idx
+		}
+	}
+	return best
+}
+
+// skipScanCardinalityRatio is the maximum leading-column cardinality relative
+// to table row count for which a skip scan is considered cost-effective.
+const skipScanCardinalityRatio = 10
+
+// skipScanAbsoluteThreshold is the absolute leading-column cardinality below
+// which a skip scan is always considered cost-effective regardless of table size.
+const skipScanAbsoluteThreshold = 100
+
+// CanSkipScan returns true when a skip scan on index is cost-effective.
+func CanSkipScan(indexCols []string, filterCols []string, leadingCardinality, rowCount int) bool {
+	if len(indexCols) <= len(filterCols) {
+		return false
+	}
+	offset := len(indexCols) - len(filterCols)
+	for i, fc := range filterCols {
+		if indexCols[offset+i] != fc {
+			return false
+		}
+	}
+	return leadingCardinality < rowCount/skipScanCardinalityRatio || leadingCardinality < skipScanAbsoluteThreshold
 }

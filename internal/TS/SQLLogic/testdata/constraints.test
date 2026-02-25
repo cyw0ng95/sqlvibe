@@ -1,0 +1,169 @@
+# constraints.test - Constraint tests
+
+# ----- PRIMARY KEY -----
+
+statement ok
+CREATE TABLE pktest (id INTEGER PRIMARY KEY, name TEXT)
+
+statement ok
+INSERT INTO pktest VALUES (1, 'one')
+
+statement ok
+INSERT INTO pktest VALUES (2, 'two')
+
+query I
+SELECT COUNT(*) FROM pktest
+----
+2
+
+# ----- UNIQUE constraint -----
+
+statement ok
+CREATE TABLE uniquetest (id INTEGER, email TEXT UNIQUE)
+
+statement ok
+INSERT INTO uniquetest VALUES (1, 'alice@example.com')
+
+statement ok
+INSERT INTO uniquetest VALUES (2, 'bob@example.com')
+
+query I
+SELECT COUNT(*) FROM uniquetest
+----
+2
+
+# ----- NOT NULL constraint -----
+
+statement ok
+CREATE TABLE nntest (id INTEGER PRIMARY KEY, name TEXT NOT NULL)
+
+statement ok
+INSERT INTO nntest VALUES (1, 'Alice')
+
+query T
+SELECT name FROM nntest
+----
+Alice
+
+# ----- DEFAULT values -----
+
+statement ok
+CREATE TABLE defaults (id INTEGER PRIMARY KEY, status TEXT DEFAULT 'active', count INTEGER DEFAULT 0)
+
+statement ok
+INSERT INTO defaults (id) VALUES (1)
+
+statement ok
+INSERT INTO defaults (id, status) VALUES (2, 'pending')
+
+statement ok
+INSERT INTO defaults (id, count) VALUES (3, 10)
+
+query TI rowsort
+SELECT id, status FROM defaults
+----
+1  active
+2  pending
+3  active
+
+query II rowsort
+SELECT id, count FROM defaults
+----
+1  0
+2  0
+3  10
+
+# ----- CHECK constraint -----
+
+statement ok
+CREATE TABLE checktest (id INTEGER PRIMARY KEY, age INTEGER CHECK (age >= 0))
+
+statement ok
+INSERT INTO checktest VALUES (1, 25)
+
+statement ok
+INSERT INTO checktest VALUES (2, 0)
+
+query II rowsort
+SELECT id, age FROM checktest
+----
+1  25
+2  0
+
+# ----- FOREIGN KEY -----
+
+statement ok
+CREATE TABLE parent (id INTEGER PRIMARY KEY)
+
+statement ok
+CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id))
+
+statement ok
+INSERT INTO parent VALUES (1)
+
+statement ok
+INSERT INTO parent VALUES (2)
+
+statement ok
+INSERT INTO child VALUES (1, 1)
+
+statement ok
+INSERT INTO child VALUES (2, 2)
+
+query II rowsort
+SELECT id, parent_id FROM child
+----
+1  1
+2  2
+
+# ----- Composite PRIMARY KEY -----
+
+statement ok
+CREATE TABLE composite (a INTEGER, b INTEGER, val TEXT, PRIMARY KEY (a, b))
+
+statement ok
+INSERT INTO composite VALUES (1, 1, 'a')
+
+statement ok
+INSERT INTO composite VALUES (1, 2, 'b')
+
+statement ok
+INSERT INTO composite VALUES (2, 1, 'c')
+
+query TI rowsort
+SELECT a, val FROM composite
+----
+1  a
+1  b
+2  c
+
+query T
+SELECT val FROM composite WHERE a = 1 AND b = 2
+----
+b
+
+# ----- Cleanup -----
+
+statement ok
+DROP TABLE pktest
+
+statement ok
+DROP TABLE uniquetest
+
+statement ok
+DROP TABLE nntest
+
+statement ok
+DROP TABLE defaults
+
+statement ok
+DROP TABLE checktest
+
+statement ok
+DROP TABLE child
+
+statement ok
+DROP TABLE parent
+
+statement ok
+DROP TABLE composite

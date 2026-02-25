@@ -2,6 +2,7 @@ package sqlvibe
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
 )
@@ -37,6 +38,32 @@ func (db *Database) getTableRowCount(tableName string) int64 {
 		return 0
 	}
 	return int64(len(rows))
+}
+
+// handleReindex handles REINDEX [target].
+// If target is empty, all indexes are rebuilt. If target matches a table name,
+// all indexes on that table are rebuilt. Otherwise, the named index is rebuilt.
+func (db *Database) handleReindex(stmt *QP.ReindexStmt) (*Rows, error) {
+	if stmt.Target == "" {
+		// Rebuild all indexes.
+		for idxName := range db.indexes {
+			db.buildIndexData(idxName)
+		}
+		return nil, nil
+	}
+	// Rebuild indexes matching the target (by index name or table name).
+	target := strings.ToLower(stmt.Target)
+	rebuilt := false
+	for idxName, idx := range db.indexes {
+		if strings.ToLower(idxName) == target || strings.ToLower(idx.Table) == target {
+			db.buildIndexData(idxName)
+			rebuilt = true
+		}
+	}
+	if !rebuilt {
+		// Target not found — silently succeed (matches SQLite behavior).
+	}
+	return nil, nil
 }
 
 // querySqliteStat1 returns the collected ANALYZE statistics.

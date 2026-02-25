@@ -138,3 +138,66 @@ func (ie *IndexEngine) SkipListColumns() []string {
 func (ie *IndexEngine) SkipList(colName string) *SkipList {
 	return ie.skipLists[colName]
 }
+
+// IndexMeta describes the metadata for a named index.
+type IndexMeta struct {
+	Name      string
+	TableName string
+	Columns   []string
+	IsPrimary bool
+	IsUnique  bool
+}
+
+// CoversColumns returns true if all required columns are present in the index.
+func (im *IndexMeta) CoversColumns(required []string) bool {
+	colSet := make(map[string]bool, len(im.Columns))
+	for _, c := range im.Columns {
+		colSet[c] = true
+	}
+	for _, r := range required {
+		if !colSet[r] {
+			return false
+		}
+	}
+	return true
+}
+
+// getDistinctValues returns all distinct values stored for colName in the bitmap index.
+func (ie *IndexEngine) getDistinctValues(colName string) []Value {
+	if !ie.hasBitmap[colName] {
+		return nil
+	}
+	vals := make([]Value, 0, len(ie.bitmaps[colName]))
+	for key := range ie.bitmaps[colName] {
+		vals = append(vals, ParseValue(key))
+	}
+	return vals
+}
+
+// DistinctCount returns the number of distinct indexed values for colName.
+func (ie *IndexEngine) DistinctCount(colName string) int {
+	if ie.hasBitmap[colName] {
+		return len(ie.bitmaps[colName])
+	}
+	return 0
+}
+
+// SkipScan performs a skip scan over all distinct leading-column values and
+// unions the per-prefix intersections with the filter bitmap.
+func (ie *IndexEngine) SkipScan(leadingCol, filterCol string, filterVal Value) *RoaringBitmap {
+	if !ie.hasBitmap[leadingCol] || !ie.hasBitmap[filterCol] {
+		return nil
+	}
+	filterKey := filterVal.String()
+	filterBM, ok := ie.bitmaps[filterCol][filterKey]
+	if !ok {
+		return NewRoaringBitmap()
+	}
+	result := NewRoaringBitmap()
+	for _, leadBM := range ie.bitmaps[leadingCol] {
+		intersection := leadBM.Clone()
+		intersection.IntersectWith(filterBM)
+		result.UnionInPlace(intersection)
+	}
+	return result
+}

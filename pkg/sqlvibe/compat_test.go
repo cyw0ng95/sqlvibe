@@ -1961,6 +1961,7 @@ func TestRegression_LimitInSubquery_L1(t *testing.T) {
 		})
 	}
 }
+
 // Bug: COALESCE was returning wrong values when first arg is non-NULL
 // Fixed in commit that improved test comparison logic
 func TestRegression_CoalesceNULL_L1(t *testing.T) {

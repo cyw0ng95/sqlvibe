@@ -1,5 +1,9 @@
 package VM
 
+import (
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
+)
+
 const (
 	// MaxCursors is the maximum number of cursors that can be open simultaneously
 	MaxCursors = 256
@@ -40,6 +44,9 @@ func (ca *CursorArray) Open(tableID int) int {
 }
 
 func (ca *CursorArray) OpenTable(tableName string, data []map[string]interface{}, columns []string) int {
+	util.Assert(tableName != "", "table name cannot be empty")
+	util.AssertNotNil(data, "data")
+	util.AssertNotNil(columns, "columns")
 	cursor := &Cursor{
 		ID:        len(ca.cursors),
 		TableName: tableName,
@@ -54,7 +61,10 @@ func (ca *CursorArray) OpenTable(tableName string, data []map[string]interface{}
 }
 
 func (ca *CursorArray) OpenTableAtID(cursorID int, tableName string, data []map[string]interface{}, columns []string) {
-	// fmt.Printf("DEBUG OpenTableAtID: cursorID=%d, tableName=%q\n", cursorID, tableName)
+	util.Assert(cursorID >= 0 && cursorID < MaxCursors, "cursor ID %d out of bounds [0, %d)", cursorID, MaxCursors)
+	util.Assert(tableName != "", "table name cannot be empty")
+	util.AssertNotNil(data, "data")
+	util.AssertNotNil(columns, "columns")
 	// Ensure cursors array is large enough
 	for len(ca.cursors) <= cursorID {
 		ca.cursors = append(ca.cursors, nil)
@@ -72,6 +82,7 @@ func (ca *CursorArray) OpenTableAtID(cursorID int, tableName string, data []map[
 }
 
 func (ca *CursorArray) Next(id int) (map[string]interface{}, bool) {
+	util.Assert(id >= 0 && id < MaxCursors, "cursor ID %d out of bounds [0, %d)", id, MaxCursors)
 	if id < 0 || id >= len(ca.cursors) || ca.cursors[id] == nil {
 		return nil, true
 	}
@@ -85,6 +96,7 @@ func (ca *CursorArray) Next(id int) (map[string]interface{}, bool) {
 }
 
 func (ca *CursorArray) GetRow(id int) (map[string]interface{}, bool) {
+	util.Assert(id >= 0 && id < MaxCursors, "cursor ID %d out of bounds [0, %d)", id, MaxCursors)
 	if id < 0 || id >= len(ca.cursors) || ca.cursors[id] == nil {
 		return nil, true
 	}
@@ -104,6 +116,7 @@ func (ca *CursorArray) GetColumn(id int, colName string) interface{} {
 }
 
 func (ca *CursorArray) Close(id int) error {
+	util.Assert(id >= 0 && id < MaxCursors, "cursor ID %d out of bounds [0, %d)", id, MaxCursors)
 	if id >= 0 && id < len(ca.cursors) {
 		ca.cursors[id] = nil
 		return nil
@@ -112,6 +125,7 @@ func (ca *CursorArray) Close(id int) error {
 }
 
 func (ca *CursorArray) Get(id int) *Cursor {
+	util.Assert(id >= 0 && id < MaxCursors, "cursor ID %d out of bounds [0, %d)", id, MaxCursors)
 	if id >= 0 && id < len(ca.cursors) {
 		result := ca.cursors[id]
 		if result != nil {
@@ -126,18 +140,21 @@ func (ca *CursorArray) Get(id int) *Cursor {
 }
 
 func (ca *CursorArray) SetRowID(id int, rowID int64) {
+	util.Assert(id >= 0 && id < MaxCursors, "cursor ID %d out of bounds [0, %d)", id, MaxCursors)
 	if id >= 0 && id < len(ca.cursors) {
 		ca.cursors[id].RowID = rowID
 	}
 }
 
 func (ca *CursorArray) SetEOF(id int, eof bool) {
+	util.Assert(id >= 0 && id < MaxCursors, "cursor ID %d out of bounds [0, %d)", id, MaxCursors)
 	if id >= 0 && id < len(ca.cursors) {
 		ca.cursors[id].EOF = eof
 	}
 }
 
 func (ca *CursorArray) SetIndex(id int, idx int) {
+	util.Assert(id >= 0 && id < MaxCursors, "cursor ID %d out of bounds [0, %d)", id, MaxCursors)
 	if id >= 0 && id < len(ca.cursors) {
 		ca.cursors[id].Index = idx
 	}

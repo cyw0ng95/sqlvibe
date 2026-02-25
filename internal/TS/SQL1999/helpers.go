@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/glebarez/go-sqlite"
 	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
+	_ "github.com/glebarez/go-sqlite"
 )
 
 func sqlvibeDB(t *testing.T, path string) *sqlvibe.Database {

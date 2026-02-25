@@ -102,6 +102,8 @@ func NewTransactionManager(pm *DS.PageManager) *TransactionManager {
 
 // EnableWAL enables Write-Ahead Logging mode
 func (tm *TransactionManager) EnableWAL(walPath string, pageSize int) error {
+	util.Assert(walPath != "", "WAL path cannot be empty")
+	util.Assert(pageSize > 0, "page size must be positive: %d", pageSize)
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
@@ -139,6 +141,8 @@ func (tm *TransactionManager) DisableWAL() error {
 
 // Begin starts a new transaction
 func (tm *TransactionManager) Begin(dbPath string, txType TransactionType) (*Transaction, error) {
+	util.Assert(dbPath != "", "database path cannot be empty")
+	util.Assert(txType >= TransactionDeferred && txType <= TransactionExclusive, "invalid transaction type: %d", txType)
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 

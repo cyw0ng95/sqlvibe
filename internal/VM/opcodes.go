@@ -110,6 +110,7 @@ const (
 	OpLike
 	OpNotLike
 	OpGlob
+	OpMatch
 
 	// Aggregate functions
 	OpSum
@@ -324,6 +325,7 @@ var OpCodeInfo = map[OpCode]string{
 	OpLike:    "Like",
 	OpNotLike: "NotLike",
 	OpGlob:    "Glob",
+	OpMatch:   "Match",
 
 	// Aggregate functions
 	OpSum:   "Sum",

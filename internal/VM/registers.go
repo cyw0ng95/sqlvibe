@@ -1,5 +1,9 @@
 package VM
 
+import (
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
+)
+
 type RegisterAllocator struct {
 	maxReg    int
 	nextReg   int
@@ -42,6 +46,7 @@ func (ra *RegisterAllocator) Alloc() int {
 }
 
 func (ra *RegisterAllocator) AllocMany(count int) []int {
+	util.Assert(count > 0, "count must be positive: %d", count)
 	result := make([]int, count)
 	for i := 0; i < count; i++ {
 		result[i] = ra.Alloc()
@@ -50,6 +55,7 @@ func (ra *RegisterAllocator) AllocMany(count int) []int {
 }
 
 func (ra *RegisterAllocator) Release(reg int) {
+	util.Assert(reg >= 0, "register index cannot be negative: %d", reg)
 	if reg < 0 {
 		return
 	}
@@ -70,6 +76,7 @@ func (ra *RegisterAllocator) ReleaseMany(regs []int) {
 }
 
 func (ra *RegisterAllocator) Reserve(reg int) {
+	util.Assert(reg >= 0, "register index cannot be negative: %d", reg)
 	if reg < 0 {
 		return
 	}

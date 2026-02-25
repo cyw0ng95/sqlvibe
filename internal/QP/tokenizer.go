@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 // hexValTable is a lookup table for hex character values.
@@ -72,6 +74,12 @@ const (
 	TokenAll
 	TokenAny
 	TokenCast
+	TokenMatch
+	TokenCollate
+	TokenPlaceholderPos   // ? positional parameter
+	TokenPlaceholderNamed // :name or @name named parameter
+	TokenArrow            // ->
+	TokenArrowText        // ->>
 )
 
 var keywords = map[string]TokenType{
@@ -166,6 +174,8 @@ var keywords = map[string]TokenType{
 	"BEGIN":             TokenKeyword,
 	"COMMIT":            TokenKeyword,
 	"ROLLBACK":          TokenKeyword,
+	"SAVEPOINT":         TokenKeyword,
+	"RELEASE":           TokenKeyword,
 	"BACKUP":            TokenKeyword,
 	"DATABASE":          TokenKeyword,
 	"INCREMENTAL":       TokenKeyword,
@@ -214,6 +224,10 @@ var keywords = map[string]TokenType{
 	"BEFORE":            TokenKeyword,
 	"VACUUM":            TokenKeyword,
 	"ANALYZE":           TokenKeyword,
+	"REINDEX":           TokenKeyword,
+	"MATCH":             TokenMatch,
+	"COLLATE":           TokenCollate,
+	"RETURNING":         TokenKeyword,
 }
 
 type Token struct {
@@ -230,6 +244,7 @@ type Tokenizer struct {
 }
 
 func NewTokenizer(input string) *Tokenizer {
+	util.Assert(len(input) >= 0, "input length cannot be negative")
 	// Pre-allocate token slice: estimate ~1 token per 8 chars, minimum 16
 	estimated := len(input) / 8
 	if estimated < 16 {
@@ -455,6 +470,10 @@ func lookupKeyword(s string) (TokenType, bool) {
 }
 
 func (t *Tokenizer) Tokenize() ([]Token, error) {
+	util.AssertNotNil(t, "tokenizer")
+	util.AssertNotNil(t.input, "input")
+	util.Assert(t.pos >= 0, "position cannot be negative: %d", t.pos)
+	util.Assert(t.pos <= len(t.input), "position %d exceeds input length %d", t.pos, len(t.input))
 	for {
 		t.skipWhitespace()
 		if t.pos >= len(t.input) {
@@ -479,6 +498,10 @@ func (t *Tokenizer) Tokenize() ([]Token, error) {
 			}
 		} else if ch == '"' || ch == '\'' {
 			if err := t.readString(); err != nil {
+				return nil, err
+			}
+		} else if (ch == ':' || ch == '@') && t.pos+1 < len(t.input) && (isIdentStartByte(t.input[t.pos+1])) {
+			if err := t.readNamedParam(ch); err != nil {
 				return nil, err
 			}
 		} else {
@@ -659,6 +682,8 @@ func (t *Tokenizer) readOperator() error {
 		t.addToken(TokenDot, ".")
 	case '*':
 		t.addToken(TokenAsterisk, "*")
+	case '?':
+		t.addToken(TokenPlaceholderPos, "?")
 	case '=':
 		t.addToken(TokenEq, "=")
 	case '<':
@@ -696,7 +721,17 @@ func (t *Tokenizer) readOperator() error {
 	case '+':
 		t.addToken(TokenPlus, "+")
 	case '-':
-		t.addToken(TokenMinus, "-")
+		if t.pos < len(t.input) && t.input[t.pos] == '>' {
+			t.pos++
+			if t.pos < len(t.input) && t.input[t.pos] == '>' {
+				t.pos++
+				t.addToken(TokenArrowText, "->>")
+			} else {
+				t.addToken(TokenArrow, "->")
+			}
+		} else {
+			t.addToken(TokenMinus, "-")
+		}
 	case '/':
 		t.addToken(TokenSlash, "/")
 	case '%':
@@ -720,6 +755,29 @@ func (t *Tokenizer) addToken(tokenType TokenType, literal string) {
 		Literal:  literal,
 		Location: t.start,
 	})
+}
+
+// isIdentStartByte returns true if b is a valid first byte of an identifier.
+func isIdentStartByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_'
+}
+
+// readNamedParam reads ':name' or '@name' and emits a TokenPlaceholderNamed token.
+func (t *Tokenizer) readNamedParam(prefix byte) error {
+	t.start = t.pos
+	t.pos++ // skip ':' or '@'
+	nameStart := t.pos
+	for t.pos < len(t.input) {
+		ch := t.input[t.pos]
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' {
+			t.pos++
+		} else {
+			break
+		}
+	}
+	name := string(prefix) + t.input[nameStart:t.pos]
+	t.addToken(TokenPlaceholderNamed, name)
+	return nil
 }
 
 func (t *Tokenizer) String() string {

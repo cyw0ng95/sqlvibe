@@ -37,7 +37,7 @@ func (c *Compiler) finalize() *VM.Program {
 }
 
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program {
-	util.AssertNotNil(stmt, "SelectStmt")
+	util.AssertNotNil(stmt, "stmt")
 	if hasAggregates(stmt) {
 		return c.CompileAggregate(stmt)
 	}
@@ -852,7 +852,8 @@ func (c *Compiler) CompileAggregate(stmt *QP.SelectStmt) *VM.Program {
 	for _, col := range stmt.Columns {
 		if fc, ok := col.(*QP.FuncCall); ok {
 			switch strings.ToUpper(fc.Name) {
-			case "COUNT", "SUM", "AVG", "MIN", "MAX", "GROUP_CONCAT":
+			case "COUNT", "SUM", "AVG", "MIN", "MAX", "GROUP_CONCAT",
+				"JSON_GROUP_ARRAY", "JSONB_GROUP_ARRAY", "JSON_GROUP_OBJECT", "JSONB_GROUP_OBJECT":
 				aggDef := VM.AggregateDef{
 					Function: strings.ToUpper(fc.Name),
 					Args:     fc.Args,
@@ -1209,7 +1210,8 @@ func exprHasAggregate(expr QP.Expr) bool {
 	switch e := expr.(type) {
 	case *QP.FuncCall:
 		switch strings.ToUpper(e.Name) {
-		case "COUNT", "SUM", "AVG", "MIN", "MAX", "TOTAL", "GROUP_CONCAT":
+		case "COUNT", "SUM", "AVG", "MIN", "MAX", "TOTAL", "GROUP_CONCAT",
+			"JSON_GROUP_ARRAY", "JSONB_GROUP_ARRAY", "JSON_GROUP_OBJECT", "JSONB_GROUP_OBJECT":
 			return true
 		}
 	case *QP.BinaryExpr:
@@ -1243,7 +1245,8 @@ func extractAggregatesFromExpr(expr QP.Expr, aggInfo *VM.AggregateInfo) {
 	case *QP.FuncCall:
 		upperName := strings.ToUpper(e.Name)
 		switch upperName {
-		case "COUNT", "SUM", "AVG", "MIN", "MAX", "GROUP_CONCAT":
+		case "COUNT", "SUM", "AVG", "MIN", "MAX", "GROUP_CONCAT",
+			"JSON_GROUP_ARRAY", "JSONB_GROUP_ARRAY", "JSON_GROUP_OBJECT", "JSONB_GROUP_OBJECT":
 			// Check if already registered with the same args (not just same function name)
 			// e.g., SUM(i) and SUM(r) are different aggregates
 			argKey := fmt.Sprintf("%v", e.Args)

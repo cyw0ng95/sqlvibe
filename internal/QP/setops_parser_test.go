@@ -6,9 +6,9 @@ import (
 
 func TestParseSetOperations(t *testing.T) {
 	tests := []struct {
-		sql       string
-		setOp     string
-		setOpAll  bool
+		sql      string
+		setOp    string
+		setOpAll bool
 	}{
 		{
 			sql:   "SELECT a FROM t1 UNION SELECT a FROM t2",

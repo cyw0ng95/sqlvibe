@@ -3,6 +3,7 @@ package DS
 import (
 	"fmt"
 	"math"
+	"strconv"
 )
 
 // ValueType enumerates the supported column types.
@@ -26,12 +27,18 @@ type Value struct {
 	Bytes []byte
 }
 
-func NullValue() Value                { return Value{Type: TypeNull} }
-func IntValue(v int64) Value          { return Value{Type: TypeInt, Int: v} }
-func FloatValue(v float64) Value      { return Value{Type: TypeFloat, Float: v} }
-func StringValue(v string) Value      { return Value{Type: TypeString, Str: v} }
-func BoolValue(v bool) Value          { b := int64(0); if v { b = 1 }; return Value{Type: TypeBool, Int: b} }
-func BytesValue(v []byte) Value       { return Value{Type: TypeBytes, Bytes: v} }
+func NullValue() Value           { return Value{Type: TypeNull} }
+func IntValue(v int64) Value     { return Value{Type: TypeInt, Int: v} }
+func FloatValue(v float64) Value { return Value{Type: TypeFloat, Float: v} }
+func StringValue(v string) Value { return Value{Type: TypeString, Str: v} }
+func BoolValue(v bool) Value {
+	b := int64(0)
+	if v {
+		b = 1
+	}
+	return Value{Type: TypeBool, Int: b}
+}
+func BytesValue(v []byte) Value { return Value{Type: TypeBytes, Bytes: v} }
 
 // IsNull returns true if the value is NULL.
 func (v Value) IsNull() bool { return v.Type == TypeNull }
@@ -159,4 +166,19 @@ func cmpBytes(a, b []byte) int {
 		return 1
 	}
 	return 0
+}
+
+// ParseValue parses a string (as produced by Value.String()) back to a Value.
+// It tries int64, then float64, then falls back to string.
+func ParseValue(s string) Value {
+	if s == "NULL" {
+		return NullValue()
+	}
+	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return IntValue(i)
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return FloatValue(f)
+	}
+	return StringValue(s)
 }

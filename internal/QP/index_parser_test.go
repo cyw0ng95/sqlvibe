@@ -6,11 +6,11 @@ import (
 
 func TestParseCreateIndex(t *testing.T) {
 	tests := []struct {
-		sql       string
-		name      string
-		table     string
-		columns   []string
-		unique    bool
+		sql         string
+		name        string
+		table       string
+		columns     []string
+		unique      bool
 		ifNotExists bool
 	}{
 		{
@@ -35,11 +35,11 @@ func TestParseCreateIndex(t *testing.T) {
 			unique:  false,
 		},
 		{
-			sql:       "CREATE INDEX IF NOT EXISTS idx_name ON users(name)",
-			name:      "idx_name",
-			table:     "users",
-			columns:   []string{"name"},
-			unique:    false,
+			sql:         "CREATE INDEX IF NOT EXISTS idx_name ON users(name)",
+			name:        "idx_name",
+			table:       "users",
+			columns:     []string{"name"},
+			unique:      false,
 			ifNotExists: true,
 		},
 	}

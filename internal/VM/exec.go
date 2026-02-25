@@ -1,6 +1,8 @@
 package VM
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -11,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/cyw0ng95/sqlvibe/ext"
 	QP "github.com/cyw0ng95/sqlvibe/internal/QP"
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
@@ -109,6 +112,11 @@ func (vm *VM) Exec(ctx interface{}) error {
 
 		case OpResultRow:
 			if regs, ok := inst.P4.([]int); ok {
+				// Early termination: halt before allocating buffer space for this row
+				// if the result limit is already satisfied.
+				if vm.resultLimit > 0 && len(vm.results) >= vm.resultLimit {
+					return ErrHalt
+				}
 				n := len(regs)
 				start := len(vm.flatBuf)
 				needed := start + n
@@ -562,7 +570,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpSubstr:
 			src := vm.registers[inst.P1]
 			start := int64(1)
-			length := int64(-1)
+			length := int64(math.MinInt64) // sentinel: no length argument
 			if inst.P2 != 0 {
 				if v, ok := vm.registers[inst.P2].(int64); ok {
 					start = v
@@ -722,6 +730,23 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 			continue
 
+		case OpMatch:
+			lStr := ""
+			rStr := ""
+			if v, ok := vm.registers[inst.P1].(string); ok {
+				lStr = v
+			}
+			if v, ok := vm.registers[inst.P2].(string); ok {
+				rStr = v
+			}
+			if dst, ok := inst.P4.(int); ok {
+				vm.registers[dst] = int64(0)
+				if strings.Contains(strings.ToLower(lStr), strings.ToLower(rStr)) {
+					vm.registers[dst] = int64(1)
+				}
+			}
+			continue
+
 		case OpAbs:
 			src := vm.registers[inst.P1]
 			if dst, ok := inst.P4.(int); ok {
@@ -766,6 +791,9 @@ func (vm *VM) Exec(ctx interface{}) error {
 				}
 				syntheticCall := &QP.FuncCall{Name: info.Name, Args: argExprs}
 				vm.registers[info.Dst] = vm.evaluateFuncCallOnRow(nil, nil, syntheticCall)
+				if vm.err != nil {
+					return vm.err
+				}
 			}
 			continue
 
@@ -1020,9 +1048,45 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpColumn:
 			cursorID := int(inst.P1)
 			colIdx := int(inst.P2)
-			tableQualifier := inst.P3 // Table qualifier if present (string), or "table.column" for outer ref
+			tableQualifier := inst.P3 // Table qualifier if present (string), or column name for outer ref
 			dst := inst.P4
 			cursor := vm.cursors.Get(cursorID)
+
+			// Special case: colIdx=-1 means column was not found in inner table
+			// This is likely a correlated reference to outer query's column
+			// Try outer context regardless of table qualifier
+			if colIdx == -1 && vm.ctx != nil {
+				type OuterContextProvider interface {
+					GetOuterRowValue(columnName string) (interface{}, bool)
+				}
+
+				if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
+					colName := ""
+					// If tableQualifier is in "table.column" format, extract column name
+					if tableQualifier != "" {
+						parts := strings.Split(tableQualifier, ".")
+						if len(parts) == 2 {
+							colName = parts[1]
+						} else {
+							// Just a column name (not qualified)
+							colName = tableQualifier
+						}
+					}
+					if colName != "" {
+						if val, found := outerCtx.GetOuterRowValue(colName); found {
+							if dstReg, ok := dst.(int); ok {
+								vm.registers[dstReg] = val
+								continue
+							}
+						}
+					}
+					// Column not found in outer context either - emit NULL
+					if dstReg, ok := dst.(int); ok {
+						vm.registers[dstReg] = nil
+					}
+					continue
+				}
+			}
 
 			// Special case: colIdx=-1 means this is definitely an outer reference
 			// P3 contains "table.column" format
@@ -1093,12 +1157,34 @@ func (vm *VM) Exec(ctx interface{}) error {
 			}
 
 			// Default: load from current cursor
+			// For correlated subqueries with unqualified column references:
+			// if column not found in inner table, try outer context
+			foundInInner := false
 			if cursor != nil && cursor.Data != nil && cursor.Index >= 0 && cursor.Index < len(cursor.Data) {
 				row := cursor.Data[cursor.Index]
 				if colIdx >= 0 && colIdx < len(cursor.Columns) {
 					colName := cursor.Columns[colIdx]
 					if dstReg, ok := dst.(int); ok {
 						vm.registers[dstReg] = row[colName]
+						foundInInner = true
+					}
+				}
+			}
+
+			// If not found in inner table and we have outer context, try outer context
+			// This handles correlated subqueries with unqualified column references
+			if !foundInInner && tableQualifier == "" && vm.ctx != nil {
+				type OuterContextProvider interface {
+					GetOuterRowValue(columnName string) (interface{}, bool)
+				}
+				if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
+					if cursor != nil && colIdx >= 0 && colIdx < len(cursor.Columns) {
+						colName := cursor.Columns[colIdx]
+						if val, found := outerCtx.GetOuterRowValue(colName); found {
+							if dstReg, ok := dst.(int); ok {
+								vm.registers[dstReg] = val
+							}
+						}
 					}
 				}
 			}
@@ -1779,16 +1865,22 @@ func (vm *VM) Exec(ctx interface{}) error {
 			if cursor.Index < 0 || cursor.Index >= len(cursor.Data) {
 				return fmt.Errorf("OpUpdate: invalid cursor position %d", cursor.Index)
 			}
-			row := cursor.Data[cursor.Index]
+			oldRow := cursor.Data[cursor.Index]
 
-			// Update only the columns specified in SET clause
+			// Build an updated copy of the row instead of modifying in-place.
+			// This ensures that UpdateRow (and FK cascade checks inside it) can
+			// read the original "old" values from db.data before they are replaced.
+			updatedRow := make(map[string]interface{}, len(oldRow))
+			for k, v := range oldRow {
+				updatedRow[k] = v
+			}
 			for colName, regIdx := range setInfo {
-				row[colName] = vm.registers[regIdx]
+				updatedRow[colName] = vm.registers[regIdx]
 			}
 
 			// Update via context
 			if vm.ctx != nil {
-				err := vm.ctx.UpdateRow(cursor.TableName, cursor.Index, row)
+				err := vm.ctx.UpdateRow(cursor.TableName, cursor.Index, updatedRow)
 				if err != nil {
 					return err
 				}
@@ -2112,23 +2204,7 @@ func compareVals(a, b interface{}) int {
 		return strings.Compare(as, bs)
 
 	case []byte:
-		as := a.([]byte)
-		bs := b.([]byte)
-		if len(as) < len(bs) {
-			return -1
-		}
-		if len(as) > len(bs) {
-			return 1
-		}
-		for i := range as {
-			if as[i] < bs[i] {
-				return -1
-			}
-			if as[i] > bs[i] {
-				return 1
-			}
-		}
-		return 0
+		return bytes.Compare(a.([]byte), b.([]byte))
 	}
 
 	return strings.Compare(fmt.Sprintf("%v", a), fmt.Sprintf("%v", b))
@@ -2315,9 +2391,25 @@ func stringSubstr(s interface{}, start, length int64) interface{} {
 	}
 
 	endIdx := len(runes)
+	// math.MinInt64 is the sentinel meaning "no length argument" - return rest of string
+	if length == math.MinInt64 {
+		return string(runes[startIdx:endIdx])
+	}
 	// SQLite: if length is 0, return empty string
 	if length == 0 {
 		return ""
+	}
+	// Handle negative length: SUBSTR(s, start, -n) returns n chars ending at start
+	if length < 0 {
+		endIdx = startIdx
+		startIdx = startIdx + int(length)
+		if startIdx < 0 {
+			startIdx = 0
+		}
+		if endIdx <= 0 {
+			return ""
+		}
+		return string(runes[startIdx:endIdx])
 	}
 	// If start was 0, length is reduced by 1 to exclude first char
 	if start == 0 && length > 0 {
@@ -2440,7 +2532,8 @@ func getRound(v interface{}, decimals int) interface{} {
 	}
 	f := reflectVal(v).toFloat()
 	if decimals == 0 {
-		return int64(math.Round(f))
+		// SQLite returns a float (real) for ROUND, even with 0 decimal places.
+		return math.Round(f)
 	}
 	m := math.Pow10(decimals)
 	return math.Round(f*m) / m
@@ -2814,18 +2907,20 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 				}
 			}
 			state = &AggregateState{
-				GroupKey:     groupKey,
-				Count:        0,
-				Counts:       make([]int, len(aggInfo.Aggregates)),
-				SumsInt:      make([]int64, len(aggInfo.Aggregates)),
-				SumsFloat:    make([]float64, len(aggInfo.Aggregates)),
-				SumsIsFloat:  make([]bool, len(aggInfo.Aggregates)),
-				SumsHasVal:   make([]bool, len(aggInfo.Aggregates)),
-				Mins:         make([]interface{}, len(aggInfo.Aggregates)),
-				Maxs:         make([]interface{}, len(aggInfo.Aggregates)),
-				NonAggValues: make([]interface{}, len(aggInfo.NonAggCols)),
-				DistinctSets: distinctSets,
-				GroupConcats: make([][]string, len(aggInfo.Aggregates)),
+				GroupKey:         groupKey,
+				Count:            0,
+				Counts:           make([]int, len(aggInfo.Aggregates)),
+				SumsInt:          make([]int64, len(aggInfo.Aggregates)),
+				SumsFloat:        make([]float64, len(aggInfo.Aggregates)),
+				SumsIsFloat:      make([]bool, len(aggInfo.Aggregates)),
+				SumsHasVal:       make([]bool, len(aggInfo.Aggregates)),
+				Mins:             make([]interface{}, len(aggInfo.Aggregates)),
+				Maxs:             make([]interface{}, len(aggInfo.Aggregates)),
+				NonAggValues:     make([]interface{}, len(aggInfo.NonAggCols)),
+				DistinctSets:     distinctSets,
+				GroupConcats:     make([][]string, len(aggInfo.Aggregates)),
+				JsonGroupArrays:  make([][]interface{}, len(aggInfo.Aggregates)),
+				JsonGroupObjects: make([][][]interface{}, len(aggInfo.Aggregates)),
 			}
 			groups[groupKey] = state
 		}
@@ -2900,6 +2995,18 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 			case "GROUP_CONCAT":
 				if value != nil {
 					state.GroupConcats[aggIdx] = append(state.GroupConcats[aggIdx], fmt.Sprintf("%v", value))
+				}
+			case "JSON_GROUP_ARRAY", "JSONB_GROUP_ARRAY":
+				if value != nil {
+					state.JsonGroupArrays[aggIdx] = append(state.JsonGroupArrays[aggIdx], value)
+				}
+			case "JSON_GROUP_OBJECT", "JSONB_GROUP_OBJECT":
+				if len(aggDef.Args) >= 2 {
+					keyVal := vm.evaluateExprOnRow(row, cursor.Columns, aggDef.Args[0])
+					valVal := vm.evaluateExprOnRow(row, cursor.Columns, aggDef.Args[1])
+					if keyVal != nil {
+						state.JsonGroupObjects[aggIdx] = append(state.JsonGroupObjects[aggIdx], []interface{}{keyVal, valVal})
+					}
 				}
 			}
 		}
@@ -3012,6 +3119,21 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 					}
 					aggValue = strings.Join(state.GroupConcats[aggIdx], sep)
 				}
+			case "JSON_GROUP_ARRAY", "JSONB_GROUP_ARRAY":
+				arr := make([]interface{}, 0, len(state.JsonGroupArrays[aggIdx]))
+				arr = append(arr, state.JsonGroupArrays[aggIdx]...)
+				b, _ := json.Marshal(arr)
+				aggValue = string(b)
+			case "JSON_GROUP_OBJECT", "JSONB_GROUP_OBJECT":
+				obj := make(map[string]interface{})
+				for _, pair := range state.JsonGroupObjects[aggIdx] {
+					if len(pair) >= 2 {
+						key := fmt.Sprintf("%v", pair[0])
+						obj[key] = pair[1]
+					}
+				}
+				b, _ := json.Marshal(obj)
+				aggValue = string(b)
 			}
 
 			resultRow = append(resultRow, aggValue)
@@ -3062,74 +3184,76 @@ type AggregateState struct {
 	NonAggValues []interface{}
 	DistinctSets []map[string]bool // per-aggregate distinct value sets (for DISTINCT aggregates)
 	GroupConcats [][]string        // per-aggregate accumulated strings for GROUP_CONCAT
+	JsonGroupArrays  [][]interface{}   // per-aggregate accumulated values for JSON_GROUP_ARRAY
+	JsonGroupObjects [][][]interface{} // per-aggregate accumulated key-value pairs for JSON_GROUP_OBJECT
 }
 
 // compareForAnyAllVM compares two values for ANY/ALL predicates (returns -1, 0, or 1).
 func compareForAnyAllVM(a, b interface{}) int {
-if a == nil && b == nil {
-return 0
-}
-if a == nil {
-return -1
-}
-if b == nil {
-return 1
-}
-switch av := a.(type) {
-case int64:
-switch bv := b.(type) {
-case int64:
-if av < bv {
-return -1
-} else if av > bv {
-return 1
-}
-return 0
-case float64:
-fa := float64(av)
-if fa < bv {
-return -1
-} else if fa > bv {
-return 1
-}
-return 0
-}
-case float64:
-switch bv := b.(type) {
-case float64:
-if av < bv {
-return -1
-} else if av > bv {
-return 1
-}
-return 0
-case int64:
-fb := float64(bv)
-if av < fb {
-return -1
-} else if av > fb {
-return 1
-}
-return 0
-}
-case string:
-if bv, ok := b.(string); ok {
-if av < bv {
-return -1
-} else if av > bv {
-return 1
-}
-return 0
-}
-}
-as := fmt.Sprintf("%v", a)
-bs := fmt.Sprintf("%v", b)
-if as < bs {
-return -1
-} else if as > bs {
-return 1
-}
-return 0
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	switch av := a.(type) {
+	case int64:
+		switch bv := b.(type) {
+		case int64:
+			if av < bv {
+				return -1
+			} else if av > bv {
+				return 1
+			}
+			return 0
+		case float64:
+			fa := float64(av)
+			if fa < bv {
+				return -1
+			} else if fa > bv {
+				return 1
+			}
+			return 0
+		}
+	case float64:
+		switch bv := b.(type) {
+		case float64:
+			if av < bv {
+				return -1
+			} else if av > bv {
+				return 1
+			}
+			return 0
+		case int64:
+			fb := float64(bv)
+			if av < fb {
+				return -1
+			} else if av > fb {
+				return 1
+			}
+			return 0
+		}
+	case string:
+		if bv, ok := b.(string); ok {
+			if av < bv {
+				return -1
+			} else if av > bv {
+				return 1
+			}
+			return 0
+		}
+	}
+	as := fmt.Sprintf("%v", a)
+	bs := fmt.Sprintf("%v", b)
+	if as < bs {
+		return -1
+	} else if as > bs {
+		return 1
+	}
+	return 0
 }
 
 // isCountStar reports whether an aggregate definition is COUNT(*) or COUNT() with no args.
@@ -3344,6 +3468,36 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 			if val, ok := row[qualKey]; ok {
 				return val
 			}
+			// If the qualifier matches the alias of the cursor currently being scanned
+			// (e.g. "t2.a" inside a query scanning "t1 AS t2"), resolve directly from
+			// the inner row using the unqualified column name.  This prevents outer-
+			// context leakage for self-correlated subqueries.
+			if cursor := vm.cursors.Get(0); cursor != nil {
+				if strings.ToLower(cursor.TableName) == strings.ToLower(e.Table) {
+					if val, ok := row[e.Name]; ok {
+						return val
+					}
+					return nil
+				}
+			}
+			// Try outer context (correlated subqueries: "customers.id" inside a query
+			// scanning "orders" must resolve from the outer customers row).
+			if vm.ctx != nil {
+				type OuterContextProvider interface {
+					GetOuterRowValue(columnName string) (interface{}, bool)
+				}
+				if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
+					if val, found := outerCtx.GetOuterRowValue(e.Name); found {
+						return val
+					}
+				}
+			}
+			// Final fallback: unqualified lookup for aliased single-table queries
+			// (e.g. "e.department" in GROUP BY when the row only has "department").
+			if val, ok := row[e.Name]; ok {
+				return val
+			}
+			return nil
 		}
 		if val, ok := row[e.Name]; ok {
 			return val
@@ -3353,7 +3507,21 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 		if idx := strings.LastIndex(name, "."); idx >= 0 {
 			name = name[idx+1:]
 		}
-		return row[name]
+		if val, ok := row[name]; ok {
+			return val
+		}
+		// Column not found in inner row - try outer context for correlated subqueries
+		if vm.ctx != nil {
+			type OuterContextProvider interface {
+				GetOuterRowValue(columnName string) (interface{}, bool)
+			}
+			if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
+				if val, found := outerCtx.GetOuterRowValue(e.Name); found {
+					return val
+				}
+			}
+		}
+		return nil
 	case *QP.AliasExpr:
 		return vm.evaluateExprOnRow(row, columns, e.Expr)
 	case *QP.UnaryExpr:
@@ -3368,8 +3536,15 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 		}
 		return val
 	case *QP.BinaryExpr:
+		// When either side is a CollateExpr, apply that collation to both sides
+		// before comparing so that e.g. `name = 'alice' COLLATE NOCASE` works.
 		left := vm.evaluateExprOnRow(row, columns, e.Left)
 		right := vm.evaluateExprOnRow(row, columns, e.Right)
+		if ce, ok := e.Right.(*QP.CollateExpr); ok {
+			left = applyCollation(left, ce.Collation)
+		} else if ce, ok := e.Left.(*QP.CollateExpr); ok {
+			right = applyCollation(right, ce.Collation)
+		}
 		return vm.evaluateBinaryOp(left, right, e.Op)
 	case *QP.FuncCall:
 		return vm.evaluateFuncCallOnRow(row, columns, e)
@@ -3446,6 +3621,9 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 			}
 		}
 		return nil
+	case *QP.CollateExpr:
+		val := vm.evaluateExprOnRow(row, columns, e.Expr)
+		return applyCollation(val, e.Collation)
 	default:
 		return nil
 	}
@@ -3556,7 +3734,11 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 		}
 		return applyStrftime(fmtStr, t)
 	case "JULIANDAY":
-		t := parseDateTimeValue(vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0)))
+		arg0 := vm.evaluateExprOnRow(row, columns, safeArg(e.Args, 0))
+		if arg0 == nil && len(e.Args) > 0 {
+			return nil // JULIANDAY(NULL) -> NULL
+		}
+		t := parseDateTimeValue(arg0)
 		if t.IsZero() {
 			t = time.Now().UTC()
 		}
@@ -3656,28 +3838,6 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 			return b
 		}
 		return nil
-	case "RANDOM":
-		return int64(rand.Uint64())
-	case "RANDOMBLOB":
-		if len(e.Args) >= 1 {
-			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
-			if n, ok := toInt64ForVM(val); ok && n > 0 {
-				b := make([]byte, n)
-				for i := range b {
-					b[i] = byte(rand.Intn(256))
-				}
-				return b
-			}
-		}
-		return []byte{}
-	case "ZEROBLOB":
-		if len(e.Args) >= 1 {
-			val := vm.evaluateExprOnRow(row, columns, e.Args[0])
-			if n, ok := toInt64ForVM(val); ok && n > 0 {
-				return make([]byte, n)
-			}
-		}
-		return []byte{}
 	case "IIF":
 		if len(e.Args) >= 3 {
 			cond := vm.evaluateExprOnRow(row, columns, e.Args[0])
@@ -3688,6 +3848,16 @@ func (vm *VM) evaluateFuncCallOnRow(row map[string]interface{}, columns []string
 		}
 		return nil
 	}
+	// Dispatch to registered extension functions.
+	evalArgs := make([]interface{}, len(e.Args))
+	for i, arg := range e.Args {
+		evalArgs[i] = vm.evaluateExprOnRow(row, columns, arg)
+	}
+	if result, ok := ext.CallFunc(funcName, evalArgs); ok {
+		return result
+	}
+	// Function not found: set vm.err so the caller can propagate it.
+	vm.err = fmt.Errorf("no such function: %s", funcName)
 	return nil
 }
 
@@ -3991,6 +4161,18 @@ func (vm *VM) evaluateBoolExprOnRow(row map[string]interface{}, columns []string
 				return false
 			}
 			return vmMatchLike(fmt.Sprintf("%v", left), fmt.Sprintf("%v", right))
+		case QP.TokenGlob:
+			left := vm.evaluateExprOnRow(row, columns, e.Left)
+			right := vm.evaluateExprOnRow(row, columns, e.Right)
+			if left == nil || right == nil {
+				return false
+			}
+			leftStr, leftOk := left.(string)
+			patStr, patOk := right.(string)
+			if !leftOk || !patOk {
+				return false
+			}
+			return globMatch(leftStr, patStr)
 		case QP.TokenNotLike:
 			left := vm.evaluateExprOnRow(row, columns, e.Left)
 			right := vm.evaluateExprOnRow(row, columns, e.Right)
@@ -4047,7 +4229,49 @@ func (vm *VM) evaluateBoolExprOnRow(row map[string]interface{}, columns []string
 					return true
 				}
 			}
+			// Check if it's a subquery
+			if subqExpr, ok := e.Right.(*QP.SubqueryExpr); ok {
+				if vm.ctx != nil {
+					type SubqueryRowsExecutor interface {
+						ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+					}
+					if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+						if rows, err := executor.ExecuteSubqueryRows(subqExpr.Select); err == nil {
+							for _, subRow := range rows {
+								if len(subRow) > 0 && vm.compareVals(val, subRow[0]) == 0 {
+									return false
+								}
+							}
+							return true
+						}
+					}
+				}
+			}
 			return true
+		case QP.TokenInSubquery:
+			// IN (subquery)
+			val := vm.evaluateExprOnRow(row, columns, e.Left)
+			if val == nil {
+				return false
+			}
+			if subqExpr, ok := e.Right.(*QP.SubqueryExpr); ok {
+				if vm.ctx != nil {
+					type SubqueryRowsExecutor interface {
+						ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+					}
+					if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+						if rows, err := executor.ExecuteSubqueryRows(subqExpr.Select); err == nil {
+							for _, subRow := range rows {
+								if len(subRow) > 0 && vm.compareVals(val, subRow[0]) == 0 {
+									return true
+								}
+							}
+							return false
+						}
+					}
+				}
+			}
+			return false
 		default:
 			result := vm.evaluateBinaryOp(
 				vm.evaluateExprOnRow(row, columns, e.Left),
@@ -4144,24 +4368,32 @@ func parseNumericPrefix(s string) int64 {
 // parseDateTimeValue parses a value into a time.Time, trying common SQLite date formats.
 // Returns zero time if parsing fails.
 func parseDateTimeValue(val interface{}) time.Time {
-	var s string
 	switch v := val.(type) {
-	case string:
-		s = v
 	case nil:
 		return time.Time{}
-	default:
-		return time.Time{}
-	}
-	if strings.ToLower(s) == "now" {
-		return time.Now().UTC()
-	}
-	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02", "15:04:05"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t
+	case float64:
+		// Interpret as Julian day number.
+		return julianDayToTime(v)
+	case int64:
+		// Interpret as Unix timestamp (seconds since epoch).
+		return time.Unix(v, 0).UTC()
+	case string:
+		if strings.ToLower(v) == "now" {
+			return time.Now().UTC()
+		}
+		for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02", "15:04:05"} {
+			if t, err := time.Parse(layout, v); err == nil {
+				return t
+			}
 		}
 	}
 	return time.Time{}
+}
+
+// julianDayToTime converts a Julian day number to time.Time (UTC).
+func julianDayToTime(jd float64) time.Time {
+	nanos := (jd - julianDayUnixEpoch) * float64(24*60*60*1e9)
+	return time.Unix(0, int64(nanos)).UTC()
 }
 
 // applyDateModifier applies a SQLite date modifier string (e.g., "+1 day") to a time.Time.
@@ -4272,6 +4504,23 @@ func (vm *VM) evaluateBinaryOp(left, right interface{}, op QP.TokenType) interfa
 		return vm.compareVals(left, right) == 0
 	case QP.TokenNe:
 		return vm.compareVals(left, right) != 0
+	case QP.TokenMatch:
+		lStr, lok := left.(string)
+		rStr, rok := right.(string)
+		if lok && rok {
+			if strings.Contains(strings.ToLower(lStr), strings.ToLower(rStr)) {
+				return true
+			}
+			return false
+		}
+		return false
+	case QP.TokenGlob:
+		lStr, lok := left.(string)
+		rStr, rok := right.(string)
+		if lok && rok {
+			return globMatch(lStr, rStr)
+		}
+		return false
 	default:
 		return nil
 	}
@@ -4436,6 +4685,21 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				return state.Maxs[i]
 			case "GROUP_CONCAT":
 				return state.groupConcatResult(i, aggDef)
+			case "JSON_GROUP_ARRAY", "JSONB_GROUP_ARRAY":
+				arr := make([]interface{}, 0, len(state.JsonGroupArrays[i]))
+				arr = append(arr, state.JsonGroupArrays[i]...)
+				b, _ := json.Marshal(arr)
+				return string(b)
+			case "JSON_GROUP_OBJECT", "JSONB_GROUP_OBJECT":
+				obj := make(map[string]interface{})
+				for _, pair := range state.JsonGroupObjects[i] {
+					if len(pair) >= 2 {
+						key := fmt.Sprintf("%v", pair[0])
+						obj[key] = pair[1]
+					}
+				}
+				b, _ := json.Marshal(obj)
+				return string(b)
 			}
 		}
 		// Fallback: if no arg-matching entry found, try first matching function name
@@ -4465,6 +4729,21 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				return state.Maxs[i]
 			case "GROUP_CONCAT":
 				return state.groupConcatResult(i, aggDef)
+			case "JSON_GROUP_ARRAY", "JSONB_GROUP_ARRAY":
+				arr := make([]interface{}, 0, len(state.JsonGroupArrays[i]))
+				arr = append(arr, state.JsonGroupArrays[i]...)
+				b, _ := json.Marshal(arr)
+				return string(b)
+			case "JSON_GROUP_OBJECT", "JSONB_GROUP_OBJECT":
+				obj := make(map[string]interface{})
+				for _, pair := range state.JsonGroupObjects[i] {
+					if len(pair) >= 2 {
+						key := fmt.Sprintf("%v", pair[0])
+						obj[key] = pair[1]
+					}
+				}
+				b, _ := json.Marshal(obj)
+				return string(b)
 			}
 		}
 		return nil
@@ -4838,4 +5117,20 @@ func columnarAggregate(rows []map[string]interface{}, colName string, aggType in
 		return sum / float64(count)
 	}
 	return nil
+}
+
+// applyCollation applies a collation to a value for comparison purposes.
+func applyCollation(val interface{}, collation string) interface{} {
+	str, ok := val.(string)
+	if !ok {
+		return val
+	}
+	switch strings.ToUpper(collation) {
+	case "NOCASE":
+		return strings.ToUpper(str)
+	case "RTRIM":
+		return strings.TrimRight(str, " ")
+	default: // BINARY or unknown
+		return str
+	}
 }

@@ -11,7 +11,7 @@ func TestIndexUsage(t *testing.T) {
 
 	db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)")
 	db.Exec("CREATE INDEX idx_email ON users(email)")
-	
+
 	for i := 0; i < 100; i++ {
 		db.Exec(fmt.Sprintf("INSERT INTO users VALUES (%d, 'name%d', 'user%d@test.com')", i, i%10, i%10))
 	}

@@ -1,12 +1,15 @@
 package sqlvibe
 
 import (
+	"context"
+	"encoding/hex"
 	"fmt"
 	"hash/fnv"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cyw0ng95/sqlvibe/internal/CG"
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
@@ -16,7 +19,6 @@ import (
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 	"github.com/cyw0ng95/sqlvibe/internal/TM"
 	"github.com/cyw0ng95/sqlvibe/internal/VM"
-
 )
 
 // queryResultCache is a thread-safe in-process cache for full SELECT query results.
@@ -66,45 +68,59 @@ func (c *queryResultCache) Invalidate() {
 }
 
 type Database struct {
-	pm             *DS.PageManager
-	cache          *DS.Cache
-	engine         *VM.QueryEngine
-	tx             *Transaction
-	txMgr          *TM.TransactionManager
-	activeTx       *TM.Transaction
-	dbPath         string
-	tables         map[string]map[string]string        // table name -> column name -> type
-	primaryKeys    map[string][]string                 // table name -> primary key column names
-	columnOrder    map[string][]string                 // table name -> ordered column names
-	columnDefaults map[string]map[string]interface{}   // table name -> column name -> default value
-	columnNotNull  map[string]map[string]bool          // table name -> column name -> NOT NULL
-	columnChecks   map[string]map[string]QP.Expr       // table name -> column name -> CHECK expression
-	data           map[string][]map[string]interface{} // table name -> rows -> column name -> value
-	indexes        map[string]*IndexInfo               // index name -> index info
-	views          map[string]string                   // view name -> SELECT SQL
-	isRegistry     *IS.Registry                        // information_schema registry
-	txSnapshot     *dbSnapshot                         // snapshot for transaction rollback
-	tableBTrees    map[string]*DS.BTree                // table name -> B-Tree for storage
-	journalMode    string                              // "delete" or "wal"
-	wal            *TM.WAL                             // WAL instance when in WAL mode
-	pkHashSet      map[string]map[interface{}]struct{} // table name -> PK value -> exists (single-col PK only)
-	indexData      map[string]map[interface{}][]int    // index name -> col value -> []row indices
-	planCache          *CG.PlanCache                       // compiled query plan cache
-	queryCache         *queryResultCache                   // full query result cache (columns + rows)
-	schemaCache        *IS.SchemaCache                     // information_schema result cache (DDL-invalidated)
-	hybridStores       map[string]*DS.HybridStore     // table name -> columnar hybrid store (analytical fast path)
-	hybridStoresDirty  map[string]bool                     // table name -> needs rebuild on next access
-	isolationConfig    *TM.IsolationConfig                 // isolation level and busy_timeout settings
-	compressionName    string                              // active compression algorithm (NONE/RLE/LZ4/ZSTD/GZIP)
+	pm                *DS.PageManager
+	cache             *DS.Cache
+	engine            *VM.QueryEngine
+	tx                *Transaction
+	txMgr             *TM.TransactionManager
+	activeTx          *TM.Transaction
+	dbPath            string
+	tables            map[string]map[string]string        // table name -> column name -> type
+	primaryKeys       map[string][]string                 // table name -> primary key column names
+	columnOrder       map[string][]string                 // table name -> ordered column names
+	columnDefaults    map[string]map[string]interface{}   // table name -> column name -> default value
+	columnNotNull     map[string]map[string]bool          // table name -> column name -> NOT NULL
+	columnChecks      map[string]map[string]QP.Expr       // table name -> column name -> CHECK expression
+	data              map[string][]map[string]interface{} // table name -> rows -> column name -> value
+	indexes           map[string]*IndexInfo               // index name -> index info
+	views             map[string]string                   // view name -> SELECT SQL
+	isRegistry        *IS.Registry                        // information_schema registry
+	txSnapshot        *dbSnapshot                         // snapshot for transaction rollback
+	tableBTrees       map[string]*DS.BTree                // table name -> B-Tree for storage
+	journalMode       string                              // "delete" or "wal"
+	wal               *TM.WAL                             // WAL instance when in WAL mode
+	pkHashSet         map[string]map[interface{}]struct{} // table name -> PK value -> exists (single-col PK only)
+	indexData         map[string]map[interface{}][]int    // index name -> col value -> []row indices
+	planCache         *CG.PlanCache                       // compiled query plan cache
+	queryCache        *queryResultCache                   // full query result cache (columns + rows)
+	schemaCache       *IS.SchemaCache                     // information_schema result cache (DDL-invalidated)
+	hybridStores      map[string]*DS.HybridStore          // table name -> columnar hybrid store (analytical fast path)
+	hybridStoresDirty map[string]bool                     // table name -> needs rebuild on next access
+	isolationConfig   *TM.IsolationConfig                 // isolation level and busy_timeout settings
+	compressionName   string                              // active compression algorithm (NONE/RLE/LZ4/ZSTD/GZIP)
 	// v0.8.6 additions
-	foreignKeys       map[string][]QP.ForeignKeyConstraint // table name -> FK constraints
-	triggers          map[string][]*QP.CreateTriggerStmt   // table name -> triggers list
-	autoincrement     map[string]string                    // table name -> pk col name (if AUTOINCREMENT)
-	seqValues         map[string]int64                     // table name -> last used autoincrement value
-	foreignKeysEnabled bool                               // PRAGMA foreign_keys = ON/OFF
-	pragmaSettings     map[string]interface{}             // PRAGMA setting storage
-	tableStats         map[string]int64                   // table name -> row count (for ANALYZE)
-	queryMu            sync.RWMutex                       // guards concurrent read queries
+	foreignKeys        map[string][]QP.ForeignKeyConstraint // table name -> FK constraints
+	triggers           map[string][]*QP.CreateTriggerStmt   // table name -> triggers list
+	autoincrement      map[string]string                    // table name -> pk col name (if AUTOINCREMENT)
+	seqValues          map[string]int64                     // table name -> last used autoincrement value
+	foreignKeysEnabled bool                                 // PRAGMA foreign_keys = ON/OFF
+	pragmaSettings     map[string]interface{}               // PRAGMA setting storage
+	tableStats         map[string]int64                     // table name -> row count (for ANALYZE)
+	queryMu            sync.RWMutex                         // guards concurrent read queries
+	// v0.9.6: savepoint stack
+	savepointStack []savepointEntry // named savepoints within a transaction
+	// v0.9.10: WAL auto-checkpoint
+	autoCheckpointN int           // checkpoint WAL after this many frames (0 = disabled)
+	stopAutoChkpt   chan struct{} // signal channel to stop background checkpoint goroutine
+	// v0.9.13: context & memory limits
+	queryTimeoutMs int64 // default per-query timeout in milliseconds (0 = no limit)
+	maxMemoryBytes int64 // max result-set memory in bytes (0 = no limit)
+}
+
+// savepointEntry holds the name and snapshot for a named savepoint.
+type savepointEntry struct {
+	name     string
+	snapshot *dbSnapshot
 }
 
 type dbSnapshot struct {
@@ -211,10 +227,12 @@ func (db *Database) restoreSnapshot(snap *dbSnapshot) {
 }
 
 type IndexInfo struct {
-	Name    string
-	Table   string
-	Columns []string
-	Unique  bool
+	Name      string
+	Table     string
+	Columns   []string
+	Exprs     []QP.Expr // parallel to Columns; non-nil means expression index
+	Unique    bool
+	WhereExpr QP.Expr // non-nil for partial index
 }
 
 type Conn interface {
@@ -338,27 +356,27 @@ func Open(path string) (*Database, error) {
 	engine := VM.NewQueryEngine(pm, data)
 	txMgr := TM.NewTransactionManager(pm)
 
-	return &Database{
-		pm:             pm,
-		cache:          DS.NewCache(-2000),
-		engine:         engine,
-		txMgr:          txMgr,
-		activeTx:       nil,
-		dbPath:         path,
-		tables:         make(map[string]map[string]string),
-		primaryKeys:    make(map[string][]string),
-		columnOrder:    make(map[string][]string),
-		columnDefaults: make(map[string]map[string]interface{}),
-		columnNotNull:  make(map[string]map[string]bool),
-		columnChecks:   make(map[string]map[string]QP.Expr),
-		data:           data,
-		indexes:        make(map[string]*IndexInfo),
-		views:          make(map[string]string),
-		tableBTrees:    make(map[string]*DS.BTree),
-		journalMode:    "delete",
-		wal:            nil,
-		pkHashSet:      make(map[string]map[interface{}]struct{}),
-		indexData:      make(map[string]map[interface{}][]int),
+	db := &Database{
+		pm:                 pm,
+		cache:              DS.NewCache(-2000),
+		engine:             engine,
+		txMgr:              txMgr,
+		activeTx:           nil,
+		dbPath:             path,
+		tables:             make(map[string]map[string]string),
+		primaryKeys:        make(map[string][]string),
+		columnOrder:        make(map[string][]string),
+		columnDefaults:     make(map[string]map[string]interface{}),
+		columnNotNull:      make(map[string]map[string]bool),
+		columnChecks:       make(map[string]map[string]QP.Expr),
+		data:               data,
+		indexes:            make(map[string]*IndexInfo),
+		views:              make(map[string]string),
+		tableBTrees:        make(map[string]*DS.BTree),
+		journalMode:        "delete",
+		wal:                nil,
+		pkHashSet:          make(map[string]map[interface{}]struct{}),
+		indexData:          make(map[string]map[interface{}][]int),
 		planCache:          CG.NewPlanCache(256),
 		queryCache:         newQueryResultCache(512),
 		schemaCache:        IS.NewSchemaCache(),
@@ -373,7 +391,29 @@ func Open(path string) (*Database, error) {
 		foreignKeysEnabled: false,
 		pragmaSettings:     make(map[string]interface{}),
 		tableStats:         make(map[string]int64),
-	}, nil
+		savepointStack:     nil,
+	}
+
+	// A2: WAL Startup Replay - if a WAL file exists for this database, open
+	// and replay it automatically so the database reflects any uncommitted
+	// operations from a previous session.
+	if path != ":memory:" {
+		walPath := path + "-wal"
+		if TM.WALExists(walPath) {
+			wal, walErr := TM.OpenWAL(walPath, pm.PageSize())
+			if walErr == nil {
+				if _, recErr := wal.Recover(); recErr == nil {
+					db.wal = wal
+					db.journalMode = "wal"
+					_ = db.txMgr.EnableWAL(walPath, pm.PageSize())
+				} else {
+					_ = wal.Close()
+				}
+			}
+		}
+	}
+
+	return db, nil
 }
 
 func (db *Database) getOrderedColumns(tableName string) []string {
@@ -448,6 +488,10 @@ func (db *Database) evalConstantExpression(stmt *QP.SelectStmt) (*Rows, error) {
 
 		cols = append(cols, colName)
 		row = append(row, colValue)
+		// Propagate any "no such function" errors from EvalExpr.
+		if err := db.engine.LastError(); err != nil {
+			return nil, err
+		}
 	}
 
 	return &Rows{Columns: cols, Data: [][]interface{}{row}}, nil
@@ -577,6 +621,34 @@ func (db *Database) Exec(sql string) (Result, error) {
 		// Initialise an empty HybridStore for the new table.
 		db.hybridStores[stmt.Name] = db.buildHybridStore(stmt.Name)
 		db.hybridStoresDirty[stmt.Name] = false
+
+		// Create implicit unique indexes for columns with inline UNIQUE constraint.
+		for _, col := range stmt.Columns {
+			if col.Unique && !col.PrimaryKey {
+				idxName := fmt.Sprintf("sqlite_autoindex_%s_%s", stmt.Name, col.Name)
+				db.indexes[idxName] = &IndexInfo{
+					Name:    idxName,
+					Table:   stmt.Name,
+					Columns: []string{col.Name},
+					Unique:  true,
+				}
+				db.indexData[idxName] = make(map[interface{}][]int)
+			}
+		}
+		// Create implicit unique indexes for table-level UNIQUE(...) constraints.
+		for i, ukCols := range stmt.UniqueKeys {
+			if len(ukCols) > 0 {
+				idxName := fmt.Sprintf("sqlite_autoindex_%s_uk%d", stmt.Name, i)
+				db.indexes[idxName] = &IndexInfo{
+					Name:    idxName,
+					Table:   stmt.Name,
+					Columns: ukCols,
+					Unique:  true,
+				}
+				db.indexData[idxName] = make(map[interface{}][]int)
+			}
+		}
+
 		if db.schemaCache != nil {
 			db.schemaCache.Invalidate()
 		}
@@ -590,6 +662,10 @@ func (db *Database) Exec(sql string) (Result, error) {
 			result, err = db.execInsertSelect(stmt)
 		} else if stmt.OnConflict != nil {
 			result, err = db.execInsertOnConflict(stmt)
+		} else if stmt.OrAction == "REPLACE" {
+			result, err = db.execInsertOrReplace(stmt)
+		} else if stmt.OrAction == "IGNORE" {
+			result, err = db.execInsertOrIgnore(stmt)
 		} else if res, batchErr, handled := db.execInsertBatch(stmt); handled {
 			result, err = res, batchErr
 		} else {
@@ -601,14 +677,26 @@ func (db *Database) Exec(sql string) (Result, error) {
 		return result, err
 	case "UpdateStmt":
 		stmt := ast.(*QP.UpdateStmt)
-		result, err := db.execVMDML(sql, stmt.Table)
+		var result Result
+		var err error
+		if stmt.From != nil {
+			result, err = db.execUpdateFrom(stmt)
+		} else {
+			result, err = db.execVMDML(sql, stmt.Table)
+		}
 		if err == nil {
 			db.invalidateWriteCaches()
 		}
 		return result, err
 	case "DeleteStmt":
 		stmt := ast.(*QP.DeleteStmt)
-		result, err := db.execVMDML(sql, stmt.Table)
+		var result Result
+		var err error
+		if len(stmt.Using) > 0 {
+			result, err = db.execDeleteUsing(stmt)
+		} else {
+			result, err = db.execVMDML(sql, stmt.Table)
+		}
 		if err == nil {
 			db.invalidateWriteCaches()
 		}
@@ -676,10 +764,12 @@ func (db *Database) Exec(sql string) (Result, error) {
 			return Result{}, fmt.Errorf("table %s does not exist", stmt.Table)
 		}
 		db.indexes[stmt.Name] = &IndexInfo{
-			Name:    stmt.Name,
-			Table:   stmt.Table,
-			Columns: stmt.Columns,
-			Unique:  stmt.Unique,
+			Name:      stmt.Name,
+			Table:     stmt.Table,
+			Columns:   stmt.Columns,
+			Exprs:     stmt.Exprs,
+			Unique:    stmt.Unique,
+			WhereExpr: stmt.WhereExpr,
 		}
 		// Build hash index immediately from existing table data.
 		db.buildIndexData(stmt.Name)
@@ -758,12 +848,19 @@ func (db *Database) Exec(sql string) (Result, error) {
 		db.txSnapshot = nil
 		return Result{}, nil
 	case "RollbackStmt":
-		if db.activeTx == nil {
+		stmt := ast.(*QP.RollbackStmt)
+		if stmt.Savepoint != "" {
+			// ROLLBACK TO SAVEPOINT sp_name
+			return db.handleRollbackToSavepoint(stmt.Savepoint)
+		}
+		if db.activeTx == nil && len(db.savepointStack) == 0 {
 			return Result{}, fmt.Errorf("no transaction active")
 		}
-		err := db.txMgr.RollbackTransaction(db.activeTx.ID)
-		if err != nil {
-			return Result{}, fmt.Errorf("failed to rollback transaction: %w", err)
+		if db.activeTx != nil {
+			err := db.txMgr.RollbackTransaction(db.activeTx.ID)
+			if err != nil {
+				return Result{}, fmt.Errorf("failed to rollback transaction: %w", err)
+			}
 		}
 		if db.txSnapshot != nil {
 			db.restoreSnapshot(db.txSnapshot)
@@ -771,7 +868,13 @@ func (db *Database) Exec(sql string) (Result, error) {
 		}
 		// activeTx is cleared after snapshot restore so the engine sees clean state
 		db.activeTx = nil
+		db.savepointStack = nil
 		return Result{}, nil
+	case "SavepointStmt":
+		return db.handleSavepoint(ast.(*QP.SavepointStmt).Name)
+	case "ReleaseSavepointStmt":
+		return db.handleReleaseSavepoint(ast.(*QP.ReleaseSavepointStmt).Name)
+
 	case "PragmaStmt":
 		// PRAGMAs like PRAGMA foreign_keys = ON need to work via Exec too
 		rows, err := db.handlePragma(ast.(*QP.PragmaStmt))
@@ -786,6 +889,16 @@ func (db *Database) Exec(sql string) (Result, error) {
 	case "AnalyzeStmt":
 		_, err := db.handleAnalyze(ast.(*QP.AnalyzeStmt))
 		return Result{}, err
+	case "ReindexStmt":
+		_, err := db.handleReindex(ast.(*QP.ReindexStmt))
+		return Result{}, err
+	case "SelectStmt":
+		// SELECT INTO via Exec path
+		stmt := ast.(*QP.SelectStmt)
+		if stmt.IntoTable != "" {
+			_, err := db.execSelectInto(stmt)
+			return Result{}, err
+		}
 	}
 
 	return Result{}, nil
@@ -867,12 +980,21 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		return db.handleAnalyze(ast.(*QP.AnalyzeStmt))
 	}
 
+	if ast.NodeType() == "ReindexStmt" {
+		return db.handleReindex(ast.(*QP.ReindexStmt))
+	}
+
 	if ast.NodeType() == "ExplainStmt" {
 		return db.handleExplain(ast.(*QP.ExplainStmt), sql)
 	}
 
 	if ast.NodeType() == "SelectStmt" {
 		stmt := ast.(*QP.SelectStmt)
+
+		// Handle SELECT ... INTO tablename — creates a new table with the query results.
+		if stmt.IntoTable != "" {
+			return db.execSelectInto(stmt)
+		}
 
 		// Handle CTE (WITH ... AS (...) SELECT ...) by materializing temp tables
 		if len(stmt.CTEs) > 0 {
@@ -946,6 +1068,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return db.execValuesTable(stmt)
 		}
 
+		// Handle table-valued function: FROM json_each(...) AS t
+		if stmt.From.TableFunc != nil {
+			return db.execTableFuncQuery(stmt)
+		}
+
 		var tableName string
 		var schemaName string
 		if stmt.From != nil {
@@ -968,6 +1095,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 		// Handle sqlite_stat1 virtual table
 		if tableName == "sqlite_stat1" {
 			return db.querySqliteStat1()
+		}
+
+		// Handle sqlvibe_extensions virtual table
+		if tableName == "sqlvibe_extensions" {
+			return db.querySqlvibeExtensions(stmt)
 		}
 
 		// Handle views by substituting the view SQL (case-insensitive)
@@ -1080,7 +1212,22 @@ func (db *Database) Query(sql string) (*Rows, error) {
 
 	// For non-SELECT DML statements (INSERT, UPDATE, DELETE) called via Query(),
 	// execute them via Exec and return empty results (matching SQLite driver behavior).
+	// Exception: statements with RETURNING clause return actual rows.
 	if isDMLStatement(ast.NodeType()) {
+		switch stmt := ast.(type) {
+		case *QP.InsertStmt:
+			if len(stmt.Returning) > 0 {
+				return db.execInsertReturning(stmt, sql)
+			}
+		case *QP.UpdateStmt:
+			if len(stmt.Returning) > 0 {
+				return db.execUpdateReturning(stmt, sql)
+			}
+		case *QP.DeleteStmt:
+			if len(stmt.Returning) > 0 {
+				return db.execDeleteReturning(stmt, sql)
+			}
+		}
 		_, err := db.Exec(sql)
 		if err != nil {
 			return nil, err
@@ -1106,11 +1253,58 @@ func isDMLStatement(nodeType string) bool {
 }
 
 func (db *Database) Close() error {
+	// Stop background auto-checkpoint goroutine if running.
+	if db.stopAutoChkpt != nil {
+		close(db.stopAutoChkpt)
+		db.stopAutoChkpt = nil
+	}
 	if db.wal != nil {
 		_ = db.wal.Close()
 		db.wal = nil
 	}
 	return db.pm.Close()
+}
+
+// startAutoCheckpoint launches a background goroutine that periodically
+// checkpoints the WAL when it has accumulated at least n frames.
+// Calling it again replaces any previously running goroutine.
+func (db *Database) startAutoCheckpoint(n int) {
+	if db.stopAutoChkpt != nil {
+		close(db.stopAutoChkpt)
+		db.stopAutoChkpt = nil
+	}
+	if n <= 0 {
+		db.autoCheckpointN = 0
+		return
+	}
+	db.autoCheckpointN = n
+	stop := make(chan struct{})
+	db.stopAutoChkpt = stop
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if db.wal != nil && db.wal.ShouldCheckpoint(n) {
+					_, _ = db.wal.Checkpoint()
+				}
+			}
+		}
+	}()
+}
+
+// ClearResultCache invalidates the in-process query result cache, forcing the
+// next identical SELECT to be re-executed against live data.  This is useful
+// in benchmarks that want to measure actual query-execution cost rather than
+// cache-hit latency, and in tests that need to verify fresh results after a
+// series of writes have been made outside the normal Exec path.
+func (db *Database) ClearResultCache() {
+	if db.queryCache != nil {
+		db.queryCache.Invalidate()
+	}
 }
 
 // invalidateWriteCaches clears the result cache and plan cache after any
@@ -1221,11 +1415,166 @@ func (db *Database) sortResultsTopK(rows *Rows, orderBy []QP.OrderBy, topK int) 
 }
 
 func (db *Database) ExecWithParams(sql string, params []interface{}) (Result, error) {
-	return db.Exec(sql)
+	boundSQL, err := formatParamSQL(sql, params, nil)
+	if err != nil {
+		return Result{}, err
+	}
+	return db.Exec(boundSQL)
 }
 
 func (db *Database) QueryWithParams(sql string, params []interface{}) (*Rows, error) {
-	return db.Query(sql)
+	boundSQL, err := formatParamSQL(sql, params, nil)
+	if err != nil {
+		return nil, err
+	}
+	return db.Query(boundSQL)
+}
+
+// ExecNamed executes a SQL statement with named parameters (":name" or "@name").
+func (db *Database) ExecNamed(sql string, params map[string]interface{}) (Result, error) {
+	boundSQL, err := formatParamSQL(sql, nil, params)
+	if err != nil {
+		return Result{}, err
+	}
+	return db.Exec(boundSQL)
+}
+
+// QueryNamed executes a SQL query with named parameters (":name" or "@name").
+func (db *Database) QueryNamed(sql string, params map[string]interface{}) (*Rows, error) {
+	boundSQL, err := formatParamSQL(sql, nil, params)
+	if err != nil {
+		return nil, err
+	}
+	return db.Query(boundSQL)
+}
+
+// applyQueryTimeout wraps ctx with a deadline derived from db.queryTimeoutMs when set.
+// The returned cancel function must always be called (defer cancel()).
+func (db *Database) applyQueryTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if db.queryTimeoutMs > 0 {
+		return context.WithTimeout(ctx, time.Duration(db.queryTimeoutMs)*time.Millisecond)
+	}
+	return ctx, func() {}
+}
+
+// checkMaxMemory estimates the memory occupied by rows and returns SVDB_OOM_LIMIT
+// when it exceeds db.maxMemoryBytes.  Returns nil when the limit is not set.
+func (db *Database) checkMaxMemory(rows [][]interface{}) error {
+	if db.maxMemoryBytes <= 0 || len(rows) == 0 {
+		return nil
+	}
+	cols := len(rows[0])
+	// Heuristic: 64 bytes per value cell covers int64, float64, short strings.
+	estimatedBytes := int64(len(rows)) * int64(cols) * 64
+	if estimatedBytes > db.maxMemoryBytes {
+		return Errorf(SVDB_OOM_LIMIT,
+			"result set exceeds max_memory limit (%d bytes estimated > %d bytes limit)",
+			estimatedBytes, db.maxMemoryBytes)
+	}
+	return nil
+}
+
+// ExecContext executes a SQL statement with context support.
+// A pre-cancelled context returns an error immediately without executing the statement.
+// When PRAGMA query_timeout is set, it is applied as an additional deadline.
+func (db *Database) ExecContext(ctx context.Context, sql string) (Result, error) {
+	select {
+	case <-ctx.Done():
+		return Result{}, wrapCtxErr(ctx.Err())
+	default:
+	}
+	ctx, cancel := db.applyQueryTimeout(ctx)
+	defer cancel()
+
+	type res struct {
+		r   Result
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		r, err := db.Exec(sql)
+		ch <- res{r, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return Result{}, wrapCtxErr(ctx.Err())
+	case r := <-ch:
+		return r.r, r.err
+	}
+}
+
+// QueryContext executes a SQL query with context support.
+// A pre-cancelled context returns an error immediately without executing the query.
+// When PRAGMA query_timeout is set, it is applied as an additional deadline.
+// When PRAGMA max_memory is set, the result set size is checked before returning.
+func (db *Database) QueryContext(ctx context.Context, sql string) (*Rows, error) {
+	select {
+	case <-ctx.Done():
+		return nil, wrapCtxErr(ctx.Err())
+	default:
+	}
+	ctx, cancel := db.applyQueryTimeout(ctx)
+	defer cancel()
+
+	type res struct {
+		rows *Rows
+		err  error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		rows, err := db.Query(sql)
+		ch <- res{rows, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, wrapCtxErr(ctx.Err())
+	case r := <-ch:
+		if r.err != nil {
+			return nil, r.err
+		}
+		if r.rows != nil {
+			if memErr := db.checkMaxMemory(r.rows.Data); memErr != nil {
+				return nil, memErr
+			}
+		}
+		return r.rows, nil
+	}
+}
+
+// ExecContextWithParams executes a parameterized SQL statement with context support.
+func (db *Database) ExecContextWithParams(ctx context.Context, sql string, params []interface{}) (Result, error) {
+	boundSQL, err := formatParamSQL(sql, params, nil)
+	if err != nil {
+		return Result{}, err
+	}
+	return db.ExecContext(ctx, boundSQL)
+}
+
+// QueryContextWithParams executes a parameterized SQL query with context support.
+func (db *Database) QueryContextWithParams(ctx context.Context, sql string, params []interface{}) (*Rows, error) {
+	boundSQL, err := formatParamSQL(sql, params, nil)
+	if err != nil {
+		return nil, err
+	}
+	return db.QueryContext(ctx, boundSQL)
+}
+
+// ExecContextNamed executes a named-parameter SQL statement with context support.
+func (db *Database) ExecContextNamed(ctx context.Context, sql string, params map[string]interface{}) (Result, error) {
+	boundSQL, err := formatParamSQL(sql, nil, params)
+	if err != nil {
+		return Result{}, err
+	}
+	return db.ExecContext(ctx, boundSQL)
+}
+
+// QueryContextNamed executes a named-parameter SQL query with context support.
+func (db *Database) QueryContextNamed(ctx context.Context, sql string, params map[string]interface{}) (*Rows, error) {
+	boundSQL, err := formatParamSQL(sql, nil, params)
+	if err != nil {
+		return nil, err
+	}
+	return db.QueryContext(ctx, boundSQL)
 }
 
 func (db *Database) Begin() (*Transaction, error) {
@@ -1282,11 +1631,155 @@ func (db *Database) convertStringToType(val string, colType string) interface{} 
 }
 
 func (db *Database) MustExec(sql string, params ...interface{}) Result {
-	res, err := db.Exec(sql)
+	res, err := db.ExecWithParams(sql, params)
 	if err != nil {
 		panic(err)
 	}
 	return res
+}
+
+// formatParamSQL substitutes positional ('?') and named (':name', '@name') parameter
+// placeholders in sql with properly-escaped SQL literal values.
+// This prevents SQL injection: string values are single-quoted with internal quotes escaped.
+// nil → NULL, int/float → numeric literal, string → 'value', []byte → x'hex'.
+// Extra positional params beyond the number of '?' placeholders are silently ignored.
+func formatParamSQL(sql string, params []interface{}, namedParams map[string]interface{}) (string, error) {
+	var sb strings.Builder
+	sb.Grow(len(sql) + 32)
+	paramIdx := 0
+	i := 0
+	for i < len(sql) {
+		ch := sql[i]
+
+		// Skip string literals (single or double quoted)
+		if ch == '\'' || ch == '"' {
+			quote := ch
+			sb.WriteByte(ch)
+			i++
+			for i < len(sql) {
+				c := sql[i]
+				sb.WriteByte(c)
+				i++
+				if c == quote {
+					// doubled quote → escaped quote inside literal
+					if i < len(sql) && sql[i] == quote {
+						sb.WriteByte(sql[i])
+						i++
+					} else {
+						break
+					}
+				}
+			}
+			continue
+		}
+
+		// Skip line comments (-- ...)
+		if ch == '-' && i+1 < len(sql) && sql[i+1] == '-' {
+			for i < len(sql) && sql[i] != '\n' {
+				sb.WriteByte(sql[i])
+				i++
+			}
+			continue
+		}
+
+		// Skip block comments (/* ... */)
+		if ch == '/' && i+1 < len(sql) && sql[i+1] == '*' {
+			sb.WriteString("/*")
+			i += 2
+			for i+1 < len(sql) {
+				if sql[i] == '*' && sql[i+1] == '/' {
+					sb.WriteString("*/")
+					i += 2
+					break
+				}
+				sb.WriteByte(sql[i])
+				i++
+			}
+			continue
+		}
+
+		// Positional placeholder '?'
+		if ch == '?' {
+			if paramIdx >= len(params) {
+				return "", fmt.Errorf("missing required parameter at position %d (got %d parameters)", paramIdx+1, len(params))
+			}
+			sb.WriteString(formatSQLLiteral(params[paramIdx]))
+			paramIdx++
+			i++
+			continue
+		}
+
+		// Named placeholder ':name' or '@name'
+		if (ch == ':' || ch == '@') && i+1 < len(sql) && isParamIdentByte(sql[i+1]) {
+			i++ // skip ':' or '@'
+			start := i
+			for i < len(sql) && isParamIdentByte(sql[i]) {
+				i++
+			}
+			name := sql[start:i]
+			var val interface{}
+			var ok bool
+			if namedParams != nil {
+				val, ok = namedParams[name]
+			}
+			if !ok {
+				return "", fmt.Errorf("missing named parameter: %s", name)
+			}
+			sb.WriteString(formatSQLLiteral(val))
+			continue
+		}
+
+		sb.WriteByte(ch)
+		i++
+	}
+	return sb.String(), nil
+}
+
+// isParamIdentByte reports whether b is valid inside a parameter name.
+func isParamIdentByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+// formatSQLLiteral converts a Go value to a safely-quoted SQL literal string.
+func formatSQLLiteral(v interface{}) string {
+	if v == nil {
+		return "NULL"
+	}
+	switch val := v.(type) {
+	case int64:
+		return strconv.FormatInt(val, 10)
+	case int:
+		return strconv.FormatInt(int64(val), 10)
+	case int32:
+		return strconv.FormatInt(int64(val), 10)
+	case int16:
+		return strconv.FormatInt(int64(val), 10)
+	case int8:
+		return strconv.FormatInt(int64(val), 10)
+	case uint64:
+		return strconv.FormatUint(val, 10)
+	case uint:
+		return strconv.FormatUint(uint64(val), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(val), 10)
+	case float64:
+		return strconv.FormatFloat(val, 'g', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(val), 'g', -1, 64)
+	case bool:
+		if val {
+			return "1"
+		}
+		return "0"
+	case string:
+		// SQLite uses SQL-standard single-quote doubling for escaping (no backslash escapes).
+		// Doubling every single quote inside the value prevents SQL injection.
+		return "'" + strings.ReplaceAll(val, "'", "''") + "'"
+	case []byte:
+		return "x'" + hex.EncodeToString(val) + "'"
+	default:
+		return "'" + strings.ReplaceAll(fmt.Sprintf("%v", val), "'", "''") + "'"
+	}
 }
 
 func (db *Database) tryUseIndex(tableName string, where QP.Expr) []map[string]interface{} {
@@ -1351,6 +1844,61 @@ func pkKey(row map[string]interface{}, pkCols []string) interface{} {
 	return b.String()
 }
 
+// checkUniqueIndexes verifies that row does not violate any UNIQUE index on tableName.
+// Returns an error in the form "UNIQUE constraint failed: table.col" on violation.
+func (db *Database) checkUniqueIndexes(tableName string, row map[string]interface{}) error {
+	for idxName, idx := range db.indexes {
+		if !idx.Unique || idx.Table != tableName {
+			continue
+		}
+		// Skip if this is effectively the primary-key index (PK uniqueness is checked separately).
+		pkCols := db.primaryKeys[tableName]
+		if len(pkCols) == 1 && len(idx.Columns) == 1 && pkCols[0] == idx.Columns[0] {
+			continue
+		}
+		hmap := db.indexData[idxName]
+		if hmap == nil {
+			continue
+		}
+		// Build composite key for multi-column unique indexes.
+		var key interface{}
+		if len(idx.Columns) == 1 {
+			key = normalizeIndexKey(row[idx.Columns[0]])
+			// SQLite semantics: NULL is never equal to NULL, so a NULL value in a
+			// UNIQUE column does not violate the constraint.
+			if key == nil {
+				continue
+			}
+		} else {
+			// For composite UNIQUE indexes, if ANY component is NULL the constraint
+			// is not enforced (NULL != NULL per SQL standard).
+			hasNull := false
+			parts := make([]interface{}, len(idx.Columns))
+			for i, c := range idx.Columns {
+				v := row[c]
+				if v == nil {
+					hasNull = true
+					break
+				}
+				parts[i] = v
+			}
+			if hasNull {
+				continue
+			}
+			key = fmt.Sprintf("%v", parts)
+		}
+		if existing, ok := hmap[key]; ok && len(existing) > 0 {
+			// Build column list for the error message (matches SQLite format).
+			colRefs := make([]string, len(idx.Columns))
+			for i, c := range idx.Columns {
+				colRefs[i] = tableName + "." + c
+			}
+			return fmt.Errorf("UNIQUE constraint failed: %s", strings.Join(colRefs, ", "))
+		}
+	}
+	return nil
+}
+
 // pkHashAdd adds a row's PK to the hash set for tableName.
 func (db *Database) pkHashAdd(tableName string, row map[string]interface{}) {
 	pkCols := db.primaryKeys[tableName]
@@ -1404,17 +1952,39 @@ func (db *Database) buildPKHashSet(tableName string) {
 	db.pkHashSet[tableName] = set
 }
 
+// buildIndexKey returns the index key for a row.  Single-column (or expression)
+// indexes return the raw normalised value; composite indexes return a
+// fmt.Sprintf("%v", parts) string that matches the key format used in
+// checkUniqueIndexes, buildIndexData, indexAdd, and removeFromIndexes.
+func (db *Database) buildIndexKey(idx *IndexInfo, row map[string]interface{}) interface{} {
+	if len(idx.Exprs) > 0 && idx.Exprs[0] != nil {
+		return normalizeIndexKey(db.engine.EvalExpr(row, idx.Exprs[0]))
+	}
+	if len(idx.Columns) == 1 {
+		return normalizeIndexKey(row[idx.Columns[0]])
+	}
+	// Composite key: same format as checkUniqueIndexes.
+	parts := make([]interface{}, len(idx.Columns))
+	for i, c := range idx.Columns {
+		parts[i] = row[c]
+	}
+	return fmt.Sprintf("%v", parts)
+}
+
 // buildIndexData builds the hash index for a single secondary index from current data.
 func (db *Database) buildIndexData(indexName string) {
 	idx := db.indexes[indexName]
 	if idx == nil || len(idx.Columns) == 0 {
 		return
 	}
-	colName := idx.Columns[0]
 	rows := db.data[idx.Table]
 	hmap := make(map[interface{}][]int, len(rows))
 	for i, row := range rows {
-		key := normalizeIndexKey(row[colName])
+		// Skip rows that don't match the partial index condition
+		if idx.WhereExpr != nil && !isTruthy(db.evalExprOnMap(idx.WhereExpr, row)) {
+			continue
+		}
+		key := db.buildIndexKey(idx, row)
 		hmap[key] = append(hmap[key], i)
 	}
 	db.indexData[indexName] = hmap
@@ -1426,21 +1996,30 @@ func (db *Database) indexAdd(indexName string, rowIdx int, row map[string]interf
 	if idx == nil || len(idx.Columns) == 0 {
 		return
 	}
+	// Skip rows that don't match the partial index condition
+	if idx.WhereExpr != nil && !isTruthy(db.evalExprOnMap(idx.WhereExpr, row)) {
+		return
+	}
 	hmap := db.indexData[indexName]
 	if hmap == nil {
 		return
 	}
-	key := normalizeIndexKey(row[idx.Columns[0]])
+	key := db.buildIndexKey(idx, row)
 	hmap[key] = append(hmap[key], rowIdx)
 }
 
 // indexRemove removes a specific row index from the secondary hash index entry.
-func (db *Database) indexRemove(indexName string, rowIdx int, colValue interface{}) {
+// row is the full row map; the index key is computed via buildIndexKey.
+func (db *Database) indexRemove(indexName string, rowIdx int, row map[string]interface{}) {
+	idx := db.indexes[indexName]
+	if idx == nil {
+		return
+	}
 	hmap := db.indexData[indexName]
 	if hmap == nil {
 		return
 	}
-	key := normalizeIndexKey(colValue)
+	key := db.buildIndexKey(idx, row)
 	entries := hmap[key]
 	for i, e := range entries {
 		if e == rowIdx {
@@ -1484,7 +2063,7 @@ func (db *Database) removeFromIndexes(tableName string, row map[string]interface
 	for idxName, idx := range db.indexes {
 		if idx.Table == tableName && len(idx.Columns) > 0 {
 			if db.indexData[idxName] != nil {
-				db.indexRemove(idxName, rowIdx, row[idx.Columns[0]])
+				db.indexRemove(idxName, rowIdx, row)
 				db.indexShiftDown(idxName, rowIdx)
 			}
 		}
@@ -1500,7 +2079,7 @@ func (db *Database) updateIndexes(tableName string, oldRow, newRow map[string]in
 	for idxName, idx := range db.indexes {
 		if idx.Table == tableName && len(idx.Columns) > 0 && db.indexData[idxName] != nil {
 			if oldRow != nil {
-				db.indexRemove(idxName, rowIdx, oldRow[idx.Columns[0]])
+				db.indexRemove(idxName, rowIdx, oldRow)
 			}
 			db.indexAdd(idxName, rowIdx, newRow)
 		}
@@ -1739,6 +2318,17 @@ func (db *Database) tryIndexLookup(tableName string, where QP.Expr) []map[string
 	}
 
 	switch bin.Op {
+	case QP.TokenAnd:
+		// For AND conditions, try to use an index for one sub-predicate.
+		// We use the first indexable sub-predicate found (left-to-right), which
+		// is typically the most selective condition placed first by the query
+		// writer or the predicate reorderer.  The VM still applies the full
+		// WHERE clause for correctness; the index only pre-filters rows.
+		if rows := db.tryIndexLookup(tableName, bin.Left); rows != nil {
+			return rows
+		}
+		return db.tryIndexLookup(tableName, bin.Right)
+
 	case QP.TokenEq:
 		var colName string
 		var val interface{}
@@ -2032,7 +2622,7 @@ func (db *Database) serializeRow(row map[string]interface{}) []byte {
 func (db *Database) querySqliteMaster(stmt *QP.SelectStmt) (*Rows, error) {
 	allResults := make([]map[string]interface{}, 0)
 	for tableName := range db.tables {
-		sql := fmt.Sprintf("CREATE TABLE %s ()", tableName)
+		sql := db.reconstructCreateTableSQL(tableName)
 		allResults = append(allResults, map[string]interface{}{
 			"type":     "table",
 			"name":     tableName,
@@ -2139,6 +2729,54 @@ func (db *Database) querySqliteMaster(stmt *QP.SelectStmt) (*Rows, error) {
 	return &Rows{Columns: cols, Data: resultData}, nil
 }
 
+// reconstructCreateTableSQL rebuilds the CREATE TABLE SQL from the in-memory schema.
+func (db *Database) reconstructCreateTableSQL(tableName string) string {
+	colOrder, ok := db.columnOrder[tableName]
+	if !ok {
+		return fmt.Sprintf("CREATE TABLE %s ()", tableName)
+	}
+	colTypes := db.tables[tableName]
+	pkCols := db.primaryKeys[tableName]
+	pkSet := make(map[string]bool)
+	for _, pk := range pkCols {
+		pkSet[pk] = true
+	}
+
+	var parts []string
+	for _, colName := range colOrder {
+		colType := colTypes[colName]
+		if colType == "" {
+			colType = "TEXT"
+		}
+		col := colName + " " + colType
+		if db.columnNotNull[tableName] != nil && db.columnNotNull[tableName][colName] {
+			col += " NOT NULL"
+		}
+		if pkSet[colName] && len(pkCols) == 1 {
+			col += " PRIMARY KEY"
+		}
+		parts = append(parts, col)
+	}
+	if len(pkCols) > 1 {
+		parts = append(parts, "PRIMARY KEY ("+strings.Join(pkCols, ", ")+")")
+	}
+	for _, fk := range db.foreignKeys[tableName] {
+		fkStr := "FOREIGN KEY (" + strings.Join(fk.ChildColumns, ", ") + ")" +
+			" REFERENCES " + fk.ParentTable
+		if len(fk.ParentColumns) > 0 {
+			fkStr += " (" + strings.Join(fk.ParentColumns, ", ") + ")"
+		}
+		if fk.OnDelete != QP.ReferenceNoAction {
+			fkStr += " ON DELETE " + actionName(fk.OnDelete)
+		}
+		if fk.OnUpdate != QP.ReferenceNoAction {
+			fkStr += " ON UPDATE " + actionName(fk.OnUpdate)
+		}
+		parts = append(parts, fkStr)
+	}
+	return fmt.Sprintf("CREATE TABLE %s (%s)", tableName, strings.Join(parts, ", "))
+}
+
 // queryInformationSchema handles queries to information_schema virtual tables
 func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string) (*Rows, error) {
 	// Extract view name from "information_schema.viewname"
@@ -2162,91 +2800,115 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 	if allResults == nil {
 		// Generate data based on view type
 		switch viewName {
-	case "columns":
-		columnNames = []string{"column_name", "table_name", "table_schema", "data_type", "is_nullable", "column_default"}
-		// Extract columns from in-memory schema
-		for tblName, colTypes := range db.tables {
-			orderedCols := db.columnOrder[tblName]
-			pkCols := db.primaryKeys[tblName]
-			pkMap := make(map[string]bool)
-			for _, pk := range pkCols {
-				pkMap[pk] = true
-			}
-			for _, colName := range orderedCols {
-				colType := colTypes[colName]
-				isNullable := "YES"
-				// PRIMARY KEY columns cannot be NULL
-				if pkMap[colName] {
-					isNullable = "NO"
-				} else if strings.Contains(strings.ToUpper(colType), "NOT NULL") {
-					isNullable = "NO"
+		case "columns":
+			columnNames = []string{"column_name", "table_name", "table_schema", "data_type", "is_nullable", "column_default"}
+			// Extract columns from in-memory schema
+			for tblName, colTypes := range db.tables {
+				orderedCols := db.columnOrder[tblName]
+				pkCols := db.primaryKeys[tblName]
+				pkMap := make(map[string]bool)
+				for _, pk := range pkCols {
+					pkMap[pk] = true
 				}
-				allResults = append(allResults, []interface{}{
-					colName,
-					tblName,
-					"main",
-					colType,
-					isNullable,
-					nil, // column_default (not tracked yet)
-				})
-			}
-		}
-
-	case "tables":
-		columnNames = []string{"table_name", "table_schema", "table_type"}
-		// Extract tables from in-memory schema
-		for tblName := range db.tables {
-			allResults = append(allResults, []interface{}{
-				tblName,
-				"main",
-				"BASE TABLE",
-			})
-		}
-
-	case "views":
-		columnNames = []string{"table_name", "table_schema", "view_definition"}
-		// No views tracked yet, return empty
-
-	case "table_constraints":
-		columnNames = []string{"constraint_name", "table_name", "table_schema", "constraint_type"}
-		// Extract PRIMARY KEY constraints from in-memory schema
-		for tblName, pkCols := range db.primaryKeys {
-			if len(pkCols) > 0 {
-				constraintName := fmt.Sprintf("pk_%s", tblName)
-				allResults = append(allResults, []interface{}{
-					constraintName,
-					tblName,
-					"main",
-					"PRIMARY KEY",
-				})
-			}
-		}
-
-	case "referential_constraints":
-		columnNames = []string{"constraint_name", "unique_constraint_schema", "unique_constraint_name"}
-		// No foreign keys tracked yet, return empty
-
-	case "key_column_usage":
-		columnNames = []string{"constraint_name", "table_name", "table_schema", "column_name", "ordinal_position"}
-		// Extract PRIMARY KEY column usage from in-memory schema
-		for tblName, pkCols := range db.primaryKeys {
-			if len(pkCols) > 0 {
-				constraintName := fmt.Sprintf("pk_%s", tblName)
-				for i, colName := range pkCols {
+				for _, colName := range orderedCols {
+					colType := colTypes[colName]
+					isNullable := "YES"
+					// PRIMARY KEY columns cannot be NULL
+					if pkMap[colName] {
+						isNullable = "NO"
+					} else if db.columnNotNull[tblName] != nil && db.columnNotNull[tblName][colName] {
+						isNullable = "NO"
+					}
+					var colDefault interface{}
+					if db.columnDefaults[tblName] != nil {
+						colDefault = db.columnDefaults[tblName][colName]
+					}
 					allResults = append(allResults, []interface{}{
-						constraintName,
-						tblName,
-						"main",
-						colName,
-						int64(i + 1), // ordinal position starts at 1
+						colName, tblName, "main", colType, isNullable, colDefault,
 					})
 				}
 			}
-		}
 
-	default:
-		return nil, fmt.Errorf("unknown information_schema view: %s", viewName)
-	}
+		case "tables":
+			columnNames = []string{"table_name", "table_schema", "table_type"}
+			// Extract tables from in-memory schema
+			for tblName := range db.tables {
+				allResults = append(allResults, []interface{}{
+					tblName,
+					"main",
+					"BASE TABLE",
+				})
+			}
+
+		case "views":
+			columnNames = []string{"table_name", "table_schema", "view_definition"}
+			for viewName, viewSQL := range db.views {
+				allResults = append(allResults, []interface{}{viewName, "main", viewSQL})
+			}
+
+		case "table_constraints":
+			columnNames = []string{"constraint_name", "table_name", "table_schema", "constraint_type"}
+			// PRIMARY KEY constraints
+			for tblName, pkCols := range db.primaryKeys {
+				if len(pkCols) > 0 {
+					constraintName := fmt.Sprintf("pk_%s", tblName)
+					allResults = append(allResults, []interface{}{
+						constraintName, tblName, "main", "PRIMARY KEY",
+					})
+				}
+			}
+			// UNIQUE constraints (from unique indexes with autoindex prefix)
+			for idxName, idx := range db.indexes {
+				if idx.Unique {
+					allResults = append(allResults, []interface{}{
+						idxName, idx.Table, "main", "UNIQUE",
+					})
+				}
+			}
+			// FOREIGN KEY constraints
+			for tblName, fks := range db.foreignKeys {
+				for i := range fks {
+					constraintName := fmt.Sprintf("fk_%s_%d", tblName, i)
+					allResults = append(allResults, []interface{}{
+						constraintName, tblName, "main", "FOREIGN KEY",
+					})
+				}
+			}
+
+		case "referential_constraints":
+			columnNames = []string{"constraint_name", "unique_constraint_schema", "unique_constraint_name"}
+			for tblName, fks := range db.foreignKeys {
+				for i, fk := range fks {
+					constraintName := fmt.Sprintf("fk_%s_%d", tblName, i)
+					// The unique constraint on the parent table
+					parentConstraint := fmt.Sprintf("pk_%s", fk.ParentTable)
+					allResults = append(allResults, []interface{}{
+						constraintName, "main", parentConstraint,
+					})
+				}
+			}
+
+		case "key_column_usage":
+			columnNames = []string{"constraint_name", "table_name", "table_schema", "column_name", "ordinal_position"}
+			// Extract PRIMARY KEY column usage from in-memory schema
+			for tblName, pkCols := range db.primaryKeys {
+				if len(pkCols) > 0 {
+					constraintName := fmt.Sprintf("pk_%s", tblName)
+					for i, colName := range pkCols {
+						allResults = append(allResults, []interface{}{
+							constraintName,
+							tblName,
+							"main",
+							colName,
+							int64(i + 1), // ordinal position starts at 1
+						})
+					}
+				}
+			}
+
+		default:
+			return nil, fmt.Errorf("unknown information_schema view: %s", viewName)
+		}
 		// Store built results in schema cache for subsequent calls.
 		if db.schemaCache != nil {
 			db.schemaCache.Set(viewName, columnNames, allResults)
@@ -2566,11 +3228,26 @@ func (db *Database) execDerivedTableQuery(stmt *QP.SelectStmt) (*Rows, error) {
 		subRows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
 	}
 
-	// Register temp table
+	// Register temp table with inferred column types from actual data.
+	// Using "TEXT" for all columns causes the HybridStore vectorized filter
+	// to treat integer values as strings, breaking comparisons like a > 1.
 	tempName := alias
 	colTypes := make(map[string]string)
 	for _, col := range subRows.Columns {
-		colTypes[col] = "TEXT"
+		colTypes[col] = "TEXT" // default
+	}
+	if len(subRows.Data) > 0 {
+		for i, col := range subRows.Columns {
+			if i >= len(subRows.Data[0]) {
+				break
+			}
+			switch subRows.Data[0][i].(type) {
+			case int64, int:
+				colTypes[col] = "INTEGER"
+			case float64:
+				colTypes[col] = "REAL"
+			}
+		}
 	}
 	db.tables[tempName] = colTypes
 	db.columnOrder[tempName] = subRows.Columns
@@ -2874,82 +3551,99 @@ func (db *Database) evalExprOnMap(expr QP.Expr, row map[string]interface{}) inte
 			return int64(1)
 		}
 		return nil
+	case *QP.CollateExpr:
+		return db.evalExprOnMap(e.Expr, row)
+	case *QP.BinaryExpr:
+		lv := db.evalExprOnMap(e.Left, row)
+		rv := db.evalExprOnMap(e.Right, row)
+		if e.Op == QP.TokenMatch {
+			lStr, lok := lv.(string)
+			rStr, rok := rv.(string)
+			if lok && rok {
+				if strings.Contains(strings.ToLower(lStr), strings.ToLower(rStr)) {
+					return int64(1)
+				}
+				return nil
+			}
+			return nil
+		}
+		return nil
 	}
 	return nil
 }
 
 // compareForAnyAll compares two values for ANY/ALL predicates.
 func compareForAnyAll(a, b interface{}) int {
-if a == nil && b == nil {
-return 0
-}
-if a == nil {
-return -1
-}
-if b == nil {
-return 1
-}
-switch av := a.(type) {
-case int64:
-switch bv := b.(type) {
-case int64:
-if av < bv {
-return -1
-}
-if av > bv {
-return 1
-}
-return 0
-case float64:
-fa := float64(av)
-if fa < bv {
-return -1
-}
-if fa > bv {
-return 1
-}
-return 0
-}
-case float64:
-switch bv := b.(type) {
-case float64:
-if av < bv {
-return -1
-}
-if av > bv {
-return 1
-}
-return 0
-case int64:
-fb := float64(bv)
-if av < fb {
-return -1
-}
-if av > fb {
-return 1
-}
-return 0
-}
-case string:
-if bv, ok := b.(string); ok {
-if av < bv {
-return -1
-}
-if av > bv {
-return 1
-}
-return 0
-}
-}
-as := fmt.Sprintf("%v", a)
-bs := fmt.Sprintf("%v", b)
-if as < bs {
-return -1
-}
-if as > bs {
-return 1
-}
-return 0
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	switch av := a.(type) {
+	case int64:
+		switch bv := b.(type) {
+		case int64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		case float64:
+			fa := float64(av)
+			if fa < bv {
+				return -1
+			}
+			if fa > bv {
+				return 1
+			}
+			return 0
+		}
+	case float64:
+		switch bv := b.(type) {
+		case float64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		case int64:
+			fb := float64(bv)
+			if av < fb {
+				return -1
+			}
+			if av > fb {
+				return 1
+			}
+			return 0
+		}
+	case string:
+		if bv, ok := b.(string); ok {
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		}
+	}
+	as := fmt.Sprintf("%v", a)
+	bs := fmt.Sprintf("%v", b)
+	if as < bs {
+		return -1
+	}
+	if as > bs {
+		return 1
+	}
+	return 0
 }
 
 // execCreateTableAsSelect handles CREATE TABLE ... AS SELECT
@@ -3000,6 +3694,55 @@ func (db *Database) execCreateTableAsSelect(stmt *QP.CreateTableStmt) (Result, e
 	db.hybridStoresDirty[stmt.Name] = false
 
 	return Result{}, nil
+}
+
+// execSelectInto handles SELECT col1, col2 INTO newtable FROM source [WHERE ...].
+// Creates a new table populated with the query results (similar to CREATE TABLE AS SELECT).
+func (db *Database) execSelectInto(stmt *QP.SelectStmt) (*Rows, error) {
+	tableName := stmt.IntoTable
+	// Execute the SELECT without the INTO clause.
+	selectStmt := *stmt
+	selectStmt.IntoTable = ""
+	rows, err := db.execSelectStmt(&selectStmt)
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		rows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
+	}
+
+	// Create the new table with inferred schema.
+	schema := make(map[string]VM.ColumnType)
+	colTypes := make(map[string]string)
+	db.columnDefaults[tableName] = make(map[string]interface{})
+	db.columnNotNull[tableName] = make(map[string]bool)
+	db.columnChecks[tableName] = make(map[string]QP.Expr)
+	for _, col := range rows.Columns {
+		colType := db.inferColumnTypeFromSelect(col, &selectStmt)
+		schema[col] = VM.ColumnType{Name: col, Type: colType}
+		colTypes[col] = colType
+	}
+	db.engine.RegisterTable(tableName, schema)
+	db.tables[tableName] = colTypes
+	db.columnOrder[tableName] = rows.Columns
+
+	bt := DS.NewBTree(db.pm, 0, true)
+	db.tableBTrees[tableName] = bt
+
+	db.data[tableName] = make([]map[string]interface{}, 0, len(rows.Data))
+	for _, row := range rows.Data {
+		rowMap := make(map[string]interface{})
+		for i, col := range rows.Columns {
+			if i < len(row) {
+				rowMap[col] = row[i]
+			}
+		}
+		db.data[tableName] = append(db.data[tableName], rowMap)
+	}
+	db.hybridStores[tableName] = db.buildHybridStore(tableName)
+	db.hybridStoresDirty[tableName] = false
+	db.invalidateSchemaCaches()
+	return nil, nil
 }
 
 // inferColumnTypeFromSelect tries to determine a column's type from its source in a SELECT statement.
@@ -3130,6 +3873,171 @@ func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 		db.hybridStoresDirty[stmt.NewName] = true
 		delete(db.hybridStoresDirty, stmt.Table)
 		return Result{}, nil
+
+	case "DROP_COLUMN":
+		if _, exists := db.tables[stmt.Table]; !exists {
+			return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
+		}
+		colName := stmt.Column.Name
+		if _, colExists := db.tables[stmt.Table][colName]; !colExists {
+			return Result{}, fmt.Errorf("no such column: %s", colName)
+		}
+		// Cannot drop a primary key column
+		for _, pkCol := range db.primaryKeys[stmt.Table] {
+			if pkCol == colName {
+				return Result{}, NewError(SVDB_ALTER_CONFLICT, fmt.Sprintf("cannot drop PRIMARY KEY column: %s", colName))
+			}
+		}
+		// Cannot drop a column used in a multi-column index
+		for idxName, idx := range db.indexes {
+			if idx.Table != stmt.Table {
+				continue
+			}
+			usedInIdx := false
+			for _, c := range idx.Columns {
+				if c == colName {
+					usedInIdx = true
+				}
+			}
+			if usedInIdx && len(idx.Columns) > 1 {
+				return Result{}, NewError(SVDB_ALTER_CONFLICT, fmt.Sprintf("column %s is used in multi-column index %s", colName, idxName))
+			}
+		}
+		// Remove from schema
+		delete(db.tables[stmt.Table], colName)
+		// Remove from columnOrder
+		order := db.columnOrder[stmt.Table]
+		newOrder := make([]string, 0, len(order)-1)
+		for _, c := range order {
+			if c != colName {
+				newOrder = append(newOrder, c)
+			}
+		}
+		db.columnOrder[stmt.Table] = newOrder
+		// Remove from metadata maps
+		if db.columnDefaults[stmt.Table] != nil {
+			delete(db.columnDefaults[stmt.Table], colName)
+		}
+		if db.columnNotNull[stmt.Table] != nil {
+			delete(db.columnNotNull[stmt.Table], colName)
+		}
+		if db.columnChecks[stmt.Table] != nil {
+			delete(db.columnChecks[stmt.Table], colName)
+		}
+		// Remove the column key from every existing row
+		for i := range db.data[stmt.Table] {
+			delete(db.data[stmt.Table][i], colName)
+		}
+		// Drop any index that only covers the dropped column
+		for idxName, idx := range db.indexes {
+			if idx.Table != stmt.Table {
+				continue
+			}
+			for _, c := range idx.Columns {
+				if c == colName {
+					delete(db.indexes, idxName)
+					delete(db.indexData, idxName)
+					break
+				}
+			}
+		}
+		db.engine.RegisterTable(stmt.Table, db.buildSchema(stmt.Table))
+		db.hybridStoresDirty[stmt.Table] = true
+		return Result{}, nil
+
+	case "RENAME_COLUMN":
+		if _, exists := db.tables[stmt.Table]; !exists {
+			return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
+		}
+		oldName := stmt.Column.Name
+		newName := stmt.NewName
+		if _, colExists := db.tables[stmt.Table][oldName]; !colExists {
+			return Result{}, fmt.Errorf("no such column: %s", oldName)
+		}
+		if _, taken := db.tables[stmt.Table][newName]; taken {
+			return Result{}, fmt.Errorf("column already exists: %s", newName)
+		}
+		// Rename in schema (type map)
+		colType := db.tables[stmt.Table][oldName]
+		db.tables[stmt.Table][newName] = colType
+		delete(db.tables[stmt.Table], oldName)
+		// Rename in columnOrder
+		for i, c := range db.columnOrder[stmt.Table] {
+			if c == oldName {
+				db.columnOrder[stmt.Table][i] = newName
+				break
+			}
+		}
+		// Rename in metadata maps
+		if db.columnDefaults[stmt.Table] != nil {
+			if v, ok := db.columnDefaults[stmt.Table][oldName]; ok {
+				db.columnDefaults[stmt.Table][newName] = v
+				delete(db.columnDefaults[stmt.Table], oldName)
+			}
+		}
+		if db.columnNotNull[stmt.Table] != nil {
+			if v, ok := db.columnNotNull[stmt.Table][oldName]; ok {
+				db.columnNotNull[stmt.Table][newName] = v
+				delete(db.columnNotNull[stmt.Table], oldName)
+			}
+		}
+		if db.columnChecks[stmt.Table] != nil {
+			if v, ok := db.columnChecks[stmt.Table][oldName]; ok {
+				db.columnChecks[stmt.Table][newName] = v
+				delete(db.columnChecks[stmt.Table], oldName)
+			}
+		}
+		// Rename the key in every existing row
+		for i := range db.data[stmt.Table] {
+			if v, ok := db.data[stmt.Table][i][oldName]; ok {
+				db.data[stmt.Table][i][newName] = v
+				delete(db.data[stmt.Table][i], oldName)
+			}
+		}
+		// Rename column reference in indexes
+		for _, idx := range db.indexes {
+			if idx.Table != stmt.Table {
+				continue
+			}
+			for i, c := range idx.Columns {
+				if c == oldName {
+					idx.Columns[i] = newName
+				}
+			}
+		}
+		db.engine.RegisterTable(stmt.Table, db.buildSchema(stmt.Table))
+		db.hybridStoresDirty[stmt.Table] = true
+		return Result{}, nil
+
+	case "ADD_CONSTRAINT":
+		if _, exists := db.tables[stmt.Table]; !exists {
+			return Result{}, fmt.Errorf("no such table: %s", stmt.Table)
+		}
+		if stmt.CheckExpr != nil {
+			// Register CHECK constraint
+			if db.columnChecks[stmt.Table] == nil {
+				db.columnChecks[stmt.Table] = make(map[string]QP.Expr)
+			}
+			name := stmt.ConstraintName
+			if name == "" {
+				name = fmt.Sprintf("__check_%d__", len(db.columnChecks[stmt.Table]))
+			}
+			db.columnChecks[stmt.Table][name] = stmt.CheckExpr
+		} else if len(stmt.UniqueColumns) > 0 {
+			// Register UNIQUE constraint as an index
+			idxName := stmt.ConstraintName
+			if idxName == "" {
+				idxName = fmt.Sprintf("__unique_%s_%s__", stmt.Table, strings.Join(stmt.UniqueColumns, "_"))
+			}
+			db.indexes[idxName] = &IndexInfo{
+				Name:    idxName,
+				Table:   stmt.Table,
+				Columns: stmt.UniqueColumns,
+				Unique:  true,
+			}
+			db.buildIndexData(idxName)
+		}
+		return Result{}, nil
 	}
 	return Result{}, nil
 }
@@ -3219,8 +4127,8 @@ func evalLiteralExpr(expr QP.Expr) interface{} {
 // Returns (result, error, true) when handled; (Result{}, nil, false) to fall through.
 func (db *Database) execInsertBatch(stmt *QP.InsertStmt) (Result, error, bool) {
 	util.AssertNotNil(stmt, "InsertStmt")
-	// Only handle simple literal-value inserts (no SELECT, ON CONFLICT, DEFAULT VALUES).
-	if stmt.SelectQuery != nil || stmt.OnConflict != nil || stmt.UseDefaults {
+	// Only handle simple literal-value inserts (no SELECT, ON CONFLICT, DEFAULT VALUES, OrAction).
+	if stmt.SelectQuery != nil || stmt.OnConflict != nil || stmt.UseDefaults || stmt.OrAction != "" {
 		return Result{}, nil, false
 	}
 	if !isAllLiteralValues(stmt) {
@@ -3480,6 +4388,170 @@ func (db *Database) execInsertOnConflict(stmt *QP.InsertStmt) (Result, error) {
 	return Result{RowsAffected: affected}, nil
 }
 
+// execInsertOrReplace handles INSERT OR REPLACE: for each row, attempt the INSERT;
+// on a UNIQUE/PK constraint violation, delete the conflicting row and re-insert.
+func (db *Database) execInsertOrReplace(stmt *QP.InsertStmt) (Result, error) {
+	util.AssertNotNil(stmt, "InsertStmt")
+	util.Assert(stmt.Table != "", "InsertStmt.Table cannot be empty")
+	util.Assert(stmt.OrAction == "REPLACE", "execInsertOrReplace called with wrong OrAction")
+
+	tableName := db.resolveTableName(stmt.Table)
+	if _, exists := db.tables[tableName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName)
+	}
+
+	tableCols := db.columnOrder[tableName]
+	if tableCols == nil {
+		tableCols = db.getOrderedColumns(tableName)
+	}
+
+	var affected int64
+
+	for _, row := range stmt.Values {
+		insertCols := stmt.Columns
+		if len(insertCols) == 0 {
+			insertCols = tableCols
+		}
+
+		colParts := make([]string, 0, len(insertCols))
+		valParts := make([]string, 0, len(insertCols))
+		colVals := make(map[string]string, len(insertCols))
+		for i, col := range insertCols {
+			v := "NULL"
+			if i < len(row) {
+				v = exprToSQL(row[i])
+			}
+			colParts = append(colParts, col)
+			valParts = append(valParts, v)
+			colVals[col] = v
+		}
+
+		insertSQL := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+			tableName,
+			strings.Join(colParts, ", "),
+			strings.Join(valParts, ", "))
+
+		res, err := db.execVMDML(insertSQL, tableName)
+		if err == nil {
+			affected += res.RowsAffected
+			continue
+		}
+
+		if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return Result{}, err
+		}
+
+		// Conflict: determine which columns caused the violation, delete
+		// the conflicting row(s), then re-insert.
+		// Parse conflict columns from the error message:
+		//   "UNIQUE constraint failed: table.col1, table.col2"
+		conflictCols := parseUniqueConflictCols(err.Error())
+		if len(conflictCols) == 0 {
+			// Fall back to primary key columns when the error cannot be parsed.
+			conflictCols = db.primaryKeys[tableName]
+		}
+		if len(conflictCols) == 0 {
+			// No primary key — delete all rows matching the inserted columns.
+			conflictCols = insertCols
+		}
+
+		whereParts := make([]string, 0, len(conflictCols))
+		for _, col := range conflictCols {
+			if val, ok := colVals[col]; ok {
+				whereParts = append(whereParts, fmt.Sprintf("%s = %s", col, val))
+			}
+		}
+		if len(whereParts) > 0 {
+			deleteSQL := fmt.Sprintf("DELETE FROM %s WHERE %s",
+				tableName, strings.Join(whereParts, " AND "))
+			if _, delErr := db.execVMDML(deleteSQL, tableName); delErr != nil {
+				return Result{}, delErr
+			}
+		}
+
+		res2, err2 := db.execVMDML(insertSQL, tableName)
+		if err2 != nil {
+			return Result{}, err2
+		}
+		affected += res2.RowsAffected
+	}
+
+	return Result{RowsAffected: affected}, nil
+}
+
+// execInsertOrIgnore handles INSERT OR IGNORE: attempt the INSERT;
+// on a UNIQUE/PK constraint violation, silently skip the row.
+func (db *Database) execInsertOrIgnore(stmt *QP.InsertStmt) (Result, error) {
+	util.AssertNotNil(stmt, "InsertStmt")
+	util.Assert(stmt.Table != "", "InsertStmt.Table cannot be empty")
+	util.Assert(stmt.OrAction == "IGNORE", "execInsertOrIgnore called with wrong OrAction")
+
+	tableName := db.resolveTableName(stmt.Table)
+	if _, exists := db.tables[tableName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName)
+	}
+
+	tableCols := db.columnOrder[tableName]
+	if tableCols == nil {
+		tableCols = db.getOrderedColumns(tableName)
+	}
+
+	var affected int64
+
+	for _, row := range stmt.Values {
+		insertCols := stmt.Columns
+		if len(insertCols) == 0 {
+			insertCols = tableCols
+		}
+
+		colParts := make([]string, 0, len(insertCols))
+		valParts := make([]string, 0, len(insertCols))
+		for i, col := range insertCols {
+			v := "NULL"
+			if i < len(row) {
+				v = exprToSQL(row[i])
+			}
+			colParts = append(colParts, col)
+			valParts = append(valParts, v)
+		}
+
+		insertSQL := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+			tableName,
+			strings.Join(colParts, ", "),
+			strings.Join(valParts, ", "))
+
+		res, err := db.execVMDML(insertSQL, tableName)
+		if err == nil {
+			affected += res.RowsAffected
+		} else if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return Result{}, err
+		}
+		// Constraint violation silently ignored.
+	}
+
+	return Result{RowsAffected: affected}, nil
+}
+
+// parseUniqueConflictCols extracts the column names from a UNIQUE constraint
+// failed error message of the form "UNIQUE constraint failed: tbl.col1, tbl.col2".
+// Returns nil when the message does not match the expected format.
+func parseUniqueConflictCols(errMsg string) []string {
+	const prefix = "UNIQUE constraint failed: "
+	if !strings.HasPrefix(errMsg, prefix) {
+		return nil
+	}
+	refs := strings.Split(errMsg[len(prefix):], ", ")
+	cols := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if dot := strings.LastIndex(ref, "."); dot >= 0 {
+			cols = append(cols, ref[dot+1:])
+		} else if ref != "" {
+			cols = append(cols, ref)
+		}
+	}
+	return cols
+}
+
 // resolveExcluded converts an expression to SQL, replacing excluded.col references
 // with the actual literal values from the attempted INSERT row.
 func resolveExcluded(expr QP.Expr, colVals map[string]string) string {
@@ -3551,6 +4623,281 @@ func substituteAliasExpr(expr QP.Expr, aliasMap map[string]QP.Expr) QP.Expr {
 	default:
 		return expr
 	}
+}
+
+// projectReturning projects RETURNING expressions over a list of rows.
+func (db *Database) projectReturning(returning []QP.Expr, rows []map[string]interface{}, tableCols []string) (*Rows, error) {
+	// Determine column names
+	var colNames []string
+	allCols := false
+	if len(returning) == 1 {
+		if colRef, ok := returning[0].(*QP.ColumnRef); ok && colRef.Name == "*" {
+			allCols = true
+		}
+	}
+
+	if allCols {
+		colNames = tableCols
+	} else {
+		for _, expr := range returning {
+			switch e := expr.(type) {
+			case *QP.ColumnRef:
+				colNames = append(colNames, e.Name)
+			case *QP.AliasExpr:
+				colNames = append(colNames, e.Alias)
+			default:
+				colNames = append(colNames, "?")
+			}
+		}
+	}
+
+	result := make([][]interface{}, 0, len(rows))
+	for _, row := range rows {
+		var rowData []interface{}
+		if allCols {
+			for _, col := range tableCols {
+				rowData = append(rowData, row[col])
+			}
+		} else {
+			for _, expr := range returning {
+				rowData = append(rowData, db.engine.EvalExpr(row, expr))
+			}
+		}
+		result = append(result, rowData)
+	}
+	return &Rows{Columns: colNames, Data: result}, nil
+}
+
+// execInsertReturning runs an INSERT and returns the inserted rows.
+func (db *Database) execInsertReturning(stmt *QP.InsertStmt, sql string) (*Rows, error) {
+	tableName := db.resolveTableName(stmt.Table)
+	tableCols := db.columnOrder[tableName]
+
+	// Snapshot existing row count before insert
+	before := len(db.data[tableName])
+
+	// Execute the insert (strip trailing RETURNING clause by finding last occurrence)
+	retIdx := strings.LastIndex(strings.ToUpper(sql), "RETURNING")
+	_, err := db.Exec(sql[:retIdx])
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect newly inserted rows
+	afterRows := db.data[tableName]
+	inserted := afterRows[before:]
+	db.invalidateWriteCaches()
+	return db.projectReturning(stmt.Returning, inserted, tableCols)
+}
+
+// execUpdateReturning runs an UPDATE and returns the updated rows.
+func (db *Database) execUpdateReturning(stmt *QP.UpdateStmt, sql string) (*Rows, error) {
+	tableName := db.resolveTableName(stmt.Table)
+	tableCols := db.columnOrder[tableName]
+
+	// Execute the update (strip trailing RETURNING clause)
+	retIdx := strings.LastIndex(strings.ToUpper(sql), "RETURNING")
+	_, err := db.Exec(sql[:retIdx])
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect rows matching WHERE after update
+	allRows := db.data[tableName]
+	var matchedRows []map[string]interface{}
+	for _, row := range allRows {
+		if db.engine.EvalBool(row, stmt.Where) {
+			matchedRows = append(matchedRows, row)
+		}
+	}
+	db.invalidateWriteCaches()
+	return db.projectReturning(stmt.Returning, matchedRows, tableCols)
+}
+
+// execDeleteReturning collects matching rows before deleting, then deletes, then returns them.
+func (db *Database) execDeleteReturning(stmt *QP.DeleteStmt, sql string) (*Rows, error) {
+	tableName := db.resolveTableName(stmt.Table)
+	tableCols := db.columnOrder[tableName]
+
+	// Collect rows that will be deleted
+	allRows := db.data[tableName]
+	var toDelete []map[string]interface{}
+	for _, row := range allRows {
+		if db.engine.EvalBool(row, stmt.Where) {
+			// Make a copy
+			rowCopy := make(map[string]interface{}, len(row))
+			for k, v := range row {
+				rowCopy[k] = v
+			}
+			toDelete = append(toDelete, rowCopy)
+		}
+	}
+
+	// Execute the delete (strip trailing RETURNING clause)
+	retIdx := strings.LastIndex(strings.ToUpper(sql), "RETURNING")
+	_, err := db.Exec(sql[:retIdx])
+	if err != nil {
+		return nil, err
+	}
+
+	db.invalidateWriteCaches()
+	return db.projectReturning(stmt.Returning, toDelete, tableCols)
+}
+
+// execUpdateFrom handles UPDATE ... FROM t2 WHERE ... (PostgreSQL-style multi-table update).
+func (db *Database) execUpdateFrom(stmt *QP.UpdateStmt) (Result, error) {
+	tableName := db.resolveTableName(stmt.Table)
+	fromName := db.resolveTableName(stmt.From.Name)
+	fromAlias := stmt.From.Alias
+	if fromAlias == "" {
+		fromAlias = fromName
+	}
+
+	if _, exists := db.tables[tableName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName)
+	}
+	if _, exists := db.tables[fromName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", fromName)
+	}
+
+	targetRows := db.data[tableName]
+	fromRows := db.data[fromName]
+
+	ctx := newDsVmContext(db)
+	var affected int64
+
+	for i, tRow := range targetRows {
+		// Build base row snapshot for this target row
+		baseRow := make(map[string]interface{}, len(tRow)+10)
+		for k, v := range tRow {
+			baseRow[k] = v
+			baseRow[tableName+"."+k] = v
+		}
+		// Try each FROM row as join partner
+		for _, fRow := range fromRows {
+			// Rebuild joinedRow from base for each FROM row to avoid cross-contamination
+			joinedRow := make(map[string]interface{}, len(baseRow)+len(fRow)+5)
+			for k, v := range baseRow {
+				joinedRow[k] = v
+			}
+			for k, v := range fRow {
+				joinedRow[fromAlias+"."+k] = v
+				joinedRow[fromName+"."+k] = v
+			}
+			// Plain (unqualified) keys get the FROM row values last so qualified keys dominate
+			for k, v := range fRow {
+				joinedRow[k] = v
+			}
+			if !db.engine.EvalBool(joinedRow, stmt.Where) {
+				continue
+			}
+			// Apply SET clauses
+			newRow := make(map[string]interface{}, len(tRow))
+			for k, v := range tRow {
+				newRow[k] = v
+			}
+			for _, set := range stmt.Set {
+				colRef, ok := set.Column.(*QP.ColumnRef)
+				if !ok {
+					continue
+				}
+				newRow[colRef.Name] = db.engine.EvalExpr(joinedRow, set.Value)
+			}
+			db.applyTypeAffinity(tableName, newRow)
+			if err := ctx.UpdateRow(tableName, i, newRow); err != nil {
+				return Result{}, err
+			}
+			targetRows[i] = newRow
+			affected++
+			break // update each target row at most once (on first matching FROM row)
+		}
+	}
+
+	db.data[tableName] = targetRows
+	return Result{RowsAffected: affected}, nil
+}
+
+// execDeleteUsing handles DELETE FROM t1 USING t2, t3 WHERE ...
+func (db *Database) execDeleteUsing(stmt *QP.DeleteStmt) (Result, error) {
+	tableName := db.resolveTableName(stmt.Table)
+	if _, exists := db.tables[tableName]; !exists {
+		return Result{}, fmt.Errorf("no such table: %s", tableName)
+	}
+
+	// Resolve all USING tables
+	usingData := make(map[string][]map[string]interface{})
+	for _, usingTable := range stmt.Using {
+		resolved := db.resolveTableName(usingTable)
+		if _, exists := db.tables[resolved]; !exists {
+			return Result{}, fmt.Errorf("no such table: %s", usingTable)
+		}
+		usingData[resolved] = db.data[resolved]
+	}
+
+	ctx := newDsVmContext(db)
+	rows := db.data[tableName]
+	var toDeleteIdx []int
+
+	for i, row := range rows {
+		matched := false
+		// Build joined row with all USING table rows
+		joinedRow := make(map[string]interface{}, len(row)+20)
+		for k, v := range row {
+			joinedRow[k] = v
+			joinedRow[tableName+"."+k] = v
+		}
+		// For simplicity, try all combinations (nested loop)
+		// Build all combinations of USING rows
+		if len(usingData) == 0 {
+			if db.engine.EvalBool(joinedRow, stmt.Where) {
+				matched = true
+			}
+		} else {
+			// Try each combination of USING rows
+			matched = db.evalUsingCombinations(stmt.Where, joinedRow, stmt.Using, usingData, 0)
+		}
+		if matched {
+			toDeleteIdx = append(toDeleteIdx, i)
+		}
+	}
+
+	// Delete in reverse order to preserve indices
+	var affected int64
+	for j := len(toDeleteIdx) - 1; j >= 0; j-- {
+		idx := toDeleteIdx[j]
+		row := rows[idx]
+		db.removeFromIndexes(tableName, row, idx)
+		if err := ctx.DeleteRow(tableName, idx); err != nil {
+			return Result{}, err
+		}
+		rows = db.data[tableName]
+		affected++
+	}
+
+	return Result{RowsAffected: affected}, nil
+}
+
+// evalUsingCombinations evaluates WHERE condition across all combinations of USING rows.
+func (db *Database) evalUsingCombinations(where QP.Expr, baseRow map[string]interface{}, usingTables []string, usingData map[string][]map[string]interface{}, idx int) bool {
+	if idx >= len(usingTables) {
+		return db.engine.EvalBool(baseRow, where)
+	}
+	tableName := db.resolveTableName(usingTables[idx])
+	for _, uRow := range usingData[tableName] {
+		// Copy base row and merge USING row
+		merged := make(map[string]interface{}, len(baseRow)+len(uRow))
+		for k, v := range baseRow {
+			merged[k] = v
+		}
+		for k, v := range uRow {
+			merged[k] = v
+			merged[tableName+"."+k] = v
+		}
+		if db.evalUsingCombinations(where, merged, usingTables, usingData, idx+1) {
+			return true
+		}
+	}
+	return false
 }
 
 // splitStatements splits SQL on top-level semicolons (not inside strings/parens).

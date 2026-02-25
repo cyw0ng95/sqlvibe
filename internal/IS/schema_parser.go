@@ -2,7 +2,7 @@ package IS
 
 import (
 	"fmt"
-	
+
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
 )
 
@@ -26,7 +26,7 @@ func (sp *SchemaParser) ParseSchema() ([]TableInfo, []ColumnInfo, []ViewInfo, []
 	views := make([]ViewInfo, 0)
 	constraints := make([]ConstraintInfo, 0)
 	refs := make([]ReferentialConstraint, 0)
-	
+
 	// TODO: Implement schema extraction from BTree
 	// This will:
 	// 1. Find and read sqlite_master table
@@ -34,7 +34,7 @@ func (sp *SchemaParser) ParseSchema() ([]TableInfo, []ColumnInfo, []ViewInfo, []
 	// 3. Parse CREATE VIEW statements
 	// 4. Extract column definitions
 	// 5. Extract constraint information
-	
+
 	// For now, return empty results
 	return tables, columns, views, constraints, refs, nil
 }
@@ -43,14 +43,14 @@ func (sp *SchemaParser) ParseSchema() ([]TableInfo, []ColumnInfo, []ViewInfo, []
 func (sp *SchemaParser) parseCreateTable(sql string) (*TableInfo, []ColumnInfo, []ConstraintInfo, error) {
 	// TODO: Implement CREATE TABLE parsing
 	// This will extract table name, column definitions, and constraints
-	
+
 	return nil, nil, nil, fmt.Errorf("CREATE TABLE parsing not yet implemented")
 }
 
-// parseCreateView parses a CREATE VIEW statement  
+// parseCreateView parses a CREATE VIEW statement
 func (sp *SchemaParser) parseCreateView(sql string) (*ViewInfo, error) {
 	// TODO: Implement CREATE VIEW parsing
 	// This will extract view name and definition
-	
+
 	return nil, fmt.Errorf("CREATE VIEW parsing not yet implemented")
 }
