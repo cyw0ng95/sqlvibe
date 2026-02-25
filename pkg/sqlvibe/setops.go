@@ -42,20 +42,35 @@ func (db *Database) setOpUnion(left, right [][]interface{}, all bool) [][]interf
 }
 
 func (db *Database) setOpExcept(left, right [][]interface{}, all bool) [][]interface{} {
+	if all {
+		// Multiset subtraction: for each row in right, remove one matching row from left.
+		rightCount := make(map[string]int)
+		for _, row := range right {
+			rightCount[db.rowKey(row)]++
+		}
+		result := make([][]interface{}, 0)
+		for _, row := range left {
+			key := db.rowKey(row)
+			if rightCount[key] > 0 {
+				rightCount[key]--
+			} else {
+				result = append(result, row)
+			}
+		}
+		return result
+	}
+	// EXCEPT without ALL: set difference, deduplicated.
 	rightSet := make(map[string]bool)
 	for _, row := range right {
 		rightSet[db.rowKey(row)] = true
 	}
+	seen := make(map[string]bool)
 	result := make([][]interface{}, 0)
 	for _, row := range left {
 		key := db.rowKey(row)
-		if !rightSet[key] {
-			if all {
-				result = append(result, row)
-			} else {
-				rightSet[key] = true
-				result = append(result, row)
-			}
+		if !rightSet[key] && !seen[key] {
+			seen[key] = true
+			result = append(result, row)
 		}
 	}
 	return result
