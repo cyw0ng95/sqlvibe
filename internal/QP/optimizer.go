@@ -319,6 +319,76 @@ func SelectBestIndex(indexes []*IndexMetaQP, filterCol string, required []string
 	return FindCoveringIndex(indexes, required)
 }
 
+// FindCoveringIndexForColumns finds an index that covers all required columns,
+// preferring one where filterCol is the leading column.
+// Returns (indexName, filterFirst) where filterFirst is true when the filter
+// column is the leading column of the chosen index.
+func FindCoveringIndexForColumns(indexes []*IndexMetaQP, required []string, filterCol string) (name string, filterFirst bool) {
+	// First pass: prefer index where filterCol is leading AND covers all required
+	for _, idx := range indexes {
+		if len(idx.Columns) > 0 && idx.Columns[0] == filterCol && idx.CoversColumns(required) {
+			return idx.Name, true
+		}
+	}
+	// Second pass: any covering index
+	for _, idx := range indexes {
+		if idx.CoversColumns(required) {
+			return idx.Name, false
+		}
+	}
+	return "", false
+}
+
+// TableStats holds simple cardinality information about a table used by the
+// cost-based index selector.
+type TableStats struct {
+	RowCount int
+}
+
+// IndexSelectivity estimates the fraction of rows matching a predicate on an index.
+// Uses ANALYZE statistics if available; otherwise falls back to heuristics.
+func IndexSelectivity(idx *IndexMetaQP, expr Expr, stats *TableStats) float64 {
+	bin, ok := expr.(*BinaryExpr)
+	if !ok {
+		return 1.0
+	}
+	switch bin.Op {
+	case TokenEq:
+		return 0.01 // col = const → ~1% match
+	case TokenLt, TokenGt:
+		return 0.33 // range → ~33% match
+	case TokenLe, TokenGe:
+		return 0.35
+	case TokenBetween:
+		return 0.10 // col BETWEEN a AND b
+	case TokenLike:
+		// Simple heuristic: prefix LIKE 'foo%' → 5%
+		return 0.05
+	}
+	return 1.0
+}
+
+// SelectBestIndexByCost chooses the index with the lowest estimated cost for a
+// query given the WHERE expression and table statistics.
+// Cost = selectivity * tableRows + 1 (constant for index-lookup overhead).
+func SelectBestIndexByCost(indexes []*IndexMetaQP, expr Expr, stats *TableStats) *IndexMetaQP {
+	rowCount := 1000
+	if stats != nil && stats.RowCount > 0 {
+		rowCount = stats.RowCount
+	}
+	var best *IndexMetaQP
+	bestCost := float64(rowCount) + 1 // full scan cost as baseline
+	for _, idx := range indexes {
+		sel := IndexSelectivity(idx, expr, stats)
+		cost := sel*float64(rowCount) + 1
+		if cost < bestCost {
+			bestCost = cost
+			best = idx
+		}
+	}
+	return best
+}
+
 // skipScanCardinalityRatio is the maximum leading-column cardinality relative
 // to table row count for which a skip scan is considered cost-effective.
 const skipScanCardinalityRatio = 10

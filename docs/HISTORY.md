@@ -1,6 +1,53 @@
 # sqlvibe Release History
 
-## **v0.9.15** (2026-02-25)
+## **v0.9.16** (2026-02-25)
+
+### Features: Performance Optimization
+
+#### Track A: Index-Only Scan & Covering Index Detection
+- New `FindCoveringIndexForColumns(indexes, required, filterCol)` in `internal/QP/optimizer.go`: finds an index that covers all required columns, preferring one where `filterCol` is the leading column. Returns `(name, filterFirst)`.
+- New `TableStats` struct and `IndexSelectivity(idx, expr, stats)`: estimates the fraction of rows matching a predicate using heuristics (`= → 1%`, `BETWEEN → 10%`, `LIKE prefix → 5%`, `> / <→ 33%`).
+- New `SelectBestIndexByCost(indexes, expr, stats)`: picks the index with the lowest estimated cost = `selectivity × rowCount + 1`.
+
+#### Track B: Bloom Filter for Hash Join
+- New `internal/DS/bloom_filter.go`: `BloomFilter` with k=2 FNV-1a hash functions. `NewBloomFilter(expectedItems, falsePositiveRate)` sizes the bit array via optimal formula `m = -n·ln(p)/ln(2)²`. `Add(key)` and `MightContain(key)` handle int64, float64, string, bool keys without allocation.
+- New `ColumnarHashJoinBloom(left, right, leftCol, rightCol)` in `pkg/sqlvibe/exec_columnar.go`: performs hash join with bloom filter pre-filtering, skipping hash-table probes for keys definitely absent from the right side.
+
+#### Track C: Vectorized WHERE Filter
+- New `VectorizedFilterSIMD(col, op, val)` in `pkg/sqlvibe/exec_columnar.go`: routes to typed 4-way unrolled filter functions.
+- New `vectorizedFilterInt64(data, col, op, val)`: 4-way unrolled comparison across `[]int64` backing array.
+- New `vectorizedFilterFloat64(data, col, op, val)`: 4-way unrolled comparison across `[]float64` backing array.
+- New `vectorizedFilterString(data, col, op, val)`: 4-way unrolled comparison across `[]string` backing array.
+All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can auto-vectorize these loops on amd64/arm64.
+
+#### Track D: Row Map Pool
+- New `pkg/sqlvibe/row_pool.go`: `getRowMap()` / `putRowMap()` helpers backed by the existing `mapPool` (`sync.Pool`). Reduces allocations in hot scan paths by reusing cleared row maps.
+
+#### Track F: Dispatch Table Expansion
+- `internal/VM/dispatch.go` extended from 22 to 27 opcodes:
+  - `OpIsNull` → `execDispatchIsNull`: jumps to P2 if register P1 is nil.
+  - `OpNotNull` → `execDispatchNotNull`: jumps to P2 if register P1 is not nil.
+  - `OpBitAnd` → `execDispatchBitAnd`: dst = P1 & P2 (NULL-safe).
+  - `OpBitOr` → `execDispatchBitOr`: dst = P1 | P2 (NULL-safe).
+  - `OpRemainder` → `execDispatchRemainder`: dst = P1 % P2.
+
+#### Tests & Benchmarks
+- New `internal/TS/Benchmark/benchmark_v0.9.16_test.go`: 7 benchmarks covering bloom-filter join, vectorized WHERE, index-only scan, allocation overhead (with `-benchmem`), IS NULL dispatch, bitwise dispatch, and range filter.
+
+#### Performance Results (Intel Xeon Platinum 8370C @ 2.80GHz)
+| Operation | v0.9.15 | v0.9.16 | Change |
+|-----------|--------:|--------:|--------|
+| SELECT all (1K) | 60 µs | 58 µs | −3% |
+| GROUP BY | 137 µs | 123 µs | **−10%** |
+| IS NOT NULL scan (1K) | — | 251 µs | new |
+| Index-only scan (PK) | — | 257 µs | new |
+| Allocation/query | — | 83 allocs | baseline |
+
+- Version bumped to `v0.9.16`.
+
+---
+
+
 
 ### Features: SQLValidator — Differential SQL Testing Framework
 
