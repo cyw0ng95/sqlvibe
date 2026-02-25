@@ -376,6 +376,43 @@ When PlainFuzzer confirms a bug, record it in `internal/TS/PlainFuzzer/HUNTINGS.
 
 ---
 
+#### 8.4.9 SQLValidator Bug Tracking
+
+When SQLValidator finds a correctness mismatch between sqlvibe and SQLite, record it in
+`internal/TS/SQLValidator/HUNTINGS.md` instead of HISTORY.md.
+
+**HUNTINGS.md Format**:
+```markdown
+### Bug Title
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High/Medium/Low |
+| **Type** | ResultMismatch / ErrorMismatch / NullHandling / TypeConversion |
+| **Table(s)** | TPC-C table(s) involved |
+| **Trigger SQL** | exact SQL that triggers the mismatch |
+| **SQLite Result** | rows / error returned by SQLite |
+| **SQLVibe Result** | rows / error returned by SQLVibe |
+| **Root Cause** | explanation of the bug |
+| **Fix** | how it was fixed |
+| **Seed** | LCG seed that reproduces the mismatch |
+| **Found By** | SQLValidator |
+| **Date** | YYYY-MM-DD |
+```
+
+**Workflow**:
+1. Add bug entry to `internal/TS/SQLValidator/HUNTINGS.md` with full details
+2. Add regression test in `internal/TS/Regression/` or as a `TestSQLValidator_Regression` subcase
+3. Fix the root cause in the engine
+4. Commit and push
+5. Do NOT add to HISTORY.md - HUNTINGS.md is the source of truth for SQLValidator bugs
+
+**SQLValidator** uses an LCG random generator with the TPC-C schema as its starter
+schema. It runs generated SQL against both SQLite and sqlvibe and compares results.
+See `docs/plan-v0.9.15.md` for full design details.
+
+---
+
 ## 4. Subsystem-Specific Guidelines
 
 ### 4.1 Data Storage (DS) Subsystem
