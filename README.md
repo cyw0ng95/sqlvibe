@@ -98,7 +98,7 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.9.11)
+## Performance (v0.9.12)
 
 Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
@@ -173,6 +173,29 @@ Results may vary on different hardware.
 
 v0.9.3 extends the dispatch table to 22 opcodes: comparison operators (Eq/Ne/Lt/Le/Gt/Ge)
 and extended string ops (Trim/LTrim/RTrim/Replace/Instr) now bypass the large switch statement.
+
+### v0.9.12 database/sql Driver
+
+| Feature | Description |
+|---------|-------------|
+| `sql.Open("sqlvibe", path)` | Standard Go `database/sql` entry point |
+| `db.Exec` / `db.Query` | DDL + DML via stdlib interface |
+| `db.QueryRow` + scan | Typed scan into `int64`, `float64`, `string`, `[]byte`, `sql.NullString` |
+| `db.Prepare` + `stmt.Query` | Prepared statements with parameter binding |
+| `db.Begin` / `tx.Commit` / `tx.Rollback` | Full transaction support using `BEGIN`/`COMMIT`/`ROLLBACK` SQL |
+| `?` positional params | `db.Exec(sql, arg1, arg2)` — bound via `database/sql` `driver.NamedValue` |
+| `sql.Named("name", val)` | Named params routed to `ExecNamed`/`QueryNamed` |
+| `context.Context` cancellation | `ExecContext`/`QueryContext`/`BeginTx` respect `ctx.Done()` |
+| Type round-trips | nil → NULL, int64, float64, string, []byte, bool → int64 |
+
+> **Analysis v0.9.12**: The `driver/` package adds zero overhead to core query throughput —
+> all existing benchmarks remain identical to v0.9.11 (SELECT all 9.4× faster, SUM 3.6×,
+> GROUP BY 3.6×, result cache 377× faster). The driver layer is a thin adapter: `Conn.QueryContext`
+> spawns one goroutine per query to support context cancellation; for non-cancelled queries the
+> goroutine completes synchronously before the channel receive returns. `driver.Rows.Next`
+> delegates directly to `sqlvibe.Rows.Scan` with `*interface{}` pointers for zero-copy value
+> extraction. The `database/sql` connection pool works correctly with `:memory:` databases when
+> `db.SetMaxOpenConns(1)` is used, ensuring all operations share the same in-memory instance.
 
 ### v0.9.11 SQL Compatibility Features
 

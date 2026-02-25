@@ -228,17 +228,17 @@ Add `internal/TS/Regression/regression_v0.9.12_test.go`:
 
 | Feature | Target | Status |
 |---------|--------|--------|
-| `sql.Open("sqlvibe", ...)` works | Yes | [ ] |
-| `db.Exec` DDL works | Yes | [ ] |
-| `db.Query` + scan works | Yes | [ ] |
-| `db.Prepare` + `stmt.Query` works | Yes | [ ] |
-| `db.Begin` / `tx.Commit` / `tx.Rollback` works | Yes | [ ] |
-| `?` positional params via `database/sql` | Yes | [ ] |
-| Named params via `sql.Named` | Yes | [ ] |
-| `context.Context` cancellation respected | Yes | [ ] |
-| Type round-trip: int64/float64/string/[]byte/nil | Yes | [ ] |
-| F883 suite passes | 100% | [ ] |
-| Regression v0.9.12 passes | 100% | [ ] |
+| `sql.Open("sqlvibe", ...)` works | Yes | [x] |
+| `db.Exec` DDL works | Yes | [x] |
+| `db.Query` + scan works | Yes | [x] |
+| `db.Prepare` + `stmt.Query` works | Yes | [x] |
+| `db.Begin` / `tx.Commit` / `tx.Rollback` works | Yes | [x] |
+| `?` positional params via `database/sql` | Yes | [x] |
+| Named params via `sql.Named` | Yes | [x] |
+| `context.Context` cancellation respected | Yes | [x] |
+| Type round-trip: int64/float64/string/[]byte/nil | Yes | [x] |
+| F883 suite passes | 100% | [x] |
+| Regression v0.9.12 passes | 100% | [x] |
 
 ---
 
@@ -246,5 +246,5 @@ Add `internal/TS/Regression/regression_v0.9.12_test.go`:
 
 | Test Suite | Description | Status |
 |------------|-------------|--------|
-| F883 suite | database/sql driver end-to-end (7+ tests) | [ ] |
-| Regression v0.9.12 | Driver compatibility + context (6+ tests) | [ ] |
+| F883 suite | database/sql driver end-to-end (7+ tests) | [x] |
+| Regression v0.9.12 | Driver compatibility + context (6+ tests) | [x] |
