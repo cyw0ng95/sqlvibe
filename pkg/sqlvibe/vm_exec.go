@@ -1227,6 +1227,13 @@ func (db *Database) tryVectorizedFilterFastPath(stmt *QP.SelectStmt) *Rows {
 		return nil
 	}
 
+	// Only apply fast path for supported column types (int, float, string)
+	// Skip boolean and other types that may have type conversion issues
+	colType := colVec.Type
+	if colType != DS.TypeInt && colType != DS.TypeFloat && colType != DS.TypeString {
+		return nil
+	}
+
 	rb := VectorizedFilter(colVec, info.op, info.value)
 	if rb == nil {
 		return nil
