@@ -166,4 +166,3 @@ func TestSQL1999_F053_UpsertMultipleConflicts_L1(t *testing.T) {
 		})
 	}
 }
-

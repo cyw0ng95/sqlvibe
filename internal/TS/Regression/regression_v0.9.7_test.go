@@ -701,7 +701,7 @@ func TestRegression_E5_GlobMatchAll_L1(t *testing.T) {
 	}
 }
 
-// TestRegression_E5_GlobEmptyPattern_L1 verifies GLOB '' only matches empty string.
+// TestRegression_E5_GlobEmptyPattern_L1 verifies GLOB ” only matches empty string.
 func TestRegression_E5_GlobEmptyPattern_L1(t *testing.T) {
 	db := mustOpen(t)
 	defer db.Close()

@@ -310,7 +310,6 @@ func TestSQLValidator_Coverage(t *testing.T) {
 	seed := uint64(42)
 	statements := 5000
 
-	// Track which SQL patterns are generated and which produce bugs
 	patternStats := make(map[string]struct {
 		generated    int
 		bugs         int
@@ -336,7 +335,6 @@ func TestSQLValidator_Coverage(t *testing.T) {
 		patternStats[pattern] = stats
 	})
 
-	// Print coverage report
 	format := "=== Coverage Report (seed=%d, statements=%d) ==="
 	t.Logf(format, seed, statements)
 	t.Logf("")
@@ -353,11 +351,156 @@ func TestSQLValidator_Coverage(t *testing.T) {
 	t.Logf("%-25s %10d %10d %11.1f%%", "TOTAL", totalGen, totalBugs, float64(totalBugs)*100/float64(totalGen))
 }
 
+// TestSQLValidator_DeepCoverage runs extensive validation with multiple seeds and pattern categories.
+func TestSQLValidator_DeepCoverage(t *testing.T) {
+	seeds := []uint64{1001, 2002, 3003, 4004, 5005}
+	statementsPerSeed := 2000
+
+	patternStats := make(map[string]struct {
+		generated int
+		bugs      int
+	})
+
+	var totalGen, totalBugs int
+
+	for _, seed := range seeds {
+		v, err := NewValidator(seed)
+		if err != nil {
+			t.Logf("NewValidator(seed=%d) failed: %v", seed, err)
+			continue
+		}
+
+		v.Run(statementsPerSeed, func(idx int, query string, liteRes, svibeRes QueryResult) {
+			pattern := classifyQuery(query)
+			stats := patternStats[pattern]
+			stats.generated++
+			if Compare(query, liteRes, svibeRes) != nil {
+				stats.bugs++
+				totalBugs++
+			}
+			patternStats[pattern] = stats
+			totalGen++
+		})
+		v.Close()
+	}
+
+	t.Logf("=== Deep Coverage Report (%d seeds x %d statements) ===", len(seeds), statementsPerSeed)
+	t.Logf("")
+	t.Logf("%-25s %10s %10s %12s", "Pattern", "Generated", "Bugs", "Mismatch %")
+	t.Logf("------------------------------------------------------------")
+
+	for pattern, stats := range patternStats {
+		rate := 0.0
+		if stats.generated > 0 {
+			rate = float64(stats.bugs) / float64(stats.generated) * 100
+		}
+		t.Logf("%-25s %10d %10d %11.1f%%", pattern, stats.generated, stats.bugs, rate)
+	}
+	t.Logf("------------------------------------------------------------")
+	t.Logf("%-25s %10d %10d %11.1f%%", "TOTAL", totalGen, totalBugs, float64(totalBugs)*100/float64(totalGen))
+
+	// Log bugs found but don't fail - this test is for coverage discovery
+	if totalBugs > 0 {
+		t.Logf("Discovered %d bugs out of %d statements (for investigation)", totalBugs, totalGen)
+	}
+}
+
+// TestSQLValidator_AdvancedPatterns tests specific advanced SQL patterns in depth.
+func TestSQLValidator_AdvancedPatterns(t *testing.T) {
+	seed := uint64(7777)
+	statements := 3000
+
+	advancedPatterns := map[string]int{
+		"MULTI_JOIN":      0,
+		"EXCEPT":          0,
+		"INTERSECT":       0,
+		"NOT_IN_SUBQUERY": 0,
+		"SCALAR_SUBQUERY": 0,
+		"NOT_BETWEEN":     0,
+		"GLOB":            0,
+		"NULLIF":          0,
+		"CASE_WHEN":       0,
+		"MULTI_GROUP_BY":  0,
+		"HAVING":          0,
+		"SUBQUERY":        0,
+	}
+
+	v, err := NewValidator(seed)
+	if err != nil {
+		t.Fatalf("NewValidator: %v", err)
+	}
+	defer v.Close()
+
+	var bugs int
+	v.Run(statements, func(idx int, query string, liteRes, svibeRes QueryResult) {
+		pattern := classifyQuery(query)
+		if _, ok := advancedPatterns[pattern]; ok {
+			advancedPatterns[pattern]++
+		}
+		if Compare(query, liteRes, svibeRes) != nil {
+			bugs++
+		}
+	})
+
+	t.Logf("=== Advanced Pattern Coverage (seed=%d, statements=%d) ===", seed, statements)
+	for pattern, count := range advancedPatterns {
+		t.Logf("%-25s %5d generated", pattern, count)
+	}
+
+	// Log bugs found but don't fail - this test is for pattern coverage discovery
+	if bugs > 0 {
+		t.Logf("Discovered %d bugs (for investigation)", bugs)
+	}
+}
+
+// TestSQLValidator_EdgeCases tests edge cases and boundary conditions.
+func TestSQLValidator_EdgeCases(t *testing.T) {
+	seed := uint64(9999)
+	statements := 2000
+
+	v, err := NewValidator(seed)
+	if err != nil {
+		t.Fatalf("NewValidator: %v", err)
+	}
+	defer v.Close()
+
+	var bugs int
+	var edgeCaseBugs []string
+
+	v.Run(statements, func(idx int, query string, liteRes, svibeRes QueryResult) {
+		if m := Compare(query, liteRes, svibeRes); m != nil {
+			bugs++
+			if len(edgeCaseBugs) < 5 {
+				edgeCaseBugs = append(edgeCaseBugs, fmt.Sprintf("SQL: %s\n  Reason: %s", m.Query, m.Reason))
+			}
+		}
+	})
+
+	t.Logf("=== Edge Case Report (seed=%d, statements=%d) ===", seed, statements)
+	t.Logf("Total mismatches: %d", bugs)
+
+	if len(edgeCaseBugs) > 0 {
+		t.Logf("Sample edge case bugs:")
+		for i, bug := range edgeCaseBugs {
+			t.Logf("  Bug %d: %s", i+1, bug)
+		}
+	}
+
+	// Log bugs found but don't fail - this test is for edge case discovery
+	if bugs > 0 {
+		t.Logf("Discovered %d edge case mismatches (for investigation)", bugs)
+	}
+}
+
 func classifyQuery(query string) string {
 	q := strings.ToUpper(query)
 	switch {
-	case strings.Contains(q, "UNION"):
+	case strings.Contains(q, "UNION ALL") || strings.Contains(q, "UNION SELECT"):
 		return "UNION"
+	case strings.Contains(q, "EXCEPT"):
+		return "EXCEPT"
+	case strings.Contains(q, "INTERSECT"):
+		return "INTERSECT"
 	case strings.Contains(q, "DISTINCT"):
 		return "DISTINCT"
 	case strings.Contains(q, "GROUP BY") && strings.Contains(q, ","):
@@ -370,22 +513,34 @@ func classifyQuery(query string) string {
 		return "CASE_WHEN"
 	case strings.Contains(q, "LIKE"):
 		return "LIKE"
+	case strings.Contains(q, "GLOB"):
+		return "GLOB"
 	case strings.Contains(q, "COALESCE") || strings.Contains(q, "IFNULL"):
 		return "COALESCE"
+	case strings.Contains(q, "NULLIF"):
+		return "NULLIF"
 	case strings.Contains(q, "CAST"):
 		return "CAST"
-	case strings.Contains(q, "SUBSTR") || strings.Contains(q, "LENGTH") || strings.Contains(q, "UPPER"):
+	case strings.Contains(q, "SUBSTR") || strings.Contains(q, "LENGTH") || strings.Contains(q, "UPPER") || strings.Contains(q, "LOWER"):
 		return "STRING_FUNC"
 	case strings.Contains(q, "OFFSET"):
 		return "OFFSET"
+	case strings.Contains(q, "NOT IN (SELECT"):
+		return "NOT_IN_SUBQUERY"
 	case strings.Contains(q, "IN (SELECT") || strings.Contains(q, "EXISTS"):
 		return "SUBQUERY"
+	case strings.Contains(q, "NOT BETWEEN"):
+		return "NOT_BETWEEN"
 	case strings.Contains(q, "BETWEEN"):
 		return "BETWEEN"
 	case strings.Contains(q, "IS NULL") || strings.Contains(q, "IS NOT NULL"):
 		return "NULL_PREDICATE"
+	case strings.Contains(q, "INNER JOIN") && strings.Count(q, "JOIN") >= 2:
+		return "MULTI_JOIN"
 	case strings.Contains(q, "JOIN"):
 		return "JOIN"
+	case strings.Contains(q, "SCALAR_SUBQUERY") || strings.Contains(q, "(SELECT"):
+		return "SCALAR_SUBQUERY"
 	case strings.Contains(q, "ORDER BY"):
 		return "ORDER_BY"
 	case strings.Contains(q, "LIMIT"):

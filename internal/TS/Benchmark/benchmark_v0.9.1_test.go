@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"testing"
 
-	DS "github.com/cyw0ng95/sqlvibe/internal/DS"
 	CG "github.com/cyw0ng95/sqlvibe/internal/CG"
+	DS "github.com/cyw0ng95/sqlvibe/internal/DS"
 	VM "github.com/cyw0ng95/sqlvibe/internal/VM"
 	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
@@ -371,4 +371,3 @@ func BenchmarkDirectCompilerFastPath(b *testing.B) {
 		})
 	}
 }
-

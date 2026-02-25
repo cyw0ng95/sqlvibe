@@ -108,9 +108,9 @@ func TestOverflowManager_ChainLength(t *testing.T) {
 	om := NewOverflowManager(pm)
 
 	tests := []struct {
-		name           string
-		payloadSize    int
-		expectedPages  int
+		name          string
+		payloadSize   int
+		expectedPages int
 	}{
 		{
 			name:          "no overflow",

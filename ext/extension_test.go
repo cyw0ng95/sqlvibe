@@ -12,9 +12,9 @@ type mockExtension struct {
 	funcs []string
 }
 
-func (m *mockExtension) Name() string        { return m.name }
-func (m *mockExtension) Description() string { return "mock " + m.name }
-func (m *mockExtension) Functions() []string { return m.funcs }
+func (m *mockExtension) Name() string          { return m.name }
+func (m *mockExtension) Description() string   { return "mock " + m.name }
+func (m *mockExtension) Functions() []string   { return m.funcs }
 func (m *mockExtension) Opcodes() []ext.Opcode { return nil }
 func (m *mockExtension) CallFunc(name string, args []interface{}) interface{} {
 	return "mock_" + name

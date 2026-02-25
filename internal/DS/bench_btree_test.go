@@ -154,4 +154,3 @@ func BenchmarkCache_Set(b *testing.B) {
 		pm.ReadPage(pageNums[i%numPages]) //nolint:errcheck
 	}
 }
-

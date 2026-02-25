@@ -7,7 +7,7 @@ import (
 
 func TestBTree_NewAndBasics(t *testing.T) {
 	pm := setupTestPageManager(t, 4096)
-	
+
 	// Allocate root page
 	rootPage, err := pm.AllocatePage()
 	if err != nil {

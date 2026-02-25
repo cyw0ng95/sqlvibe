@@ -35,12 +35,12 @@ import (
 
 // record is a single parsed test record.
 type record struct {
-	kind      string // "statement" or "query" or "halt" or "skipif" or "onlyif"
-	expectErr bool   // statement error
-	queryType string // column type string e.g. "ITR"
-	sortMode  string // "rowsort", "valuesort", "" (nosort)
-	label     string // optional label after sortMode
-	sql       string // the SQL text
+	kind      string   // "statement" or "query" or "halt" or "skipif" or "onlyif"
+	expectErr bool     // statement error
+	queryType string   // column type string e.g. "ITR"
+	sortMode  string   // "rowsort", "valuesort", "" (nosort)
+	label     string   // optional label after sortMode
+	sql       string   // the SQL text
 	expected  []string // expected output values (one per column per row, flattened)
 }
 

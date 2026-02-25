@@ -11,7 +11,7 @@ import (
 
 func main() {
 	checkFlag := flag.Bool("check", false, "Validate database integrity")
-	infoFlag  := flag.Bool("info", false, "Show database metadata")
+	infoFlag := flag.Bool("info", false, "Show database metadata")
 	tablesFlag := flag.Bool("tables", false, "List tables")
 	schemaFlag := flag.String("schema", "", "Show schema for table (empty = all)")
 	indexesFlag := flag.Bool("indexes", false, "Show indexes")

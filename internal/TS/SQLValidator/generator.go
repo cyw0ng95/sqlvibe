@@ -546,3 +546,210 @@ func (g *Generator) genCast() string {
 	orderBy := g.pkOrderBy(tm, "ASC")
 	return fmt.Sprintf("SELECT %s FROM %s%s LIMIT 10", castExpr, tm.name, orderBy)
 }
+
+// genNotInSubquery generates: SELECT ... WHERE <col> NOT IN (SELECT ...)
+func (g *Generator) genNotInSubquery() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	if len(intCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	col := g.lcg.Choice(intCols)
+
+	tm2 := g.randomTable()
+	tm2IntCols := tm2.nonNullIntCols()
+	if len(tm2IntCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	tm2Col := g.lcg.Choice(tm2IntCols)
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s FROM %s WHERE %s NOT IN (SELECT %s FROM %s)%s LIMIT 10",
+		tm.columns[0].name, tm.name, col, tm2Col, tm2.name, orderBy)
+}
+
+// genScalarSubquery generates: SELECT (SELECT MAX(col) FROM table) AS val
+func (g *Generator) genScalarSubquery() string {
+	return fmt.Sprintf("SELECT w_id, (SELECT MAX(d_id) FROM district WHERE d_w_id = warehouse.w_id) AS max_d FROM warehouse ORDER BY w_id ASC LIMIT 10")
+}
+
+// genThreeTableJoin generates a three-table JOIN
+func (g *Generator) genThreeTableJoin() string {
+	limit := g.lcg.Intn(5) + 1
+	return fmt.Sprintf("SELECT w.w_id, d.d_id, c.c_id FROM warehouse w INNER JOIN district d ON w.w_id = d.d_w_id INNER JOIN customer c ON c.c_d_id = d.d_id AND c.c_w_id = w.w_id ORDER BY w.w_id ASC, d.d_id ASC, c.c_id ASC LIMIT %d", limit)
+}
+
+// genSelfJoin generates a self-join query
+func (g *Generator) genSelfJoin() string {
+	limit := g.lcg.Intn(3) + 1
+	return fmt.Sprintf("SELECT w1.w_id, w1.w_name, w2.w_name AS w2_name FROM warehouse w1 INNER JOIN warehouse w2 ON w1.w_id = w2.w_id ORDER BY w1.w_id ASC LIMIT %d", limit)
+}
+
+// genComplexWhere generates complex WHERE with AND/OR
+func (g *Generator) genComplexWhere() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	if len(intCols) < 2 {
+		return g.genSimpleSelect()
+	}
+	col1 := intCols[0]
+	col2 := intCols[1]
+	val1 := g.randomIntLit()
+	val2 := g.randomIntLit()
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s FROM %s WHERE (%s > %s AND %s < %s) OR %s = 0%s LIMIT 10",
+		tm.columns[0].name, tm.name, col1, val1, col1, val2, col2, orderBy)
+}
+
+// genArithmeticExpr generates SELECT with arithmetic expressions
+func (g *Generator) genArithmeticExpr() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	var realCols []string
+	for _, c := range tm.columns {
+		if c.colType == "REAL" && c.notNull {
+			realCols = append(realCols, c.name)
+		}
+	}
+	col := tm.columns[0].name
+	if len(realCols) > 0 {
+		col = realCols[0]
+	} else if len(intCols) > 0 {
+		col = intCols[0]
+	}
+	exprs := []string{
+		fmt.Sprintf("%s * 2", col),
+		fmt.Sprintf("%s + 100", col),
+		fmt.Sprintf("%s - 50", col),
+		fmt.Sprintf("%s / 10", col),
+		fmt.Sprintf("(%s + %s) / 2", col, col),
+	}
+	expr := g.lcg.Choice(exprs)
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s, %s AS computed FROM %s%s LIMIT 10",
+		tm.columns[0].name, expr, tm.name, orderBy)
+}
+
+// genMultiAggregate generates SELECT with multiple aggregates
+func (g *Generator) genMultiAggregate() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	if len(intCols) == 0 {
+		return g.genAggregate()
+	}
+	col := g.lcg.Choice(intCols)
+	return fmt.Sprintf("SELECT COUNT(*) AS cnt, SUM(%s) AS total, AVG(%s) AS avg, MIN(%s) AS min_val, MAX(%s) AS max_val FROM %s",
+		col, col, col, col, tm.name)
+}
+
+// genInValueList generates: SELECT ... WHERE <col> IN (val1, val2, ...)
+func (g *Generator) genInValueList() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	if len(intCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	col := g.lcg.Choice(intCols)
+	values := []string{"1", "2", "3", "0", "-1"}
+	n := g.lcg.Intn(3) + 2
+	selected := make([]string, n)
+	for i := 0; i < n; i++ {
+		selected[i] = values[g.lcg.Intn(len(values))]
+	}
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s FROM %s WHERE %s IN (%s)%s LIMIT 10",
+		tm.columns[0].name, tm.name, col, strings.Join(selected, ", "), orderBy)
+}
+
+// genNotBetween generates: SELECT ... WHERE <col> NOT BETWEEN low AND high
+func (g *Generator) genNotBetween() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	if len(intCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	col := g.lcg.Choice(intCols)
+	lo := g.lcg.Intn(5)
+	hi := lo + g.lcg.Intn(5) + 1
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s FROM %s WHERE %s NOT BETWEEN %d AND %d%s LIMIT 10",
+		tm.columns[0].name, tm.name, col, lo, hi, orderBy)
+}
+
+// genNestedCase generates nested CASE expressions
+func (g *Generator) genNestedCase() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	if len(intCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	col := g.lcg.Choice(intCols)
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s, CASE WHEN %s > 5 THEN 'high' WHEN %s > 2 THEN CASE WHEN %s > 3 THEN 'med-high' ELSE 'med-low' END ELSE 'low' END AS level FROM %s%s LIMIT 10",
+		tm.columns[0].name, col, col, col, tm.name, orderBy)
+}
+
+// genChainedUnion generates multiple UNIONs chained together
+func (g *Generator) genChainedUnion() string {
+	tm := g.randomTable()
+	cols := g.randomCols(tm)
+	return fmt.Sprintf("SELECT %s FROM %s UNION SELECT %s FROM %s ORDER BY 1 LIMIT 10",
+		strings.Join(cols, ", "), tm.name, strings.Join(cols, ", "), tm.name)
+}
+
+// genGlob generates: SELECT ... WHERE <col> GLOB '<pattern>'
+func (g *Generator) genGlob() string {
+	tm := g.randomTable()
+	var strCols []string
+	for _, c := range tm.columns {
+		if c.colType == "VARCHAR" || c.colType == "CHAR(1)" || c.colType == "TEXT" {
+			strCols = append(strCols, c.name)
+		}
+	}
+	if len(strCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	col := g.lcg.Choice(strCols)
+	patterns := []string{"'W-*'", "'*ville'", "'*[0-9]*'", "'???*'"}
+	pattern := g.lcg.Choice(patterns)
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s FROM %s WHERE %s GLOB %s%s LIMIT 10",
+		tm.columns[0].name, tm.name, col, pattern, orderBy)
+}
+
+// genNullIf generates: SELECT NULLIF(col1, col2) FROM table
+func (g *Generator) genNullIf() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	if len(intCols) < 2 {
+		return g.genSimpleSelect()
+	}
+	col1 := intCols[0]
+	col2 := intCols[1]
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s, NULLIF(%s, %s) AS nullif_result FROM %s%s LIMIT 10",
+		tm.columns[0].name, col1, col2, tm.name, orderBy)
+}
+
+// genExceptIntersect generates EXCEPT or INTERSECT queries
+func (g *Generator) genExceptIntersect() string {
+	op := g.lcg.Choice([]string{"EXCEPT", "INTERSECT"})
+	limit := g.lcg.Intn(5) + 1
+	return fmt.Sprintf("SELECT i_id FROM item WHERE i_id <= 5 %s SELECT s_i_id FROM stock WHERE s_w_id = 1 ORDER BY i_id LIMIT %d", op, limit)
+}
+
+// genCorrelatedSubquery generates correlated subquery with outer reference
+func (g *Generator) genCorrelatedSubquery() string {
+	return fmt.Sprintf("SELECT w_id, w_name FROM warehouse w WHERE EXISTS (SELECT 1 FROM district d WHERE d.d_w_id = w.w_id) ORDER BY w_id ASC LIMIT 10")
+}
+
+// genComplexHaving generates GROUP BY with complex HAVING clause
+func (g *Generator) genComplexHaving() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	if len(intCols) == 0 {
+		return g.genAggregate()
+	}
+	col := g.lcg.Choice(intCols)
+	return fmt.Sprintf("SELECT %s, COUNT(*) AS cnt, SUM(%s) AS total FROM %s GROUP BY %s HAVING COUNT(*) > 1 AND SUM(%s) > 0 ORDER BY %s ASC LIMIT 10",
+		col, col, tm.name, col, col, col)
+}

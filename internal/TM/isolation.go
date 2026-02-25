@@ -48,8 +48,8 @@ func ParseIsolationLevel(s string) (IsolationLevel, error) {
 
 // IsolationConfig holds per-database isolation settings.
 type IsolationConfig struct {
-	Level        IsolationLevel
-	BusyTimeout  int // milliseconds; 0 = no timeout
+	Level       IsolationLevel
+	BusyTimeout int // milliseconds; 0 = no timeout
 }
 
 // NewIsolationConfig returns the default configuration (READ COMMITTED,

@@ -26,14 +26,15 @@ const (
 // Fields are exported for JSON marshaling.
 type walEntry struct {
 	Op     WalOp   `json:"op"`
-	Index  int     `json:"idx,omitempty"` // used by WalDelete and WalUpdate
+	Index  int     `json:"idx,omitempty"`  // used by WalDelete and WalUpdate
 	Values []Value `json:"vals,omitempty"` // used by WalInsert and WalUpdate
 }
 
 // WriteAheadLog is an append-only log for SQLVIBE columnar database mutations.
 //
 // File format (append-only, no seek required):
-//   [entry0_len uint32][entry0 JSON][entry1_len uint32][entry1 JSON]...
+//
+//	[entry0_len uint32][entry0 JSON][entry1_len uint32][entry1 JSON]...
 //
 // After a successful Checkpoint the WAL file is truncated to zero and the main
 // database file is rewritten with the current store state.

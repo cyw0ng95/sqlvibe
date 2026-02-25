@@ -11,7 +11,7 @@ const (
 type containerKind int
 
 const (
-	kindArray  containerKind = iota
+	kindArray containerKind = iota
 	kindBitmap
 )
 
@@ -19,9 +19,9 @@ const (
 type rbContainer struct {
 	key    uint16
 	kind   containerKind
-	array  []uint16   // sorted, used when kind == kindArray
-	bitmap []uint64   // 1024 words (65536 bits), used when kind == kindBitmap
-	count  int        // cardinality
+	array  []uint16 // sorted, used when kind == kindArray
+	bitmap []uint64 // 1024 words (65536 bits), used when kind == kindBitmap
+	count  int      // cardinality
 }
 
 // RoaringBitmap is a pure-Go roaring bitmap implementation without external dependencies.
@@ -354,12 +354,12 @@ func iterateContainer(c *rbContainer, fn func(uint16)) {
 
 // IntersectWith replaces the receiver with its intersection with other.
 func (rb *RoaringBitmap) IntersectWith(other *RoaringBitmap) {
-result := rb.And(other)
-rb.containers = result.containers
+	result := rb.And(other)
+	rb.containers = result.containers
 }
 
 // UnionInPlace merges other into the receiver.
 func (rb *RoaringBitmap) UnionInPlace(other *RoaringBitmap) {
-result := rb.Or(other)
-rb.containers = result.containers
+	result := rb.Or(other)
+	rb.containers = result.containers
 }

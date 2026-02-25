@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	dbPath     = flag.String("db", "test.db", "Database file path")
-	echoMode   = flag.Bool("echo", false, "Echo SQL statements")
+	dbPath      = flag.String("db", "test.db", "Database file path")
+	echoMode    = flag.Bool("echo", false, "Echo SQL statements")
 	showHeaders = flag.Bool("headers", true, "Show column headers")
 )
 

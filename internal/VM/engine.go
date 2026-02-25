@@ -59,23 +59,23 @@ func (bp *BranchPredictor) Update(pc int, taken bool) {
 }
 
 type VM struct {
-	program        *Program
-	pc             int
-	registers      []interface{}
-	cursors        *CursorArray
-	subReturn      []int
-	affinity       int
-	undo           [][]interface{}
-	errorcnt       int
-	err            error
-	ctx            VmContext
-	results        [][]interface{}
-	flatBuf        []interface{} // flat backing array for zero-alloc result rows
-	rowsAffected   int64
-	ephemeralTbls  map[int]map[string]bool // ephemeral tables for SetOps (table_id -> row_key -> exists)
-	subqueryCache  *subqueryResultCache    // caches non-correlated subquery results per execution
-	bp             BranchPredictor         // 2-bit saturating branch predictor for loop opcodes
-	resultLimit    int                     // if > 0, halt after collecting this many result rows (early termination)
+	program       *Program
+	pc            int
+	registers     []interface{}
+	cursors       *CursorArray
+	subReturn     []int
+	affinity      int
+	undo          [][]interface{}
+	errorcnt      int
+	err           error
+	ctx           VmContext
+	results       [][]interface{}
+	flatBuf       []interface{} // flat backing array for zero-alloc result rows
+	rowsAffected  int64
+	ephemeralTbls map[int]map[string]bool // ephemeral tables for SetOps (table_id -> row_key -> exists)
+	subqueryCache *subqueryResultCache    // caches non-correlated subquery results per execution
+	bp            BranchPredictor         // 2-bit saturating branch predictor for loop opcodes
+	resultLimit   int                     // if > 0, halt after collecting this many result rows (early termination)
 }
 
 func NewVM(program *Program) *VM {
@@ -120,8 +120,8 @@ func (vm *VM) Reset() {
 	vm.affinity = 0
 	vm.errorcnt = 0
 	vm.err = nil
-	vm.results = vm.results[:0]   // reuse pre-allocated capacity
-	vm.flatBuf = vm.flatBuf[:0]   // reuse flat backing buffer
+	vm.results = vm.results[:0] // reuse pre-allocated capacity
+	vm.flatBuf = vm.flatBuf[:0] // reuse flat backing buffer
 	vm.rowsAffected = 0
 	for k := range vm.ephemeralTbls {
 		delete(vm.ephemeralTbls, k)

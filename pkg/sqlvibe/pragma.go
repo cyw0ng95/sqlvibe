@@ -496,195 +496,195 @@ func (db *Database) pragmaWALCheckpoint(stmt *QP.PragmaStmt) (*Rows, error) {
 // pragmaWALMode handles PRAGMA wal_mode and PRAGMA wal_mode = ON/OFF.
 // wal_mode is an alias for journal_mode focused specifically on WAL toggle.
 func (db *Database) pragmaWALMode(stmt *QP.PragmaStmt) (*Rows, error) {
-if stmt.Value == nil {
-mode := "off"
-if db.journalMode == "wal" {
-mode = "on"
-}
-return &Rows{
-Columns: []string{"wal_mode"},
-Data:    [][]interface{}{{mode}},
-}, nil
-}
-var val string
-switch v := stmt.Value.(type) {
-case *QP.Literal:
-if s, ok := v.Value.(string); ok {
-val = strings.ToLower(s)
-}
-case *QP.ColumnRef:
-val = strings.ToLower(v.Name)
-default:
-return nil, fmt.Errorf("PRAGMA wal_mode: unsupported value %T", stmt.Value)
-}
-synthetic := &QP.PragmaStmt{Name: "journal_mode", Value: &QP.ColumnRef{Name: func() string {
-if val == "on" {
-return "wal"
-}
-return "delete"
-}()}}
-return db.pragmaJournalMode(synthetic)
+	if stmt.Value == nil {
+		mode := "off"
+		if db.journalMode == "wal" {
+			mode = "on"
+		}
+		return &Rows{
+			Columns: []string{"wal_mode"},
+			Data:    [][]interface{}{{mode}},
+		}, nil
+	}
+	var val string
+	switch v := stmt.Value.(type) {
+	case *QP.Literal:
+		if s, ok := v.Value.(string); ok {
+			val = strings.ToLower(s)
+		}
+	case *QP.ColumnRef:
+		val = strings.ToLower(v.Name)
+	default:
+		return nil, fmt.Errorf("PRAGMA wal_mode: unsupported value %T", stmt.Value)
+	}
+	synthetic := &QP.PragmaStmt{Name: "journal_mode", Value: &QP.ColumnRef{Name: func() string {
+		if val == "on" {
+			return "wal"
+		}
+		return "delete"
+	}()}}
+	return db.pragmaJournalMode(synthetic)
 }
 
 // pragmaIsolationLevel handles PRAGMA isolation_level and PRAGMA isolation_level = LEVEL.
 func (db *Database) pragmaIsolationLevel(stmt *QP.PragmaStmt) (*Rows, error) {
-if stmt.Value == nil {
-return &Rows{
-Columns: []string{"isolation_level"},
-Data:    [][]interface{}{{db.isolationConfig.GetIsolationLevel()}},
-}, nil
-}
-var val string
-switch v := stmt.Value.(type) {
-case *QP.Literal:
-if s, ok := v.Value.(string); ok {
-val = s
-}
-case *QP.ColumnRef:
-val = v.Name
-default:
-return nil, fmt.Errorf("PRAGMA isolation_level: unsupported value %T", stmt.Value)
-}
-if err := db.isolationConfig.SetIsolationLevel(val); err != nil {
-return nil, fmt.Errorf("PRAGMA isolation_level: %w", err)
-}
-return &Rows{
-Columns: []string{"isolation_level"},
-Data:    [][]interface{}{{db.isolationConfig.GetIsolationLevel()}},
-}, nil
+	if stmt.Value == nil {
+		return &Rows{
+			Columns: []string{"isolation_level"},
+			Data:    [][]interface{}{{db.isolationConfig.GetIsolationLevel()}},
+		}, nil
+	}
+	var val string
+	switch v := stmt.Value.(type) {
+	case *QP.Literal:
+		if s, ok := v.Value.(string); ok {
+			val = s
+		}
+	case *QP.ColumnRef:
+		val = v.Name
+	default:
+		return nil, fmt.Errorf("PRAGMA isolation_level: unsupported value %T", stmt.Value)
+	}
+	if err := db.isolationConfig.SetIsolationLevel(val); err != nil {
+		return nil, fmt.Errorf("PRAGMA isolation_level: %w", err)
+	}
+	return &Rows{
+		Columns: []string{"isolation_level"},
+		Data:    [][]interface{}{{db.isolationConfig.GetIsolationLevel()}},
+	}, nil
 }
 
 // pragmaBusyTimeout handles PRAGMA busy_timeout and PRAGMA busy_timeout = N (ms).
 func (db *Database) pragmaBusyTimeout(stmt *QP.PragmaStmt) (*Rows, error) {
-if stmt.Value == nil {
-return &Rows{
-Columns: []string{"busy_timeout"},
-Data:    [][]interface{}{{int64(db.isolationConfig.BusyTimeout)}},
-}, nil
-}
-var ms int64
-switch v := stmt.Value.(type) {
-case *QP.Literal:
-switch val := v.Value.(type) {
-case int64:
-ms = val
-case float64:
-ms = int64(val)
-default:
-return nil, fmt.Errorf("PRAGMA busy_timeout: unsupported value type %T", v.Value)
-}
-default:
-return nil, fmt.Errorf("PRAGMA busy_timeout: unsupported value %T", stmt.Value)
-}
-if ms < 0 {
-return nil, fmt.Errorf("PRAGMA busy_timeout: value must be >= 0")
-}
-db.isolationConfig.BusyTimeout = int(ms)
-return &Rows{
-Columns: []string{"busy_timeout"},
-Data:    [][]interface{}{{ms}},
-}, nil
+	if stmt.Value == nil {
+		return &Rows{
+			Columns: []string{"busy_timeout"},
+			Data:    [][]interface{}{{int64(db.isolationConfig.BusyTimeout)}},
+		}, nil
+	}
+	var ms int64
+	switch v := stmt.Value.(type) {
+	case *QP.Literal:
+		switch val := v.Value.(type) {
+		case int64:
+			ms = val
+		case float64:
+			ms = int64(val)
+		default:
+			return nil, fmt.Errorf("PRAGMA busy_timeout: unsupported value type %T", v.Value)
+		}
+	default:
+		return nil, fmt.Errorf("PRAGMA busy_timeout: unsupported value %T", stmt.Value)
+	}
+	if ms < 0 {
+		return nil, fmt.Errorf("PRAGMA busy_timeout: value must be >= 0")
+	}
+	db.isolationConfig.BusyTimeout = int(ms)
+	return &Rows{
+		Columns: []string{"busy_timeout"},
+		Data:    [][]interface{}{{ms}},
+	}, nil
 }
 
 // pragmaCompression handles PRAGMA compression and PRAGMA compression = NAME.
 func (db *Database) pragmaCompression(stmt *QP.PragmaStmt) (*Rows, error) {
-if stmt.Value == nil {
-return &Rows{
-Columns: []string{"compression"},
-Data:    [][]interface{}{{db.compressionName}},
-}, nil
-}
-var name string
-switch v := stmt.Value.(type) {
-case *QP.Literal:
-if s, ok := v.Value.(string); ok {
-name = strings.ToUpper(s)
-}
-case *QP.ColumnRef:
-name = strings.ToUpper(v.Name)
-default:
-return nil, fmt.Errorf("PRAGMA compression: unsupported value %T", stmt.Value)
-}
-// Validate by attempting to create the compressor.
-if _, err := DS.NewCompressor(name, 0); err != nil {
-return nil, fmt.Errorf("PRAGMA compression: %w", err)
-}
-db.compressionName = name
-return &Rows{
-Columns: []string{"compression"},
-Data:    [][]interface{}{{name}},
-}, nil
+	if stmt.Value == nil {
+		return &Rows{
+			Columns: []string{"compression"},
+			Data:    [][]interface{}{{db.compressionName}},
+		}, nil
+	}
+	var name string
+	switch v := stmt.Value.(type) {
+	case *QP.Literal:
+		if s, ok := v.Value.(string); ok {
+			name = strings.ToUpper(s)
+		}
+	case *QP.ColumnRef:
+		name = strings.ToUpper(v.Name)
+	default:
+		return nil, fmt.Errorf("PRAGMA compression: unsupported value %T", stmt.Value)
+	}
+	// Validate by attempting to create the compressor.
+	if _, err := DS.NewCompressor(name, 0); err != nil {
+		return nil, fmt.Errorf("PRAGMA compression: %w", err)
+	}
+	db.compressionName = name
+	return &Rows{
+		Columns: []string{"compression"},
+		Data:    [][]interface{}{{name}},
+	}, nil
 }
 
 // pragmaStorageInfo returns storage statistics.
 func (db *Database) pragmaStorageInfo() (*Rows, error) {
-var walSize int64
-if db.wal != nil {
-walSize = db.wal.Size()
-}
-m := DS.CollectMetrics(db.pm, walSize)
-m.TotalTables = len(db.tables)
-for _, rows := range db.data {
-m.TotalRows += len(rows)
-}
-columns := []string{"page_count", "used_pages", "free_pages", "compression_ratio", "wal_size", "total_rows", "total_tables"}
-row := []interface{}{
-int64(m.PageCount),
-int64(m.UsedPages),
-int64(m.FreePages),
-m.CompressionRatio,
-m.WALSize,
-int64(m.TotalRows),
-int64(m.TotalTables),
-}
-return &Rows{Columns: columns, Data: [][]interface{}{row}}, nil
+	var walSize int64
+	if db.wal != nil {
+		walSize = db.wal.Size()
+	}
+	m := DS.CollectMetrics(db.pm, walSize)
+	m.TotalTables = len(db.tables)
+	for _, rows := range db.data {
+		m.TotalRows += len(rows)
+	}
+	columns := []string{"page_count", "used_pages", "free_pages", "compression_ratio", "wal_size", "total_rows", "total_tables"}
+	row := []interface{}{
+		int64(m.PageCount),
+		int64(m.UsedPages),
+		int64(m.FreePages),
+		m.CompressionRatio,
+		m.WALSize,
+		int64(m.TotalRows),
+		int64(m.TotalTables),
+	}
+	return &Rows{Columns: columns, Data: [][]interface{}{row}}, nil
 }
 
 // pragmaForeignKeys handles PRAGMA foreign_keys and PRAGMA foreign_keys = ON/OFF.
 func (db *Database) pragmaForeignKeys(stmt *QP.PragmaStmt) (*Rows, error) {
-if stmt.Value == nil {
-val := int64(0)
-if db.foreignKeysEnabled {
-val = 1
-}
-return &Rows{
-Columns: []string{"foreign_keys"},
-Data:    [][]interface{}{{val}},
-}, nil
-}
-var enable bool
-switch v := stmt.Value.(type) {
-case *QP.Literal:
-switch val := v.Value.(type) {
-case int64:
-enable = val != 0
-case float64:
-enable = val != 0
-case bool:
-enable = val
-default:
-s := strings.ToUpper(fmt.Sprintf("%v", val))
-enable = s == "ON" || s == "1" || s == "TRUE"
-}
-case *QP.ColumnRef:
-s := strings.ToUpper(v.Name)
-enable = s == "ON" || s == "1" || s == "TRUE"
-default:
-return nil, fmt.Errorf("PRAGMA foreign_keys: unsupported value %T", stmt.Value)
-}
-db.foreignKeysEnabled = enable
-// SQLite returns no rows when setting a pragma value
-return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
+	if stmt.Value == nil {
+		val := int64(0)
+		if db.foreignKeysEnabled {
+			val = 1
+		}
+		return &Rows{
+			Columns: []string{"foreign_keys"},
+			Data:    [][]interface{}{{val}},
+		}, nil
+	}
+	var enable bool
+	switch v := stmt.Value.(type) {
+	case *QP.Literal:
+		switch val := v.Value.(type) {
+		case int64:
+			enable = val != 0
+		case float64:
+			enable = val != 0
+		case bool:
+			enable = val
+		default:
+			s := strings.ToUpper(fmt.Sprintf("%v", val))
+			enable = s == "ON" || s == "1" || s == "TRUE"
+		}
+	case *QP.ColumnRef:
+		s := strings.ToUpper(v.Name)
+		enable = s == "ON" || s == "1" || s == "TRUE"
+	default:
+		return nil, fmt.Errorf("PRAGMA foreign_keys: unsupported value %T", stmt.Value)
+	}
+	db.foreignKeysEnabled = enable
+	// SQLite returns no rows when setting a pragma value
+	return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 }
 
 // pragmaSQLiteSequence returns the current autoincrement sequences.
 func (db *Database) pragmaSQLiteSequence() (*Rows, error) {
-columns := []string{"name", "seq"}
-data := make([][]interface{}, 0)
-for tableName, seq := range db.seqValues {
-data = append(data, []interface{}{tableName, seq})
-}
-return &Rows{Columns: columns, Data: data}, nil
+	columns := []string{"name", "seq"}
+	data := make([][]interface{}, 0)
+	for tableName, seq := range db.seqValues {
+		data = append(data, []interface{}{tableName, seq})
+	}
+	return &Rows{Columns: columns, Data: data}, nil
 }
 
 func (db *Database) getPragmaInt(name string, defaultVal int64) int64 {
@@ -858,35 +858,34 @@ func (db *Database) pragmaCacheGrind() (*Rows, error) {
 	}
 	return &Rows{
 		Columns: cols,
-		Data: [][]interface{}{{pagesCached, pagesFree, int64(0), int64(0)}},
+		Data:    [][]interface{}{{pagesCached, pagesFree, int64(0), int64(0)}},
 	}, nil
 }
-
 
 // pragmaQueryTimeout handles PRAGMA query_timeout = N (milliseconds).
 // A value of 0 disables the per-query default timeout.
 func (db *Database) pragmaQueryTimeout(stmt *QP.PragmaStmt) (*Rows, error) {
-if stmt.Value != nil {
-val := pragmaIntValue(stmt.Value)
-if val < 0 {
-val = 0
-}
-db.queryTimeoutMs = int64(val)
-return &Rows{Columns: []string{"query_timeout"}, Data: [][]interface{}{{int64(val)}}}, nil
-}
-return &Rows{Columns: []string{"query_timeout"}, Data: [][]interface{}{{db.queryTimeoutMs}}}, nil
+	if stmt.Value != nil {
+		val := pragmaIntValue(stmt.Value)
+		if val < 0 {
+			val = 0
+		}
+		db.queryTimeoutMs = int64(val)
+		return &Rows{Columns: []string{"query_timeout"}, Data: [][]interface{}{{int64(val)}}}, nil
+	}
+	return &Rows{Columns: []string{"query_timeout"}, Data: [][]interface{}{{db.queryTimeoutMs}}}, nil
 }
 
 // pragmaMaxMemory handles PRAGMA max_memory = N (bytes).
 // A value of 0 disables the result-set memory limit.
 func (db *Database) pragmaMaxMemory(stmt *QP.PragmaStmt) (*Rows, error) {
-if stmt.Value != nil {
-val := pragmaIntValue(stmt.Value)
-if val < 0 {
-val = 0
-}
-db.maxMemoryBytes = int64(val)
-return &Rows{Columns: []string{"max_memory"}, Data: [][]interface{}{{int64(val)}}}, nil
-}
-return &Rows{Columns: []string{"max_memory"}, Data: [][]interface{}{{db.maxMemoryBytes}}}, nil
+	if stmt.Value != nil {
+		val := pragmaIntValue(stmt.Value)
+		if val < 0 {
+			val = 0
+		}
+		db.maxMemoryBytes = int64(val)
+		return &Rows{Columns: []string{"max_memory"}, Data: [][]interface{}{{int64(val)}}}, nil
+	}
+	return &Rows{Columns: []string{"max_memory"}, Data: [][]interface{}{{db.maxMemoryBytes}}}, nil
 }

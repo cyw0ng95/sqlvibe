@@ -4,9 +4,9 @@ import (
 	"database/sql"
 	"testing"
 
-	_ "github.com/glebarez/go-sqlite"
 	"github.com/cyw0ng95/sqlvibe/internal/TS/SQL1999"
 	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
+	_ "github.com/glebarez/go-sqlite"
 )
 
 func setup(t *testing.T) (*sqlvibe.Database, *sql.DB) {

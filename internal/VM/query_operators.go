@@ -406,7 +406,7 @@ func (h *topKHeap) Less(i, j int) bool {
 	return h.entries[i].origIdx > h.entries[j].origIdx
 }
 
-func (h *topKHeap) Swap(i, j int)       { h.entries[i], h.entries[j] = h.entries[j], h.entries[i] }
+func (h *topKHeap) Swap(i, j int)      { h.entries[i], h.entries[j] = h.entries[j], h.entries[i] }
 func (h *topKHeap) Push(x interface{}) { h.entries = append(h.entries, x.(sortEntry)) }
 func (h *topKHeap) Pop() interface{} {
 	old := h.entries

@@ -357,65 +357,65 @@ func (hs *HybridStore) ScanWithFilter(colName string, op string, val Value) [][]
 
 // ScanProjected returns all rows with only the requested columns materialized.
 func (hs *HybridStore) ScanProjected(requiredCols []string) [][]Value {
-colIndices := make([]int, len(requiredCols))
-for i, col := range requiredCols {
-colIndices[i] = hs.ColIndex(col)
-}
-indices := hs.rowStore.ScanIndices()
-out := make([][]Value, 0, len(indices))
-for _, rowIdx := range indices {
-row := hs.rowStore.Get(rowIdx)
-vals := make([]Value, len(requiredCols))
-for i, colIdx := range colIndices {
-if colIdx >= 0 {
-vals[i] = row.Get(colIdx)
-} else {
-vals[i] = NullValue()
-}
-}
-out = append(out, vals)
-}
-return out
+	colIndices := make([]int, len(requiredCols))
+	for i, col := range requiredCols {
+		colIndices[i] = hs.ColIndex(col)
+	}
+	indices := hs.rowStore.ScanIndices()
+	out := make([][]Value, 0, len(indices))
+	for _, rowIdx := range indices {
+		row := hs.rowStore.Get(rowIdx)
+		vals := make([]Value, len(requiredCols))
+		for i, colIdx := range colIndices {
+			if colIdx >= 0 {
+				vals[i] = row.Get(colIdx)
+			} else {
+				vals[i] = NullValue()
+			}
+		}
+		out = append(out, vals)
+	}
+	return out
 }
 
 // ScanProjectedWhere returns filtered rows with only the requested columns.
 func (hs *HybridStore) ScanProjectedWhere(colName string, val Value, requiredCols []string) [][]Value {
-colIndices := make([]int, len(requiredCols))
-for i, col := range requiredCols {
-colIndices[i] = hs.ColIndex(col)
-}
-filterIdx := hs.ColIndex(colName)
+	colIndices := make([]int, len(requiredCols))
+	for i, col := range requiredCols {
+		colIndices[i] = hs.ColIndex(col)
+	}
+	filterIdx := hs.ColIndex(colName)
 
-projectRows := func(rowIDs []uint32) [][]Value {
-out := make([][]Value, 0, len(rowIDs))
-for _, rid := range rowIDs {
-row := hs.rowStore.Get(int(rid))
-vals := make([]Value, len(requiredCols))
-for i, ci := range colIndices {
-if ci >= 0 {
-vals[i] = row.Get(ci)
-} else {
-vals[i] = NullValue()
-}
-}
-out = append(out, vals)
-}
-return out
-}
+	projectRows := func(rowIDs []uint32) [][]Value {
+		out := make([][]Value, 0, len(rowIDs))
+		for _, rid := range rowIDs {
+			row := hs.rowStore.Get(int(rid))
+			vals := make([]Value, len(requiredCols))
+			for i, ci := range colIndices {
+				if ci >= 0 {
+					vals[i] = row.Get(ci)
+				} else {
+					vals[i] = NullValue()
+				}
+			}
+			out = append(out, vals)
+		}
+		return out
+	}
 
-if hs.indexEngine.HasBitmapIndex(colName) {
-rb := hs.indexEngine.LookupEqual(colName, val)
-if rb != nil {
-return projectRows(rb.ToSlice())
-}
-}
+	if hs.indexEngine.HasBitmapIndex(colName) {
+		rb := hs.indexEngine.LookupEqual(colName, val)
+		if rb != nil {
+			return projectRows(rb.ToSlice())
+		}
+	}
 
-var rowIDs []uint32
-for _, i := range hs.rowStore.ScanIndices() {
-row := hs.rowStore.Get(i)
-if filterIdx >= 0 && row.Get(filterIdx).Equal(val) {
-rowIDs = append(rowIDs, uint32(i))
-}
-}
-return projectRows(rowIDs)
+	var rowIDs []uint32
+	for _, i := range hs.rowStore.ScanIndices() {
+		row := hs.rowStore.Get(i)
+		if filterIdx >= 0 && row.Get(filterIdx).Equal(val) {
+			rowIDs = append(rowIDs, uint32(i))
+		}
+	}
+	return projectRows(rowIDs)
 }

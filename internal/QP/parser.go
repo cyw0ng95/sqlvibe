@@ -961,7 +961,7 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 	}
 
 	// ORDER BY before UNION/EXCEPT/INTERSECT is invalid SQL
-	if p.current().Literal == "UNION" || p.current().Literal == "EXCEPT" || p.current().Literal == "INTERSECT" {
+	if stmt.OrderBy != nil && (p.current().Literal == "UNION" || p.current().Literal == "EXCEPT" || p.current().Literal == "INTERSECT") {
 		return nil, fmt.Errorf("ORDER BY clause should come after %s not before", p.current().Literal)
 	}
 

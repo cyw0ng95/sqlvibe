@@ -259,7 +259,10 @@ func TestSQL1999_F876_UpdateFrom_L1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	type row struct{ id int64; total float64 }
+	type row struct {
+		id    int64
+		total float64
+	}
 	var got []row
 	for rows.Next() {
 		var r row

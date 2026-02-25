@@ -1670,9 +1670,9 @@ func (db *Database) execJoinAggregate(stmt *QP.SelectStmt) (*Rows, error) {
 		rightSchema[c] = nLeft + i
 	}
 	multiSchemas := map[string]map[string]int{
-		leftName:  leftSchema,
-		leftAlias: leftSchema,
-		rightName: rightSchema,
+		leftName:   leftSchema,
+		leftAlias:  leftSchema,
+		rightName:  rightSchema,
 		rightAlias: rightSchema,
 	}
 	cg.SetMultiTableSchema(multiSchemas, combinedCols)

@@ -37,7 +37,7 @@ func (c *Compiler) finalize() *VM.Program {
 }
 
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program {
-	util.AssertNotNil(stmt, "SelectStmt")
+	util.AssertNotNil(stmt, "stmt")
 	if hasAggregates(stmt) {
 		return c.CompileAggregate(stmt)
 	}

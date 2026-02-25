@@ -10,9 +10,9 @@ import (
 
 // windowFuncInfo tracks a window function column position and its definition.
 type windowFuncInfo struct {
-	colIndex int                 // position in the SELECT column list
+	colIndex int                // position in the SELECT column list
 	expr     *QP.WindowFuncExpr // the window function expression
-	alias    string              // output column name
+	alias    string             // output column name
 }
 
 // extractWindowFunctions finds WindowFuncExpr in SELECT columns and replaces them

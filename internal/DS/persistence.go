@@ -15,20 +15,20 @@ import (
 
 // Compression type constants stored in the file header CompressionType field.
 const (
-	CompressionNone  = uint32(0) // no compression
-	CompressionRLE   = uint32(1) // run-length encoding
-	CompressionGzip  = uint32(2) // gzip (deflate)
+	CompressionNone = uint32(0) // no compression
+	CompressionRLE  = uint32(1) // run-length encoding
+	CompressionGzip = uint32(2) // gzip (deflate)
 )
 
 // File format constants.
 const (
-	MagicBytes          = "SQLVIBE\x01"
-	FooterMagic         = "SQLVIB\xFE\x01"
-	FormatVersionMajor  = uint32(1)
-	FormatVersionMinor  = uint32(0)
-	FormatVersionPatch  = uint32(0)
-	HeaderSize          = 256
-	FooterSize          = 32
+	MagicBytes         = "SQLVIBE\x01"
+	FooterMagic        = "SQLVIB\xFE\x01"
+	FormatVersionMajor = uint32(1)
+	FormatVersionMinor = uint32(0)
+	FormatVersionPatch = uint32(0)
+	HeaderSize         = 256
+	FooterSize         = 32
 )
 
 // crc64Table is the shared CRC64 table (ECMA polynomial).
@@ -37,23 +37,24 @@ var crc64Table = crc64.MakeTable(crc64.ECMA)
 // FileHeader is the fixed 256-byte file header.
 //
 // Binary layout (all fields little-endian):
-//   Offset  Size  Field
-//   0       8     Magic
-//   8       4     VersionMajor
-//   12      4     VersionMinor
-//   16      4     VersionPatch
-//   20      4     Flags
-//   24      4     SchemaOffset (always 256)
-//   28      4     SchemaLength
-//   32      4     ColumnCount
-//   36      4     RowCount
-//   40      4     IndexCount
-//   44      4     CreatedAt (unix seconds)
-//   48      4     ModifiedAt (unix seconds)
-//   52      4     CompressionType (0 = none)
-//   56      4     PageSize (0 = n/a)
-//   60      188   Reserved
-//   248     8     HeaderCRC64 (CRC64 of bytes 0..247)
+//
+//	Offset  Size  Field
+//	0       8     Magic
+//	8       4     VersionMajor
+//	12      4     VersionMinor
+//	16      4     VersionPatch
+//	20      4     Flags
+//	24      4     SchemaOffset (always 256)
+//	28      4     SchemaLength
+//	32      4     ColumnCount
+//	36      4     RowCount
+//	40      4     IndexCount
+//	44      4     CreatedAt (unix seconds)
+//	48      4     ModifiedAt (unix seconds)
+//	52      4     CompressionType (0 = none)
+//	56      4     PageSize (0 = n/a)
+//	60      188   Reserved
+//	248     8     HeaderCRC64 (CRC64 of bytes 0..247)
 type FileHeader struct {
 	Magic           [8]byte
 	VersionMajor    uint32
@@ -76,12 +77,13 @@ type FileHeader struct {
 // Footer is the fixed 32-byte file footer.
 //
 // Binary layout:
-//   Offset  Size  Field
-//   0       8     Magic ("SQLVIB\xFE\x01")
-//   8       8     FileCRC (CRC64 of all bytes before the footer)
-//   16      4     RowCount
-//   20      4     ColumnCount
-//   24      8     Reserved
+//
+//	Offset  Size  Field
+//	0       8     Magic ("SQLVIB\xFE\x01")
+//	8       8     FileCRC (CRC64 of all bytes before the footer)
+//	16      4     RowCount
+//	20      4     ColumnCount
+//	24      8     Reserved
 type Footer struct {
 	Magic       [8]byte
 	FileCRC     uint64
@@ -654,7 +656,8 @@ func extractColTypes(schema map[string]interface{}, columns []string) []ValueTyp
 // WriteDatabase writes a SQLVIBE v1.0.0 binary database file with no compression.
 //
 // File layout:
-//   Header (256 bytes) | Schema JSON | Column data... | Footer (32 bytes)
+//
+//	Header (256 bytes) | Schema JSON | Column data... | Footer (32 bytes)
 //
 // The schema parameter should include "column_names" ([]string) and
 // "column_types" ([]int or []ValueType). Additional fields are preserved.

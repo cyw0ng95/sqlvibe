@@ -19,7 +19,6 @@ import (
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 	"github.com/cyw0ng95/sqlvibe/internal/TM"
 	"github.com/cyw0ng95/sqlvibe/internal/VM"
-
 )
 
 // queryResultCache is a thread-safe in-process cache for full SELECT query results.
@@ -69,53 +68,53 @@ func (c *queryResultCache) Invalidate() {
 }
 
 type Database struct {
-	pm             *DS.PageManager
-	cache          *DS.Cache
-	engine         *VM.QueryEngine
-	tx             *Transaction
-	txMgr          *TM.TransactionManager
-	activeTx       *TM.Transaction
-	dbPath         string
-	tables         map[string]map[string]string        // table name -> column name -> type
-	primaryKeys    map[string][]string                 // table name -> primary key column names
-	columnOrder    map[string][]string                 // table name -> ordered column names
-	columnDefaults map[string]map[string]interface{}   // table name -> column name -> default value
-	columnNotNull  map[string]map[string]bool          // table name -> column name -> NOT NULL
-	columnChecks   map[string]map[string]QP.Expr       // table name -> column name -> CHECK expression
-	data           map[string][]map[string]interface{} // table name -> rows -> column name -> value
-	indexes        map[string]*IndexInfo               // index name -> index info
-	views          map[string]string                   // view name -> SELECT SQL
-	isRegistry     *IS.Registry                        // information_schema registry
-	txSnapshot     *dbSnapshot                         // snapshot for transaction rollback
-	tableBTrees    map[string]*DS.BTree                // table name -> B-Tree for storage
-	journalMode    string                              // "delete" or "wal"
-	wal            *TM.WAL                             // WAL instance when in WAL mode
-	pkHashSet      map[string]map[interface{}]struct{} // table name -> PK value -> exists (single-col PK only)
-	indexData      map[string]map[interface{}][]int    // index name -> col value -> []row indices
-	planCache          *CG.PlanCache                       // compiled query plan cache
-	queryCache         *queryResultCache                   // full query result cache (columns + rows)
-	schemaCache        *IS.SchemaCache                     // information_schema result cache (DDL-invalidated)
-	hybridStores       map[string]*DS.HybridStore     // table name -> columnar hybrid store (analytical fast path)
-	hybridStoresDirty  map[string]bool                     // table name -> needs rebuild on next access
-	isolationConfig    *TM.IsolationConfig                 // isolation level and busy_timeout settings
-	compressionName    string                              // active compression algorithm (NONE/RLE/LZ4/ZSTD/GZIP)
+	pm                *DS.PageManager
+	cache             *DS.Cache
+	engine            *VM.QueryEngine
+	tx                *Transaction
+	txMgr             *TM.TransactionManager
+	activeTx          *TM.Transaction
+	dbPath            string
+	tables            map[string]map[string]string        // table name -> column name -> type
+	primaryKeys       map[string][]string                 // table name -> primary key column names
+	columnOrder       map[string][]string                 // table name -> ordered column names
+	columnDefaults    map[string]map[string]interface{}   // table name -> column name -> default value
+	columnNotNull     map[string]map[string]bool          // table name -> column name -> NOT NULL
+	columnChecks      map[string]map[string]QP.Expr       // table name -> column name -> CHECK expression
+	data              map[string][]map[string]interface{} // table name -> rows -> column name -> value
+	indexes           map[string]*IndexInfo               // index name -> index info
+	views             map[string]string                   // view name -> SELECT SQL
+	isRegistry        *IS.Registry                        // information_schema registry
+	txSnapshot        *dbSnapshot                         // snapshot for transaction rollback
+	tableBTrees       map[string]*DS.BTree                // table name -> B-Tree for storage
+	journalMode       string                              // "delete" or "wal"
+	wal               *TM.WAL                             // WAL instance when in WAL mode
+	pkHashSet         map[string]map[interface{}]struct{} // table name -> PK value -> exists (single-col PK only)
+	indexData         map[string]map[interface{}][]int    // index name -> col value -> []row indices
+	planCache         *CG.PlanCache                       // compiled query plan cache
+	queryCache        *queryResultCache                   // full query result cache (columns + rows)
+	schemaCache       *IS.SchemaCache                     // information_schema result cache (DDL-invalidated)
+	hybridStores      map[string]*DS.HybridStore          // table name -> columnar hybrid store (analytical fast path)
+	hybridStoresDirty map[string]bool                     // table name -> needs rebuild on next access
+	isolationConfig   *TM.IsolationConfig                 // isolation level and busy_timeout settings
+	compressionName   string                              // active compression algorithm (NONE/RLE/LZ4/ZSTD/GZIP)
 	// v0.8.6 additions
-	foreignKeys       map[string][]QP.ForeignKeyConstraint // table name -> FK constraints
-	triggers          map[string][]*QP.CreateTriggerStmt   // table name -> triggers list
-	autoincrement     map[string]string                    // table name -> pk col name (if AUTOINCREMENT)
-	seqValues         map[string]int64                     // table name -> last used autoincrement value
-	foreignKeysEnabled bool                               // PRAGMA foreign_keys = ON/OFF
-	pragmaSettings     map[string]interface{}             // PRAGMA setting storage
-	tableStats         map[string]int64                   // table name -> row count (for ANALYZE)
-	queryMu            sync.RWMutex                       // guards concurrent read queries
+	foreignKeys        map[string][]QP.ForeignKeyConstraint // table name -> FK constraints
+	triggers           map[string][]*QP.CreateTriggerStmt   // table name -> triggers list
+	autoincrement      map[string]string                    // table name -> pk col name (if AUTOINCREMENT)
+	seqValues          map[string]int64                     // table name -> last used autoincrement value
+	foreignKeysEnabled bool                                 // PRAGMA foreign_keys = ON/OFF
+	pragmaSettings     map[string]interface{}               // PRAGMA setting storage
+	tableStats         map[string]int64                     // table name -> row count (for ANALYZE)
+	queryMu            sync.RWMutex                         // guards concurrent read queries
 	// v0.9.6: savepoint stack
-	savepointStack     []savepointEntry                   // named savepoints within a transaction
+	savepointStack []savepointEntry // named savepoints within a transaction
 	// v0.9.10: WAL auto-checkpoint
-	autoCheckpointN    int           // checkpoint WAL after this many frames (0 = disabled)
-	stopAutoChkpt      chan struct{}  // signal channel to stop background checkpoint goroutine
+	autoCheckpointN int           // checkpoint WAL after this many frames (0 = disabled)
+	stopAutoChkpt   chan struct{} // signal channel to stop background checkpoint goroutine
 	// v0.9.13: context & memory limits
-	queryTimeoutMs  int64 // default per-query timeout in milliseconds (0 = no limit)
-	maxMemoryBytes  int64 // max result-set memory in bytes (0 = no limit)
+	queryTimeoutMs int64 // default per-query timeout in milliseconds (0 = no limit)
+	maxMemoryBytes int64 // max result-set memory in bytes (0 = no limit)
 }
 
 // savepointEntry holds the name and snapshot for a named savepoint.
@@ -233,7 +232,7 @@ type IndexInfo struct {
 	Columns   []string
 	Exprs     []QP.Expr // parallel to Columns; non-nil means expression index
 	Unique    bool
-	WhereExpr QP.Expr   // non-nil for partial index
+	WhereExpr QP.Expr // non-nil for partial index
 }
 
 type Conn interface {
@@ -358,26 +357,26 @@ func Open(path string) (*Database, error) {
 	txMgr := TM.NewTransactionManager(pm)
 
 	db := &Database{
-		pm:             pm,
-		cache:          DS.NewCache(-2000),
-		engine:         engine,
-		txMgr:          txMgr,
-		activeTx:       nil,
-		dbPath:         path,
-		tables:         make(map[string]map[string]string),
-		primaryKeys:    make(map[string][]string),
-		columnOrder:    make(map[string][]string),
-		columnDefaults: make(map[string]map[string]interface{}),
-		columnNotNull:  make(map[string]map[string]bool),
-		columnChecks:   make(map[string]map[string]QP.Expr),
-		data:           data,
-		indexes:        make(map[string]*IndexInfo),
-		views:          make(map[string]string),
-		tableBTrees:    make(map[string]*DS.BTree),
-		journalMode:    "delete",
-		wal:            nil,
-		pkHashSet:      make(map[string]map[interface{}]struct{}),
-		indexData:      make(map[string]map[interface{}][]int),
+		pm:                 pm,
+		cache:              DS.NewCache(-2000),
+		engine:             engine,
+		txMgr:              txMgr,
+		activeTx:           nil,
+		dbPath:             path,
+		tables:             make(map[string]map[string]string),
+		primaryKeys:        make(map[string][]string),
+		columnOrder:        make(map[string][]string),
+		columnDefaults:     make(map[string]map[string]interface{}),
+		columnNotNull:      make(map[string]map[string]bool),
+		columnChecks:       make(map[string]map[string]QP.Expr),
+		data:               data,
+		indexes:            make(map[string]*IndexInfo),
+		views:              make(map[string]string),
+		tableBTrees:        make(map[string]*DS.BTree),
+		journalMode:        "delete",
+		wal:                nil,
+		pkHashSet:          make(map[string]map[interface{}]struct{}),
+		indexData:          make(map[string]map[interface{}][]int),
 		planCache:          CG.NewPlanCache(256),
 		queryCache:         newQueryResultCache(512),
 		schemaCache:        IS.NewSchemaCache(),
@@ -2796,115 +2795,115 @@ func (db *Database) queryInformationSchema(stmt *QP.SelectStmt, tableName string
 	if allResults == nil {
 		// Generate data based on view type
 		switch viewName {
-	case "columns":
-		columnNames = []string{"column_name", "table_name", "table_schema", "data_type", "is_nullable", "column_default"}
-		// Extract columns from in-memory schema
-		for tblName, colTypes := range db.tables {
-			orderedCols := db.columnOrder[tblName]
-			pkCols := db.primaryKeys[tblName]
-			pkMap := make(map[string]bool)
-			for _, pk := range pkCols {
-				pkMap[pk] = true
-			}
-			for _, colName := range orderedCols {
-				colType := colTypes[colName]
-				isNullable := "YES"
-				// PRIMARY KEY columns cannot be NULL
-				if pkMap[colName] {
-					isNullable = "NO"
-				} else if db.columnNotNull[tblName] != nil && db.columnNotNull[tblName][colName] {
-					isNullable = "NO"
+		case "columns":
+			columnNames = []string{"column_name", "table_name", "table_schema", "data_type", "is_nullable", "column_default"}
+			// Extract columns from in-memory schema
+			for tblName, colTypes := range db.tables {
+				orderedCols := db.columnOrder[tblName]
+				pkCols := db.primaryKeys[tblName]
+				pkMap := make(map[string]bool)
+				for _, pk := range pkCols {
+					pkMap[pk] = true
 				}
-				var colDefault interface{}
-				if db.columnDefaults[tblName] != nil {
-					colDefault = db.columnDefaults[tblName][colName]
-				}
-				allResults = append(allResults, []interface{}{
-					colName, tblName, "main", colType, isNullable, colDefault,
-				})
-			}
-		}
-
-	case "tables":
-		columnNames = []string{"table_name", "table_schema", "table_type"}
-		// Extract tables from in-memory schema
-		for tblName := range db.tables {
-			allResults = append(allResults, []interface{}{
-				tblName,
-				"main",
-				"BASE TABLE",
-			})
-		}
-
-	case "views":
-		columnNames = []string{"table_name", "table_schema", "view_definition"}
-		for viewName, viewSQL := range db.views {
-			allResults = append(allResults, []interface{}{viewName, "main", viewSQL})
-		}
-
-	case "table_constraints":
-		columnNames = []string{"constraint_name", "table_name", "table_schema", "constraint_type"}
-		// PRIMARY KEY constraints
-		for tblName, pkCols := range db.primaryKeys {
-			if len(pkCols) > 0 {
-				constraintName := fmt.Sprintf("pk_%s", tblName)
-				allResults = append(allResults, []interface{}{
-					constraintName, tblName, "main", "PRIMARY KEY",
-				})
-			}
-		}
-		// UNIQUE constraints (from unique indexes with autoindex prefix)
-		for idxName, idx := range db.indexes {
-			if idx.Unique {
-				allResults = append(allResults, []interface{}{
-					idxName, idx.Table, "main", "UNIQUE",
-				})
-			}
-		}
-		// FOREIGN KEY constraints
-		for tblName, fks := range db.foreignKeys {
-			for i := range fks {
-				constraintName := fmt.Sprintf("fk_%s_%d", tblName, i)
-				allResults = append(allResults, []interface{}{
-					constraintName, tblName, "main", "FOREIGN KEY",
-				})
-			}
-		}
-
-	case "referential_constraints":
-		columnNames = []string{"constraint_name", "unique_constraint_schema", "unique_constraint_name"}
-		for tblName, fks := range db.foreignKeys {
-			for i, fk := range fks {
-				constraintName := fmt.Sprintf("fk_%s_%d", tblName, i)
-				// The unique constraint on the parent table
-				parentConstraint := fmt.Sprintf("pk_%s", fk.ParentTable)
-				allResults = append(allResults, []interface{}{
-					constraintName, "main", parentConstraint,
-				})
-			}
-		}
-
-	case "key_column_usage":
-		columnNames = []string{"constraint_name", "table_name", "table_schema", "column_name", "ordinal_position"}
-		// Extract PRIMARY KEY column usage from in-memory schema
-		for tblName, pkCols := range db.primaryKeys {
-			if len(pkCols) > 0 {
-				constraintName := fmt.Sprintf("pk_%s", tblName)
-				for i, colName := range pkCols {
+				for _, colName := range orderedCols {
+					colType := colTypes[colName]
+					isNullable := "YES"
+					// PRIMARY KEY columns cannot be NULL
+					if pkMap[colName] {
+						isNullable = "NO"
+					} else if db.columnNotNull[tblName] != nil && db.columnNotNull[tblName][colName] {
+						isNullable = "NO"
+					}
+					var colDefault interface{}
+					if db.columnDefaults[tblName] != nil {
+						colDefault = db.columnDefaults[tblName][colName]
+					}
 					allResults = append(allResults, []interface{}{
-						constraintName,
-						tblName,
-						"main",
-						colName,
-						int64(i + 1), // ordinal position starts at 1
+						colName, tblName, "main", colType, isNullable, colDefault,
 					})
 				}
 			}
-		}
 
-	default:
-		return nil, fmt.Errorf("unknown information_schema view: %s", viewName)
-	}
+		case "tables":
+			columnNames = []string{"table_name", "table_schema", "table_type"}
+			// Extract tables from in-memory schema
+			for tblName := range db.tables {
+				allResults = append(allResults, []interface{}{
+					tblName,
+					"main",
+					"BASE TABLE",
+				})
+			}
+
+		case "views":
+			columnNames = []string{"table_name", "table_schema", "view_definition"}
+			for viewName, viewSQL := range db.views {
+				allResults = append(allResults, []interface{}{viewName, "main", viewSQL})
+			}
+
+		case "table_constraints":
+			columnNames = []string{"constraint_name", "table_name", "table_schema", "constraint_type"}
+			// PRIMARY KEY constraints
+			for tblName, pkCols := range db.primaryKeys {
+				if len(pkCols) > 0 {
+					constraintName := fmt.Sprintf("pk_%s", tblName)
+					allResults = append(allResults, []interface{}{
+						constraintName, tblName, "main", "PRIMARY KEY",
+					})
+				}
+			}
+			// UNIQUE constraints (from unique indexes with autoindex prefix)
+			for idxName, idx := range db.indexes {
+				if idx.Unique {
+					allResults = append(allResults, []interface{}{
+						idxName, idx.Table, "main", "UNIQUE",
+					})
+				}
+			}
+			// FOREIGN KEY constraints
+			for tblName, fks := range db.foreignKeys {
+				for i := range fks {
+					constraintName := fmt.Sprintf("fk_%s_%d", tblName, i)
+					allResults = append(allResults, []interface{}{
+						constraintName, tblName, "main", "FOREIGN KEY",
+					})
+				}
+			}
+
+		case "referential_constraints":
+			columnNames = []string{"constraint_name", "unique_constraint_schema", "unique_constraint_name"}
+			for tblName, fks := range db.foreignKeys {
+				for i, fk := range fks {
+					constraintName := fmt.Sprintf("fk_%s_%d", tblName, i)
+					// The unique constraint on the parent table
+					parentConstraint := fmt.Sprintf("pk_%s", fk.ParentTable)
+					allResults = append(allResults, []interface{}{
+						constraintName, "main", parentConstraint,
+					})
+				}
+			}
+
+		case "key_column_usage":
+			columnNames = []string{"constraint_name", "table_name", "table_schema", "column_name", "ordinal_position"}
+			// Extract PRIMARY KEY column usage from in-memory schema
+			for tblName, pkCols := range db.primaryKeys {
+				if len(pkCols) > 0 {
+					constraintName := fmt.Sprintf("pk_%s", tblName)
+					for i, colName := range pkCols {
+						allResults = append(allResults, []interface{}{
+							constraintName,
+							tblName,
+							"main",
+							colName,
+							int64(i + 1), // ordinal position starts at 1
+						})
+					}
+				}
+			}
+
+		default:
+			return nil, fmt.Errorf("unknown information_schema view: %s", viewName)
+		}
 		// Store built results in schema cache for subsequent calls.
 		if db.schemaCache != nil {
 			db.schemaCache.Set(viewName, columnNames, allResults)
@@ -3555,76 +3554,76 @@ func (db *Database) evalExprOnMap(expr QP.Expr, row map[string]interface{}) inte
 
 // compareForAnyAll compares two values for ANY/ALL predicates.
 func compareForAnyAll(a, b interface{}) int {
-if a == nil && b == nil {
-return 0
-}
-if a == nil {
-return -1
-}
-if b == nil {
-return 1
-}
-switch av := a.(type) {
-case int64:
-switch bv := b.(type) {
-case int64:
-if av < bv {
-return -1
-}
-if av > bv {
-return 1
-}
-return 0
-case float64:
-fa := float64(av)
-if fa < bv {
-return -1
-}
-if fa > bv {
-return 1
-}
-return 0
-}
-case float64:
-switch bv := b.(type) {
-case float64:
-if av < bv {
-return -1
-}
-if av > bv {
-return 1
-}
-return 0
-case int64:
-fb := float64(bv)
-if av < fb {
-return -1
-}
-if av > fb {
-return 1
-}
-return 0
-}
-case string:
-if bv, ok := b.(string); ok {
-if av < bv {
-return -1
-}
-if av > bv {
-return 1
-}
-return 0
-}
-}
-as := fmt.Sprintf("%v", a)
-bs := fmt.Sprintf("%v", b)
-if as < bs {
-return -1
-}
-if as > bs {
-return 1
-}
-return 0
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	switch av := a.(type) {
+	case int64:
+		switch bv := b.(type) {
+		case int64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		case float64:
+			fa := float64(av)
+			if fa < bv {
+				return -1
+			}
+			if fa > bv {
+				return 1
+			}
+			return 0
+		}
+	case float64:
+		switch bv := b.(type) {
+		case float64:
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		case int64:
+			fb := float64(bv)
+			if av < fb {
+				return -1
+			}
+			if av > fb {
+				return 1
+			}
+			return 0
+		}
+	case string:
+		if bv, ok := b.(string); ok {
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		}
+	}
+	as := fmt.Sprintf("%v", a)
+	bs := fmt.Sprintf("%v", b)
+	if as < bs {
+		return -1
+	}
+	if as > bs {
+		return 1
+	}
+	return 0
 }
 
 // execCreateTableAsSelect handles CREATE TABLE ... AS SELECT

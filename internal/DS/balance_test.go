@@ -21,8 +21,8 @@ func TestPageBalancer_IsPageOverfull(t *testing.T) {
 	}
 
 	// Initialize as table leaf page
-	page.Data[0] = 0x0d // table leaf
-	binary.BigEndian.PutUint16(page.Data[3:5], 0) // 0 cells
+	page.Data[0] = 0x0d                              // table leaf
+	binary.BigEndian.PutUint16(page.Data[3:5], 0)    // 0 cells
 	binary.BigEndian.PutUint16(page.Data[5:7], 1024) // content at end
 
 	if err := pm.WritePage(page); err != nil {
@@ -71,7 +71,7 @@ func TestPageBalancer_IsPageUnderfull(t *testing.T) {
 
 	// Initialize as table leaf page with minimal data
 	page.Data[0] = 0x0d
-	binary.BigEndian.PutUint16(page.Data[3:5], 2) // 2 cells
+	binary.BigEndian.PutUint16(page.Data[3:5], 2)    // 2 cells
 	binary.BigEndian.PutUint16(page.Data[5:7], 1000) // content at byte 1000 (very little data)
 
 	if err := pm.WritePage(page); err != nil {
@@ -159,14 +159,14 @@ func TestPageBalancer_MergePages_Simple(t *testing.T) {
 
 	// Initialize both as empty table leaf pages
 	leftPage, _ := pm.ReadPage(leftPageNum)
-	leftPage.Data[0] = 0x0d // table leaf
-	binary.BigEndian.PutUint16(leftPage.Data[3:5], 0) // 0 cells
+	leftPage.Data[0] = 0x0d                              // table leaf
+	binary.BigEndian.PutUint16(leftPage.Data[3:5], 0)    // 0 cells
 	binary.BigEndian.PutUint16(leftPage.Data[5:7], 4096) // content at end
 	pm.WritePage(leftPage)
 
 	rightPage, _ := pm.ReadPage(rightPageNum)
-	rightPage.Data[0] = 0x0d // table leaf
-	binary.BigEndian.PutUint16(rightPage.Data[3:5], 0) // 0 cells
+	rightPage.Data[0] = 0x0d                              // table leaf
+	binary.BigEndian.PutUint16(rightPage.Data[3:5], 0)    // 0 cells
 	binary.BigEndian.PutUint16(rightPage.Data[5:7], 4096) // content at end
 	pm.WritePage(rightPage)
 

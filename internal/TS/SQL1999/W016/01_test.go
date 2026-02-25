@@ -63,4 +63,3 @@ func TestSQL1999_W016_AggregateWindowFunctions_L1(t *testing.T) {
 		})
 	}
 }
-

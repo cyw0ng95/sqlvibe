@@ -1,0 +1,247 @@
+# functions.test - Built-in function tests
+
+# ----- Setup -----
+
+statement ok
+CREATE TABLE data (id INTEGER PRIMARY KEY, val TEXT, num REAL, flag INTEGER)
+
+statement ok
+INSERT INTO data VALUES (1, 'Hello World', 123.456, 1)
+
+statement ok
+INSERT INTO data VALUES (2, 'SQLite', 789.012, 0)
+
+statement ok
+INSERT INTO data VALUES (3, 'Test', -45.67, 1)
+
+statement ok
+INSERT INTO data VALUES (4, NULL, NULL, NULL)
+
+# ----- String functions -----
+
+query T rowsort
+SELECT UPPER(val) FROM data WHERE val IS NOT NULL
+----
+HELLO WORLD
+SQLITE
+TEST
+
+query T rowsort
+SELECT LOWER(val) FROM data WHERE val IS NOT NULL
+----
+hello world
+sqlite
+test
+
+query I rowsort
+SELECT LENGTH(val) FROM data WHERE val IS NOT NULL
+----
+11
+4
+6
+
+query T rowsort
+SELECT SUBSTR(val, 1, 5) FROM data WHERE val IS NOT NULL
+----
+Hello
+SQLit
+Test
+
+query T
+SELECT SUBSTR(val, 7) FROM data WHERE val LIKE 'Hello%'
+----
+World
+
+query T rowsort
+SELECT val || '!' FROM data WHERE val IS NOT NULL
+----
+Hello World!
+SQLite!
+Test!
+
+# ----- TRIM functions -----
+
+statement ok
+CREATE TABLE trimtest (s TEXT)
+
+statement ok
+INSERT INTO trimtest VALUES ('  hello  ')
+
+statement ok
+INSERT INTO trimtest VALUES ('xxxworldxxx')
+
+query T
+SELECT TRIM(s) FROM trimtest WHERE s LIKE '%hello%'
+----
+hello
+
+query T
+SELECT LTRIM(s) FROM trimtest WHERE s LIKE '%hello%'
+----
+hello  
+
+query T
+SELECT RTRIM(s) FROM trimtest WHERE s LIKE '%hello%'
+----
+  hello
+
+query T
+SELECT TRIM(s, 'x') FROM trimtest WHERE s LIKE '%world%'
+----
+world
+
+# ----- REPLACE -----
+
+statement ok
+CREATE TABLE repl(s TEXT)
+
+statement ok
+INSERT INTO repl VALUES ('hello world')
+
+query T
+SELECT REPLACE(s, 'world', 'sqlite')
+----
+hello sqlite
+
+query T
+SELECT REPLACE(s, 'l', 'L')
+----
+heLLo worLd
+
+statement ok
+DROP TABLE repl
+
+# ----- Mathematical functions -----
+
+query R rowsort
+SELECT ABS(num) FROM data WHERE num IS NOT NULL
+----
+45.67
+123.456
+789.012
+
+query R rowsort
+SELECT ROUND(num, 2) FROM data WHERE num IS NOT NULL
+----
+-45.67
+123.46
+789.01
+
+query R rowsort
+SELECT ROUND(num) FROM data WHERE num IS NOT NULL
+----
+-46
+123
+789
+
+# ----- TYPEOF -----
+
+query T
+SELECT TYPEOF(id) FROM data LIMIT 1
+----
+integer
+
+query T
+SELECT TYPEOF(val) FROM data WHERE val IS NOT NULL LIMIT 1
+----
+text
+
+query T
+SELECT TYPEOF(num) FROM data WHERE num IS NOT NULL LIMIT 1
+----
+real
+
+query T
+SELECT TYPEOF(val) FROM data WHERE val IS NULL LIMIT 1
+----
+null
+
+# ----- CAST -----
+
+query T
+SELECT CAST(id AS TEXT) FROM data WHERE id = 1
+----
+1
+
+query I rowsort
+SELECT CAST(num AS INTEGER) FROM data WHERE num IS NOT NULL
+----
+-46
+123
+789
+
+# ----- IFNULL/COALESCE -----
+
+query TI rowsort
+SELECT id, IFNULL(val, 'DEFAULT') FROM data
+----
+1  Hello World
+2  SQLite
+3  Test
+4  DEFAULT
+
+query II rowsort
+SELECT id, COALESCE(num, 0) FROM data
+----
+1  123.456
+2  789.012
+3  -45.67
+4  0
+
+# ----- NULLIF -----
+
+query I rowsort
+SELECT NULLIF(flag, 0) FROM data
+----
+1
+NULL
+1
+NULL
+
+query I rowsort
+SELECT NULLIF(flag, 1) FROM data
+----
+NULL
+0
+NULL
+NULL
+
+# ----- Aggregate functions -----
+
+query I
+SELECT COUNT(*) FROM data
+----
+4
+
+query I
+SELECT COUNT(val) FROM data
+----
+3
+
+query R
+SELECT SUM(num) FROM data
+----
+866.798
+
+query R
+SELECT AVG(num) FROM data WHERE num IS NOT NULL
+----
+288.933
+
+query R
+SELECT MIN(num) FROM data WHERE num IS NOT NULL
+----
+-45.67
+
+query R
+SELECT MAX(num) FROM data WHERE num IS NOT NULL
+----
+789.012
+
+# ----- Cleanup -----
+
+statement ok
+DROP TABLE data
+
+statement ok
+DROP TABLE trimtest

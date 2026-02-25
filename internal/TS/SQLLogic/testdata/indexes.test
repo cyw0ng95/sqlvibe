@@ -1,0 +1,147 @@
+# indexes.test - Index creation and usage tests
+
+# ----- CREATE INDEX -----
+
+statement ok
+CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, price REAL, category TEXT)
+
+statement ok
+INSERT INTO products VALUES (1, 'Widget', 9.99, 'hardware')
+
+statement ok
+INSERT INTO products VALUES (2, 'Gadget', 19.99, 'hardware')
+
+statement ok
+INSERT INTO products VALUES (3, 'Doohickey', 14.99, 'software')
+
+statement ok
+INSERT INTO products VALUES (4, 'Thingamajig', 29.99, 'software')
+
+statement ok
+INSERT INTO products VALUES (5, 'Whatchamacallit', 4.99, 'hardware')
+
+# ----- Single column index -----
+
+statement ok
+CREATE INDEX idx_price ON products(price)
+
+query R
+SELECT MIN(price) FROM products
+----
+4.99
+
+query R
+SELECT MAX(price) FROM products
+----
+29.99
+
+query T
+SELECT name FROM products WHERE price = 4.99
+----
+Whatchamacallit
+
+# ----- Multi-column index -----
+
+statement ok
+CREATE INDEX idx_cat_price ON products(category, price)
+
+query TR rowsort
+SELECT name, price FROM products WHERE category = 'hardware' ORDER BY price
+----
+Whatchamacallit  4.99
+Widget           9.99
+Gadget           19.99
+
+# ----- Unique index -----
+
+statement ok
+CREATE UNIQUE INDEX idx_name ON products(name)
+
+query T
+SELECT name FROM products ORDER BY name LIMIT 2
+----
+Doohickey
+Gadget
+
+# ----- DROP INDEX -----
+
+statement ok
+DROP INDEX idx_name
+
+statement ok
+DROP INDEX idx_price
+
+statement ok
+DROP INDEX idx_cat_price
+
+# ----- IF NOT EXISTS -----
+
+statement ok
+CREATE INDEX IF NOT EXISTS idx_cat ON products(category)
+
+statement ok
+CREATE INDEX IF NOT EXISTS idx_cat ON products(category)
+
+statement ok
+DROP INDEX idx_cat
+
+# ----- Index on expression -----
+
+statement ok
+CREATE INDEX idx_lower_name ON products(LOWER(name))
+
+query T rowsort
+SELECT name FROM products WHERE LOWER(name) = 'widget'
+----
+Widget
+
+statement ok
+DROP INDEX idx_lower_name
+
+# ----- Cleanup -----
+
+statement ok
+DROP TABLE products
+
+# ----- Index on multiple tables -----
+
+statement ok
+CREATE TABLE a (id INTEGER PRIMARY KEY, x INTEGER)
+
+statement ok
+CREATE TABLE b (id INTEGER PRIMARY KEY, y INTEGER)
+
+statement ok
+CREATE INDEX idx_a_x ON a(x)
+
+statement ok
+CREATE INDEX idx_b_y ON b(y)
+
+statement ok
+INSERT INTO a VALUES (1, 10)
+
+statement ok
+INSERT INTO a VALUES (2, 20)
+
+statement ok
+INSERT INTO b VALUES (1, 30)
+
+statement ok
+INSERT INTO b VALUES (2, 40)
+
+query II rowsort
+SELECT a.x, b.y FROM a, b WHERE a.x = 10 AND b.y = 30
+----
+10  30
+
+statement ok
+DROP INDEX idx_a_x
+
+statement ok
+DROP INDEX idx_b_y
+
+statement ok
+DROP TABLE a
+
+statement ok
+DROP TABLE b

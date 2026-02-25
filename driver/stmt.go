@@ -9,9 +9,9 @@ import (
 
 // Stmt implements driver.Stmt, driver.StmtExecContext, and driver.StmtQueryContext.
 type Stmt struct {
-	stmt  *sqlvibe.Statement
-	query string
-	conn  *Conn
+	stmt   *sqlvibe.Statement
+	query  string
+	conn   *Conn
 	closed bool
 }
 

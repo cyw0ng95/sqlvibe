@@ -151,35 +151,35 @@ func (cv *ColumnVector) Slice(start, end int) *ColumnVector {
 
 // Project returns a new ColumnVector containing only the values at the given indices.
 func (cv *ColumnVector) Project(indices []int) *ColumnVector {
-result := NewColumnVector(cv.Name, cv.Type)
-result.nulls = make([]bool, len(indices))
-switch cv.Type {
-case TypeInt, TypeBool:
-result.ints = make([]int64, len(indices))
-for i, idx := range indices {
-result.nulls[i] = cv.nulls[idx]
-result.ints[i] = cv.ints[idx]
-}
-case TypeFloat:
-result.floats = make([]float64, len(indices))
-for i, idx := range indices {
-result.nulls[i] = cv.nulls[idx]
-result.floats[i] = cv.floats[idx]
-}
-case TypeString:
-result.strings = make([]string, len(indices))
-for i, idx := range indices {
-result.nulls[i] = cv.nulls[idx]
-result.strings[i] = cv.strings[idx]
-}
-case TypeBytes:
-result.bytes = make([][]byte, len(indices))
-for i, idx := range indices {
-result.nulls[i] = cv.nulls[idx]
-result.bytes[i] = cv.bytes[idx]
-}
-}
-return result
+	result := NewColumnVector(cv.Name, cv.Type)
+	result.nulls = make([]bool, len(indices))
+	switch cv.Type {
+	case TypeInt, TypeBool:
+		result.ints = make([]int64, len(indices))
+		for i, idx := range indices {
+			result.nulls[i] = cv.nulls[idx]
+			result.ints[i] = cv.ints[idx]
+		}
+	case TypeFloat:
+		result.floats = make([]float64, len(indices))
+		for i, idx := range indices {
+			result.nulls[i] = cv.nulls[idx]
+			result.floats[i] = cv.floats[idx]
+		}
+	case TypeString:
+		result.strings = make([]string, len(indices))
+		for i, idx := range indices {
+			result.nulls[i] = cv.nulls[idx]
+			result.strings[i] = cv.strings[idx]
+		}
+	case TypeBytes:
+		result.bytes = make([][]byte, len(indices))
+		for i, idx := range indices {
+			result.nulls[i] = cv.nulls[idx]
+			result.bytes[i] = cv.bytes[idx]
+		}
+	}
+	return result
 }
 
 // Ints returns the underlying int64 slice.

@@ -138,22 +138,22 @@ func (s *SchemaTracker) GetColumnType(tableName, colName string) ColumnType {
 
 // ComplexityBudget limits the complexity of generated SQL
 type ComplexityBudget struct {
-	MaxExprDepth    int // Maximum nesting depth for expressions
-	MaxSubqueries   int // Maximum number of nested subqueries
-	MaxJoins        int // Maximum number of JOINs
-	MaxColumns      int // Maximum columns in SELECT
-	MaxFunctions    int // Maximum nested function calls
-	CurrentDepth    int // Current nesting depth
+	MaxExprDepth  int // Maximum nesting depth for expressions
+	MaxSubqueries int // Maximum number of nested subqueries
+	MaxJoins      int // Maximum number of JOINs
+	MaxColumns    int // Maximum columns in SELECT
+	MaxFunctions  int // Maximum nested function calls
+	CurrentDepth  int // Current nesting depth
 }
 
 func NewComplexityBudget() *ComplexityBudget {
 	return &ComplexityBudget{
 		MaxExprDepth:  5,
 		MaxSubqueries: 3,
-		MaxJoins:     3,
+		MaxJoins:      3,
 		MaxColumns:    8,
-		MaxFunctions: 4,
-		CurrentDepth: 0,
+		MaxFunctions:  4,
+		CurrentDepth:  0,
 	}
 }
 
@@ -192,11 +192,10 @@ func (b *ComplexityBudget) WithDepth(fn func() string) string {
 	return fn()
 }
 
-
 type SQLGenerator struct {
 	rand   *rand.Rand
-	Schema  *SchemaTracker
-	Budget  *ComplexityBudget
+	Schema *SchemaTracker
+	Budget *ComplexityBudget
 }
 
 func NewSQLGenerator(seed int64) *SQLGenerator {
@@ -625,8 +624,6 @@ func (g *SQLGenerator) mutateAddParen(sql string) string {
 	}
 	return sql
 }
-
-
 
 // generateValueForType generates a value matching the given column type
 func (g *SQLGenerator) generateValueForType(colType ColumnType) string {
@@ -1062,7 +1059,6 @@ func (g *SQLGenerator) GenerateSchemaAwareRandomSQL() string {
 	return generators[g.rand.Intn(len(generators))]()
 }
 
-
 // =============================================================================
 // SQLSmith-style Optimizations: Recursive Expression, Cross-feature, Persistent Schema
 // =============================================================================
@@ -1112,7 +1108,7 @@ func (g *SQLGenerator) generateSimpleExpression(colType ColumnType) string {
 func (g *SQLGenerator) generateNestedFunction(colType ColumnType) string {
 	// Generate nested function calls like ABS(COALESCE(col, 0))
 	inner := g.GenerateRecursiveExpression(colType)
-	
+
 	funcs := []struct {
 		name string
 		args int // 0 = *, 1 = single arg
@@ -1121,7 +1117,7 @@ func (g *SQLGenerator) generateNestedFunction(colType ColumnType) string {
 		{"TRIM", 1}, {"COALESCE", 2}, {"IFNULL", 2}, {"NULLIF", 2},
 	}
 	f := funcs[g.rand.Intn(len(funcs))]
-	
+
 	if f.args == 2 {
 		// Binary function: COALESCE(x, y) or IFNULL(x, y)
 		second := g.generateSimpleExpression(colType)
@@ -1134,27 +1130,27 @@ func (g *SQLGenerator) generateNestedFunction(colType ColumnType) string {
 func (g *SQLGenerator) generateBinaryExpression(colType ColumnType) string {
 	left := g.GenerateRecursiveExpression(colType)
 	right := g.GenerateRecursiveExpression(colType)
-	
+
 	ops := []string{"+", "-", "*", "/"}
 	if colType == ColumnTypeText {
 		ops = []string{"||"}
 	}
 	op := ops[g.rand.Intn(len(ops))]
-	
+
 	return fmt.Sprintf("(%s %s %s)", left, op, right)
 }
 
 // generateCaseExpression generates CASE WHEN expressions
 func (g *SQLGenerator) generateCaseExpression(colType ColumnType) string {
 	caseWhen := g.rand.Intn(3) + 1 // 1-3 WHEN clauses
-	
+
 	var whens []string
 	for i := 0; i < caseWhen; i++ {
 		cond := g.generateSimpleCondition()
 		val := g.generateSimpleExpression(colType)
 		whens = append(whens, fmt.Sprintf("WHEN %s THEN %s", cond, val))
 	}
-	
+
 	elseVal := g.generateSimpleExpression(colType)
 	return fmt.Sprintf("CASE %s ELSE %s END", strings.Join(whens, " "), elseVal)
 }
@@ -1163,10 +1159,10 @@ func (g *SQLGenerator) generateCaseExpression(colType ColumnType) string {
 func (g *SQLGenerator) generateSimpleCondition() string {
 	ops := []string{"=", "!=", ">", "<", ">=", "<="}
 	op := ops[g.rand.Intn(len(ops))]
-	
+
 	left := fmt.Sprintf("c%d", g.rand.Intn(5))
 	right := fmt.Sprintf("%d", g.rand.Intn(100))
-	
+
 	return fmt.Sprintf("%s %s %s", left, op, right)
 }
 
@@ -1184,14 +1180,14 @@ func (g *SQLGenerator) GenerateCrossFeatureQuery() string {
 
 	// Build a complex query with multiple features
 	var clauses []string
-	
+
 	// SELECT clause with functions
 	numCols := g.rand.Intn(len(table.Columns)) + 1
 	cols := make([]string, numCols)
 	for i := 0; i < numCols; i++ {
 		colIdx := g.rand.Intn(len(table.Columns))
 		col := table.Columns[colIdx]
-		
+
 		// 30% chance of function on column
 		if g.rand.Intn(10) < 3 {
 			funcs := []string{"COUNT(%s)", "MAX(%s)", "MIN(%s)", "AVG(%s)", "SUM(%s)"}
@@ -1201,14 +1197,14 @@ func (g *SQLGenerator) GenerateCrossFeatureQuery() string {
 		}
 	}
 	clauses = append(clauses, fmt.Sprintf("SELECT %s", strings.Join(cols, ", ")))
-	
+
 	// FROM clause with JOIN possibility
 	if g.Schema.HasTables() && g.rand.Intn(3) == 0 {
 		table2Name := g.Schema.GetRandomTable()
 		if table2Name != tableName {
 			joinType := []string{"JOIN", "LEFT JOIN", "INNER JOIN"}
 			clauses = append(clauses, fmt.Sprintf("FROM %s %s %s ON %s.c0 = %s.c0",
-			tableName, joinType[g.rand.Intn(len(joinType))], table2Name, tableName, table2Name))
+				tableName, joinType[g.rand.Intn(len(joinType))], table2Name, tableName, table2Name))
 		} else {
 			clauses = append(clauses, fmt.Sprintf("FROM %s", tableName))
 		}
@@ -1258,7 +1254,7 @@ func (g *SQLGenerator) GenerateSubqueryInFrom() string {
 
 	// Generate inner query
 	inner := g.GenerateCrossFeatureQuery()
-	
+
 	return fmt.Sprintf("SELECT * FROM (%s) AS subq", inner)
 }
 
@@ -1273,7 +1269,7 @@ func (g *SQLGenerator) GenerateComplexJoin() string {
 	for name := range g.Schema.Tables {
 		tableNames = append(tableNames, name)
 	}
-	
+
 	if len(tableNames) < 2 {
 		return g.GenerateCreateTable()
 	}
@@ -1287,7 +1283,7 @@ func (g *SQLGenerator) GenerateComplexJoin() string {
 
 	table1 := g.Schema.GetTable(t1)
 	table2 := g.Schema.GetTable(t2)
-	
+
 	if table1 == nil || table2 == nil || len(table1.Columns) == 0 || len(table2.Columns) == 0 {
 		return g.GenerateCreateTable()
 	}
@@ -1295,19 +1291,19 @@ func (g *SQLGenerator) GenerateComplexJoin() string {
 	// Build JOIN with multiple conditions
 	joinTypes := []string{"JOIN", "LEFT JOIN", "INNER JOIN", "CROSS JOIN"}
 	joinType := joinTypes[g.rand.Intn(len(joinTypes))]
-	
+
 	col1 := table1.Columns[g.rand.Intn(len(table1.Columns))].Name
 	col2 := table2.Columns[g.rand.Intn(len(table2.Columns))].Name
-	
+
 	query := fmt.Sprintf("SELECT * FROM %s %s %s ON %s.%s = %s.%s",
 		t1, joinType, t2, t1, col1, t2, col2)
-	
+
 	// Add WHERE
 	if g.rand.Intn(2) == 1 {
 		whereCol := table1.Columns[g.rand.Intn(len(table1.Columns))].Name
 		query += fmt.Sprintf(" WHERE %s.%s > %d", t1, whereCol, g.rand.Intn(50))
 	}
-	
+
 	return query
 }
 
@@ -1326,11 +1322,11 @@ func (g *SQLGenerator) GenerateComplexAggregate() string {
 	// Build aggregate query with multiple aggregates
 	numAggs := g.rand.Intn(3) + 1 // 1-3 aggregates
 	aggs := make([]string, numAggs)
-	
+
 	for i := 0; i < numAggs; i++ {
 		colIdx := g.rand.Intn(len(table.Columns))
 		col := table.Columns[colIdx]
-		
+
 		aggFuncs := []string{"COUNT(%s)", "SUM(%s)", "AVG(%s)", "MIN(%s)", "MAX(%s)"}
 		// Use COUNT(*) for non-integer columns
 		if col.Type != ColumnTypeInteger {
@@ -1339,26 +1335,26 @@ func (g *SQLGenerator) GenerateComplexAggregate() string {
 		agg := aggFuncs[g.rand.Intn(len(aggFuncs))]
 		aggs[i] = fmt.Sprintf(agg, col.Name)
 	}
-	
+
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(aggs, ", "), tableName)
-	
+
 	// Add WHERE
 	if g.rand.Intn(2) == 1 && len(table.Columns) > 0 {
 		col := table.Columns[g.rand.Intn(len(table.Columns))]
 		query += g.generateSchemaAwareWhere(tableName, col)
 	}
-	
+
 	// Add GROUP BY
 	if g.rand.Intn(2) == 1 && len(table.Columns) > 0 {
 		colIdx := g.rand.Intn(len(table.Columns))
 		query += fmt.Sprintf(" GROUP BY %s", table.Columns[colIdx].Name)
 	}
-	
+
 	// Add ORDER BY with aggregate
 	if g.rand.Intn(3) == 0 {
 		query += fmt.Sprintf(" ORDER BY %s", aggs[0])
 	}
-	
+
 	return query
 }
 
@@ -1390,6 +1386,7 @@ func (g *SQLGenerator) SQLSmithMode() string {
 
 	return strategies[g.rand.Intn(len(strategies))]()
 }
+
 // GenerateDateTime generates date/time related queries
 func (g *SQLGenerator) GenerateDateTime() string {
 	funcs := []string{

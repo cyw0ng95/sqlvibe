@@ -57,17 +57,30 @@ func exprIsCorrelated(expr QP.Expr, innerTable, innerAlias string) bool {
 	case *QP.ColumnRef:
 		if e.Table != "" {
 			tbl := strings.ToLower(e.Table)
-			// When the inner table has an alias, it must be referenced via that alias.
-			// Any table qualifier that differs from the alias is a reference to an outer table.
-			// When the inner table has no alias, references to its table name are internal.
 			if innerAlias != "" {
 				return tbl != innerAlias
 			}
 			return tbl != innerTable
 		}
 	case *QP.BinaryExpr:
-		return exprIsCorrelated(e.Left, innerTable, innerAlias) ||
-			exprIsCorrelated(e.Right, innerTable, innerAlias)
+		if exprIsCorrelated(e.Left, innerTable, innerAlias) ||
+			exprIsCorrelated(e.Right, innerTable, innerAlias) {
+			return true
+		}
+		if leftCol, ok := e.Left.(*QP.ColumnRef); ok {
+			if rightCol, ok := e.Right.(*QP.ColumnRef); ok {
+				leftIsInner := (leftCol.Table != "" && strings.ToLower(leftCol.Table) == innerTable) ||
+					(leftCol.Table != "" && innerAlias != "" && strings.ToLower(leftCol.Table) == innerAlias)
+				rightIsInner := (rightCol.Table != "" && strings.ToLower(rightCol.Table) == innerTable) ||
+					(rightCol.Table != "" && innerAlias != "" && strings.ToLower(rightCol.Table) == innerAlias)
+				if leftIsInner && rightCol.Table == "" {
+					return true
+				}
+				if rightIsInner && leftCol.Table == "" {
+					return true
+				}
+			}
+		}
 	case *QP.UnaryExpr:
 		return exprIsCorrelated(e.Expr, innerTable, innerAlias)
 	case *QP.FuncCall:

@@ -307,89 +307,89 @@ func TestColumnarGroupBy_SkipsNullKeys(t *testing.T) {
 // ----- ColumnarHashJoin -----
 
 func TestColumnarHashJoin_Basic(t *testing.T) {
-left := DS.NewHybridStore([]string{"id", "name"}, []DS.ValueType{DS.TypeInt, DS.TypeString})
-left.Insert([]DS.Value{DS.IntValue(1), DS.StringValue("alice")})
-left.Insert([]DS.Value{DS.IntValue(2), DS.StringValue("bob")})
-left.Insert([]DS.Value{DS.IntValue(3), DS.StringValue("carol")})
+	left := DS.NewHybridStore([]string{"id", "name"}, []DS.ValueType{DS.TypeInt, DS.TypeString})
+	left.Insert([]DS.Value{DS.IntValue(1), DS.StringValue("alice")})
+	left.Insert([]DS.Value{DS.IntValue(2), DS.StringValue("bob")})
+	left.Insert([]DS.Value{DS.IntValue(3), DS.StringValue("carol")})
 
-right := DS.NewHybridStore([]string{"uid", "score"}, []DS.ValueType{DS.TypeInt, DS.TypeInt})
-right.Insert([]DS.Value{DS.IntValue(1), DS.IntValue(90)})
-right.Insert([]DS.Value{DS.IntValue(3), DS.IntValue(85)})
+	right := DS.NewHybridStore([]string{"uid", "score"}, []DS.ValueType{DS.TypeInt, DS.TypeInt})
+	right.Insert([]DS.Value{DS.IntValue(1), DS.IntValue(90)})
+	right.Insert([]DS.Value{DS.IntValue(3), DS.IntValue(85)})
 
-rows := ColumnarHashJoin(left, right, "id", "uid")
-if len(rows) != 2 {
-t.Fatalf("expected 2 rows, got %d", len(rows))
-}
-// Each row: [id, name, uid, score]
-for _, row := range rows {
-if len(row) != 4 {
-t.Fatalf("expected 4 columns per row, got %d", len(row))
-}
-}
+	rows := ColumnarHashJoin(left, right, "id", "uid")
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+	// Each row: [id, name, uid, score]
+	for _, row := range rows {
+		if len(row) != 4 {
+			t.Fatalf("expected 4 columns per row, got %d", len(row))
+		}
+	}
 }
 
 func TestColumnarHashJoin_NoMatches(t *testing.T) {
-left := DS.NewHybridStore([]string{"id"}, []DS.ValueType{DS.TypeInt})
-left.Insert([]DS.Value{DS.IntValue(1)})
-right := DS.NewHybridStore([]string{"id"}, []DS.ValueType{DS.TypeInt})
-right.Insert([]DS.Value{DS.IntValue(99)})
+	left := DS.NewHybridStore([]string{"id"}, []DS.ValueType{DS.TypeInt})
+	left.Insert([]DS.Value{DS.IntValue(1)})
+	right := DS.NewHybridStore([]string{"id"}, []DS.ValueType{DS.TypeInt})
+	right.Insert([]DS.Value{DS.IntValue(99)})
 
-rows := ColumnarHashJoin(left, right, "id", "id")
-if len(rows) != 0 {
-t.Fatalf("expected 0 rows, got %d", len(rows))
-}
+	rows := ColumnarHashJoin(left, right, "id", "id")
+	if len(rows) != 0 {
+		t.Fatalf("expected 0 rows, got %d", len(rows))
+	}
 }
 
 // ----- VectorizedGroupBy -----
 
 func TestVectorizedGroupBy_Sum(t *testing.T) {
-hs := DS.NewHybridStore(
-[]string{"cat", "val"},
-[]DS.ValueType{DS.TypeString, DS.TypeInt},
-)
-hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(10)})
-hs.Insert([]DS.Value{DS.StringValue("B"), DS.IntValue(20)})
-hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(5)})
+	hs := DS.NewHybridStore(
+		[]string{"cat", "val"},
+		[]DS.ValueType{DS.TypeString, DS.TypeInt},
+	)
+	hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(10)})
+	hs.Insert([]DS.Value{DS.StringValue("B"), DS.IntValue(20)})
+	hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(5)})
 
-rows := VectorizedGroupBy(hs, []string{"cat"}, "val", "sum")
-if len(rows) != 2 {
-t.Fatalf("expected 2 groups, got %d", len(rows))
-}
-sum := make(map[string]float64)
-for _, row := range rows {
-sum[row[0].Str] = row[1].Float
-}
-if sum["A"] != 15 {
-t.Errorf("A sum: got %v, want 15", sum["A"])
-}
-if sum["B"] != 20 {
-t.Errorf("B sum: got %v, want 20", sum["B"])
-}
+	rows := VectorizedGroupBy(hs, []string{"cat"}, "val", "sum")
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(rows))
+	}
+	sum := make(map[string]float64)
+	for _, row := range rows {
+		sum[row[0].Str] = row[1].Float
+	}
+	if sum["A"] != 15 {
+		t.Errorf("A sum: got %v, want 15", sum["A"])
+	}
+	if sum["B"] != 20 {
+		t.Errorf("B sum: got %v, want 20", sum["B"])
+	}
 }
 
 // ----- Database.GetHybridStore integration -----
 
 func TestDatabase_GetHybridStore(t *testing.T) {
-db, err := Open(":memory:")
-if err != nil {
-t.Fatal(err)
-}
-defer db.Close()
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
 
-if _, err := db.Exec("CREATE TABLE t (id INTEGER, val INTEGER)"); err != nil {
-t.Fatal(err)
-}
-for i := 1; i <= 5; i++ {
-if _, err := db.Exec(fmt.Sprintf("INSERT INTO t VALUES (%d, %d)", i, i*10)); err != nil {
-t.Fatal(err)
-}
-}
-// Invalidate and rebuild.
-hs := db.GetHybridStore("t")
-if hs == nil {
-t.Fatal("GetHybridStore returned nil")
-}
-if hs.LiveCount() != 5 {
-t.Fatalf("expected 5 rows, got %d", hs.LiveCount())
-}
+	if _, err := db.Exec("CREATE TABLE t (id INTEGER, val INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 5; i++ {
+		if _, err := db.Exec(fmt.Sprintf("INSERT INTO t VALUES (%d, %d)", i, i*10)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Invalidate and rebuild.
+	hs := db.GetHybridStore("t")
+	if hs == nil {
+		t.Fatal("GetHybridStore returned nil")
+	}
+	if hs.LiveCount() != 5 {
+		t.Fatalf("expected 5 rows, got %d", hs.LiveCount())
+	}
 }

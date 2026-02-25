@@ -3436,6 +3436,19 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 			if val, ok := row[qualKey]; ok {
 				return val
 			}
+			// Qualified column not found in row - try outer context for correlated subqueries
+			// DO NOT fall back to unqualified lookup for qualified columns
+			if vm.ctx != nil {
+				type OuterContextProvider interface {
+					GetOuterRowValue(columnName string) (interface{}, bool)
+				}
+				if outerCtx, ok := vm.ctx.(OuterContextProvider); ok {
+					if val, found := outerCtx.GetOuterRowValue(e.Name); found {
+						return val
+					}
+				}
+			}
+			return nil
 		}
 		if val, ok := row[e.Name]; ok {
 			return val
@@ -4167,7 +4180,49 @@ func (vm *VM) evaluateBoolExprOnRow(row map[string]interface{}, columns []string
 					return true
 				}
 			}
+			// Check if it's a subquery
+			if subqExpr, ok := e.Right.(*QP.SubqueryExpr); ok {
+				if vm.ctx != nil {
+					type SubqueryRowsExecutor interface {
+						ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+					}
+					if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+						if rows, err := executor.ExecuteSubqueryRows(subqExpr.Select); err == nil {
+							for _, subRow := range rows {
+								if len(subRow) > 0 && vm.compareVals(val, subRow[0]) == 0 {
+									return false
+								}
+							}
+							return true
+						}
+					}
+				}
+			}
 			return true
+		case QP.TokenInSubquery:
+			// IN (subquery)
+			val := vm.evaluateExprOnRow(row, columns, e.Left)
+			if val == nil {
+				return false
+			}
+			if subqExpr, ok := e.Right.(*QP.SubqueryExpr); ok {
+				if vm.ctx != nil {
+					type SubqueryRowsExecutor interface {
+						ExecuteSubqueryRows(subquery interface{}) ([][]interface{}, error)
+					}
+					if executor, ok := vm.ctx.(SubqueryRowsExecutor); ok {
+						if rows, err := executor.ExecuteSubqueryRows(subqExpr.Select); err == nil {
+							for _, subRow := range rows {
+								if len(subRow) > 0 && vm.compareVals(val, subRow[0]) == 0 {
+									return true
+								}
+							}
+							return false
+						}
+					}
+				}
+			}
+			return false
 		default:
 			result := vm.evaluateBinaryOp(
 				vm.evaluateExprOnRow(row, columns, e.Left),
