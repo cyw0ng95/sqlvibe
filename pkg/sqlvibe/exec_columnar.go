@@ -1,6 +1,7 @@
 package sqlvibe
 
 import (
+	"context"
 	"strings"
 
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
@@ -235,6 +236,12 @@ func joinHashKey(v DS.Value) interface{} {
 // where the first len(left.Columns()) values are from the left row and the
 // remaining values are from the right row.
 func ColumnarHashJoin(left, right *DS.HybridStore, leftCol, rightCol string) [][]DS.Value {
+	return ColumnarHashJoinContext(context.Background(), left, right, leftCol, rightCol)
+}
+
+// ColumnarHashJoinContext is a context-aware variant of ColumnarHashJoin.
+// It checks ctx.Done() every 256 rows in the build phase and returns nil on cancellation.
+func ColumnarHashJoinContext(ctx context.Context, left, right *DS.HybridStore, leftCol, rightCol string) [][]DS.Value {
 	lci := left.ColIndex(leftCol)
 	rci := right.ColIndex(rightCol)
 	if lci < 0 || rci < 0 {
@@ -244,9 +251,18 @@ func ColumnarHashJoin(left, right *DS.HybridStore, leftCol, rightCol string) [][
 	// Build hash table from the smaller side (right).
 	// Use interface{} key to avoid fmt.Sprintf allocation for int/float/string values.
 	hash := make(map[interface{}][][]DS.Value)
+	var buildCount int64
 	for _, rRow := range right.Scan() {
 		key := joinHashKey(rRow[rci])
 		hash[key] = append(hash[key], rRow)
+		buildCount++
+		if buildCount%256 == 0 {
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+			}
+		}
 	}
 
 	// Probe with left side.

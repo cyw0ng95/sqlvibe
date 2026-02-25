@@ -138,6 +138,12 @@ const (
 
 	// AUTH extended codes
 	SVDB_AUTH_USER ErrorCode = 279 // 23 | (1 << 8)
+
+	// INTERRUPT extended codes (query timeout)
+	SVDB_QUERY_TIMEOUT ErrorCode = 265 // 9 | (1 << 8)
+
+	// NOMEM extended codes (memory limit exceeded)
+	SVDB_OOM_LIMIT ErrorCode = 263 // 7 | (1 << 8)
 )
 
 // primaryCodeNames maps primary code values to their string names.
@@ -249,6 +255,8 @@ var extendedCodeNames = map[ErrorCode]string{
 	SVDB_NOTICE_RBU:              "SVDB_NOTICE_RBU",
 	SVDB_WARNING_AUTOINDEX:       "SVDB_WARNING_AUTOINDEX",
 	SVDB_AUTH_USER:               "SVDB_AUTH_USER",
+	SVDB_QUERY_TIMEOUT:           "SVDB_QUERY_TIMEOUT",
+	SVDB_OOM_LIMIT:               "SVDB_OOM_LIMIT",
 }
 
 // String returns the string representation of the error code.

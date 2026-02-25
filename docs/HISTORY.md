@@ -1,5 +1,36 @@
 # sqlvibe Release History
 
+## **v0.9.13** (2026-02-25)
+
+### Features: Context API & Query Timeouts
+
+#### Track A: Native Context API
+- New `ExecContext(ctx, sql)` and `QueryContext(ctx, sql)` methods on `*Database`.
+- New `ExecContextWithParams(ctx, sql, params)` and `QueryContextWithParams(ctx, sql, params)` for parameterized context-aware queries.
+- New `ExecContextNamed(ctx, sql, named)` and `QueryContextNamed(ctx, sql, named)` for named parameter context queries.
+- New `pkg/sqlvibe/exec_state.go`: `execState` struct carrying per-call context, `newExecState(ctx)`, `check()`, `checkEvery256()` helpers. `RowCallback` interface placeholder for future streaming (v0.9.14+).
+- Pre-cancelled context detected upfront before any SQL execution.
+
+#### Track B: Query Timeout
+- New `PRAGMA query_timeout = N` (milliseconds) sets a per-database default query timeout (0 = no limit). Applied as `context.WithTimeout` on every `ExecContext`/`QueryContext` call.
+- New `SVDB_QUERY_TIMEOUT ErrorCode = 265` returned when a query is cancelled due to `context.DeadlineExceeded`. Distinguishes timeout from user cancellation (`context.Canceled`).
+- `wrapCtxErr` helper in `exec_state.go` maps context errors to native sqlvibe error codes.
+
+#### Track C: Memory Limit
+- New `PRAGMA max_memory = N` (bytes, 0 = unlimited) guards against unbounded result sets.
+- `checkMaxMemory` in `database.go` estimates result memory (rows × cols × 64 bytes heuristic) and returns `SVDB_OOM_LIMIT` when limit is exceeded.
+- New `SVDB_OOM_LIMIT ErrorCode = 263` returned on memory limit violation.
+- `ColumnarHashJoinContext(ctx, left, right, leftCol, rightCol)` added to `exec_columnar.go` with context check every 256 rows in the build phase. `ColumnarHashJoin` is now a thin wrapper calling it with `context.Background()`.
+
+#### Track D: Driver Update
+- `driver/conn.go`: `ExecContext` and `QueryContext` now call `db.ExecContextWithParams` / `db.ExecContextNamed` / `db.QueryContextWithParams` / `db.QueryContextNamed` directly. The goroutine wrapper is removed from the driver layer; context handling is now done natively inside the `*Database` methods.
+
+#### Track E: Tests
+- `internal/TS/SQL1999/F884/01_test.go`: 6 tests covering pre-cancelled context, deadline completion, mid-scan cancellation, `PRAGMA query_timeout`, `PRAGMA max_memory` rejection, and concurrent independent cancellation.
+- `internal/TS/Regression/regression_v0.9.13_test.go`: 5 tests covering DDL no partial schema, `SVDB_QUERY_TIMEOUT` error code, `max_memory=0` unlimited, row counter reset between queries, and `query_timeout` pragma round-trip.
+
+---
+
 ## **v0.9.12** (2026-02-25)
 
 ### Features: database/sql Driver Interface

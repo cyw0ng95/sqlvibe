@@ -1,6 +1,7 @@
 package sqlvibe
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"hash/fnv"
@@ -112,6 +113,9 @@ type Database struct {
 	// v0.9.10: WAL auto-checkpoint
 	autoCheckpointN    int           // checkpoint WAL after this many frames (0 = disabled)
 	stopAutoChkpt      chan struct{}  // signal channel to stop background checkpoint goroutine
+	// v0.9.13: context & memory limits
+	queryTimeoutMs  int64 // default per-query timeout in milliseconds (0 = no limit)
+	maxMemoryBytes  int64 // max result-set memory in bytes (0 = no limit)
 }
 
 // savepointEntry holds the name and snapshot for a named savepoint.
@@ -1438,6 +1442,135 @@ func (db *Database) QueryNamed(sql string, params map[string]interface{}) (*Rows
 		return nil, err
 	}
 	return db.Query(boundSQL)
+}
+
+// applyQueryTimeout wraps ctx with a deadline derived from db.queryTimeoutMs when set.
+// The returned cancel function must always be called (defer cancel()).
+func (db *Database) applyQueryTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if db.queryTimeoutMs > 0 {
+		return context.WithTimeout(ctx, time.Duration(db.queryTimeoutMs)*time.Millisecond)
+	}
+	return ctx, func() {}
+}
+
+// checkMaxMemory estimates the memory occupied by rows and returns SVDB_OOM_LIMIT
+// when it exceeds db.maxMemoryBytes.  Returns nil when the limit is not set.
+func (db *Database) checkMaxMemory(rows [][]interface{}) error {
+	if db.maxMemoryBytes <= 0 || len(rows) == 0 {
+		return nil
+	}
+	cols := len(rows[0])
+	// Heuristic: 64 bytes per value cell covers int64, float64, short strings.
+	estimatedBytes := int64(len(rows)) * int64(cols) * 64
+	if estimatedBytes > db.maxMemoryBytes {
+		return Errorf(SVDB_OOM_LIMIT,
+			"result set exceeds max_memory limit (%d bytes estimated > %d bytes limit)",
+			estimatedBytes, db.maxMemoryBytes)
+	}
+	return nil
+}
+
+// ExecContext executes a SQL statement with context support.
+// A pre-cancelled context returns an error immediately without executing the statement.
+// When PRAGMA query_timeout is set, it is applied as an additional deadline.
+func (db *Database) ExecContext(ctx context.Context, sql string) (Result, error) {
+	select {
+	case <-ctx.Done():
+		return Result{}, wrapCtxErr(ctx.Err())
+	default:
+	}
+	ctx, cancel := db.applyQueryTimeout(ctx)
+	defer cancel()
+
+	type res struct {
+		r   Result
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		r, err := db.Exec(sql)
+		ch <- res{r, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return Result{}, wrapCtxErr(ctx.Err())
+	case r := <-ch:
+		return r.r, r.err
+	}
+}
+
+// QueryContext executes a SQL query with context support.
+// A pre-cancelled context returns an error immediately without executing the query.
+// When PRAGMA query_timeout is set, it is applied as an additional deadline.
+// When PRAGMA max_memory is set, the result set size is checked before returning.
+func (db *Database) QueryContext(ctx context.Context, sql string) (*Rows, error) {
+	select {
+	case <-ctx.Done():
+		return nil, wrapCtxErr(ctx.Err())
+	default:
+	}
+	ctx, cancel := db.applyQueryTimeout(ctx)
+	defer cancel()
+
+	type res struct {
+		rows *Rows
+		err  error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		rows, err := db.Query(sql)
+		ch <- res{rows, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, wrapCtxErr(ctx.Err())
+	case r := <-ch:
+		if r.err != nil {
+			return nil, r.err
+		}
+		if r.rows != nil {
+			if memErr := db.checkMaxMemory(r.rows.Data); memErr != nil {
+				return nil, memErr
+			}
+		}
+		return r.rows, nil
+	}
+}
+
+// ExecContextWithParams executes a parameterized SQL statement with context support.
+func (db *Database) ExecContextWithParams(ctx context.Context, sql string, params []interface{}) (Result, error) {
+	boundSQL, err := formatParamSQL(sql, params, nil)
+	if err != nil {
+		return Result{}, err
+	}
+	return db.ExecContext(ctx, boundSQL)
+}
+
+// QueryContextWithParams executes a parameterized SQL query with context support.
+func (db *Database) QueryContextWithParams(ctx context.Context, sql string, params []interface{}) (*Rows, error) {
+	boundSQL, err := formatParamSQL(sql, params, nil)
+	if err != nil {
+		return nil, err
+	}
+	return db.QueryContext(ctx, boundSQL)
+}
+
+// ExecContextNamed executes a named-parameter SQL statement with context support.
+func (db *Database) ExecContextNamed(ctx context.Context, sql string, params map[string]interface{}) (Result, error) {
+	boundSQL, err := formatParamSQL(sql, nil, params)
+	if err != nil {
+		return Result{}, err
+	}
+	return db.ExecContext(ctx, boundSQL)
+}
+
+// QueryContextNamed executes a named-parameter SQL query with context support.
+func (db *Database) QueryContextNamed(ctx context.Context, sql string, params map[string]interface{}) (*Rows, error) {
+	boundSQL, err := formatParamSQL(sql, nil, params)
+	if err != nil {
+		return nil, err
+	}
+	return db.QueryContext(ctx, boundSQL)
 }
 
 func (db *Database) Begin() (*Transaction, error) {

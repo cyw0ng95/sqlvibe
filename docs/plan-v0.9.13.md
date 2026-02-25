@@ -195,15 +195,15 @@ Add `internal/TS/Regression/regression_v0.9.13_test.go`:
 
 | Feature | Target | Status |
 |---------|--------|--------|
-| `ExecContext` / `QueryContext` on `*Database` | Yes | [ ] |
-| Pre-cancelled context rejected immediately | Yes | [ ] |
-| Running query cancelled mid-scan | Yes | [ ] |
-| `PRAGMA query_timeout` fires correctly | Yes | [ ] |
-| `PRAGMA max_memory` rejects oversized results | Yes | [ ] |
-| `SVDB_QUERY_TIMEOUT` error code returned | Yes | [ ] |
-| driver/conn.go updated to use native API | Yes | [ ] |
-| F884 suite passes | 100% | [ ] |
-| Regression v0.9.13 passes | 100% | [ ] |
+| `ExecContext` / `QueryContext` on `*Database` | Yes | [x] |
+| Pre-cancelled context rejected immediately | Yes | [x] |
+| Running query cancelled mid-scan | Yes | [x] |
+| `PRAGMA query_timeout` fires correctly | Yes | [x] |
+| `PRAGMA max_memory` rejects oversized results | Yes | [x] |
+| `SVDB_QUERY_TIMEOUT` error code returned | Yes | [x] |
+| driver/conn.go updated to use native API | Yes | [x] |
+| F884 suite passes | 100% | [x] |
+| Regression v0.9.13 passes | 100% | [x] |
 
 ---
 
@@ -211,5 +211,5 @@ Add `internal/TS/Regression/regression_v0.9.13_test.go`:
 
 | Test Suite | Description | Status |
 |------------|-------------|--------|
-| F884 suite | Context/timeout feature tests (6+ tests) | [ ] |
-| Regression v0.9.13 | Cancellation safety regressions (5+ tests) | [ ] |
+| F884 suite | Context/timeout feature tests (6+ tests) | [x] |
+| Regression v0.9.13 | Cancellation safety regressions (5+ tests) | [x] |

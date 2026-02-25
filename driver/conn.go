@@ -58,60 +58,34 @@ func (c *Conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, e
 
 // ExecContext executes a non-query statement with context support.
 func (c *Conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	type result struct {
-		res sqlvibe.Result
-		err error
-	}
-	ch := make(chan result, 1)
 	pos, named := fromNamedValues(args)
-	go func() {
-		var res sqlvibe.Result
-		var err error
-		if named != nil {
-			res, err = c.db.ExecNamed(query, named)
-		} else {
-			res, err = c.db.ExecWithParams(query, pos)
-		}
-		ch <- result{res, err}
-	}()
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case r := <-ch:
-		if r.err != nil {
-			return nil, r.err
-		}
-		return Result{lastInsertID: r.res.LastInsertRowID, rowsAffected: r.res.RowsAffected}, nil
+	var res sqlvibe.Result
+	var err error
+	if named != nil {
+		res, err = c.db.ExecContextNamed(ctx, query, named)
+	} else {
+		res, err = c.db.ExecContextWithParams(ctx, query, pos)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return Result{lastInsertID: res.LastInsertRowID, rowsAffected: res.RowsAffected}, nil
 }
 
 // QueryContext executes a query statement with context support.
 func (c *Conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	type result struct {
-		rows *sqlvibe.Rows
-		err  error
-	}
-	ch := make(chan result, 1)
 	pos, named := fromNamedValues(args)
-	go func() {
-		var rows *sqlvibe.Rows
-		var err error
-		if named != nil {
-			rows, err = c.db.QueryNamed(query, named)
-		} else {
-			rows, err = c.db.QueryWithParams(query, pos)
-		}
-		ch <- result{rows, err}
-	}()
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case r := <-ch:
-		if r.err != nil {
-			return nil, r.err
-		}
-		return &Rows{rows: r.rows}, nil
+	var rows *sqlvibe.Rows
+	var err error
+	if named != nil {
+		rows, err = c.db.QueryContextNamed(ctx, query, named)
+	} else {
+		rows, err = c.db.QueryContextWithParams(ctx, query, pos)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return &Rows{rows: rows}, nil
 }
 
 // Ensure Conn implements required interfaces.

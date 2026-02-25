@@ -139,6 +139,11 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		return db.pragmaJournalSizeLimit(stmt)
 	case "cache_grind":
 		return db.pragmaCacheGrind()
+	// v0.9.13 additions
+	case "query_timeout":
+		return db.pragmaQueryTimeout(stmt)
+	case "max_memory":
+		return db.pragmaMaxMemory(stmt)
 	default:
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
@@ -855,4 +860,33 @@ func (db *Database) pragmaCacheGrind() (*Rows, error) {
 		Columns: cols,
 		Data: [][]interface{}{{pagesCached, pagesFree, int64(0), int64(0)}},
 	}, nil
+}
+
+
+// pragmaQueryTimeout handles PRAGMA query_timeout = N (milliseconds).
+// A value of 0 disables the per-query default timeout.
+func (db *Database) pragmaQueryTimeout(stmt *QP.PragmaStmt) (*Rows, error) {
+if stmt.Value != nil {
+val := pragmaIntValue(stmt.Value)
+if val < 0 {
+val = 0
+}
+db.queryTimeoutMs = int64(val)
+return &Rows{Columns: []string{"query_timeout"}, Data: [][]interface{}{{int64(val)}}}, nil
+}
+return &Rows{Columns: []string{"query_timeout"}, Data: [][]interface{}{{db.queryTimeoutMs}}}, nil
+}
+
+// pragmaMaxMemory handles PRAGMA max_memory = N (bytes).
+// A value of 0 disables the result-set memory limit.
+func (db *Database) pragmaMaxMemory(stmt *QP.PragmaStmt) (*Rows, error) {
+if stmt.Value != nil {
+val := pragmaIntValue(stmt.Value)
+if val < 0 {
+val = 0
+}
+db.maxMemoryBytes = int64(val)
+return &Rows{Columns: []string{"max_memory"}, Data: [][]interface{}{{int64(val)}}}, nil
+}
+return &Rows{Columns: []string{"max_memory"}, Data: [][]interface{}{{db.maxMemoryBytes}}}, nil
 }
