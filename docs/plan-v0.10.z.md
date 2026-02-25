@@ -1,10 +1,10 @@
-# Plan v0.9.z - Final Stability, API Hardening & Release Candidate
+# Plan v0.10.z - Final Stability, API Hardening & Release Candidate
 
 ## Summary
 
 This is the release-candidate milestone before v1.0.0. The focus is on production
 hardening: eliminating remaining panics, stabilising the public API surface, running an
-extended fuzzing campaign, and verifying performance is at or better than the v0.9.x
+extended fuzzing campaign, and verifying performance is at or better than the v0.10.x
 baseline. No new SQL features are added in this release — correctness, stability, and
 API clarity are the sole objectives.
 
@@ -17,6 +17,7 @@ At this point the database supports:
 - `context.Context` cancellation and query timeouts (v0.9.13)
 - `ALTER TABLE DROP/RENAME COLUMN`, `FETCH FIRST`, `INTERSECT ALL`, CSV/JSON I/O (v0.9.14)
 - JSON Extension with table functions and aggregates (v0.9.17)
+- Real Bytecode Execution Engine (v0.10.0)
 - 149+ SQL:1999 test suites passing
 - WAL + crash recovery, MVCC, FK enforcement, triggers, savepoints, window functions
 - Extension framework with JSON and Math extensions
@@ -43,7 +44,7 @@ go test -fuzz=FuzzSQL -fuzztime=30m ./internal/TS/PlainFuzzer/...
 **Bug fix protocol**: for every panic found:
 1. Add a minimal reproduction to `internal/TS/PlainFuzzer/testdata/corpus/`
 2. Fix the root cause
-3. Add a regression test in `internal/TS/Regression/regression_v0.9.z_test.go`
+3. Add a regression test in `internal/TS/Regression/regression_v0.10.z_test.go`
 4. Record in `internal/TS/PlainFuzzer/HUNTINGS.md`
 
 ### A2. FuzzDBFile — Extended Run
@@ -218,9 +219,9 @@ all major features added in v0.9.11–v0.9.17:
 - JSON aggregates: `json_group_array`, `json_group_object`
 - Full transaction: BEGIN → INSERT → SAVEPOINT → rollback to savepoint → COMMIT
 
-### E3. Regression Suite v0.9.z
+### E3. Regression Suite v0.10.z
 
-Add `internal/TS/Regression/regression_v0.9.z_test.go` with all panic reproductions
+Add `internal/TS/Regression/regression_v0.10.z_test.go` with all panic reproductions
 found during the fuzzing campaign.
 
 ---
@@ -231,12 +232,12 @@ found during the fuzzing campaign.
 
 ```
 pkg/sqlvibe/version.go:
-  const Version = "v0.9.z"
+  const Version = "v0.10.z"
 ```
 
 ### F2. HISTORY.md
 
-Add v0.9.z entry documenting:
+Add v0.10.z entry documenting:
 - Bugs fixed via fuzzing
 - API stabilisation changes
 - Performance numbers from Track D benchmarks
@@ -244,7 +245,7 @@ Add v0.9.z entry documenting:
 ### F3. README Update
 
 - Update "Stable Releases" table to include v0.9.x
-- Update performance section with v0.9.z benchmark numbers
+- Update performance section with v0.10.z benchmark numbers
 - Add "database/sql Driver" section with usage example
 - Add "Parameterized Queries" section with `?` and `:name` examples
 - Add "Query Timeout" section with `context.WithTimeout` example
@@ -254,8 +255,8 @@ Add v0.9.z entry documenting:
 ### F4. Tag
 
 ```bash
-git tag -a v0.9.z -m "Release v0.9.z: Release Candidate"
-git push origin v0.9.z
+git tag -a v0.10.z -m "Release v0.10.z: Release Candidate"
+git push origin v0.10.z
 ```
 
 ---
@@ -266,15 +267,15 @@ git push origin v0.9.z
 |------|--------|
 | `internal/TS/PlainFuzzer/testdata/corpus/` | Add any new panic-reproducing corpus entries |
 | `internal/TS/PlainFuzzer/HUNTINGS.md` | Document all bugs found in fuzzing campaign |
-| `internal/TS/Regression/regression_v0.9.z_test.go` | **NEW** — panic reproductions from fuzzing |
+| `internal/TS/Regression/regression_v0.10.z_test.go` | **NEW** — panic reproductions from fuzzing |
 | `internal/TS/SQL1999/F887/01_test.go` | **NEW** — RC integration smoke test |
-| `internal/TS/Benchmark/benchmark_v0.9.z_test.go` | **NEW** — prepared stmt + driver overhead benchmarks |
+| `internal/TS/Benchmark/benchmark_v0.10.z_test.go` | **NEW** — prepared stmt + driver overhead benchmarks |
 | `pkg/sqlvibe/API.md` | **NEW** — stable public API surface documentation |
-| `pkg/sqlvibe/version.go` | Bump to `v0.9.z` |
+| `pkg/sqlvibe/version.go` | Bump to `v0.10.z` |
 | `pkg/sqlvibe/error_code.go` | Add missing error codes from audit |
 | `pkg/sqlvibe/database.go` | Convert raw `fmt.Errorf` calls to typed errors |
 | `Makefile` | Add `fuzz-regression` target |
-| `docs/HISTORY.md` | Add v0.9.z entry |
+| `docs/HISTORY.md` | Add v0.10.z entry |
 | `README.md` | Update stable releases, perf numbers, new feature sections |
 
 ---
@@ -290,9 +291,9 @@ git push origin v0.9.z
 | SELECT all ≤ 70 µs (no regression) | Yes | [ ] |
 | Stable public API documented in API.md | Yes | [ ] |
 | Top 10 error paths use typed error codes | Yes | [ ] |
-| Version bumped to v0.9.z | Yes | [ ] |
-| README updated with v0.9.z numbers | Yes | [ ] |
-| v0.9.z tag created | Yes | [ ] |
+| Version bumped to v0.10.z | Yes | [ ] |
+| README updated with v0.10.z numbers | Yes | [ ] |
+| v0.10.z tag created | Yes | [ ] |
 
 ---
 
@@ -301,7 +302,7 @@ git push origin v0.9.z
 | Test Suite | Description | Status |
 |------------|-------------|--------|
 | F887 suite | RC integration smoke test (10+ tests) | [ ] |
-| Regression v0.9.z | Fuzzing-campaign panic reproductions | [ ] |
-| BenchmarkFair v0.9.z | Performance non-regression | [ ] |
+| Regression v0.10.z | Fuzzing-campaign panic reproductions | [ ] |
+| BenchmarkFair v0.10.z | Performance non-regression | [ ] |
 | Full SQL:1999 run | All 149+ suites | [ ] |
 | SQLValidator | Correctness verification | [ ] |
