@@ -47,6 +47,17 @@ func init() {
 	dispatchTable[OpLe] = execDispatchCmp(func(c int) bool { return c <= 0 })
 	dispatchTable[OpGt] = execDispatchCmp(func(c int) bool { return c > 0 })
 	dispatchTable[OpGe] = execDispatchCmp(func(c int) bool { return c >= 0 })
+
+	// NULL-check ops (v0.9.16)
+	dispatchTable[OpIsNull] = execDispatchIsNull
+	dispatchTable[OpNotNull] = execDispatchNotNull
+
+	// Bitwise ops (v0.9.16)
+	dispatchTable[OpBitAnd] = execDispatchBitAnd
+	dispatchTable[OpBitOr] = execDispatchBitOr
+
+	// Remainder (v0.9.16)
+	dispatchTable[OpRemainder] = execDispatchRemainder
 }
 
 // ExecDirect executes the program using the dispatch table for supported opcodes.
@@ -281,4 +292,71 @@ func execDispatchCmp(fn func(int) bool) OpHandler {
 		}
 		return true
 	}
+}
+
+// execDispatchIsNull handles OpIsNull: if register P1 is nil, jump to P2.
+func execDispatchIsNull(vm *VM, inst *Instruction) bool {
+	if vm.registers[inst.P1] == nil {
+		if inst.P2 != 0 {
+			vm.pc = int(inst.P2)
+			return false
+		}
+	}
+	return true
+}
+
+// execDispatchNotNull handles OpNotNull: if register P1 is not nil, jump to P2.
+func execDispatchNotNull(vm *VM, inst *Instruction) bool {
+	if vm.registers[inst.P1] != nil {
+		if inst.P2 != 0 {
+			vm.pc = int(inst.P2)
+			return false
+		}
+	}
+	return true
+}
+
+// execDispatchBitAnd handles OpBitAnd: dst = P1 & P2.
+func execDispatchBitAnd(vm *VM, inst *Instruction) bool {
+	lhs := vm.registers[inst.P1]
+	rhs := vm.registers[inst.P2]
+	if lhs == nil || rhs == nil {
+		if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
+			vm.registers[dst] = nil
+		}
+		return true
+	}
+	if dst, ok := inst.P4.(int); ok {
+		vm.registers[dst] = toInt64(lhs) & toInt64(rhs)
+	}
+	return true
+}
+
+// execDispatchBitOr handles OpBitOr: dst = P1 | P2.
+func execDispatchBitOr(vm *VM, inst *Instruction) bool {
+	lhs := vm.registers[inst.P1]
+	rhs := vm.registers[inst.P2]
+	if lhs == nil || rhs == nil {
+		if dst, ok := inst.P4.(int); ok && dst < vm.program.NumRegs {
+			vm.registers[dst] = nil
+		}
+		return true
+	}
+	if dst, ok := inst.P4.(int); ok {
+		vm.registers[dst] = toInt64(lhs) | toInt64(rhs)
+	}
+	return true
+}
+
+// execDispatchRemainder handles OpRemainder: dst = P1 % P2.
+func execDispatchRemainder(vm *VM, inst *Instruction) bool {
+	lhs := vm.registers[inst.P1]
+	rhs := vm.registers[inst.P2]
+	result := numericRemainder(lhs, rhs)
+	if inst.HasDst {
+		vm.registers[inst.DstReg] = result
+	} else if dst, ok := inst.P4.(int); ok {
+		vm.registers[dst] = result
+	}
+	return true
 }

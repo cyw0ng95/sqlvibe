@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cyw0ng95/sqlvibe/ext"
 	"github.com/cyw0ng95/sqlvibe/internal/CG"
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
@@ -126,6 +127,11 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	// Handle derived table in FROM clause (nested subqueries)
 	if stmt.From.Subquery != nil {
 		return db.execDerivedTableQuery(stmt)
+	}
+
+	// Handle table-valued function: FROM json_each(...) AS t
+	if stmt.From.TableFunc != nil {
+		return db.execTableFuncQuery(stmt)
 	}
 
 	// Delegate to execVMQuery which handles ORDER BY + LIMIT correctly
@@ -1934,4 +1940,78 @@ func (db *Database) execJoinAggregate(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 
 	return &Rows{Columns: cols, Data: results}, nil
+}
+
+// execTableFuncQuery handles SELECT ... FROM table_func(args) [AS alias] ...
+func (db *Database) execTableFuncQuery(stmt *QP.SelectStmt) (*Rows, error) {
+fromRef := stmt.From
+tf := fromRef.TableFunc
+
+// Evaluate function arguments as constants
+evalArgs := make([]interface{}, len(tf.Args))
+for i, arg := range tf.Args {
+evalArgs[i] = evalLiteralExpr(arg)
+}
+
+// Look up table function in extension registry
+tableFn, ok := ext.GetTableFunction(tf.Name)
+if !ok {
+return nil, fmt.Errorf("no such table function: %s", tf.Name)
+}
+
+// Call the table function
+rowMaps, err := tableFn.Rows(evalArgs)
+if err != nil {
+return nil, err
+}
+
+// Standard column order for json_each/json_tree style table functions
+stdCols := []string{"key", "value", "type", "atom", "id", "parent", "fullkey", "path"}
+
+if len(rowMaps) == 0 {
+cols := fromRef.TableFuncCols
+if len(cols) == 0 {
+cols = stdCols
+}
+return &Rows{Columns: cols, Data: [][]interface{}{}}, nil
+}
+
+// Determine column order
+cols := fromRef.TableFuncCols
+if len(cols) == 0 {
+cols = stdCols
+}
+
+alias := fromRef.Alias
+if alias == "" {
+alias = strings.ToLower(tf.Name)
+}
+
+// Materialize rows as temp table
+colTypes := make(map[string]string)
+for _, col := range cols {
+colTypes[col] = "TEXT"
+}
+db.tables[alias] = colTypes
+db.columnOrder[alias] = cols
+rows := make([]map[string]interface{}, len(rowMaps))
+for i, rm := range rowMaps {
+row := make(map[string]interface{})
+for _, col := range cols {
+row[col] = rm[col]
+}
+rows[i] = row
+}
+db.data[alias] = rows
+
+origFrom := stmt.From
+stmt.From = &QP.TableRef{Name: alias, Alias: alias}
+result, execErr := db.execSelectStmt(stmt)
+stmt.From = origFrom
+
+delete(db.tables, alias)
+delete(db.columnOrder, alias)
+delete(db.data, alias)
+
+return result, execErr
 }

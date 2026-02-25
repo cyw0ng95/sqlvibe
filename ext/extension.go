@@ -26,3 +26,28 @@ type Extension interface {
 	// Close releases any resources held by the extension.
 	Close() error
 }
+
+// TableFunction represents a SQL table-valued function provided by an extension.
+type TableFunction struct {
+	Name    string
+	MinArgs int
+	MaxArgs int // -1 for unlimited
+	Rows    func(args []interface{}) ([]map[string]interface{}, error)
+}
+
+// AggregateFunction represents a SQL aggregate function provided by an extension.
+type AggregateFunction struct {
+	Name string
+}
+
+// TableFunctionProvider is an optional interface that extensions implement
+// to provide table-valued functions.
+type TableFunctionProvider interface {
+	TableFunctions() []TableFunction
+}
+
+// AggregateProvider is an optional interface that extensions implement
+// to provide aggregate functions.
+type AggregateProvider interface {
+	Aggregates() []AggregateFunction
+}

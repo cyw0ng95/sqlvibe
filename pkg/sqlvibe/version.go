@@ -1,3 +1,3 @@
 package sqlvibe
 
-const Version = "v0.9.15"
+const Version = "v0.9.16"

@@ -215,6 +215,438 @@ func ColumnarGroupBy(keyCol, valCol *DS.ColumnVector, agg string) map[string]DS.
 	return result
 }
 
+// VectorizedFilterSIMD applies a comparison filter to a ColumnVector using
+// 4-way unrolled loops that the Go compiler can auto-vectorize on amd64/arm64.
+// Returns a RoaringBitmap of matching row indices.
+// Supported ops: "=", "!=", "<", "<=", ">", ">=".
+func VectorizedFilterSIMD(col *DS.ColumnVector, op string, val DS.Value) *DS.RoaringBitmap {
+	switch col.Type {
+	case DS.TypeInt, DS.TypeBool:
+		return vectorizedFilterInt64(col.Ints(), col, op, val.Int)
+	case DS.TypeFloat:
+		return vectorizedFilterFloat64(col.Floats(), col, op, val.Float)
+	case DS.TypeString:
+		return vectorizedFilterString(col.Strings(), col, op, val.Str)
+	}
+	return VectorizedFilter(col, op, val) // fallback for other types
+}
+
+// vectorizedFilterInt64 applies a comparison against an int64 column using
+// 4-way loop unrolling. The nulls slice is checked via col.IsNull.
+func vectorizedFilterInt64(data []int64, col *DS.ColumnVector, op string, val int64) *DS.RoaringBitmap {
+	rb := DS.NewRoaringBitmap()
+	n := len(data)
+	i := 0
+	switch op {
+	case "=":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] == val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] == val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] == val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] == val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case "!=":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] != val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] != val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] != val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] != val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case "<":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] < val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] < val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] < val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] < val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case "<=":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] <= val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] <= val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] <= val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] <= val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case ">":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] > val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] > val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] > val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] > val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case ">=":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] >= val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] >= val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] >= val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] >= val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	}
+	// Handle remainder
+	for ; i < n; i++ {
+		if col.IsNull(i) {
+			continue
+		}
+		var match bool
+		switch op {
+		case "=":
+			match = data[i] == val
+		case "!=":
+			match = data[i] != val
+		case "<":
+			match = data[i] < val
+		case "<=":
+			match = data[i] <= val
+		case ">":
+			match = data[i] > val
+		case ">=":
+			match = data[i] >= val
+		}
+		if match {
+			rb.Add(uint32(i))
+		}
+	}
+	return rb
+}
+
+// vectorizedFilterFloat64 applies a comparison against a float64 column using
+// 4-way loop unrolling.
+func vectorizedFilterFloat64(data []float64, col *DS.ColumnVector, op string, val float64) *DS.RoaringBitmap {
+	rb := DS.NewRoaringBitmap()
+	n := len(data)
+	i := 0
+	switch op {
+	case "=":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] == val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] == val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] == val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] == val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case "!=":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] != val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] != val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] != val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] != val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case "<":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] < val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] < val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] < val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] < val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case "<=":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] <= val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] <= val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] <= val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] <= val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case ">":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] > val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] > val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] > val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] > val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case ">=":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] >= val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] >= val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] >= val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] >= val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	}
+	for ; i < n; i++ {
+		if col.IsNull(i) {
+			continue
+		}
+		var match bool
+		switch op {
+		case "=":
+			match = data[i] == val
+		case "!=":
+			match = data[i] != val
+		case "<":
+			match = data[i] < val
+		case "<=":
+			match = data[i] <= val
+		case ">":
+			match = data[i] > val
+		case ">=":
+			match = data[i] >= val
+		}
+		if match {
+			rb.Add(uint32(i))
+		}
+	}
+	return rb
+}
+
+// vectorizedFilterString applies a comparison against a string column using
+// 4-way loop unrolling.
+func vectorizedFilterString(data []string, col *DS.ColumnVector, op string, val string) *DS.RoaringBitmap {
+	rb := DS.NewRoaringBitmap()
+	n := len(data)
+	i := 0
+	switch op {
+	case "=":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] == val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] == val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] == val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] == val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case "!=":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] != val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] != val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] != val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] != val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case "<":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] < val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] < val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] < val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] < val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case "<=":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] <= val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] <= val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] <= val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] <= val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case ">":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] > val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] > val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] > val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] > val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	case ">=":
+		for ; i <= n-4; i += 4 {
+			if !col.IsNull(i) && data[i] >= val {
+				rb.Add(uint32(i))
+			}
+			if !col.IsNull(i+1) && data[i+1] >= val {
+				rb.Add(uint32(i + 1))
+			}
+			if !col.IsNull(i+2) && data[i+2] >= val {
+				rb.Add(uint32(i + 2))
+			}
+			if !col.IsNull(i+3) && data[i+3] >= val {
+				rb.Add(uint32(i + 3))
+			}
+		}
+	}
+	for ; i < n; i++ {
+		if col.IsNull(i) {
+			continue
+		}
+		var match bool
+		switch op {
+		case "=":
+			match = data[i] == val
+		case "!=":
+			match = data[i] != val
+		case "<":
+			match = data[i] < val
+		case "<=":
+			match = data[i] <= val
+		case ">":
+			match = data[i] > val
+		case ">=":
+			match = data[i] >= val
+		}
+		if match {
+			rb.Add(uint32(i))
+		}
+	}
+	return rb
+}
+
+// ColumnarHashJoinBloom performs an inner join using a bloom filter as a pre-filter
+// before the hash table lookup. The bloom filter eliminates hash-table probes for
+// keys that are definitely not in the right side, reducing overhead for sparse joins.
+func ColumnarHashJoinBloom(left, right *DS.HybridStore, leftCol, rightCol string) [][]DS.Value {
+	lci := left.ColIndex(leftCol)
+	rci := right.ColIndex(rightCol)
+	if lci < 0 || rci < 0 {
+		return nil
+	}
+
+	rightRows := right.Scan()
+	// Build bloom filter + hash table from the right side.
+	bloom := DS.NewBloomFilter(len(rightRows)+1, 0.01)
+	hash := make(map[interface{}][][]DS.Value, len(rightRows))
+	for _, rRow := range rightRows {
+		key := joinHashKey(rRow[rci])
+		bloom.Add(key)
+		hash[key] = append(hash[key], rRow)
+	}
+
+	// Probe with left side — skip hash lookup if bloom says "definitely not".
+	var out [][]DS.Value
+	lCols := len(left.Columns())
+	rCols := len(right.Columns())
+	for _, lRow := range left.Scan() {
+		key := joinHashKey(lRow[lci])
+		if !bloom.MightContain(key) {
+			continue
+		}
+		matches, ok := hash[key]
+		if !ok {
+			continue
+		}
+		for _, rRow := range matches {
+			merged := make([]DS.Value, lCols+rCols)
+			copy(merged[:lCols], lRow)
+			copy(merged[lCols:], rRow)
+			out = append(out, merged)
+		}
+	}
+	return out
+}
+
 // joinHashKey returns a hashable key for a DS.Value without allocation for the
 // common int64/float64/string cases.  For rare types (bytes, etc.) it falls
 // back to the string representation.

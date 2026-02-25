@@ -78,6 +78,8 @@ const (
 	TokenCollate
 	TokenPlaceholderPos   // ? positional parameter
 	TokenPlaceholderNamed // :name or @name named parameter
+	TokenArrow            // ->
+	TokenArrowText        // ->>
 )
 
 var keywords = map[string]TokenType{
@@ -719,7 +721,17 @@ func (t *Tokenizer) readOperator() error {
 	case '+':
 		t.addToken(TokenPlus, "+")
 	case '-':
-		t.addToken(TokenMinus, "-")
+		if t.pos < len(t.input) && t.input[t.pos] == '>' {
+			t.pos++
+			if t.pos < len(t.input) && t.input[t.pos] == '>' {
+				t.pos++
+				t.addToken(TokenArrowText, "->>")
+			} else {
+				t.addToken(TokenArrow, "->")
+			}
+		} else {
+			t.addToken(TokenMinus, "-")
+		}
 	case '/':
 		t.addToken(TokenSlash, "/")
 	case '%':
