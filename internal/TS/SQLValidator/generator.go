@@ -21,32 +21,47 @@ func NewGenerator(lcg *LCG) *Generator {
 // The statement is guaranteed to be syntactically valid for SQLite/sqlvibe.
 func (g *Generator) Next() string {
 	// Weighted statement type selection (weights sum to 100).
-	//  0-29  → simple SELECT (single table, optional WHERE, optional LIMIT)
-	// 30-44  → SELECT with ORDER BY … LIMIT
-	// 45-54  → SELECT COUNT / aggregate
-	// 55-64  → SELECT with GROUP BY
-	// 65-79  → two-table INNER JOIN
-	// 80-89  → two-table LEFT JOIN
-	// 90-94  → SELECT with IS NULL / IS NOT NULL predicate
-	// 95-99  → SELECT with BETWEEN predicate
+	//  0-20  → simple SELECT (single table, optional WHERE, optional LIMIT)
+	// 25-34  → SELECT with ORDER BY … LIMIT
+	// 35-42  → SELECT COUNT / aggregate
+	// 43-50  → SELECT with GROUP BY
+	// 51-58  → DISTINCT
+	// 59-66  → UNION / UNION ALL
+	// 67-74  → two-table INNER JOIN
+	// 75-80  → two-table LEFT JOIN
+	// 81-85  → SELECT with IS NULL / IS NOT NULL predicate
+	// 86-90  → SELECT with BETWEEN predicate
+	// 91-94  → Subquery (IN/EXISTS)
+	// 95-97  → HAVING
+	// 98-99  → CASE WHEN
 	w := g.lcg.Intn(100)
 	switch {
-	case w < 30:
+	case w < 25:
 		return g.genSimpleSelect()
-	case w < 45:
+	case w < 35:
 		return g.genOrderByLimit()
-	case w < 55:
+	case w < 43:
 		return g.genAggregate()
-	case w < 65:
+	case w < 51:
 		return g.genGroupBy()
-	case w < 80:
+	case w < 59:
+		return g.genDistinct()
+	case w < 67:
+		return g.genUnion()
+	case w < 75:
 		return g.genInnerJoin()
-	case w < 90:
+	case w < 81:
 		return g.genLeftJoin()
-	case w < 95:
+	case w < 86:
 		return g.genNullPredicate()
-	default:
+	case w < 91:
 		return g.genBetween()
+	case w < 95:
+		return g.genSubquery()
+	case w < 98:
+		return g.genHaving()
+	default:
+		return g.genCaseWhen()
 	}
 }
 
@@ -302,4 +317,87 @@ func (g *Generator) genBetween() string {
 	// Use full PK in ORDER BY to ensure deterministic results.
 	return fmt.Sprintf("SELECT %s FROM %s WHERE %s BETWEEN %d AND %d%s LIMIT 10",
 		strings.Join(cols, ", "), tm.name, col, lo, hi, g.pkOrderBy(tm, "ASC"))
+}
+
+// genDistinct generates: SELECT DISTINCT <cols> FROM <table> [WHERE ...] [ORDER BY ...] LIMIT n
+func (g *Generator) genDistinct() string {
+	tm := g.randomTable()
+	cols := g.randomCols(tm)
+	where := g.simpleWhere(tm)
+	orderBy := g.pkOrderBy(tm, "ASC")
+	limit := g.lcg.Intn(10) + 1
+	return fmt.Sprintf("SELECT DISTINCT %s FROM %s%s%s LIMIT %d",
+		strings.Join(cols, ", "), tm.name, where, orderBy, limit)
+}
+
+// genUnion generates: SELECT ... FROM <table1> ... UNION [ALL] SELECT ... FROM <table2> ...
+func (g *Generator) genUnion() string {
+	tm1 := g.randomTable()
+	tm2 := g.randomTable()
+	cols1 := g.randomCols(tm1)
+	cols2 := g.randomCols(tm2)
+
+	all := g.lcg.Choice([]string{"", "ALL"})
+	limit := g.lcg.Intn(10) + 1
+
+	// Use same number of columns for UNION
+	n := len(cols1)
+	if n > len(cols2) {
+		n = len(cols2)
+	}
+	cols1 = cols1[:n]
+	cols2 = cols2[:n]
+
+	return fmt.Sprintf("SELECT %s FROM %s%s UNION %s SELECT %s FROM %s ORDER BY 1 LIMIT %d",
+		strings.Join(cols1, ", "), tm1.name, g.pkOrderBy(tm1, "ASC"),
+		all,
+		strings.Join(cols2, ", "), tm2.name, limit)
+}
+
+// genSubquery generates: SELECT ... WHERE <col> IN (SELECT ... FROM <table>) or EXISTS
+func (g *Generator) genSubquery() string {
+	tm1 := g.randomTable()
+	tm2 := g.randomTable()
+
+	intCols := tm1.nonNullIntCols()
+	if len(intCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	col := g.lcg.Choice(intCols)
+
+	isExists := g.lcg.Intn(2) == 0
+	if isExists {
+		return fmt.Sprintf("SELECT %s FROM %s WHERE EXISTS (SELECT 1 FROM %s WHERE %s = %s.%s) LIMIT 10",
+			tm1.columns[0].name, tm1.name, tm2.name, tm1.name, tm2.name, intCols[0])
+	}
+
+	return fmt.Sprintf("SELECT %s FROM %s WHERE %s IN (SELECT %s FROM %s) LIMIT 10",
+		tm1.columns[0].name, tm1.name, col, intCols[0], tm2.name)
+}
+
+// genHaving generates: SELECT <col>, COUNT(*) FROM <table> GROUP BY <col> HAVING COUNT(*) > n
+func (g *Generator) genHaving() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	if len(intCols) == 0 {
+		return g.genAggregate()
+	}
+	groupCol := g.lcg.Choice(intCols)
+	threshold := g.lcg.Intn(3) + 1
+	return fmt.Sprintf("SELECT %s, COUNT(*) FROM %s GROUP BY %s HAVING COUNT(*) > %d ORDER BY %s ASC LIMIT 10",
+		groupCol, tm.name, groupCol, threshold, groupCol)
+}
+
+// genCaseWhen generates: SELECT CASE WHEN <cond> THEN ... ELSE ... END FROM <table>
+func (g *Generator) genCaseWhen() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	if len(intCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	col := g.lcg.Choice(intCols)
+	selCols := g.randomCols(tm)
+
+	return fmt.Sprintf("SELECT %s, CASE WHEN %s > 2 THEN 'high' WHEN %s > 0 THEN 'low' ELSE 'zero' END AS label FROM %s%s LIMIT 10",
+		strings.Join(selCols, ", "), col, col, tm.name, g.pkOrderBy(tm, "ASC"))
 }

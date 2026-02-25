@@ -13,10 +13,10 @@ import (
 // Validator runs the same SQL statements against both SQLite and sqlvibe and
 // reports any result mismatches.
 type Validator struct {
-	lcg    *LCG
-	gen    *Generator
-	lite   *sql.DB
-	svibe  *sqlvibe.Database
+	lcg   *LCG
+	gen   *Generator
+	lite  *sql.DB
+	svibe *sqlvibe.Database
 }
 
 // NewValidator creates a Validator with the given LCG seed.
@@ -63,8 +63,9 @@ func (v *Validator) Close() {
 }
 
 // Run generates n random SQL statements, executes each against both backends,
-// and collects any mismatches.
-func (v *Validator) Run(n int) ([]Mismatch, error) {
+// and collects any mismatches. It calls onMatch after each execution to allow
+// immediate result checking.
+func (v *Validator) Run(n int, onMatch func(idx int, query string, liteRes, svibeRes QueryResult)) ([]Mismatch, error) {
 	var mismatches []Mismatch
 	for i := 0; i < n; i++ {
 		query := v.gen.Next()
@@ -72,6 +73,9 @@ func (v *Validator) Run(n int) ([]Mismatch, error) {
 		svibeRes := executeSQLVibe(v.svibe, query)
 		if m := Compare(query, liteRes, svibeRes); m != nil {
 			mismatches = append(mismatches, *m)
+		}
+		if onMatch != nil {
+			onMatch(i, query, liteRes, svibeRes)
 		}
 	}
 	return mismatches, nil
