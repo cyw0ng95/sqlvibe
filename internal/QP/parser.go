@@ -47,13 +47,15 @@ type OrderBy struct {
 }
 
 type TableRef struct {
-	Schema    string
-	Name      string
-	Alias     string
-	Join      *Join
-	Subquery  *SelectStmt // derived table: FROM (SELECT ...) AS alias
-	Values    [][]Expr    // non-nil for VALUES table constructor
-	ValueCols []string    // column names from AS t(col1, col2)
+	Schema        string
+	Name          string
+	Alias         string
+	Join          *Join
+	Subquery      *SelectStmt // derived table: FROM (SELECT ...) AS alias
+	Values        [][]Expr    // non-nil for VALUES table constructor
+	ValueCols     []string    // column names from AS t(col1, col2)
+	TableFunc     *FuncCall   // non-nil for table-valued function: FROM json_each(...)
+	TableFuncCols []string    // column names from AS t(col1, col2) for table func
 }
 
 func (t *TableRef) NodeType() string { return "TableRef" }
@@ -562,6 +564,34 @@ func (p *Parser) isEOF() bool {
 	return p.pos >= len(p.tokens) || p.current().Type == TokenEOF
 }
 
+// parseFuncArgList parses a parenthesized function argument list, consuming the parens.
+func (p *Parser) parseFuncArgList() ([]Expr, error) {
+	p.advance() // consume (
+	var args []Expr
+	for p.current().Type != TokenRightParen && !p.isEOF() {
+		argPos := p.pos
+		arg, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if p.pos == argPos {
+			break
+		}
+		if arg != nil {
+			args = append(args, arg)
+		}
+		if p.current().Type == TokenComma {
+			p.advance()
+		} else if p.current().Type != TokenRightParen {
+			break
+		}
+	}
+	if p.current().Type == TokenRightParen {
+		p.advance()
+	}
+	return args, nil
+}
+
 // parseTableRef parses a table reference which may be:
 //   - a regular table: tablename [AS alias]
 //   - a subquery: (SELECT ...) [AS alias]
@@ -662,6 +692,40 @@ func (p *Parser) parseTableRef() *TableRef {
 	} else {
 		ref.Name = p.current().Literal
 		p.advance()
+
+		// Check for table-valued function: name(args...) [AS alias]
+		if p.current().Type == TokenLeftParen {
+			args, err := p.parseFuncArgList()
+			if err != nil {
+				p.parseError = err
+				return ref
+			}
+			ref.TableFunc = &FuncCall{Name: ref.Name, Args: args}
+			ref.Name = ""
+			// Parse optional AS alias(cols)
+			if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
+				p.advance()
+			}
+			if p.current().Type == TokenIdentifier || (p.current().Type == TokenKeyword) {
+				ref.Alias = p.current().Literal
+				p.advance()
+				// Optional column list: (col1, col2, ...)
+				if p.current().Type == TokenLeftParen {
+					p.advance()
+					for p.current().Type != TokenRightParen && !p.isEOF() {
+						ref.TableFuncCols = append(ref.TableFuncCols, p.current().Literal)
+						p.advance()
+						if p.current().Type == TokenComma {
+							p.advance()
+						}
+					}
+					if p.current().Type == TokenRightParen {
+						p.advance()
+					}
+				}
+			}
+			return ref
+		}
 
 		// Check for schema.table notation
 		if p.current().Type == TokenDot {
@@ -2639,14 +2703,20 @@ func (p *Parser) parseAddExpr() (Expr, error) {
 		return nil, err
 	}
 
-	for p.current().Type == TokenPlus || p.current().Type == TokenMinus || p.current().Type == TokenConcat {
+	for p.current().Type == TokenPlus || p.current().Type == TokenMinus || p.current().Type == TokenConcat ||
+		p.current().Type == TokenArrow || p.current().Type == TokenArrowText {
 		op := p.current().Type
 		p.advance()
 		right, err := p.parseMulExpr()
 		if err != nil {
 			return nil, err
 		}
-		left = &BinaryExpr{Op: op, Left: left, Right: right}
+		if op == TokenArrow || op == TokenArrowText {
+			// a -> b  and  a ->> b  both map to json_extract(a, b)
+			left = &FuncCall{Name: "json_extract", Args: []Expr{left, right}}
+		} else {
+			left = &BinaryExpr{Op: op, Left: left, Right: right}
+		}
 	}
 
 	return left, nil

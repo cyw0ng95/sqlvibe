@@ -1068,6 +1068,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			return db.execValuesTable(stmt)
 		}
 
+		// Handle table-valued function: FROM json_each(...) AS t
+		if stmt.From.TableFunc != nil {
+			return db.execTableFuncQuery(stmt)
+		}
+
 		var tableName string
 		var schemaName string
 		if stmt.From != nil {

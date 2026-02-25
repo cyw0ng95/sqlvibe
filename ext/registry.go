@@ -79,3 +79,53 @@ func AllFunctions() []string {
 	}
 	return funcs
 }
+
+// GetTableFunction returns the TableFunction with the given name, or (nil, false).
+func GetTableFunction(name string) (*TableFunction, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	upper := strings.ToUpper(name)
+	for _, e := range registry {
+		if p, ok := e.(TableFunctionProvider); ok {
+			for _, tf := range p.TableFunctions() {
+				if strings.ToUpper(tf.Name) == upper {
+					tfCopy := tf
+					return &tfCopy, true
+				}
+			}
+		}
+	}
+	return nil, false
+}
+
+// AllAggregates returns all aggregate function names from all registered extensions.
+func AllAggregates() []string {
+	mu.RLock()
+	defer mu.RUnlock()
+	var aggs []string
+	for _, e := range registry {
+		if p, ok := e.(AggregateProvider); ok {
+			for _, a := range p.Aggregates() {
+				aggs = append(aggs, a.Name)
+			}
+		}
+	}
+	return aggs
+}
+
+// IsExtensionAggregate checks if name is an aggregate function from any extension.
+func IsExtensionAggregate(name string) bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	upper := strings.ToUpper(name)
+	for _, e := range registry {
+		if p, ok := e.(AggregateProvider); ok {
+			for _, a := range p.Aggregates() {
+				if strings.ToUpper(a.Name) == upper {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}

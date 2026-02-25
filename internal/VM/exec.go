@@ -2,6 +2,7 @@ package VM
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -2906,18 +2907,20 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 				}
 			}
 			state = &AggregateState{
-				GroupKey:     groupKey,
-				Count:        0,
-				Counts:       make([]int, len(aggInfo.Aggregates)),
-				SumsInt:      make([]int64, len(aggInfo.Aggregates)),
-				SumsFloat:    make([]float64, len(aggInfo.Aggregates)),
-				SumsIsFloat:  make([]bool, len(aggInfo.Aggregates)),
-				SumsHasVal:   make([]bool, len(aggInfo.Aggregates)),
-				Mins:         make([]interface{}, len(aggInfo.Aggregates)),
-				Maxs:         make([]interface{}, len(aggInfo.Aggregates)),
-				NonAggValues: make([]interface{}, len(aggInfo.NonAggCols)),
-				DistinctSets: distinctSets,
-				GroupConcats: make([][]string, len(aggInfo.Aggregates)),
+				GroupKey:         groupKey,
+				Count:            0,
+				Counts:           make([]int, len(aggInfo.Aggregates)),
+				SumsInt:          make([]int64, len(aggInfo.Aggregates)),
+				SumsFloat:        make([]float64, len(aggInfo.Aggregates)),
+				SumsIsFloat:      make([]bool, len(aggInfo.Aggregates)),
+				SumsHasVal:       make([]bool, len(aggInfo.Aggregates)),
+				Mins:             make([]interface{}, len(aggInfo.Aggregates)),
+				Maxs:             make([]interface{}, len(aggInfo.Aggregates)),
+				NonAggValues:     make([]interface{}, len(aggInfo.NonAggCols)),
+				DistinctSets:     distinctSets,
+				GroupConcats:     make([][]string, len(aggInfo.Aggregates)),
+				JsonGroupArrays:  make([][]interface{}, len(aggInfo.Aggregates)),
+				JsonGroupObjects: make([][][]interface{}, len(aggInfo.Aggregates)),
 			}
 			groups[groupKey] = state
 		}
@@ -2992,6 +2995,18 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 			case "GROUP_CONCAT":
 				if value != nil {
 					state.GroupConcats[aggIdx] = append(state.GroupConcats[aggIdx], fmt.Sprintf("%v", value))
+				}
+			case "JSON_GROUP_ARRAY", "JSONB_GROUP_ARRAY":
+				if value != nil {
+					state.JsonGroupArrays[aggIdx] = append(state.JsonGroupArrays[aggIdx], value)
+				}
+			case "JSON_GROUP_OBJECT", "JSONB_GROUP_OBJECT":
+				if len(aggDef.Args) >= 2 {
+					keyVal := vm.evaluateExprOnRow(row, cursor.Columns, aggDef.Args[0])
+					valVal := vm.evaluateExprOnRow(row, cursor.Columns, aggDef.Args[1])
+					if keyVal != nil {
+						state.JsonGroupObjects[aggIdx] = append(state.JsonGroupObjects[aggIdx], []interface{}{keyVal, valVal})
+					}
 				}
 			}
 		}
@@ -3104,6 +3119,21 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 					}
 					aggValue = strings.Join(state.GroupConcats[aggIdx], sep)
 				}
+			case "JSON_GROUP_ARRAY", "JSONB_GROUP_ARRAY":
+				arr := make([]interface{}, 0, len(state.JsonGroupArrays[aggIdx]))
+				arr = append(arr, state.JsonGroupArrays[aggIdx]...)
+				b, _ := json.Marshal(arr)
+				aggValue = string(b)
+			case "JSON_GROUP_OBJECT", "JSONB_GROUP_OBJECT":
+				obj := make(map[string]interface{})
+				for _, pair := range state.JsonGroupObjects[aggIdx] {
+					if len(pair) >= 2 {
+						key := fmt.Sprintf("%v", pair[0])
+						obj[key] = pair[1]
+					}
+				}
+				b, _ := json.Marshal(obj)
+				aggValue = string(b)
 			}
 
 			resultRow = append(resultRow, aggValue)
@@ -3154,6 +3184,8 @@ type AggregateState struct {
 	NonAggValues []interface{}
 	DistinctSets []map[string]bool // per-aggregate distinct value sets (for DISTINCT aggregates)
 	GroupConcats [][]string        // per-aggregate accumulated strings for GROUP_CONCAT
+	JsonGroupArrays  [][]interface{}   // per-aggregate accumulated values for JSON_GROUP_ARRAY
+	JsonGroupObjects [][][]interface{} // per-aggregate accumulated key-value pairs for JSON_GROUP_OBJECT
 }
 
 // compareForAnyAllVM compares two values for ANY/ALL predicates (returns -1, 0, or 1).
@@ -4636,6 +4668,21 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				return state.Maxs[i]
 			case "GROUP_CONCAT":
 				return state.groupConcatResult(i, aggDef)
+			case "JSON_GROUP_ARRAY", "JSONB_GROUP_ARRAY":
+				arr := make([]interface{}, 0, len(state.JsonGroupArrays[i]))
+				arr = append(arr, state.JsonGroupArrays[i]...)
+				b, _ := json.Marshal(arr)
+				return string(b)
+			case "JSON_GROUP_OBJECT", "JSONB_GROUP_OBJECT":
+				obj := make(map[string]interface{})
+				for _, pair := range state.JsonGroupObjects[i] {
+					if len(pair) >= 2 {
+						key := fmt.Sprintf("%v", pair[0])
+						obj[key] = pair[1]
+					}
+				}
+				b, _ := json.Marshal(obj)
+				return string(b)
 			}
 		}
 		// Fallback: if no arg-matching entry found, try first matching function name
@@ -4665,6 +4712,21 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				return state.Maxs[i]
 			case "GROUP_CONCAT":
 				return state.groupConcatResult(i, aggDef)
+			case "JSON_GROUP_ARRAY", "JSONB_GROUP_ARRAY":
+				arr := make([]interface{}, 0, len(state.JsonGroupArrays[i]))
+				arr = append(arr, state.JsonGroupArrays[i]...)
+				b, _ := json.Marshal(arr)
+				return string(b)
+			case "JSON_GROUP_OBJECT", "JSONB_GROUP_OBJECT":
+				obj := make(map[string]interface{})
+				for _, pair := range state.JsonGroupObjects[i] {
+					if len(pair) >= 2 {
+						key := fmt.Sprintf("%v", pair[0])
+						obj[key] = pair[1]
+					}
+				}
+				b, _ := json.Marshal(obj)
+				return string(b)
 			}
 		}
 		return nil

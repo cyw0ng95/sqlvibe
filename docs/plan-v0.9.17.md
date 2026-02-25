@@ -493,20 +493,20 @@ Add `internal/TS/Regression/regression_v0.9.17_test.go`:
 
 | Feature | Target | Status |
 |---------|--------|--------|
-| `json_each()` table function | Yes | [ ] |
-| `json_tree()` table function | Yes | [ ] |
-| `jsonb_each()` table function | Yes | [ ] |
-| `jsonb_tree()` table function | Yes | [ ] |
-| `json_group_array()` aggregate | Yes | [ ] |
-| `json_group_object()` aggregate | Yes | [ ] |
-| `jsonb_group_array()` aggregate | Yes | [ ] |
-| `jsonb_group_object()` aggregate | Yes | [ ] |
-| `jsonb()` function | Yes | [ ] |
-| `json_pretty()` function | Yes | [ ] |
-| `json_patch()` function | Yes | [ ] |
-| `json_array_insert()` function | Yes | [ ] |
-| F886 suite passes | 100% | [ ] |
-| Regression v0.9.17 passes | 100% | [ ] |
+| `json_each()` table function | Yes | [x] |
+| `json_tree()` table function | Yes | [x] |
+| `jsonb_each()` table function | Yes | [x] |
+| `jsonb_tree()` table function | Yes | [x] |
+| `json_group_array()` aggregate | Yes | [x] |
+| `json_group_object()` aggregate | Yes | [x] |
+| `jsonb_group_array()` aggregate | Yes | [x] |
+| `jsonb_group_object()` aggregate | Yes | [x] |
+| `jsonb()` function | Yes | [x] |
+| `json_pretty()` function | Yes | [x] |
+| `json_patch()` function | Yes | [x] |
+| `json_array_insert()` function | Yes | [x] |
+| F886 suite passes | 100% | [x] |
+| Regression v0.9.17 passes | 100% | [x] |
 
 ---
 

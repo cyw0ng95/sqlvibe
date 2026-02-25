@@ -1,5 +1,21 @@
 # sqlvibe Release History
 
+## **v0.9.17** (2026-02-26)
+
+### Features: JSON Extension Enhancement
+
+- Added table-valued functions: `json_each()`, `jsonb_each()`, `json_tree()`, `jsonb_tree()`
+- Added aggregate functions: `json_group_array()`, `jsonb_group_array()`, `json_group_object()`, `jsonb_group_object()`
+- Added JSONB binary format aliases: `jsonb()`, `jsonb_array()`, `jsonb_object()`
+- Added `json_pretty()` for formatted JSON output
+- Added `json_patch()` for RFC 7396 MergePatch support
+- Added `json_array_insert()` for inserting values into JSON arrays at a path
+- Added `->` and `->>` JSON extraction operators (map to `json_extract`)
+- New optional extension interfaces: `TableFunctionProvider`, `AggregateProvider`
+- New registry helpers: `GetTableFunction()`, `AllAggregates()`, `IsExtensionAggregate()`
+- New test suite: `internal/TS/SQL1999/F886` (12 tests)
+- New regression tests: `internal/TS/Regression/regression_v0.9.17_test.go` (5 tests)
+
 ## **v0.9.16** (2026-02-25)
 
 ### Features: Performance Optimization
