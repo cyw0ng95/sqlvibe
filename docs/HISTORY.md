@@ -1,6 +1,43 @@
 # sqlvibe Release History
 
-## **v0.9.13** (2026-02-25)
+## **v0.9.15** (2026-02-25)
+
+### Features: SQLValidator — Differential SQL Testing Framework
+
+#### Track A: LCG Random SQL Generator
+- New `internal/TS/SQLValidator/lcg.go`: `LCG` struct with Knuth MMIX parameters (multiplier `6364136223846793005`, increment `1442695040888963407`). Methods: `Next()`, `Intn(n)`, `Float64()`, `Choice(items)`.
+- New `internal/TS/SQLValidator/generator.go`: `Generator` struct producing 8 deterministic SQL statement types weighted by frequency: simple SELECT, ORDER BY+LIMIT, aggregate, GROUP BY, INNER JOIN, LEFT JOIN, IS NULL predicate, BETWEEN predicate.
+- All generated queries with LIMIT include the full primary key in ORDER BY to guarantee deterministic results across both SQLite and sqlvibe.
+
+#### Track B: TPC-C Starter Schema
+- New `internal/TS/SQLValidator/schema.go`: Full TPC-C schema definition for 7 tables (`warehouse`, `district`, `customer`, `orders`, `order_line`, `item`, `stock`) with column types, NOT NULL constraints, and primary key metadata.
+- Deterministic seed dataset: 4 warehouses, 8 districts, 10 customers, 10 orders, 18 order lines, 10 items, 20 stock rows — inserted identically into both SQLite and sqlvibe backends.
+
+#### Track C: Result Comparison
+- New `internal/TS/SQLValidator/compare.go`: `Compare(query, sqliteResult, svibeResult)` function with:
+  - Error type matching (both error → match; one error one success → mismatch).
+  - Order-independent row comparison via `normaliseRows()` sort.
+  - Float comparison with 1e-9 tolerance.
+  - NULL == NULL semantics.
+  - Type normalisation bridging `database/sql` and sqlvibe return types.
+
+#### Track D: Validator Driver
+- New `internal/TS/SQLValidator/validator.go`: `Validator` struct managing both backends. `NewValidator(seed)` creates both in-memory databases and seeds them. `Run(n)` generates and executes `n` statements, collecting all `Mismatch` records.
+
+#### Track E: Tests
+- New `internal/TS/SQLValidator/validator_test.go`:
+  - `TestSQLValidator_TPC_C`: 1000 random statements with seed 42 — all pass.
+  - `TestSQLValidator_Regression`: Replay specific seeds from HUNTINGS.md (empty initially).
+- New `internal/TS/SQLValidator/HUNTINGS.md`: Bug log for correctness mismatches (format: Severity / Type / Table / Trigger SQL / SQLite Result / SQLVibe Result / Root Cause / Fix / Seed / Date).
+
+#### Track F: Documentation
+- New `docs/plan-v0.9.15.md`: Full SQLValidator design plan.
+- `docs/plan-v0.9.16.md`: Former v0.9.15 "Final Stability RC" plan postponed to v0.9.16.
+- `AGENTS.md §8.4.9`: New rule for recording SQLValidator mismatches in `SQLValidator/HUNTINGS.md`.
+- Version bumped to `v0.9.15`.
+
+---
+
 
 ### Features: Context API & Query Timeouts
 

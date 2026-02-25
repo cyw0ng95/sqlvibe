@@ -343,16 +343,16 @@ All discrepancies found by SQLValidator are recorded here. See format below.
 
 | Feature | Target | Status |
 |---------|--------|--------|
-| LCG engine implemented and seeded | Yes | [ ] |
-| TPC-C schema loaded in both backends | Yes | [ ] |
-| Generator produces 8+ statement types | Yes | [ ] |
-| SQLite backend executes without CGO | Yes | [ ] |
-| SQLVibe backend executes all generated SQL | Yes | [ ] |
-| Comparison handles NULLs, floats, ordering | Yes | [ ] |
-| TestSQLValidator_TPC_C passes (1000 stmts) | Yes | [ ] |
-| Any mismatches are root-caused and fixed | Yes | [ ] |
-| HUNTINGS.md documents all mismatches found | Yes | [ ] |
-| Version bumped to v0.9.15 | Yes | [ ] |
+| LCG engine implemented and seeded | Yes | [x] |
+| TPC-C schema loaded in both backends | Yes | [x] |
+| Generator produces 8+ statement types | Yes | [x] |
+| SQLite backend executes without CGO | Yes | [x] |
+| SQLVibe backend executes all generated SQL | Yes | [x] |
+| Comparison handles NULLs, floats, ordering | Yes | [x] |
+| TestSQLValidator_TPC_C passes (1000 stmts) | Yes | [x] |
+| Any mismatches are root-caused and fixed | Yes | [x] |
+| HUNTINGS.md documents all mismatches found | Yes | [x] |
+| Version bumped to v0.9.15 | Yes | [x] |
 
 ---
 
@@ -360,5 +360,5 @@ All discrepancies found by SQLValidator are recorded here. See format below.
 
 | Test Suite | Description | Status |
 |------------|-------------|--------|
-| TestSQLValidator_TPC_C | 1000 random SQL stmts, seed 42 | [ ] |
-| TestSQLValidator_Regression | Replays seeds from HUNTINGS.md | [ ] |
+| TestSQLValidator_TPC_C | 1000 random SQL stmts, seed 42 | [x] |
+| TestSQLValidator_Regression | Replays seeds from HUNTINGS.md | [x] |
