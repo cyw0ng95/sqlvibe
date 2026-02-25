@@ -2,6 +2,7 @@ package SQLValidator
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -295,5 +296,95 @@ func TestSQLValidator_Regression(t *testing.T) {
 					i, m.Query, m.Reason)
 			}
 		})
+	}
+}
+
+// TestSQLValidator_Coverage measures which SQL patterns are tested and their bug detection rate.
+func TestSQLValidator_Coverage(t *testing.T) {
+	seed := uint64(42)
+	statements := 5000
+
+	// Track which SQL patterns are generated and which produce bugs
+	patternStats := make(map[string]struct {
+		generated    int
+		bugs         int
+		mismatchRate float64
+	})
+
+	v, err := NewValidator(seed)
+	if err != nil {
+		t.Fatalf("NewValidator: %v", err)
+	}
+	defer v.Close()
+
+	v.Run(statements, func(idx int, query string, liteRes, svibeRes QueryResult) {
+		pattern := classifyQuery(query)
+		stats := patternStats[pattern]
+		stats.generated++
+		if Compare(query, liteRes, svibeRes) != nil {
+			stats.bugs++
+		}
+		if stats.generated > 0 {
+			stats.mismatchRate = float64(stats.bugs) / float64(stats.generated) * 100
+		}
+		patternStats[pattern] = stats
+	})
+
+	// Print coverage report
+	format := "=== Coverage Report (seed=%d, statements=%d) ==="
+	t.Logf(format, seed, statements)
+	t.Logf("")
+	t.Logf("%-25s %10s %10s %12s", "Pattern", "Generated", "Bugs", "Mismatch %")
+	t.Logf("------------------------------------------------------------")
+
+	var totalGen, totalBugs int
+	for pattern, stats := range patternStats {
+		t.Logf("%-25s %10d %10d %11.1f%%", pattern, stats.generated, stats.bugs, stats.mismatchRate)
+		totalGen += stats.generated
+		totalBugs += stats.bugs
+	}
+	t.Logf("------------------------------------------------------------")
+	t.Logf("%-25s %10d %10d %11.1f%%", "TOTAL", totalGen, totalBugs, float64(totalBugs)*100/float64(totalGen))
+}
+
+func classifyQuery(query string) string {
+	q := strings.ToUpper(query)
+	switch {
+	case strings.Contains(q, "UNION"):
+		return "UNION"
+	case strings.Contains(q, "DISTINCT"):
+		return "DISTINCT"
+	case strings.Contains(q, "GROUP BY") && strings.Contains(q, ","):
+		return "MULTI_GROUP_BY"
+	case strings.Contains(q, "GROUP BY"):
+		return "GROUP_BY"
+	case strings.Contains(q, "HAVING"):
+		return "HAVING"
+	case strings.Contains(q, "CASE WHEN"):
+		return "CASE_WHEN"
+	case strings.Contains(q, "LIKE"):
+		return "LIKE"
+	case strings.Contains(q, "COALESCE") || strings.Contains(q, "IFNULL"):
+		return "COALESCE"
+	case strings.Contains(q, "CAST"):
+		return "CAST"
+	case strings.Contains(q, "SUBSTR") || strings.Contains(q, "LENGTH") || strings.Contains(q, "UPPER"):
+		return "STRING_FUNC"
+	case strings.Contains(q, "OFFSET"):
+		return "OFFSET"
+	case strings.Contains(q, "IN (SELECT") || strings.Contains(q, "EXISTS"):
+		return "SUBQUERY"
+	case strings.Contains(q, "BETWEEN"):
+		return "BETWEEN"
+	case strings.Contains(q, "IS NULL") || strings.Contains(q, "IS NOT NULL"):
+		return "NULL_PREDICATE"
+	case strings.Contains(q, "JOIN"):
+		return "JOIN"
+	case strings.Contains(q, "ORDER BY"):
+		return "ORDER_BY"
+	case strings.Contains(q, "LIMIT"):
+		return "LIMIT"
+	default:
+		return "SIMPLE_SELECT"
 	}
 }

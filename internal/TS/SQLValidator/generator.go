@@ -21,47 +21,65 @@ func NewGenerator(lcg *LCG) *Generator {
 // The statement is guaranteed to be syntactically valid for SQLite/sqlvibe.
 func (g *Generator) Next() string {
 	// Weighted statement type selection (weights sum to 100).
-	//  0-20  → simple SELECT (single table, optional WHERE, optional LIMIT)
-	// 25-34  → SELECT with ORDER BY … LIMIT
-	// 35-42  → SELECT COUNT / aggregate
-	// 43-50  → SELECT with GROUP BY
-	// 51-58  → DISTINCT
-	// 59-66  → UNION / UNION ALL
-	// 67-74  → two-table INNER JOIN
-	// 75-80  → two-table LEFT JOIN
-	// 81-85  → SELECT with IS NULL / IS NOT NULL predicate
-	// 86-90  → SELECT with BETWEEN predicate
-	// 91-94  → Subquery (IN/EXISTS)
-	// 95-97  → HAVING
-	// 98-99  → CASE WHEN
+	//  0-15  → simple SELECT (single table, optional WHERE, optional LIMIT)
+	// 16-24  → SELECT with ORDER BY … LIMIT
+	// 25-31  → SELECT COUNT / aggregate
+	// 32-38  → SELECT with GROUP BY
+	// 39-44  → DISTINCT
+	// 45-50  → UNION / UNION ALL
+	// 51-56  → two-table INNER JOIN
+	// 57-61  → two-table LEFT JOIN
+	// 62-66  → SELECT with IS NULL / IS NOT NULL predicate
+	// 67-71  → SELECT with BETWEEN predicate
+	// 72-76  → Subquery (IN/EXISTS)
+	// 77-79  → HAVING
+	// 80-82  → CASE WHEN
+	// 83-85  → OFFSET pagination
+	// 86-88  → LIKE pattern matching
+	// 89-91  → COALESCE / IFNULL
+	// 92-94  → Multi-column GROUP BY
+	// 95-97  → String functions (SUBSTR, LENGTH, UPPER)
+	// 98-99  → CAST type conversion
 	w := g.lcg.Intn(100)
 	switch {
-	case w < 25:
+	case w < 16:
 		return g.genSimpleSelect()
-	case w < 35:
+	case w < 25:
 		return g.genOrderByLimit()
-	case w < 43:
+	case w < 32:
 		return g.genAggregate()
-	case w < 51:
+	case w < 39:
 		return g.genGroupBy()
-	case w < 59:
+	case w < 45:
 		return g.genDistinct()
-	case w < 67:
+	case w < 51:
 		return g.genUnion()
-	case w < 75:
+	case w < 57:
 		return g.genInnerJoin()
-	case w < 81:
+	case w < 62:
 		return g.genLeftJoin()
-	case w < 86:
+	case w < 67:
 		return g.genNullPredicate()
-	case w < 91:
+	case w < 72:
 		return g.genBetween()
-	case w < 95:
+	case w < 77:
 		return g.genSubquery()
-	case w < 98:
+	case w < 80:
 		return g.genHaving()
-	default:
+	case w < 83:
 		return g.genCaseWhen()
+	case w < 86:
+		return g.genOffsetPagination()
+	case w < 89:
+		return g.genLike()
+	case w < 92:
+		return g.genCoalesce()
+	case w < 95:
+		return g.genMultiGroupBy()
+	case w < 98:
+		return g.genStringFunc()
+	default:
+		return g.genCast()
 	}
 }
 
@@ -88,11 +106,11 @@ func (g *Generator) randomCols(tm *tableMeta) []string {
 	return chosen[:n]
 }
 
-// intLiterals returns a small set of interesting integer values.
-var intLiterals = []string{"0", "1", "2", "3", "4", "5"}
+// intLiterals returns a small set of interesting integer values including boundaries.
+var intLiterals = []string{"0", "1", "2", "3", "4", "5", "-1", "2147483647", "-2147483648"}
 
 // realLiterals returns a small set of interesting real values.
-var realLiterals = []string{"0.0", "0.05", "0.10", "50000.0", "100.0"}
+var realLiterals = []string{"0.0", "0.05", "0.10", "50000.0", "100.0", "-1.0", "0.0001", "9999999999.99"}
 
 // randomIntLit returns a random integer literal.
 func (g *Generator) randomIntLit() string {
@@ -400,4 +418,120 @@ func (g *Generator) genCaseWhen() string {
 
 	return fmt.Sprintf("SELECT %s, CASE WHEN %s > 2 THEN 'high' WHEN %s > 0 THEN 'low' ELSE 'zero' END AS label FROM %s%s LIMIT 10",
 		strings.Join(selCols, ", "), col, col, tm.name, g.pkOrderBy(tm, "ASC"))
+}
+
+// Edge values for boundary testing
+var edgeIntValues = []string{"-2147483648", "-1", "0", "1", "2147483647"}
+var edgeStringValues = []string{"''", "'a'", "'A'", "'0'", "'abc'"}
+
+// genOffsetPagination generates: SELECT ... FROM <table> LIMIT n OFFSET m
+func (g *Generator) genOffsetPagination() string {
+	tm := g.randomTable()
+	cols := g.randomCols(tm)
+	limit := g.lcg.Intn(10) + 1
+	offset := g.lcg.Intn(5)
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s FROM %s%s LIMIT %d OFFSET %d",
+		strings.Join(cols, ", "), tm.name, orderBy, limit, offset)
+}
+
+// genLike generates: SELECT ... WHERE <col> LIKE '<pattern>'
+func (g *Generator) genLike() string {
+	tm := g.randomTable()
+	var strCols []string
+	for _, c := range tm.columns {
+		if c.colType == "VARCHAR" || c.colType == "CHAR(1)" {
+			strCols = append(strCols, c.name)
+		}
+	}
+	if len(strCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	col := g.lcg.Choice(strCols)
+	cols := g.randomCols(tm)
+	patterns := []string{"'a%'", "'A%'", "'%a'", "'%x%'", "'_'"}
+	pattern := g.lcg.Choice(patterns)
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s FROM %s WHERE %s LIKE %s%s LIMIT 10",
+		strings.Join(cols, ", "), tm.name, col, pattern, orderBy)
+}
+
+// genCoalesce generates: SELECT COALESCE(<col>, <default>) FROM <table>
+func (g *Generator) genCoalesce() string {
+	tm := g.randomTable()
+	var nullableCols []string
+	for _, c := range tm.columns {
+		if !c.notNull {
+			nullableCols = append(nullableCols, c.name)
+		}
+	}
+	if len(nullableCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	col := g.lcg.Choice(nullableCols)
+	cols := g.randomCols(tm)
+	defaults := []string{"'N/A'", "'NULL'", "'-'", "'0'"}
+	defaultVal := g.lcg.Choice(defaults)
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s, COALESCE(%s, %s) AS %s_nullable FROM %s%s LIMIT 10",
+		strings.Join(cols, ", "), col, defaultVal, col, tm.name, orderBy)
+}
+
+// genMultiGroupBy generates: SELECT <col1>, <col2>, COUNT(*) FROM <table> GROUP BY <col1>, <col2>
+func (g *Generator) genMultiGroupBy() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	if len(intCols) < 2 {
+		return g.genGroupBy()
+	}
+	col1 := g.lcg.Choice(intCols)
+	col2 := g.lcg.Choice(intCols)
+	if col1 == col2 {
+		col2 = intCols[(g.lcg.Intn(len(intCols))+1)%len(intCols)]
+	}
+	orderBy := fmt.Sprintf("ORDER BY %s ASC, %s ASC", col1, col2)
+	return fmt.Sprintf("SELECT %s, %s, COUNT(*) AS cnt FROM %s GROUP BY %s, %s %s LIMIT 10",
+		col1, col2, tm.name, col1, col2, orderBy)
+}
+
+// genStringFunc generates: SELECT SUBSTR|LENGTH|UPPER(<col>) FROM <table>
+func (g *Generator) genStringFunc() string {
+	tm := g.randomTable()
+	var strCols []string
+	for _, c := range tm.columns {
+		if c.colType == "VARCHAR" || c.colType == "CHAR(1)" {
+			strCols = append(strCols, c.name)
+		}
+	}
+	if len(strCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	col := g.lcg.Choice(strCols)
+	funcs := []string{
+		fmt.Sprintf("SUBSTR(%s, 1, 3)", col),
+		fmt.Sprintf("LENGTH(%s)", col),
+		fmt.Sprintf("UPPER(%s)", col),
+		fmt.Sprintf("LOWER(%s)", col),
+	}
+	fn := g.lcg.Choice(funcs)
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s FROM %s%s LIMIT 10", fn, tm.name, orderBy)
+}
+
+// genCast generates: SELECT CAST(<col> AS <type>) FROM <table>
+func (g *Generator) genCast() string {
+	tm := g.randomTable()
+	intCols := tm.nonNullIntCols()
+	if len(intCols) == 0 {
+		return g.genSimpleSelect()
+	}
+	col := g.lcg.Choice(intCols)
+	casts := []string{
+		fmt.Sprintf("CAST(%s AS TEXT)", col),
+		fmt.Sprintf("CAST(%s AS REAL)", col),
+		fmt.Sprintf("CAST(%s AS INTEGER)", col),
+	}
+	castExpr := g.lcg.Choice(casts)
+	orderBy := g.pkOrderBy(tm, "ASC")
+	return fmt.Sprintf("SELECT %s FROM %s%s LIMIT 10", castExpr, tm.name, orderBy)
 }
