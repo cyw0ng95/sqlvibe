@@ -3228,11 +3228,26 @@ func (db *Database) execDerivedTableQuery(stmt *QP.SelectStmt) (*Rows, error) {
 		subRows = &Rows{Columns: []string{}, Data: [][]interface{}{}}
 	}
 
-	// Register temp table
+	// Register temp table with inferred column types from actual data.
+	// Using "TEXT" for all columns causes the HybridStore vectorized filter
+	// to treat integer values as strings, breaking comparisons like a > 1.
 	tempName := alias
 	colTypes := make(map[string]string)
 	for _, col := range subRows.Columns {
-		colTypes[col] = "TEXT"
+		colTypes[col] = "TEXT" // default
+	}
+	if len(subRows.Data) > 0 {
+		for i, col := range subRows.Columns {
+			if i >= len(subRows.Data[0]) {
+				break
+			}
+			switch subRows.Data[0][i].(type) {
+			case int64, int:
+				colTypes[col] = "INTEGER"
+			case float64:
+				colTypes[col] = "REAL"
+			}
+		}
 	}
 	db.tables[tempName] = colTypes
 	db.columnOrder[tempName] = subRows.Columns

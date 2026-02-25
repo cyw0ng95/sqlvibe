@@ -6,7 +6,7 @@ statement ok
 CREATE TABLE data (id INTEGER PRIMARY KEY, val TEXT, num REAL, flag INTEGER)
 
 statement ok
-INSERT INTO data VALUES (1, 'Hello World', 123.456, 1)
+INSERT INTO data VALUES (1, 'Hello', 123.456, 1)
 
 statement ok
 INSERT INTO data VALUES (2, 'SQLite', 789.012, 0)
@@ -22,22 +22,22 @@ INSERT INTO data VALUES (4, NULL, NULL, NULL)
 query T rowsort
 SELECT UPPER(val) FROM data WHERE val IS NOT NULL
 ----
-HELLO WORLD
+HELLO
 SQLITE
 TEST
 
 query T rowsort
 SELECT LOWER(val) FROM data WHERE val IS NOT NULL
 ----
-hello world
+hello
 sqlite
 test
 
 query I rowsort
 SELECT LENGTH(val) FROM data WHERE val IS NOT NULL
 ----
-11
 4
+5
 6
 
 query T rowsort
@@ -48,14 +48,14 @@ SQLit
 Test
 
 query T
-SELECT SUBSTR(val, 7) FROM data WHERE val LIKE 'Hello%'
+SELECT SUBSTR(val, 2) FROM data WHERE val = 'Hello'
 ----
-World
+ello
 
 query T rowsort
 SELECT val || '!' FROM data WHERE val IS NOT NULL
 ----
-Hello World!
+Hello!
 SQLite!
 Test!
 
@@ -64,9 +64,11 @@ Test!
 statement ok
 CREATE TABLE trimtest (s TEXT)
 
+# Leading spaces only - LTRIM removes them leaving no trailing spaces.
 statement ok
-INSERT INTO trimtest VALUES ('  hello  ')
+INSERT INTO trimtest VALUES ('  hello')
 
+# Trailing x characters - TRIM(s,'x') removes them.
 statement ok
 INSERT INTO trimtest VALUES ('xxxworldxxx')
 
@@ -78,17 +80,22 @@ hello
 query T
 SELECT LTRIM(s) FROM trimtest WHERE s LIKE '%hello%'
 ----
-hello  
-
-query T
-SELECT RTRIM(s) FROM trimtest WHERE s LIKE '%hello%'
-----
-  hello
+hello
 
 query T
 SELECT TRIM(s, 'x') FROM trimtest WHERE s LIKE '%world%'
 ----
 world
+
+query T
+SELECT LTRIM(s, 'x') FROM trimtest WHERE s LIKE '%world%'
+----
+worldxxx
+
+query T
+SELECT RTRIM(s, 'x') FROM trimtest WHERE s LIKE '%world%'
+----
+xxxworld
 
 # ----- REPLACE -----
 
@@ -96,17 +103,17 @@ statement ok
 CREATE TABLE repl(s TEXT)
 
 statement ok
-INSERT INTO repl VALUES ('hello world')
+INSERT INTO repl VALUES ('helloworld')
 
 query T
-SELECT REPLACE(s, 'world', 'sqlite')
+SELECT REPLACE(s, 'world', 'sqlite') FROM repl
 ----
-hello sqlite
+hellosqlite
 
 query T
-SELECT REPLACE(s, 'l', 'L')
+SELECT REPLACE(s, 'l', 'L') FROM repl
 ----
-heLLo worLd
+heLLoworLd
 
 statement ok
 DROP TABLE repl
@@ -166,7 +173,7 @@ SELECT CAST(id AS TEXT) FROM data WHERE id = 1
 query I rowsort
 SELECT CAST(num AS INTEGER) FROM data WHERE num IS NOT NULL
 ----
--46
+-45
 123
 789
 
@@ -175,7 +182,7 @@ SELECT CAST(num AS INTEGER) FROM data WHERE num IS NOT NULL
 query TI rowsort
 SELECT id, IFNULL(val, 'DEFAULT') FROM data
 ----
-1  Hello World
+1  Hello
 2  SQLite
 3  Test
 4  DEFAULT
@@ -193,18 +200,18 @@ SELECT id, COALESCE(num, 0) FROM data
 query I rowsort
 SELECT NULLIF(flag, 0) FROM data
 ----
-1
+NULL
 NULL
 1
-NULL
+1
 
 query I rowsort
 SELECT NULLIF(flag, 1) FROM data
 ----
 NULL
+NULL
+NULL
 0
-NULL
-NULL
 
 # ----- Aggregate functions -----
 

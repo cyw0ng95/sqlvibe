@@ -1820,77 +1820,231 @@ func (db *Database) execJoinAggregate(stmt *QP.SelectStmt) (*Rows, error) {
 	stmt.Offset = nil
 
 	info := extractHashJoinInfo(stmt)
+
+	// For non-INNER joins (e.g. LEFT JOIN) that extractHashJoinInfo rejects,
+	// attempt direct materialization when the join condition is a simple equi-join.
+	var joinedRows []map[string]interface{}
+	var hashCols []string
+	var leftName, leftAlias, rightName, rightAlias string
+	var leftCols, rightCols []string
+
 	if info == nil {
-		// Restore before returning
+		// Try to handle LEFT JOIN directly.
+		join := stmt.From.Join
+		if join == nil || (strings.ToUpper(join.Type) != "LEFT" && join.Type != "") {
+			stmt.Columns = origCols
+			stmt.GroupBy = origGroupBy
+			stmt.Having = origHaving
+			stmt.OrderBy = origOrderBy
+			stmt.Limit = origLimit
+			stmt.Offset = origOffset
+			return nil, nil
+		}
+		// Must be a simple equi-join with two real tables.
+		if join.Right == nil || join.Right.Join != nil || join.Right.Subquery != nil || stmt.From.Subquery != nil {
+			stmt.Columns = origCols
+			stmt.GroupBy = origGroupBy
+			stmt.Having = origHaving
+			stmt.OrderBy = origOrderBy
+			stmt.Limit = origLimit
+			stmt.Offset = origOffset
+			return nil, nil
+		}
+		binExpr, ok := join.Cond.(*QP.BinaryExpr)
+		if !ok || binExpr.Op != QP.TokenEq {
+			stmt.Columns = origCols
+			stmt.GroupBy = origGroupBy
+			stmt.Having = origHaving
+			stmt.OrderBy = origOrderBy
+			stmt.Limit = origLimit
+			stmt.Offset = origOffset
+			return nil, nil
+		}
+		leftRef, lOk := binExpr.Left.(*QP.ColumnRef)
+		rightRef, rOk := binExpr.Right.(*QP.ColumnRef)
+		if !lOk || !rOk {
+			stmt.Columns = origCols
+			stmt.GroupBy = origGroupBy
+			stmt.Having = origHaving
+			stmt.OrderBy = origOrderBy
+			stmt.Limit = origLimit
+			stmt.Offset = origOffset
+			return nil, nil
+		}
+
+		leftName = db.resolveTableName(stmt.From.Name)
+		leftAlias = stmt.From.Alias
+		if leftAlias == "" {
+			leftAlias = leftName
+		}
+		rightName = db.resolveTableName(join.Right.Name)
+		rightAlias = join.Right.Alias
+		if rightAlias == "" {
+			rightAlias = rightName
+		}
+
+		// Determine join key columns from the equi-join condition.
+		leftRef2 := strings.ToLower(leftRef.Table)
+		rightRef2 := strings.ToLower(rightRef.Table)
+		lRef := strings.ToLower(leftAlias)
+		rRef := strings.ToLower(rightAlias)
+		var leftJoinKey, rightJoinKey string
+		switch {
+		case (leftRef2 == "" || leftRef2 == lRef || leftRef2 == strings.ToLower(leftName)) &&
+			(rightRef2 == "" || rightRef2 == rRef || rightRef2 == strings.ToLower(rightName)):
+			leftJoinKey = leftRef.Name
+			rightJoinKey = rightRef.Name
+		case (leftRef2 == rRef || leftRef2 == strings.ToLower(rightName)) &&
+			(rightRef2 == "" || rightRef2 == lRef || rightRef2 == strings.ToLower(leftName)):
+			leftJoinKey = rightRef.Name
+			rightJoinKey = leftRef.Name
+		default:
+			stmt.Columns = origCols
+			stmt.GroupBy = origGroupBy
+			stmt.Having = origHaving
+			stmt.OrderBy = origOrderBy
+			stmt.Limit = origLimit
+			stmt.Offset = origOffset
+			return nil, nil
+		}
+
+		leftCols = db.columnOrder[leftName]
+		rightCols = db.columnOrder[rightName]
+		if leftCols == nil || rightCols == nil {
+			stmt.Columns = origCols
+			stmt.GroupBy = origGroupBy
+			stmt.Having = origHaving
+			stmt.OrderBy = origOrderBy
+			stmt.Limit = origLimit
+			stmt.Offset = origOffset
+			return nil, nil
+		}
+
+		leftData := db.data[leftName]
+		rightData := db.data[rightName]
+
+		// Build hash table from right table.
+		hashTable := make(map[interface{}][]map[string]interface{}, len(rightData))
+		for _, row := range rightData {
+			joinVal := row[rightJoinKey]
+			if joinVal == nil {
+				continue
+			}
+			key := normalizeJoinKey(joinVal)
+			hashTable[key] = append(hashTable[key], row)
+		}
+
+		// Probe: for each left row, emit matched or null-extended rows.
+		nLeft := len(leftCols)
+		hashCols = append(append([]string{}, leftCols...), rightCols...)
+		joinedRows = make([]map[string]interface{}, 0, len(leftData))
+		nullRight := make(map[string]interface{})
+		for _, col := range rightCols {
+			nullRight[col] = nil
+		}
+		for _, lRow := range leftData {
+			joinVal := lRow[leftJoinKey]
+			var matches []map[string]interface{}
+			if joinVal != nil {
+				matches = hashTable[normalizeJoinKey(joinVal)]
+			}
+			if len(matches) == 0 {
+				// Left join: emit left row with NULLs for right side.
+				m := make(map[string]interface{}, len(hashCols)+nLeft+len(rightCols))
+				for _, c := range leftCols {
+					m[c] = lRow[c]
+					m[leftAlias+"."+c] = lRow[c]
+					if leftAlias != leftName {
+						m[leftName+"."+c] = lRow[c]
+					}
+				}
+				for _, c := range rightCols {
+					m[c] = nil
+					m[rightAlias+"."+c] = nil
+					if rightAlias != rightName {
+						m[rightName+"."+c] = nil
+					}
+				}
+				joinedRows = append(joinedRows, m)
+			} else {
+				for _, rRow := range matches {
+					m := buildJoinMergedRow(lRow, leftName, leftAlias, leftCols, rRow, rightName, rightAlias, rightCols)
+					joinedRows = append(joinedRows, m)
+				}
+			}
+		}
+
 		stmt.Columns = origCols
 		stmt.GroupBy = origGroupBy
 		stmt.Having = origHaving
 		stmt.OrderBy = origOrderBy
 		stmt.Limit = origLimit
 		stmt.Offset = origOffset
-		return nil, nil
-	}
+	} else {
+		// INNER JOIN: use the existing execHashJoin path.
+		hashRows, hCols, ok := db.execHashJoin(stmt)
 
-	hashRows, hashCols, ok := db.execHashJoin(stmt)
+		stmt.Columns = origCols
+		stmt.GroupBy = origGroupBy
+		stmt.Having = origHaving
+		stmt.OrderBy = origOrderBy
+		stmt.Limit = origLimit
+		stmt.Offset = origOffset
 
-	stmt.Columns = origCols
-	stmt.GroupBy = origGroupBy
-	stmt.Having = origHaving
-	stmt.OrderBy = origOrderBy
-	stmt.Limit = origLimit
-	stmt.Offset = origOffset
+		if !ok {
+			return nil, nil
+		}
 
-	if !ok {
-		return nil, nil
-	}
+		leftName = db.resolveTableName(info.leftTable)
+		leftAlias = info.leftAlias
+		if leftAlias == "" {
+			leftAlias = leftName
+		}
+		rightName = db.resolveTableName(info.rightTable)
+		rightAlias = info.rightAlias
+		if rightAlias == "" {
+			rightAlias = rightName
+		}
 
-	leftName := db.resolveTableName(info.leftTable)
-	leftAlias := info.leftAlias
-	if leftAlias == "" {
-		leftAlias = leftName
-	}
-	rightName := db.resolveTableName(info.rightTable)
-	rightAlias := info.rightAlias
-	if rightAlias == "" {
-		rightAlias = rightName
-	}
+		leftCols = db.columnOrder[leftName]
+		rightCols = db.columnOrder[rightName]
+		nLeft := len(leftCols)
+		hashCols = hCols
 
-	leftCols := db.columnOrder[leftName]
-	rightCols := db.columnOrder[rightName]
-	nLeft := len(leftCols)
-
-	// Build rows keyed by both unqualified and table-qualified column names so
-	// that expressions like "d.name" and "e.id" resolve to the correct table's value.
-	joinedRows := make([]map[string]interface{}, len(hashRows))
-	for i, row := range hashRows {
-		m := make(map[string]interface{}, len(hashCols)+nLeft+len(rightCols))
-		for j, col := range hashCols {
-			if j >= len(row) {
-				break
-			}
-			val := row[j]
-			m[col] = val // unqualified (last write wins for shared names)
-			if j < nLeft {
-				m[leftAlias+"."+leftCols[j]] = val
-				if leftAlias != leftName {
-					m[leftName+"."+leftCols[j]] = val
+		// Build rows keyed by both unqualified and table-qualified column names so
+		// that expressions like "d.name" and "e.id" resolve to the correct table's value.
+		joinedRows = make([]map[string]interface{}, len(hashRows))
+		for i, row := range hashRows {
+			m := make(map[string]interface{}, len(hashCols)+nLeft+len(rightCols))
+			for j, col := range hashCols {
+				if j >= len(row) {
+					break
 				}
-			} else {
-				rj := j - nLeft
-				if rj < len(rightCols) {
-					m[rightAlias+"."+rightCols[rj]] = val
-					if rightAlias != rightName {
-						m[rightName+"."+rightCols[rj]] = val
+				val := row[j]
+				m[col] = val // unqualified (last write wins for shared names)
+				if j < nLeft {
+					m[leftAlias+"."+leftCols[j]] = val
+					if leftAlias != leftName {
+						m[leftName+"."+leftCols[j]] = val
+					}
+				} else {
+					rj := j - nLeft
+					if rj < len(rightCols) {
+						m[rightAlias+"."+rightCols[rj]] = val
+						if rightAlias != rightName {
+							m[rightName+"."+rightCols[rj]] = val
+						}
 					}
 				}
 			}
+			joinedRows[i] = m
 		}
-		joinedRows[i] = m
 	}
 
 	// Compile the aggregate query.
 	cg := CG.NewCompiler()
 	combinedCols := append(append([]string{}, leftCols...), rightCols...)
+	nLeft := len(leftCols)
 	leftSchema := make(map[string]int, len(leftCols))
 	for i, c := range leftCols {
 		leftSchema[c] = i
