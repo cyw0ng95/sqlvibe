@@ -3468,8 +3468,20 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 			if val, ok := row[qualKey]; ok {
 				return val
 			}
-			// Qualified column not found in row - try outer context for correlated subqueries
-			// DO NOT fall back to unqualified lookup for qualified columns
+			// If the qualifier matches the alias of the cursor currently being scanned
+			// (e.g. "t2.a" inside a query scanning "t1 AS t2"), resolve directly from
+			// the inner row using the unqualified column name.  This prevents outer-
+			// context leakage for self-correlated subqueries.
+			if cursor := vm.cursors.Get(0); cursor != nil {
+				if strings.ToLower(cursor.TableName) == strings.ToLower(e.Table) {
+					if val, ok := row[e.Name]; ok {
+						return val
+					}
+					return nil
+				}
+			}
+			// Try outer context (correlated subqueries: "customers.id" inside a query
+			// scanning "orders" must resolve from the outer customers row).
 			if vm.ctx != nil {
 				type OuterContextProvider interface {
 					GetOuterRowValue(columnName string) (interface{}, bool)
@@ -3479,6 +3491,11 @@ func (vm *VM) evaluateExprOnRow(row map[string]interface{}, columns []string, ex
 						return val
 					}
 				}
+			}
+			// Final fallback: unqualified lookup for aliased single-table queries
+			// (e.g. "e.department" in GROUP BY when the row only has "department").
+			if val, ok := row[e.Name]; ok {
+				return val
 			}
 			return nil
 		}
