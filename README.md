@@ -6,7 +6,7 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v0.8.9** | 2026-02-22 | CLI tools (sv-cli, sv-check), Info APIs, Integrity check |
+| **v0.9.16** | 2026-02-25 | Performance Optimization: Covering Index, Bloom Filter Join, Vectorized WHERE, Reduced Allocations |
 
 ## Features
 
@@ -98,29 +98,28 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.9.16)
+## Performance (v0.9.12)
 
-Benchmarks on Intel Xeon Platinum 8370C @ 2.80GHz (CI environment), in-memory database, `-benchtime=2s`.
+Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
 `db.ClearResultCache()` so actual per-query execution cost is measured (not cache-hit
 latency). SQLite's `database/sql` driver reuses prepared statements across iterations.
 Both sides iterate all result rows end-to-end.
-(`go test ./internal/TS/Benchmark/... -bench=BenchmarkFair_ -benchtime=2s`).
+(`go test ./internal/TS/Benchmark/... -bench=BenchmarkFair_ -benchtime=3s`).
 Results may vary on different hardware.
 
 ### Query Performance (1 000-row table)
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
-| SELECT all (3 cols) | 58 µs | 566 µs | **sqlvibe 9.8x faster** |
-| SELECT WHERE (1K rows) | 255 µs | 91 µs | SQLite 2.8x faster |
+| SELECT all (3 cols) | 60 µs | 566 µs | **sqlvibe 9.4x faster** |
+| SELECT WHERE | 273 µs | 91 µs | SQLite 3.0x faster |
 | ORDER BY (500 rows) | 194 µs | 297 µs | **sqlvibe 1.5x faster** |
 | COUNT(*) | 6.6 µs | 5.3 µs | roughly equal |
 | SUM | 18.6 µs | 67 µs | **sqlvibe 3.6x faster** |
-| GROUP BY | 123 µs | 492 µs | **sqlvibe 4.0x faster** |
-| JOIN (500×2000 rows) | 2.1 ms | — | bloom filter pre-filter |
-| IS NOT NULL (1K rows) | 251 µs | — | OpIsNull dispatch |
-| Modulo filter (1K rows) | 291 µs | — | OpRemainder dispatch |
+| GROUP BY | 137 µs | 492 µs | **sqlvibe 3.6x faster** |
+| JOIN (100×500 rows) | 557 µs | 233 µs | SQLite 2.4x faster |
+| BETWEEN filter | 460 µs | 183 µs | SQLite 2.5x faster |
 
 ### DML Operations
 
@@ -138,33 +137,6 @@ Results may vary on different hardware.
 | Result cache hit (repeated query) | 1.5 µs | 566 µs | **sqlvibe 377x faster** |
 | LIMIT 10 no ORDER BY (10K rows) | 20.2 µs | — | fast early-termination path |
 | Expression bytecode eval | 99 ns | — | single-dispatch expression evaluation |
-| Index-only scan (PK lookup) | 257 µs | — | covering-index path |
-| Parameterized WHERE (allocs) | 53 µs | — | 83 allocs/op (row map pool) |
-
-### v0.9.16 Optimization Tracks
-
-| Track | Feature | Impact |
-|-------|---------|--------|
-| A | `FindCoveringIndexForColumns` + `IndexSelectivity` | Covering-index detection + cost-based selection |
-| B | Bloom filter pre-filter in `ColumnarHashJoinBloom` | Skips hash-table probes for non-matching keys |
-| C | `VectorizedFilterSIMD` — 4-way unrolled int64/float64/string | Auto-vectorizable WHERE filter on columnar data |
-| D | `getRowMap`/`putRowMap` via `mapPool` | Row map reuse reduces allocations in hot paths |
-| E | `SelectBestIndexByCost` + `TableStats` selectivity | Heuristic-based index cost model |
-| F | New dispatch handlers: `OpIsNull`, `OpNotNull`, `OpBitAnd`, `OpBitOr`, `OpRemainder` | Bypass switch for 5 additional opcodes |
-
-> **Analysis v0.9.16**: This version focuses entirely on closing performance gaps.
-> Track C adds a `VectorizedFilterSIMD` function with 4-way loop unrolling
-> for int64, float64, and string columns — the Go compiler can auto-vectorize
-> these loops on amd64/arm64 (SSE2/NEON). Track B adds a bloom filter
-> pre-filter to the hash join implementation (`ColumnarHashJoinBloom`),
-> eliminating hash-table probes for keys definitely absent from the right side
-> — useful for sparse joins where selectivity is low. Track F expands the
-> dispatch table from 22 to 27 opcodes, adding `OpIsNull`/`OpNotNull` (NULL
-> checks), `OpBitAnd`/`OpBitOr` (bitwise), and `OpRemainder` (modulo).
-> GROUP BY improves to 4.0× faster (from 3.6×). Core SELECT all and SUM
-> throughput remain stable at 9.8× and 3.6× faster than SQLite respectively.
-> SQLite retains its advantage for full-table WHERE scans (indexed B-tree vs.
-> in-memory linear scan), which is expected for random-access patterns.
 
 ### Parameterized Query Performance (v0.9.11)
 
@@ -182,7 +154,7 @@ Results may vary on different hardware.
 | INSERT with UNIQUE constraint | 4.7 µs | ~24% overhead vs plain INSERT |
 | INSERT with NOT NULL constraint | 3.8 µs | negligible overhead |
 
-### SIMD Vectorization (v0.9.16 / v0.9.3)
+### SIMD Vectorization (v0.9.3)
 
 | Operation | 256 elems | 1 024 elems | 4 096 elems |
 |-----------|----------:|------------:|------------:|
@@ -190,18 +162,19 @@ Results may vary on different hardware.
 | VectorSumFloat64 | 69 ns | 249 ns | 969 ns |
 | VectorAddInt64 (1 024) | — | 567 ns | — |
 | VectorMulFloat64 (1 024) | — | 503 ns | — |
-| VectorizedFilterSIMD int64 = (new) | — | ~200 ns | ~800 ns |
 
 4-way loop unrolling enables the Go compiler to auto-vectorize on amd64/arm64 (SSE2/NEON).
-`VectorizedFilterSIMD` extends this to typed WHERE filtering on columnar data (v0.9.16).
 
-### Dispatch Table (v0.9.16 / v0.9.3)
+### Dispatch Table (v0.9.3)
 
-| Opcode group | v0.9.3 | v0.9.16 |
-|--------------|-------:|--------:|
-| Opcodes in dispatch table | 22 | 27 |
+| Opcode group | Before | After (v0.9.3) |
+|--------------|-------:|---------------:|
+| Opcodes in dispatch table | 10 | 22 |
 
-v0.9.16 adds 5 more opcodes: `OpIsNull`, `OpNotNull`, `OpBitAnd`, `OpBitOr`, `OpRemainder`.
+v0.9.3 extends the dispatch table to 22 opcodes: comparison operators (Eq/Ne/Lt/Le/Gt/Ge)
+and extended string ops (Trim/LTrim/RTrim/Replace/Instr) now bypass the large switch statement.
+
+### v0.9.12 database/sql Driver
 
 | Feature | Description |
 |---------|-------------|

@@ -449,6 +449,15 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		return rows, nil
 	}
 
+	// Fast path: vectorized WHERE filter on columnar storage.
+	// Uses SIMD-friendly columnar operations when:
+	// - Single table (no JOIN)
+	// - Simple WHERE: column op literal (=, !=, <, <=, >, >=)
+	// - No subqueries in WHERE
+	if rows := db.tryVectorizedFilterFastPath(stmt); rows != nil {
+		return rows, nil
+	}
+
 	// Get table column order for proper column mapping
 	// For JOINs, combine columns from both tables
 	var tableCols []string
@@ -1082,6 +1091,221 @@ func (db *Database) tryAggregateFastPath(stmt *QP.SelectStmt) *Rows {
 		return &Rows{Columns: []string{colLabel}, Data: [][]interface{}{{v}}}
 	}
 	return nil
+}
+
+// filterInfo holds extracted WHERE clause information for vectorized filtering.
+type filterInfo struct {
+	colName string
+	op      string
+	value   DS.Value
+}
+
+// isVectorizedFilterEligible checks if WHERE clause can use vectorized filter.
+func isVectorizedFilterEligible(stmt *QP.SelectStmt) bool {
+	if stmt == nil || stmt.From == nil {
+		return false
+	}
+	if stmt.From.Join != nil || stmt.From.Subquery != nil {
+		return false
+	}
+	if stmt.Where == nil {
+		return false
+	}
+	if stmt.GroupBy != nil || stmt.Having != nil || stmt.Distinct {
+		return false
+	}
+
+	// Check that SELECT columns are simple: either * or column references only.
+	// Function calls, expressions, etc. should fall through to VM.
+	for _, col := range stmt.Columns {
+		switch col.(type) {
+		case *QP.ColumnRef:
+			// OK - either * or column name
+		case *QP.AliasExpr:
+			// Alias is OK as long as the underlying expression is simple
+			if _, ok := col.(*QP.AliasExpr).Expr.(*QP.ColumnRef); !ok {
+				return false
+			}
+		default:
+			// Function calls, expressions, etc. - not eligible
+			return false
+		}
+	}
+
+	bin, ok := stmt.Where.(*QP.BinaryExpr)
+	if !ok {
+		return false
+	}
+
+	switch bin.Op {
+	case QP.TokenEq, QP.TokenNe, QP.TokenLt, QP.TokenLe, QP.TokenGt, QP.TokenGe:
+	default:
+		return false
+	}
+
+	_, ok = bin.Left.(*QP.ColumnRef)
+	if !ok {
+		return false
+	}
+
+	_, ok = bin.Right.(*QP.Literal)
+	if !ok {
+		return false
+	}
+
+	return true
+}
+
+// extractFilterInfo extracts column name, operator, and value from WHERE clause.
+func extractFilterInfo(stmt *QP.SelectStmt) *filterInfo {
+	bin := stmt.Where.(*QP.BinaryExpr)
+	col := bin.Left.(*QP.ColumnRef)
+	lit := bin.Right.(*QP.Literal)
+
+	var op string
+	switch bin.Op {
+	case QP.TokenEq:
+		op = "="
+	case QP.TokenNe:
+		op = "!="
+	case QP.TokenLt:
+		op = "<"
+	case QP.TokenLe:
+		op = "<="
+	case QP.TokenGt:
+		op = ">"
+	case QP.TokenGe:
+		op = ">="
+	}
+
+	var val DS.Value
+	switch v := lit.Value.(type) {
+	case int64:
+		val = DS.IntValue(v)
+	case float64:
+		val = DS.FloatValue(v)
+	case string:
+		val = DS.StringValue(v)
+	case bool:
+		if v {
+			val = DS.IntValue(1)
+		} else {
+			val = DS.IntValue(0)
+		}
+	default:
+		return nil
+	}
+
+	return &filterInfo{
+		colName: col.Name,
+		op:      op,
+		value:   val,
+	}
+}
+
+// tryVectorizedFilterFastPath handles simple WHERE queries using vectorized operations.
+func (db *Database) tryVectorizedFilterFastPath(stmt *QP.SelectStmt) *Rows {
+	if !isVectorizedFilterEligible(stmt) {
+		return nil
+	}
+
+	if stmt.OrderBy != nil || stmt.Limit != nil {
+		return nil
+	}
+
+	tableName := stmt.From.Name
+	if tableName == "" {
+		return nil
+	}
+
+	hs := db.GetHybridStore(tableName)
+	if hs == nil {
+		return nil
+	}
+
+	info := extractFilterInfo(stmt)
+	if info == nil {
+		return nil
+	}
+
+	colVec := hs.ColStore().GetColumn(info.colName)
+	if colVec == nil {
+		return nil
+	}
+
+	// Only apply fast path for supported column types (int, float, string)
+	// Skip boolean and other types that may have type conversion issues
+	colType := colVec.Type
+	if colType != DS.TypeInt && colType != DS.TypeFloat && colType != DS.TypeString {
+		return nil
+	}
+
+	rb := VectorizedFilter(colVec, info.op, info.value)
+	if rb == nil {
+		return nil
+	}
+
+	indices := rb.ToSlice()
+	if len(indices) == 0 {
+		return &Rows{Columns: nil, Data: [][]interface{}{}}
+	}
+
+	var colNames []string
+	if len(stmt.Columns) == 1 {
+		if cr, ok := stmt.Columns[0].(*QP.ColumnRef); ok && cr.Name == "*" {
+			colNames = db.columnOrder[tableName]
+		} else {
+			for _, col := range stmt.Columns {
+				if a, ok := col.(*QP.AliasExpr); ok {
+					colNames = append(colNames, a.Alias)
+				} else if c, ok := col.(*QP.ColumnRef); ok {
+					colNames = append(colNames, c.Name)
+				}
+			}
+		}
+	} else {
+		for _, col := range stmt.Columns {
+			if a, ok := col.(*QP.AliasExpr); ok {
+				colNames = append(colNames, a.Alias)
+			} else if c, ok := col.(*QP.ColumnRef); ok {
+				colNames = append(colNames, c.Name)
+			}
+		}
+	}
+
+	results := make([][]interface{}, len(indices))
+	colIdxMap := make(map[string]int)
+	for i, c := range hs.Columns() {
+		colIdxMap[c] = i
+	}
+
+	for i, idx := range indices {
+		row := make([]interface{}, len(colNames))
+		for j, colName := range colNames {
+			ci, ok := colIdxMap[colName]
+			if !ok {
+				continue
+			}
+			vec := hs.ColStore().GetColumnByIdx(ci)
+			if vec == nil {
+				continue
+			}
+			v := vec.Get(int(idx))
+			switch v.Type {
+			case DS.TypeInt:
+				row[j] = v.Int
+			case DS.TypeFloat:
+				row[j] = v.Float
+			case DS.TypeString:
+				row[j] = v.Str
+			default:
+				row[j] = nil
+			}
+		}
+		results[i] = row
+	}
+
+	return &Rows{Columns: colNames, Data: results}
 }
 
 // execSelectStarFast materialises all rows of a single table without running
