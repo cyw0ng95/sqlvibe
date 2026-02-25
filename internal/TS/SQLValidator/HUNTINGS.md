@@ -41,6 +41,38 @@ When SQLValidator finds a mismatch:
 
 <!-- New entries go above this line, newest first -->
 
+### DISTINCT Deduplication Fails When ORDER BY References Non-SELECT Columns
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | High |
+| **Type** | ResultMismatch |
+| **Table(s)** | order_line, stock, orders, customer, district (any multi-row table) |
+| **Trigger SQL** | `SELECT DISTINCT ol_d_id FROM order_line WHERE ol_number > 0 ORDER BY ol_o_id ASC, ol_d_id ASC, ol_w_id ASC, ol_number ASC LIMIT 4` |
+| **SQLite Result** | `(2 rows)[1\|2]` — correct distinct values |
+| **SQLVibe Result** | `(4 rows)[1\|1\|1\|1]` (before fix) / `(1 rows)[1]` (mid-fix with wrong topK) |
+| **Root Cause** | When ORDER BY references columns not in the SELECT list, those extra columns are temporarily appended to each projected row so the sort can use them. The `deduplicateRows` function used ALL row columns (including the extra sort columns) as the dedup key, so rows that shared the same SELECT value but differed in the extra ORDER BY columns were NOT deduplicated. Additionally, the `SortRowsTopK` with the LIMIT value was applied before deduplication, pruning rows that should have been seen for proper DISTINCT dedup. |
+| **Fix** | (1) Skip early `deduplicateRows` when `extraOrderByCols` is non-empty. (2) Sort ALL rows without a top-K limit when DISTINCT is active. (3) After sort, apply `deduplicateRowsN(results, numSelectCols)` which uses only the first N projected columns as the dedup key. (4) Apply LIMIT after dedup. Added `deduplicateRowsN` helper to `pkg/sqlvibe/vm_exec.go`. Both code paths (`execSelectStmtWithContext` and `execVMQuery`) were fixed. |
+| **Seed** | 1, 2, 7, 42 |
+| **Found By** | SQLValidator |
+| **Date** | 2026-02-25 |
+
+### Subquery Generator Missing ORDER BY (False Positive Fix)
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | Medium |
+| **Type** | ResultMismatch (false positive — not an engine bug) |
+| **Table(s)** | Various (IN/EXISTS subquery targets) |
+| **Trigger SQL** | `SELECT s_i_id FROM stock WHERE EXISTS (SELECT 1 FROM stock WHERE s_i_id = stock.s_i_id) LIMIT 10` |
+| **SQLite Result** | `(10 rows)[1\|1\|2\|2\|3\|3\|4\|4\|5\|5]` (PK-ordered scan) |
+| **SQLVibe Result** | `(10 rows)[1\|2\|3\|4\|5\|6\|7\|8\|1\|2]` (insertion-order scan) |
+| **Root Cause** | The `genSubquery` generator emitted `LIMIT 10` without an `ORDER BY` clause. Since SQL does not define scan order without ORDER BY, SQLite (PK-ordered) and sqlvibe (insertion-ordered) produced different but equally-valid row subsets. The `compare.go` normalizer sorts rows before comparing, but both databases returned different valid 10-row subsets from a 20-row result, so the sorted multisets differed. This was a validator false-positive, not an engine bug. |
+| **Fix** | Added `g.pkOrderBy(tm1, "ASC")` before `LIMIT 10` in both the EXISTS and IN branches of `genSubquery` in `internal/TS/SQLValidator/generator.go`. This forces a deterministic ORDER BY so both databases return the same rows. |
+| **Seed** | 1, 2 |
+| **Found By** | SQLValidator |
+| **Date** | 2026-02-25 |
+
 ### ORDER BY before UNION/UNION ALL
 
 | Attribute | Value |
@@ -114,3 +146,4 @@ go test -v -run=TestSQLValidator ./internal/TS/SQLValidator/...
 # Run with a specific seed for reproduction
 go test -v -run=TestSQLValidator_Regression ./internal/TS/SQLValidator/...
 ```
+

@@ -386,8 +386,10 @@ func (g *Generator) genSubquery() string {
 	isExists := g.lcg.Intn(2) == 0
 	if isExists {
 		otherCol := tm2.nonNullIntCols()[0]
-		return fmt.Sprintf("SELECT %s FROM %s WHERE EXISTS (SELECT 1 FROM %s WHERE %s = %s.%s) LIMIT 10",
-			tm1.columns[0].name, tm1.name, tm2.name, col, tm2.name, otherCol)
+		// Always ORDER BY full PK so LIMIT is deterministic regardless of scan order.
+		orderBy := g.pkOrderBy(tm1, "ASC")
+		return fmt.Sprintf("SELECT %s FROM %s WHERE EXISTS (SELECT 1 FROM %s WHERE %s = %s.%s)%s LIMIT 10",
+			tm1.columns[0].name, tm1.name, tm2.name, col, tm2.name, otherCol, orderBy)
 	}
 
 	// For IN subquery, select a column that exists in tm2
@@ -396,8 +398,10 @@ func (g *Generator) genSubquery() string {
 		return g.genSimpleSelect()
 	}
 	tm2Col := g.lcg.Choice(tm2IntCols)
-	return fmt.Sprintf("SELECT %s FROM %s WHERE %s IN (SELECT %s FROM %s) LIMIT 10",
-		tm1.columns[0].name, tm1.name, col, tm2Col, tm2.name)
+	// Always ORDER BY full PK so LIMIT is deterministic regardless of scan order.
+	orderBy := g.pkOrderBy(tm1, "ASC")
+	return fmt.Sprintf("SELECT %s FROM %s WHERE %s IN (SELECT %s FROM %s)%s LIMIT 10",
+		tm1.columns[0].name, tm1.name, col, tm2Col, tm2.name, orderBy)
 }
 
 // genHaving generates: SELECT <col>, COUNT(*) FROM <table> GROUP BY <col> HAVING COUNT(*) > n
