@@ -277,6 +277,12 @@ func TestSQLValidator_Regression(t *testing.T) {
 	// Format: {description, seed, statement_count}
 	cases := []regCase{
 		{"FastFail seed=42", 42, 100},
+		// Regression: DISTINCT deduplication failed when ORDER BY had extra non-SELECT
+		// columns (seed=1 triggered the bug with DISTINCT + ORDER BY on non-projected cols).
+		{"DISTINCT+OrderBy extra cols seed=1", 1, 1000},
+		{"DISTINCT+OrderBy extra cols seed=2", 2, 500},
+		// Regression: subquery generator was missing ORDER BY for IN/EXISTS LIMIT queries.
+		{"Subquery IN/EXISTS ORDER BY seed=7", 7, 500},
 	}
 
 	for _, tc := range cases {

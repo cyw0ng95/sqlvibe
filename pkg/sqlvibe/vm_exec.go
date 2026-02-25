@@ -317,8 +317,11 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 
 	results := vm.Results()
 
-	// Apply DISTINCT deduplication if requested
-	if stmt.Distinct {
+	// Apply DISTINCT deduplication if requested.
+	// When ORDER BY references extra non-SELECT columns (extraOrderByCols), those
+	// columns are appended to each row for sorting; defer DISTINCT until after strip
+	// so only the projected SELECT columns are used as the dedup key.
+	if stmt.Distinct && len(extraOrderByCols) == 0 {
 		results = deduplicateRows(results)
 	}
 
@@ -335,8 +338,17 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 			}
 		}
 		allCols := append(projCols, extraOrderByCols...)
+		// When DISTINCT is active, do a full sort before dedup so we see all rows;
+		// the top-K optimization would prematurely discard rows needed for dedup.
 		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		if stmt.Distinct {
+			topK = 0 // full sort; LIMIT applied after dedup below
+		}
 		results = db.engine.SortRowsTopK(results, stmt.OrderBy, allCols, topK)
+		// Apply DISTINCT after sort so the dedup key uses only projected columns.
+		if stmt.Distinct {
+			results = deduplicateRowsN(results, numSelectCols)
+		}
 		if stmt.Limit != nil {
 			if limited, err2 := db.applyLimit(&Rows{Data: results}, stmt.Limit, stmt.Offset); err2 == nil {
 				results = limited.Data
@@ -660,8 +672,10 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 
 	results := vm.Results()
 
-	// Apply DISTINCT deduplication if requested
-	if stmt.Distinct {
+	// Apply DISTINCT deduplication if requested.
+	// When ORDER BY references extra non-SELECT columns (extraOrderByCols), those
+	// columns are appended to each row for sorting; defer DISTINCT until after strip.
+	if stmt.Distinct && len(extraOrderByCols) == 0 {
 		results = deduplicateRows(results)
 	}
 
@@ -842,9 +856,17 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 	if len(extraOrderByCols) > 0 {
 		// Build full columns list (SELECT columns + extra ORDER BY cols)
 		fullCols := append(cols, extraOrderByCols...)
-		// Sort using full column set (use top-K heap when limit is known)
+		// When DISTINCT is active, do a full sort before dedup so we see all rows;
+		// the top-K optimization would prematurely discard rows needed for dedup.
 		topK := extractLimitInt(stmt.Limit, stmt.Offset)
+		if stmt.Distinct {
+			topK = 0 // full sort; LIMIT applied after dedup below
+		}
 		results = db.engine.SortRowsTopK(results, stmt.OrderBy, fullCols, topK)
+		// Apply DISTINCT after sort so only projected columns form the dedup key.
+		if stmt.Distinct {
+			results = deduplicateRowsN(results, len(cols))
+		}
 		// Apply LIMIT/OFFSET if present (to avoid database.go re-applying with wrong cols)
 		if stmt.Limit != nil {
 			rows := &Rows{Columns: fullCols, Data: results}
@@ -1412,7 +1434,53 @@ func deduplicateRows(rows [][]interface{}) [][]interface{} {
 	return result
 }
 
-// collectColumnRefs collects all unqualified column names referenced in an expression.
+// deduplicateRowsN is like deduplicateRows but uses only the first n columns as the
+// dedup key. This is used when rows have extra ORDER BY columns appended beyond the
+// projected SELECT columns; only the SELECT columns should determine uniqueness.
+func deduplicateRowsN(rows [][]interface{}, n int) [][]interface{} {
+	seen := make(map[string]struct{}, len(rows))
+	result := make([][]interface{}, 0, len(rows))
+	var b strings.Builder
+	for _, row := range rows {
+		b.Reset()
+		limit := n
+		if limit > len(row) {
+			limit = len(row)
+		}
+		for i, v := range row[:limit] {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			switch val := v.(type) {
+			case int64:
+				b.WriteString(strconv.FormatInt(val, 10))
+			case float64:
+				b.WriteString(strconv.FormatFloat(val, 'f', -1, 64))
+			case string:
+				b.WriteString(val)
+			case bool:
+				if val {
+					b.WriteString("true")
+				} else {
+					b.WriteString("false")
+				}
+			case []byte:
+				b.WriteString(string(val))
+			case nil:
+				b.WriteString("<nil>")
+			default:
+				fmt.Fprintf(&b, "%v", val)
+			}
+		}
+		key := b.String()
+		if _, dup := seen[key]; !dup {
+			seen[key] = struct{}{}
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
 func collectColumnRefs(expr QP.Expr) []string {
 	if expr == nil {
 		return nil
