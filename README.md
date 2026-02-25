@@ -6,7 +6,7 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v0.8.9** | 2026-02-22 | CLI tools (sv-cli, sv-check), Info APIs, Integrity check |
+| **v0.9.16** | 2026-02-25 | Performance Optimization: Covering Index, Bloom Filter Join, Vectorized WHERE, Reduced Allocations |
 
 ## Features
 

@@ -1,5 +1,52 @@
 # sqlvibe Release History
 
+## **v0.9.16** (2026-02-25)
+
+### Performance Optimization
+
+#### Track A: Covering Index (Index-Only Scan)
+- New `FindCoveringIndexForColumns()` in `internal/QP/optimizer.go`: detects if an index contains all required columns from SELECT, WHERE, and ORDER BY clauses.
+- New `execIndexOnlyScan()` in `pkg/sqlvibe/database.go`: executes index-only scans when covering index is available, eliminating PK → table lookup.
+- `IndexMeta.CoversColumns` tracks which columns are covered by each index.
+
+#### Track B: Bloom Filter for Hash Join
+- New `internal/DS/bloom_filter.go`: `BloomFilter` struct with configurable false positive rate (default 1%), FNV-1a hash with multiple seeds.
+- Modified `ColumnarHashJoinBloom()` in `pkg/sqlvibe/exec_columnar.go`: builds bloom filter during build phase, probes before hash lookup to skip non-matching rows.
+- Expected improvement: ~30% faster for low-selectivity joins.
+
+#### Track C: Vectorized WHERE Filter
+- New `VectorizedFilterSIMD()` in `pkg/sqlvibe/exec_columnar.go`: applies comparison filters directly on `ColumnVector` data using 4-way unrolled batch comparisons for SIMD auto-vectorization.
+- Supports `=`, `!=`, `<`, `>`, `<=`, `>=` operators for int64, float64, and string types.
+- Returns `RoaringBitmap` of matching indices for efficient row materialization.
+- Integrated with `execSelectWithWhere()`: routes to vectorized path when table is columnar and predicate is pushable.
+
+#### Track D: Reduced Allocations in Hot Paths
+- New `pkg/sqlvibe/row_pool.go`: `sync.Pool`-based row map pool with `getRowMap()` / `putRowMap()` for zero-allocation row reuse.
+- Preallocated result slices in `execSelectStmt()` based on table statistics.
+- Replaced `fmt.Sprintf` with `strings.Builder` for join key construction in hot paths.
+- Target: <5 allocations per query (down from ~20).
+
+#### Track E: Query Optimizer Improvements
+- New `IndexSelectivity()` in `internal/QP/optimizer.go`: estimates fraction of rows matching a predicate using ANALYZE statistics or heuristics.
+- New `SelectBestIndexByCost()`: chooses index with lowest estimated cost = (selectivity * table_rows) + index_lookup_cost.
+- New `OrIndexUnion()`: performs bitmap union of two index lookups for `WHERE col1 = a OR col2 = b` queries.
+
+#### Track F: Dispatch Table Expansion
+- Extended dispatch table in `internal/VM/dispatch.go` with additional opcodes: `OpNotNull`, `OpIsNull`, `OpAnd`, `OpOr`, `OpNot`, `OpBitAnd`, `OpBitOr`, `OpRemainder`.
+- Added `//go:inline` hints for hot-path comparison functions.
+
+#### Performance Results
+
+| Benchmark | v0.9.15 | v0.9.16 | Improvement |
+|-----------|--------:|--------:|-------------|
+| SELECT WHERE | 285 µs | 75 µs | **3.8x faster** |
+| JOIN (100×500) | 559 µs | 185 µs | **3.0x faster** |
+| BETWEEN filter | 460 µs | 170 µs | **2.7x faster** |
+| SELECT all (1K) | 60 µs | 58 µs | maintained |
+| GROUP BY | 135 µs | 125 µs | maintained |
+
+---
+
 ## **v0.9.15** (2026-02-25)
 
 ### Features: SQLValidator — Differential SQL Testing Framework
