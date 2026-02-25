@@ -6,7 +6,7 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v0.9.16** | 2026-02-25 | Performance Optimization: Covering Index, Bloom Filter Join, Vectorized WHERE, Reduced Allocations |
+| **v0.9.17** | 2026-02-26 | JSON Extension Enhancement: Table-valued functions (json_each, json_tree), Aggregates (json_group_array, json_group_object), JSONB format |
 
 ## Features
 
