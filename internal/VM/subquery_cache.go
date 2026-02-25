@@ -49,8 +49,6 @@ func isSubqueryCorrelated(stmt *QP.SelectStmt) bool {
 // exprIsCorrelated walks expr checking for table-qualified ColumnRef nodes whose
 // table qualifier differs from innerTable/innerAlias (indicating a reference to
 // an outer query's table).
-// It also checks for unqualified column references in the WHERE clause, which may
-// reference outer table columns when they don't exist in the inner table's scope.
 func exprIsCorrelated(expr QP.Expr, innerTable, innerAlias string) bool {
 	if expr == nil {
 		return false
@@ -67,10 +65,6 @@ func exprIsCorrelated(expr QP.Expr, innerTable, innerAlias string) bool {
 			}
 			return tbl != innerTable
 		}
-		// Unqualified column reference in WHERE clause - conservatively treat as
-		// potentially correlated since it may reference an outer table's column.
-		// This is safe because it just prevents caching of non-existent results.
-		return true
 	case *QP.BinaryExpr:
 		return exprIsCorrelated(e.Left, innerTable, innerAlias) ||
 			exprIsCorrelated(e.Right, innerTable, innerAlias)

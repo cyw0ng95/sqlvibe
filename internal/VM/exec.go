@@ -1047,7 +1047,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 		case OpColumn:
 			cursorID := int(inst.P1)
 			colIdx := int(inst.P2)
-			tableQualifier := inst.P3 // Table qualifier if present (string), or "table.column" for outer ref
+			tableQualifier := inst.P3 // Table qualifier if present (string), or column name for outer ref
 			dst := inst.P4
 			cursor := vm.cursors.Get(cursorID)
 
@@ -1066,13 +1066,10 @@ func (vm *VM) Exec(ctx interface{}) error {
 						parts := strings.Split(tableQualifier, ".")
 						if len(parts) == 2 {
 							colName = parts[1]
+						} else {
+							// Just a column name (not qualified)
+							colName = tableQualifier
 						}
-					}
-					// If we have a table-qualified reference, use the column name from it
-					// Otherwise, we need to find the column name from the expression somehow
-					// For now, try using tableQualifier directly if it's not empty
-					if colName == "" && tableQualifier != "" {
-						colName = tableQualifier
 					}
 					if colName != "" {
 						if val, found := outerCtx.GetOuterRowValue(colName); found {
@@ -1082,9 +1079,7 @@ func (vm *VM) Exec(ctx interface{}) error {
 							}
 						}
 					}
-					// For truly unqualified column references (colIdx=-1, tableQualifier=""),
-					// we can't determine the column name here - it would need to be passed
-					// separately. For now, emit NULL.
+					// Column not found in outer context either - emit NULL
 					if dstReg, ok := dst.(int); ok {
 						vm.registers[dstReg] = nil
 					}
