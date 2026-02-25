@@ -1,266 +1,447 @@
-# Plan v0.9.16 - Final Stability, API Hardening & Release Candidate 2
+# Plan v0.9.16 - Performance Optimization
 
 ## Summary
 
-This is the release-candidate milestone before v1.0.0. The focus is on production
-hardening: eliminating remaining panics, stabilising the public API surface, running an
-extended fuzzing campaign, and verifying performance is at or better than the v0.9.6
-baseline. No new SQL features are added in this release — correctness, stability, and
-API clarity are the sole objectives.
+This version focuses entirely on **performance optimization** to close the gaps where SQLite
+is still faster. The goal is to achieve parity or better on WHERE filtering (currently 3× slower)
+and JOIN operations (currently 2.4× slower).
 
 ---
 
 ## Background
 
-At this point the database supports:
-- Full parameterized queries and `database/sql` driver (v0.9.11–12)
-- `context.Context` cancellation and query timeouts (v0.9.13)
-- `ALTER TABLE DROP/RENAME COLUMN`, `FETCH FIRST`, `INTERSECT ALL`, CSV/JSON I/O (v0.9.14)
-- 149+ SQL:1999 test suites passing
-- WAL + crash recovery, MVCC, FK enforcement, triggers, savepoints, window functions
+### Current Performance (v0.9.6, AMD EPYC 7763)
 
-What remains before v1.0.0:
-1. No known panics on any SQL input (fuzzer-verified)
-2. Stable, documented public API (no internal symbols in `pkg/sqlvibe`)
-3. Correct error codes for all failure modes
-4. Passing all existing test suites without regression
-5. Performance at least matching the v0.9.6 numbers (60 µs SELECT, 9.4× vs SQLite)
+| Benchmark | sqlvibe | SQLite | Winner |
+|-----------|--------|--------|--------|
+| SELECT all (1K rows) | 60 µs | 571 µs | **sqlvibe 9.5×** |
+| SUM aggregate | 19 µs | 66 µs | **sqlvibe 3.5×** |
+| GROUP BY | 135 µs | 499 µs | **sqlvibe 3.7×** |
+| ORDER BY | 197 µs | 299 µs | **sqlvibe 1.5×** |
+| Result cache hit | 1.5 µs | N/A | **sqlvibe** |
+| SELECT WHERE | 285 µs | 91 µs | **SQLite 3.1×** |
+| JOIN (100×500) | 559 µs | 230 µs | **SQLite 2.4×** |
 
----
+### Root Cause Analysis
 
-## Track A: Extended Fuzzing Campaign
+| Gap | Root Cause |
+|-----|------------|
+| WHERE slower | Full table scan with per-row map allocation; predicate pushdown only handles simple cases; no index-only scan |
+| JOIN slower | Hash join builds map with `[][]DS.Value` slices; allocates merged row per match; no bloom filter pre-filtering |
 
-### A1. PlainFuzzer — 10-Minute Run
+### Existing Optimizations (v0.9.0–v0.9.3)
 
-Run `FuzzSQL` for at least 10 minutes, triage every crash, fix every panic:
-
-```bash
-go test -fuzz=FuzzSQL -fuzztime=10m ./internal/TS/PlainFuzzer/...
-```
-
-**Bug fix protocol**: for every panic found:
-1. Add a minimal reproduction to `internal/TS/PlainFuzzer/testdata/corpus/`
-2. Fix the root cause
-3. Add a regression test in `internal/TS/Regression/regression_v0.9.16_test.go`
-4. Record in `internal/TS/PlainFuzzer/HUNTINGS.md`
-
-### A2. FuzzDBFile — 10-Minute Run
-
-```bash
-go test -fuzz=FuzzDBFile -fuzztime=10m ./internal/TS/PlainFuzzer/...
-```
-
-Same protocol as A1 for any panics found during file-level fuzzing.
-
-### A3. Zero-Panic Guarantee
-
-After the fuzzing campaign, execute all corpus entries in CI to confirm no panics:
-
-```bash
-go test -run=FuzzSQL/. ./internal/TS/PlainFuzzer/...
-go test -run=FuzzDBFile/. ./internal/TS/PlainFuzzer/...
-```
-
-Add these invocations to the Makefile as `make fuzz-regression`.
+- Predicate pushdown (Go-layer filter before VM)
+- SIMD vectorized sum/min/max for int64/float64
+- Dispatch table for common opcodes (arithmetic, string, comparison)
+- Early termination for LIMIT without ORDER BY
+- Result cache + plan cache
+- Pre-sized result slices
 
 ---
 
-## Track B: Public API Stabilisation
+## Performance Targets
 
-### B1. API Audit
-
-Review `pkg/sqlvibe/database.go` and identify:
-- Methods that should be unexported (helpers leaked as public)
-- Methods with inconsistent naming (e.g. `MustExec` vs `Exec`)
-- Methods that duplicate functionality (e.g. `ExecWithParams` vs `ExecContextWithParams`)
-
-Document the **stable public API** in `pkg/sqlvibe/API.md`:
-
-```
-Open(path) (*Database, error)
-Database.Exec(sql) (Result, error)
-Database.ExecContext(ctx, sql) (Result, error)
-Database.ExecWithParams(sql, params) (Result, error)
-Database.ExecContextWithParams(ctx, sql, params) (Result, error)
-Database.ExecNamed(sql, params) (Result, error)
-Database.MustExec(sql, params...) Result
-Database.Query(sql) (*Rows, error)
-Database.QueryContext(ctx, sql) (*Rows, error)
-Database.QueryWithParams(sql, params) (*Rows, error)
-Database.QueryContextWithParams(ctx, sql, params) (*Rows, error)
-Database.QueryNamed(sql, params) (*Rows, error)
-Database.Prepare(sql) (*Statement, error)
-Database.Begin() (*Transaction, error)
-Database.Close() error
-Database.ClearResultCache()
-Database.ImportCSV(table, r, opts) (int, error)
-Database.ExportCSV(w, sql, opts) error
-Database.ExportJSON(w, sql) error
-```
-
-### B2. Deprecation of Stubs
-
-Deprecated stubs that remain for backward compatibility get a `//Deprecated:` doc comment
-directing callers to the replacement. No stubs are removed — they stay until v1.1.0.
-
-### B3. `pkg/sqlvibe` Export Leaks
-
-Use `go vet` and `staticcheck` to confirm no unexported type is reachable through
-an exported interface.
+| Benchmark | Current | Target | Improvement |
+|-----------|---------|--------|-------------|
+| SELECT WHERE | 285 µs | ≤ 80 µs | 3.5× faster |
+| JOIN (100×500) | 559 µs | ≤ 200 µs | 2.8× faster |
+| SELECT all (1K) | 60 µs | ≤ 55 µs | maintain |
+| GROUP BY | 135 µs | ≤ 120 µs | 12% faster |
 
 ---
 
-## Track C: Error Code Completeness
+## Track A: Index-Only Scan (Covering Index)
 
-### C1. Error Code Audit
+### A1. Detect Covering Index in Query Planner
 
-Every `fmt.Errorf` in `pkg/sqlvibe/` that is returned to callers should instead use
-`NewError(code, ...)` with a specific `ErrorCode`. Audit and convert the top 20
-most-common error paths:
-
-| Error Path | Current | Target |
-|------------|---------|--------|
-| Table not found | raw fmt.Errorf | `SVDB_TABLE_NOT_FOUND` |
-| Column not found | raw fmt.Errorf | `SVDB_COLUMN_NOT_FOUND` |
-| Constraint violation | raw fmt.Errorf | `SVDB_CONSTRAINT_VIOLATION` |
-| Syntax error | raw fmt.Errorf | `SVDB_SYNTAX_ERROR` |
-| No active transaction | raw fmt.Errorf | `SVDB_NO_TRANSACTION` |
-| Duplicate savepoint | raw fmt.Errorf | `SVDB_DUPLICATE_SAVEPOINT` |
-| Parse error | raw fmt.Errorf | `SVDB_PARSE_ERROR` |
-| Type mismatch | raw fmt.Errorf | `SVDB_TYPE_MISMATCH` |
-| Index already exists | raw fmt.Errorf | `SVDB_INDEX_EXISTS` |
-| View not found | raw fmt.Errorf | `SVDB_VIEW_NOT_FOUND` |
-
-### C2. `IsErrorCode` Helper Usage Docs
-
-Add examples in `pkg/sqlvibe/error.go` showing how callers use `IsErrorCode`:
+Extend `internal/QP/optimizer.go`:
 
 ```go
-rows, err := db.Query("SELECT * FROM missing_table")
-if sqlvibe.IsErrorCode(err, sqlvibe.SVDB_TABLE_NOT_FOUND) {
-    // handle gracefully
+// FindCoveringIndexForColumns finds an index that contains all required columns.
+// Returns the index name and whether it covers the filter column as the leading column.
+func FindCoveringIndexForColumns(indexes []*IndexMetaQP, required []string, filterCol string) (name string, filterFirst bool)
+```
+
+**Logic**:
+1. Extract required columns from SELECT, WHERE, ORDER BY
+2. Check if any index covers all required columns
+3. Prefer index where filter column is the leading column
+
+### A2. Implement Index-Only Scan in Query Engine
+
+Extend `pkg/sqlvibe/database.go`:
+
+```go
+// execIndexOnlyScan reads rows directly from the index without table lookup.
+// Only valid when the index covers all required columns.
+func (db *Database) execIndexOnlyScan(table, indexName string, requiredCols []string, filterExpr Expr) ([]map[string]interface{}, error)
+```
+
+**Key changes**:
+- Store index data as `map[string]map[string]interface{}` (key → full row)
+- When covering index detected, read from index instead of table
+- Eliminates the PK → table lookup step
+
+### A3. Benchmark
+
+```go
+func BenchmarkFair_IndexOnlyScan(b *testing.B) {
+    // CREATE TABLE t (id INT, name TEXT, score INT)
+    // CREATE INDEX idx_covering ON t(id, name, score)
+    // SELECT name, score FROM t WHERE id = 500
+    // Expected: ~10 µs (direct index lookup, no table scan)
 }
 ```
 
 ---
 
-## Track D: Performance Verification
+## Track B: Bloom Filter for Hash Join
 
-### D1. Baseline Benchmark Run
+### B1. Bloom Filter Implementation
 
-Run the full benchmark suite and confirm no regression vs v0.9.6:
+Add `internal/DS/bloom_filter.go`:
 
-```bash
-go test ./internal/TS/Benchmark/... -bench=BenchmarkFair_ -benchtime=2s
+```go
+type BloomFilter struct {
+    bits    []uint64
+    k       int     // number of hash functions
+    n       int     // number of elements
+}
+
+func NewBloomFilter(expectedItems int, falsePositiveRate float64) *BloomFilter
+func (bf *BloomFilter) Add(key interface{})
+func (bf *BloomFilter) MightContain(key interface{}) bool
 ```
 
-Target (AMD EPYC 7763):
-- SELECT all (1K rows): ≤ 70 µs (baseline 60 µs + 15% tolerance)
-- SUM aggregate: ≤ 25 µs (baseline 19 µs)
-- GROUP BY: ≤ 160 µs (baseline 135 µs)
-- Result cache hit: ≤ 2 µs (baseline 1.5 µs)
+**Parameters**:
+- Use 2 hash functions (k=2) for simplicity
+- Size = ceil(-n * ln(p) / ln(2)^2) bits
+- Hash: use FNV-1a with different seeds for k hashes
 
-### D2. New Benchmark: Parameterized Query
+### B2. Integrate Bloom Filter into Hash Join
 
-Add `BenchmarkFair_PreparedStmt` to `internal/TS/Benchmark/benchmark_v0.9.16_test.go`:
+Modify `pkg/sqlvibe/exec_columnar.go`:
 
+```go
+func ColumnarHashJoinBloom(left, right *DS.HybridStore, leftCol, rightCol string) [][]DS.Value {
+    // Build phase: insert all right keys into bloom filter + hash table
+    bloom := DS.NewBloomFilter(right.RowCount(), 0.01)
+    hash := make(map[interface{}][][]DS.Value)
+    for _, rRow := range right.Scan() {
+        key := joinHashKey(rRow[rci])
+        bloom.Add(key)
+        hash[key] = append(hash[key], rRow)
+    }
+    
+    // Probe phase: check bloom filter first (avoids hash lookup for non-matches)
+    var out [][]DS.Value
+    for _, lRow := range left.Scan() {
+        key := joinHashKey(lRow[lci])
+        if !bloom.MightContain(key) {
+            continue  // Skip hash lookup entirely
+        }
+        matches, ok := hash[key]
+        // ...
+    }
+    return out
+}
 ```
-Prepare once, then Query 1000× with different ? params.
-Measures: param binding overhead on top of pure query execution.
-```
 
-### D3. New Benchmark: database/sql Driver Overhead
+### B3. Benchmark
 
-```
-Measure overhead of the driver layer relative to direct API:
-  direct: db.Query("SELECT ...") → rows
-  driver: sql.DB.Query("SELECT ...") → rows
-Target: driver overhead < 5 µs per query.
+```go
+func BenchmarkFair_JoinBloomFilter(b *testing.B) {
+    // 1000 users × 5000 orders, only 10% match
+    // Expected: ~30% faster than current hash join
+}
 ```
 
 ---
 
-## Track E: Final Test Suite Pass
+## Track C: Vectorized WHERE Filter
 
-### E1. Run All SQL:1999 Suites
+### C1. Column-Aware Filter Execution
 
-```bash
-go test ./internal/TS/SQL1999/... -timeout 120s
+When table is in columnar mode (`HybridStore.IsColumnar()`), execute WHERE predicates
+directly on `ColumnVector` data using SIMD-optimized comparison:
+
+Add `pkg/sqlvibe/exec_columnar.go`:
+
+```go
+// VectorizedFilterSIMD applies a comparison filter to a ColumnVector using
+// SIMD-optimized batch comparison. Returns a RoaringBitmap of matching indices.
+func VectorizedFilterSIMD(col *DS.ColumnVector, op string, val DS.Value) *DS.RoaringBitmap {
+    switch col.Type() {
+    case DS.TypeInt:
+        return vectorizedFilterInt64(col.Ints(), op, val.Int)
+    case DS.TypeFloat:
+        return vectorizedFilterFloat64(col.Floats(), op, val.Float)
+    case DS.TypeString:
+        return vectorizedFilterString(col.Strings(), op, val.Str)
+    }
+    return VectorizedFilter(col, op, val)  // fallback
+}
+
+func vectorizedFilterInt64(data []int64, op string, val int64) *DS.RoaringBitmap {
+    rb := DS.NewRoaringBitmap()
+    // 4-way unrolled comparison for SIMD auto-vectorization
+    n := len(data)
+    i := 0
+    for ; i <= n-4; i += 4 {
+        // Process 4 elements at once
+        if op == "=" {
+            if data[i] == val { rb.Add(uint32(i)) }
+            if data[i+1] == val { rb.Add(uint32(i+1)) }
+            if data[i+2] == val { rb.Add(uint32(i+2)) }
+            if data[i+3] == val { rb.Add(uint32(i+3)) }
+        }
+        // ... other ops
+    }
+    // Handle remainder
+    for ; i < n; i++ {
+        // ...
+    }
+    return rb
+}
 ```
 
-All 149+ suites must pass. Any new failures introduced by v0.9.11–14 changes must be
-fixed before tagging v0.9.16.
+### C2. Integrate with Query Execution
 
-### E2. F887 SQL1999 Suite — Release Candidate 2 Smoke Test
+Modify `pkg/sqlvibe/database.go` to detect columnar tables and route to vectorized path:
 
-Add `internal/TS/SQL1999/F887/01_test.go` as an end-to-end integration test covering
-all major features added in v0.9.11–v0.9.14:
+```go
+func (db *Database) execSelectWithWhere(stmt *SelectStmt) ([]map[string]interface{}, error) {
+    // Check if table is columnar and WHERE is pushable
+    if hs.IsColumnar() && IsPushableExpr(stmt.Where) {
+        // Use vectorized filter
+        bm := VectorizedFilterSIMD(col, op, val)
+        return materializeRows(hs, bm, requiredCols)
+    }
+    // Fallback to row-by-row execution
+}
+```
 
-- Parameterized `INSERT` + `SELECT`
-- `database/sql` driver round-trip
-- `ExecContext` with timeout
-- `ALTER TABLE DROP COLUMN` + subsequent query
-- `ALTER TABLE RENAME COLUMN` + subsequent query
-- CSV import → query → CSV export round-trip
-- Full transaction: BEGIN → INSERT → SAVEPOINT → rollback to savepoint → COMMIT
+### C3. Benchmark
 
-### E3. Regression Suite v0.9.16
-
-Add `internal/TS/Regression/regression_v0.9.16_test.go` with all panic reproductions
-found during the fuzzing campaign.
+```go
+func BenchmarkFair_VectorizedWhere(b *testing.B) {
+    // 10K rows, columnar mode, WHERE int_col = 5000
+    // Expected: 3-5× faster than row-by-row
+}
+```
 
 ---
 
-## Track F: Release Preparation
+## Track D: Reduce Allocations in Hot Paths
 
-### F1. Version Bump
+### D1. Row Map Pool
 
+Add `pkg/sqlvibe/row_pool.go`:
+
+```go
+var rowPool = sync.Pool{
+    New: func() interface{} {
+        return make(map[string]interface{}, 16)
+    },
+}
+
+func getRowMap() map[string]interface{} {
+    m := rowPool.Get().(map[string]interface{})
+    // Clear map
+    for k := range m {
+        delete(m, k)
+    }
+    return m
+}
+
+func putRowMap(m map[string]interface{}) {
+    rowPool.Put(m)
+}
 ```
-pkg/sqlvibe/version.go:
-  const Version = "v0.9.16"
+
+**Apply to**: `execSelectStmt`, `execInsertStmt`, cursor iteration.
+
+### D2. Preallocate Result Slices
+
+In query execution, preallocate result slices based on table stats:
+
+```go
+func (db *Database) execSelectStmt(...) {
+    estimatedRows := db.tableStats[tableName]
+    if estimatedRows == 0 {
+        estimatedRows = 1000
+    }
+    results := make([]map[string]interface{}, 0, estimatedRows)
+}
 ```
 
-### F2. HISTORY.md
+### D3. String Builder for Row Key Construction
 
-Add v0.9.16 entry documenting:
-- Bugs fixed via fuzzing
-- API stabilisation changes
-- Performance numbers from Track D benchmarks
+Replace `fmt.Sprintf` key building with `strings.Builder` in hot paths:
 
-### F3. README Update
-
-- Update "Stable Releases" table to include v0.9.11–v0.9.16
-- Update performance section with v0.9.16 benchmark numbers
-- Add "database/sql Driver" section with usage example
-- Add "Parameterized Queries" section with `?` and `:name` examples
-- Add "Query Timeout" section with `context.WithTimeout` example
-- Add "CSV / JSON Import-Export" section
-
-### F4. Tag
-
-```bash
-git tag -a v0.9.16 -m "Release v0.9.16: Release Candidate 2"
-git push origin v0.9.16
+```go
+// Before: key := fmt.Sprintf("%v|%v", key1, key2)
+// After:
+var sb strings.Builder
+sb.Grow(32)
+sb.WriteString(key1.String())
+sb.WriteByte(0)
+sb.WriteString(key2.String())
+key := sb.String()
 ```
+
+### D4. Benchmark
+
+```go
+func Benchmark_AllocationOverhead(b *testing.B) {
+    // SELECT * FROM t WHERE id = ? (parameterized, repeated 10000×)
+    // Measure allocations per iteration
+    // Target: < 5 allocations per query (down from ~20)
+}
+```
+
+---
+
+## Track E: Query Optimizer Improvements
+
+### E1. Selectivity-Based Index Selection
+
+Extend `internal/QP/optimizer.go`:
+
+```go
+// IndexSelectivity estimates the fraction of rows matching a predicate.
+// Uses ANALYZE statistics if available; otherwise uses heuristics.
+func IndexSelectivity(idx *IndexMetaQP, expr Expr, tableStats *TableStats) float64
+
+// SelectBestIndexByCost chooses the index with lowest estimated cost.
+// Cost = (selectivity * table_rows) + index_lookup_cost
+func SelectBestIndexByCost(indexes []*IndexMetaQP, expr Expr, stats *TableStats) *IndexMetaQP
+```
+
+**Heuristics** (when no stats available):
+- `col = const`: selectivity = 0.01 (1% match)
+- `col > const`: selectivity = 0.33
+- `col BETWEEN a AND b`: selectivity = 0.10
+- `col LIKE 'prefix%'`: selectivity = 0.05
+
+### E2. OR Predicate Index Union
+
+For `WHERE col1 = a OR col2 = b` with indexes on both columns:
+
+```go
+// OrIndexUnion performs bitmap union of two index lookups.
+func OrIndexUnion(db *Database, table string, preds []Expr) *DS.RoaringBitmap {
+    var result *DS.RoaringBitmap
+    for _, pred := range preds {
+        bm := db.indexLookup(table, pred)
+        if result == nil {
+            result = bm
+        } else {
+            result.UnionInPlace(bm)
+        }
+    }
+    return result
+}
+```
+
+### E3. Benchmark
+
+```go
+func BenchmarkFair_OrIndexUnion(b *testing.B) {
+    // CREATE INDEX idx_a ON t(a)
+    // CREATE INDEX idx_b ON t(b)
+    // SELECT * FROM t WHERE a = 100 OR b = 200
+    // Expected: use both indexes, union results
+}
+```
+
+---
+
+## Track F: Dispatch Table Expansion
+
+### F1. Add More Opcodes to Dispatch Table
+
+Extend `internal/VM/dispatch.go`:
+
+| Opcode | Handler | Estimated Impact |
+|--------|---------|------------------|
+| `OpNotNull` | Check if register is not NULL | 5% for WHERE-heavy queries |
+| `OpIsNull` | Check if register is NULL | 5% for NULL-heavy queries |
+| `OpAnd` | Logical AND | 3% for compound predicates |
+| `OpOr` | Logical OR | 3% for compound predicates |
+| `OpNot` | Logical NOT | 1% |
+| `OpBitAnd` / `OpBitOr` | Bitwise operations | 2% for bit operations |
+| `OpRemainder` | Modulo | 1% |
+
+### F2. Inline Hot Paths
+
+Mark hot-path functions for inlining:
+
+```go
+//go:noinline  // prevent inlining for cold paths
+func (vm *VM) handleComplexOp(inst *Instruction) { ... }
+
+// Inline threshold hint for hot paths
+//go:inline
+func compareVals(a, b interface{}) int { ... }
+```
+
+---
+
+## Track G: Parallel Query Execution (Optional/Stretch)
+
+### G1. Parallel Table Scan
+
+For large tables (>10K rows), split scan across multiple goroutines:
+
+```go
+func (db *Database) parallelScan(table string, workers int, fn func(row map[string]interface{}) bool) {
+    rows := db.tables[table].Rows()
+    chunkSize := (len(rows) + workers - 1) / workers
+    
+    var wg sync.WaitGroup
+    wg.Add(workers)
+    
+    for w := 0; w < workers; w++ {
+        start := w * chunkSize
+        end := start + chunkSize
+        if end > len(rows) {
+            end = len(rows)
+        }
+        
+        go func(start, end int) {
+            defer wg.Done()
+            for i := start; i < end; i++ {
+                if !fn(rows[i]) {
+                    break
+                }
+            }
+        }(start, end)
+    }
+    
+    wg.Wait()
+}
+```
+
+**Note**: This is a stretch goal. Profile first to confirm parallelization overhead is worth it.
 
 ---
 
 ## Files to Create / Modify
 
-| File | Action |
-|------|--------|
-| `internal/TS/PlainFuzzer/testdata/corpus/` | Add any new panic-reproducing corpus entries |
-| `internal/TS/PlainFuzzer/HUNTINGS.md` | Document all bugs found in fuzzing campaign |
-| `internal/TS/Regression/regression_v0.9.16_test.go` | **NEW** — panic reproductions from fuzzing |
-| `internal/TS/SQL1999/F887/01_test.go` | **NEW** — RC integration smoke test |
-| `internal/TS/Benchmark/benchmark_v0.9.16_test.go` | **NEW** — prepared stmt + driver overhead benchmarks |
-| `pkg/sqlvibe/API.md` | **NEW** — stable public API surface documentation |
-| `pkg/sqlvibe/version.go` | Bump to `v0.9.16` |
-| `pkg/sqlvibe/error_code.go` | Add missing error codes from audit |
-| `pkg/sqlvibe/database.go` | Convert raw `fmt.Errorf` calls to typed errors |
-| `Makefile` | Add `fuzz-regression` target |
-| `docs/HISTORY.md` | Add v0.9.16 entry |
-| `README.md` | Update stable releases, perf numbers, new feature sections |
+| File | Action | Track |
+|------|--------|-------|
+| `internal/DS/bloom_filter.go` | **NEW** | B |
+| `internal/QP/optimizer.go` | Modify (selectivity, index selection) | A, E |
+| `pkg/sqlvibe/exec_columnar.go` | Modify (bloom filter, vectorized WHERE) | B, C |
+| `pkg/sqlvibe/database.go` | Modify (index-only scan, row pool) | A, D |
+| `pkg/sqlvibe/row_pool.go` | **NEW** | D |
+| `pkg/sqlvibe/simd.go` | Modify (add filter functions) | C |
+| `internal/VM/dispatch.go` | Modify (more opcodes) | F |
+| `internal/TS/Benchmark/benchmark_v0.9.16_test.go` | **NEW** | All |
+| `pkg/sqlvibe/version.go` | Bump to `v0.9.16` | Final |
+| `docs/HISTORY.md` | Add v0.9.16 entry | Final |
 
 ---
 
@@ -268,16 +449,15 @@ git push origin v0.9.16
 
 | Feature | Target | Status |
 |---------|--------|--------|
-| Zero panics after 10-min FuzzSQL | Yes | [ ] |
-| Zero panics after 10-min FuzzDBFile | Yes | [ ] |
-| All 149+ SQL:1999 suites pass | 100% | [ ] |
-| F887 RC smoke test passes | 100% | [ ] |
-| SELECT all ≤ 70 µs (no regression) | Yes | [ ] |
-| Stable public API documented in API.md | Yes | [ ] |
-| Top 10 error paths use typed error codes | Yes | [ ] |
+| SELECT WHERE ≤ 80 µs (from 285 µs) | Yes | [ ] |
+| JOIN ≤ 200 µs (from 559 µs) | Yes | [ ] |
+| Index-only scan implemented | Yes | [ ] |
+| Bloom filter for hash join | Yes | [ ] |
+| Vectorized WHERE on columnar | Yes | [ ] |
+| Allocations reduced 50% | Yes | [ ] |
+| SELECT all no regression | ≤ 65 µs | [ ] |
+| All existing tests pass | 100% | [ ] |
 | Version bumped to v0.9.16 | Yes | [ ] |
-| README updated with v0.9.16 numbers | Yes | [ ] |
-| v0.9.16 tag created | Yes | [ ] |
 
 ---
 
@@ -285,7 +465,33 @@ git push origin v0.9.16
 
 | Test Suite | Description | Status |
 |------------|-------------|--------|
-| F887 suite | RC integration smoke test (7+ tests) | [ ] |
-| Regression v0.9.16 | Fuzzing-campaign panic reproductions | [ ] |
-| BenchmarkFair v0.9.16 | Performance non-regression | [ ] |
-| Full SQL:1999 run | All 149+ suites | [ ] |
+| BenchmarkFair v0.9.16 | Performance benchmarks | [ ] |
+| Benchmark_AllocationOverhead | Allocation profiling | [ ] |
+| Full SQL:1999 run | No regressions | [ ] |
+| Regression v0.9.16 | New feature tests | [ ] |
+
+---
+
+## Benchmark Commands
+
+```bash
+# Full benchmark suite
+go test ./internal/TS/Benchmark/... -bench=BenchmarkFair -benchtime=3s
+
+# Allocation profiling
+go test ./internal/TS/Benchmark/... -bench=Benchmark_Allocation -benchmem
+
+# Compare before/after
+go test ./internal/TS/Benchmark/... -bench=. -benchtime=3s | tee bench-v0.9.16.txt
+```
+
+---
+
+## Risk Mitigation
+
+| Risk | Mitigation |
+|------|------------|
+| Bloom filter false positives | Use low FPR (1%), fallback to hash lookup |
+| Parallel execution overhead | Profile first, only enable for large tables |
+| Memory increase for indexes | Document trade-off, make optional via PRAGMA |
+| Regression in existing perf | Run full benchmark suite before each commit |
