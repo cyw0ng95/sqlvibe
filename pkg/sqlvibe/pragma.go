@@ -144,6 +144,9 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		return db.pragmaQueryTimeout(stmt)
 	case "max_memory":
 		return db.pragmaMaxMemory(stmt)
+	// v0.10.0 additions
+	case "use_bytecode":
+		return db.pragmaUseBytecode(stmt)
 	default:
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
@@ -888,4 +891,24 @@ func (db *Database) pragmaMaxMemory(stmt *QP.PragmaStmt) (*Rows, error) {
 		return &Rows{Columns: []string{"max_memory"}, Data: [][]interface{}{{int64(val)}}}, nil
 	}
 	return &Rows{Columns: []string{"max_memory"}, Data: [][]interface{}{{db.maxMemoryBytes}}}, nil
+}
+
+
+// pragmaUseBytecode handles PRAGMA use_bytecode = 0|1.
+// Enables or disables the v0.10.0 bytecode execution engine.
+func (db *Database) pragmaUseBytecode(stmt *QP.PragmaStmt) (*Rows, error) {
+if stmt.Value != nil {
+val := pragmaIntValue(stmt.Value)
+db.useBytecode = val != 0
+v := int64(0)
+if db.useBytecode {
+v = 1
+}
+return &Rows{Columns: []string{"use_bytecode"}, Data: [][]interface{}{{v}}}, nil
+}
+v := int64(0)
+if db.useBytecode {
+v = 1
+}
+return &Rows{Columns: []string{"use_bytecode"}, Data: [][]interface{}{{v}}}, nil
 }

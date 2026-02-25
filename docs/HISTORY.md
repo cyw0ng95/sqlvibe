@@ -1,5 +1,57 @@
 # sqlvibe Release History
 
+## **v0.10.0** (2026-02-27)
+
+### Features: Real Bytecode Execution Engine
+
+#### Track A: Typed Value System
+- New `VmVal` 32-byte typed SQL scalar (no `interface{}` boxing) in `internal/VM/value.go`
+- `ValTag` constants: `TagNull`, `TagInt`, `TagFloat`, `TagText`, `TagBlob`, `TagBool`
+- Constructors: `VmNull()`, `VmInt()`, `VmFloat()` never allocate
+- Arithmetic helpers: `AddVmVal`, `SubVmVal`, `MulVmVal`, `DivVmVal`, `ModVmVal`, `NegVmVal`, `ConcatVmVal`
+- `ToInterface()` / `FromInterface()` for legacy API boundaries
+
+#### Track B: Compact Instruction Format
+- New `Instr` 16-byte fixed-width instruction in `internal/VM/instr.go`
+- Four instructions fit in a 64-byte L1 cache line
+- `InstrFlag` constants: `InstrFlagImmA`, `InstrFlagConstB`, `InstrFlagJumpC`, `InstrFlagTypedInt`, `InstrFlagTypedFloat`, `InstrFlagNullable`
+
+#### Track C: Opcode Set
+- New `BcOpCode uint16` constants in `internal/VM/bc_opcodes.go`
+- 36 opcodes: `BcNoop` through `BcCall` (arithmetic, comparison, logical, cursor, aggregate, function call)
+- `BcOpName` map for debug display
+
+#### Track D: Bytecode Program and Builder
+- New `BytecodeProg` struct with `Instrs`, `Consts`, `NumRegs`, `ColNames`
+- New `BytecodeBuilder` with `Emit`/`EmitA`/`EmitAB`/`EmitABC`/`EmitJump`, `AddConst`, `AllocReg`, `AllocLabel`, `FixupLabel`, `Build`
+
+#### Track E: Bytecode VM
+- New `BytecodeVM` in `internal/VM/bytecode_vm.go` with dispatch table `[NumBcOpcodes]BcOpHandler`
+- `BcVmContext` interface for storage access (`GetTableRows`, `GetTableSchema`)
+- All 36 opcode handlers in `internal/VM/bytecode_handlers.go`
+- Built-in scalar functions: `abs`, `length`, `upper`, `lower`, `coalesce`, `ifnull`, `typeof`, `nullif`
+
+#### Track F: Bytecode Compiler
+- New `BytecodeCompiler` in `internal/CG/bytecode_compiler.go`
+- Compiles `SELECT` statements (literals and FROM-table with WHERE filter)
+- Expression compiler in `internal/CG/bytecode_expr.go`: literals, column refs, binary/unary ops, function calls, CASE, CAST
+- `CompileInsert`/`CompileUpdate`/`CompileDelete` return errors (deferred to v0.10.1)
+
+#### Track G: Integration
+- `PRAGMA use_bytecode = 0|1` to opt-in (default: 0)
+- Dual-dispatch in `execSelectStmt`: tries bytecode path first, falls back to legacy on error
+- `dbBcVmContext` bridges `*Database` to `BcVmContext`
+
+#### Tests
+- New `internal/VM/value_test.go`: VmVal size, constructors, arithmetic, NULL propagation, ToInterface/FromInterface
+- New `internal/VM/instr_test.go`: Instr size (16 bytes), field packing, cache-line check
+- New `internal/VM/bytecode_prog_test.go`: builder emit, label fixup, const pool
+- New `internal/VM/bytecode_vm_test.go`: load const, arithmetic, jump, table scan
+- New `internal/CG/bytecode_compiler_test.go`: SELECT literal, multi-column, FROM table, WHERE filter
+- New `internal/TS/SQL1999/F888/01_test.go`: end-to-end bytecode tests
+- New `internal/TS/Regression/regression_v0.10.0_test.go`: NULL propagation, overflow, LIKE, CAST, agg all-NULL
+- New `internal/TS/Benchmark/benchmark_v0.10.0_test.go`: BC_SelectAll1K, BC_ArithInt, BC_WhereFilter, BC_SumAggregate, BC_Allocs
+
 ## **v0.9.17** (2026-02-26)
 
 ### Features: JSON Extension Enhancement
