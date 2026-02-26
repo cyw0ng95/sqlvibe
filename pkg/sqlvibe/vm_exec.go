@@ -102,6 +102,14 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 
 // execSelectStmt executes a SelectStmt directly using VM compilation
 func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
+	// v0.10.0: try bytecode path first (opt-in via PRAGMA use_bytecode = 1).
+	if db.useBytecode {
+		if rows, err := db.execBytecode(stmt); err == nil {
+			return rows, nil
+		}
+		// Fall through to legacy path on any compilation error.
+	}
+
 	if stmt.From == nil {
 		// SELECT without FROM - compile and execute directly
 		compiler := CG.NewCompiler()
@@ -2168,4 +2176,57 @@ delete(db.columnOrder, alias)
 delete(db.data, alias)
 
 return result, execErr
+}
+
+// execBytecode compiles stmt with the BytecodeCompiler and runs it with BytecodeVM.
+// Returns an error if compilation is not supported (caller falls back to legacy path).
+func (db *Database) execBytecode(stmt *QP.SelectStmt) (*Rows, error) {
+bc := CG.NewBytecodeCompiler()
+
+// Populate schema information so the compiler can resolve columns.
+for tbl, schema := range db.tables {
+bc.TableSchemas[tbl] = schema
+if order, ok := db.columnOrder[tbl]; ok {
+bc.TableColOrder[tbl] = order
+}
+}
+
+prog, err := bc.CompileSelect(stmt)
+if err != nil {
+return nil, err
+}
+
+ctx := &dbBcVmContext{db: db}
+bcVM := VM.NewBytecodeVM(prog, ctx)
+if err := bcVM.Run(); err != nil {
+return nil, err
+}
+
+colNames := bcVM.ResultColNames()
+if len(colNames) == 0 {
+colNames = make([]string, len(stmt.Columns))
+for i := range stmt.Columns {
+colNames[i] = fmt.Sprintf("col%d", i)
+}
+}
+
+return &Rows{Columns: colNames, Data: bcVM.ResultRows()}, nil
+}
+
+// dbBcVmContext adapts *Database to VM.BcVmContext.
+type dbBcVmContext struct {
+db *Database
+}
+
+func (c *dbBcVmContext) GetTableRows(table string) ([]map[string]interface{}, []string, error) {
+rows, ok := c.db.data[table]
+if !ok {
+return nil, nil, fmt.Errorf("no such table: %s", table)
+}
+cols := c.db.columnOrder[table]
+return rows, cols, nil
+}
+
+func (c *dbBcVmContext) GetTableSchema(table string) map[string]string {
+return c.db.tables[table]
 }

@@ -115,6 +115,8 @@ type Database struct {
 	// v0.9.13: context & memory limits
 	queryTimeoutMs int64 // default per-query timeout in milliseconds (0 = no limit)
 	maxMemoryBytes int64 // max result-set memory in bytes (0 = no limit)
+	// v0.10.0: bytecode execution engine (opt-in via PRAGMA use_bytecode = 1)
+	useBytecode bool
 }
 
 // savepointEntry holds the name and snapshot for a named savepoint.
