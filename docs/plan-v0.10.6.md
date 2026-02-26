@@ -1,210 +1,202 @@
-# Plan v0.10.6 — CLI Enhancements
+# Plan v0.10.6 — CLI Enhancements + Features + Compatibility
 
 ## Summary
 
-Enhance the CLI shell (sv-cli) with output modes, query timer, import/export, file I/O, NULL display, and column width controls. These improvements make the CLI more useful for development and debugging.
+Enhance the CLI shell with output modes, query timer, import/export, file I/O, NULL display, and column width controls. Add generated columns, deferrable constraints, trigger WHEN clauses, and complete error codes.
 
 ---
 
 ## Background
 
-### Current CLI State
+### Current State
 
-The CLI already has basic functionality:
-- ✅ SQL execution
-- ✅ `.tables`
-- ✅ `.schema`
-- ✅ `.indexes`
-- ✅ `.ext`
-- ✅ `.headers`
-- ✅ Basic table output
-
-### v0.10.6 Focus
-
-Add essential CLI features for embedded database use:
-
-| Feature | Description |
-|---------|-------------|
-| Output modes | csv, table, list, json |
-| Query timer | Show execution time |
-| Import/Export | CSV/JSON file I/O |
-| File I/O | .read, .output |
-| NULL display | Custom NULL representation |
-| Column width | Adjustable column widths |
+The database has solid core functionality. This version adds:
+- CLI improvements for development/debugging
+- Advanced SQL features (generated columns, deferrable constraints)
+- Trigger enhancements
+- Error code completion
 
 ---
 
-## 1. Output Modes
+## Part 1: CLI Enhancements
 
-### 1.1 Modes
+### 1. Output Modes
 
-| Mode | Description | Example |
-|------|-------------|---------|
-| `csv` | Comma-separated | `1,alice,25` |
-| `table` | ASCII table with borders | `| id | name |` |
-| `list` | Column: value | `id: 1` |
-| `json` | JSON array | `[{"id":1}]` |
+| Mode | Description |
+|------|-------------|
+| `csv` | Comma-separated |
+| `table` | ASCII table with borders |
+| `list` | Column: value format |
+| `json` | JSON array |
 
-### 1.2 Implementation
-
-```go
-type OutputMode int
-
-const (
-    ModeTable OutputMode = iota
-    ModeCSV
-    ModeList
-    ModeJSON
-)
-```
-
-### 1.3 Commands
+### 2. Query Timer
 
 ```bash
-.mode csv
-.mode table
-.mode list
-.mode json
-.mode           # Show current mode
+.timer on       # Show execution time
+.timer off
+```
+
+### 3. Import/Export
+
+```bash
+.import file.csv table   # Import CSV
+.export csv file.csv    # Export to CSV
+.export json file.json  # Export to JSON
+```
+
+### 4. File I/O
+
+```bash
+.read file.sql        # Execute SQL file
+.output file.txt      # Redirect output
+.output stdout        # Restore output
+```
+
+### 5. NULL Display
+
+```bash
+.nullvalue TEXT       # Custom NULL string
+```
+
+### 6. Column Width
+
+```bash
+.width 10 20          # Set column widths
+.width -1            # Auto-size
 ```
 
 ---
 
-## 2. Query Timer
+## Part 2: Generated Columns
 
-### 2.1 Timer Toggle
+### 2.1 Syntax
 
-```bash
-.timer on       # Show query execution time
-.timer off      # Hide timer (default)
+```sql
+CREATE TABLE t (
+    id INTEGER PRIMARY KEY,
+    first_name TEXT,
+    last_name TEXT,
+    full_name TEXT GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED,
+    price REAL,
+    tax REAL GENERATED ALWAYS AS (price * 0.1) STORED
+);
 ```
 
-### 2.2 Output Format
+### 2.2 Implementation
 
+| Task | Description |
+|------|-------------|
+| Parse GENERATED ALWAYS AS | New syntax in column definition |
+| STORED keyword | Materialize on write |
+| Expression evaluation | Compute generated values |
+| Read generated columns | Return computed values |
+
+### 2.3 Types
+
+| Type | Description |
+|------|-------------|
+| `VIRTUAL` | Computed on read (not stored) |
+| `STORED` | Computed on write (persisted) |
+
+---
+
+## Part 3: Deferrable Constraints
+
+### 3.1 Syntax
+
+```sql
+CREATE TABLE t (
+    id INTEGER PRIMARY KEY,
+    parent_id INTEGER REFERENCES t(id) DEFERRABLE INITIALLY DEFERRED
+);
+
+-- Or immediate (default)
+CREATE TABLE t (
+    id INTEGER PRIMARY KEY,
+    parent_id INTEGER REFERENCES t(id) DEFERRABLE INITIALLY IMMEDIATE
+);
+
+-- Not deferrable (default)
+CREATE TABLE t (
+    id INTEGER PRIMARY KEY,
+    parent_id INTEGER REFERENCES t(id) NOT DEFERRABLE
+);
 ```
-Run time: 0.234 ms
-```
 
-### 2.3 Implementation
+### 3.2 Implementation
 
-```go
-type TimerConfig struct {
-    Enabled bool
-}
+| Task | Description |
+|------|-------------|
+| Parse DEFERRABLE | New syntax in column/table constraints |
+| INITIALLY DEFERRED | Check at transaction end |
+| INITIALLY IMMEDIATE | Check at each statement |
+| NOT DEFERRABLE | Check immediately (default) |
 
-func (t *TimerConfig) Measure(start time.Time) time.Duration {
-    elapsed := time.Since(start)
-    if t.Enabled {
-        fmt.Printf("Run time: %.3f ms\n", elapsed.Seconds()*1000)
-    }
-    return elapsed
-}
+### 3.3 Transaction Behavior
+
+```sql
+BEGIN;
+INSERT INTO child VALUES (1, 999);  -- parent doesn't exist yet
+COMMIT;  -- constraint checked here for DEFERRED
 ```
 
 ---
 
-## 3. Import/Export
+## Part 4: Trigger WHEN Clause
 
-### 3.1 Import CSV
+### 4.1 Syntax
 
-```bash
-.import path/to/file.csv table_name
+```sql
+CREATE TRIGGER update_auth
+    BEFORE UPDATE ON users
+    WHEN old.role != 'admin'
+BEGIN
+    UPDATE log SET action = 'update' WHERE user_id = old.id;
+END;
+
+CREATE TRIGGER log_insert
+    AFTER INSERT ON orders
+    WHEN NEW.total > 1000
+BEGIN
+    INSERT INTO alerts VALUES ('Large order', NEW.id);
+END;
 ```
 
-| Feature | Description |
-|--------|-------------|
-| Auto-detect delimiter | Comma, tab, semicolon |
-| Header row | First row as column names |
-| Create table | Auto-create if not exists |
-| Types | Infer INTEGER, REAL, TEXT |
+### 4.2 Implementation
 
-### 3.2 Export
-
-```bash
-.export csv path/to/file.csv
-.export json path/to/file.json
-.export table table_name path/to/file.csv
-```
-
-### 3.3 Implementation
-
-```go
-func (cli *CLI) ImportCSV(path string, tableName string) error
-func (cli *CLI) ExportCSV(path string, query string) error
-func (cli *CLI) ExportJSON(path string, query string) error
-```
+| Task | Description |
+|------|-------------|
+| Parse WHEN clause | New syntax in trigger definition |
+| Evaluate condition | Check WHEN before trigger body |
+| Skip if false | Don't execute trigger body |
 
 ---
 
-## 4. File I/O
+## Part 5: Error Code Completion
 
-### 4.1 Read SQL File
+### 5.1 Current State
 
-```bash
-.read path/to/file.sql
-```
+Partial typed error codes exist. Complete coverage needed.
 
-Execute SQL commands from a file.
+### 5.2 Error Codes to Add
 
-### 4.2 Output Redirection
+| Code | Description |
+|------|-------------|
+| SVDB_CONSTRAINT_NOT_NULL | NOT NULL violation |
+| SVDB_CONSTRAINT_UNIQUE | UNIQUE violation |
+| SVDB_CONSTRAINT_CHECK | CHECK violation |
+| SVDB_CONSTRAINT_FOREIGN_KEY | FK violation |
+| SVDB_DIVISION_BY_ZERO | Division by zero |
+| SVDB_INVALID_TYPE | Type mismatch |
+| SVDB_INVALID_VALUE | Invalid value |
 
-```bash
-.output path/to/file.txt
-SELECT * FROM t;
-.output stdout
-```
+### 5.3 Implementation
 
-Redirect query output to a file.
-
-### 4.3 Implementation
-
-```go
-func (cli *CLI) ReadFile(path string) error
-func (cli *CLI) SetOutput(path string) error
-func (cli *CLI) SetOutputStdout() error
-```
-
----
-
-## 5. NULL Display
-
-### 5.1 Custom NULL String
-
-```bash
-.nullvalue NULL       # Default
-.nullvalue '(null)'   # Custom
-.nullvalue ''         # Empty string
-```
-
-### 5.2 Implementation
-
-```go
-type NULLDisplayConfig struct {
-    Value string  // displayed for NULL
-}
-```
-
----
-
-## 6. Column Width
-
-### 6.1 Set Column Widths
-
-```bash
-.width 10 20 30       # Set widths for columns 1, 2, 3
-.width                # Show current widths
-.width -1            # Auto-size column N
-```
-
-### 6.2 Implementation
-
-```go
-type ColumnWidthConfig struct {
-    Widths []int  // per-column width, -1 = auto
-}
-
-func (c *ColumnWidthConfig) Format(value interface{}, colIdx int) string
-```
+| Task | Description |
+|------|-------------|
+| Add error codes | Define new codes in error_code.go |
+| Replace fmt.Errorf | Use typed errors |
+| IsErrorCode helper | Already exists, ensure full usage |
 
 ---
 
@@ -212,176 +204,15 @@ func (c *ColumnWidthConfig) Format(value interface{}, colIdx int) string
 
 ```mermaid
 graph TD
-    A[Track 1: Output Modes] --> E
-    B[Track 2: Query Timer] --> E
-    C[Track 3: Import/Export] --> E
-    D[Track 4: File I/O] --> E
-    F[Track 5: NULL Display] --> E
-    G[Track 6: Column Width] --> E
-    E[Track 7: Tests]
+    A[CLI: Output Modes] --> G
+    B[CLI: Timer/Import/Export] --> G
+    C[CLI: File I/O/NULL/Width] --> G
+    D[Generated Columns] --> G
+    E[Deferrable Constraints] --> G
+    F[Trigger WHEN] --> G
+    H[Error Code Completion] --> G
+    G[Tests]
 ```
-
----
-
-## Track 1: Output Modes
-
-### T1.1 Mode Parser
-
-- Parse `.mode csv|table|list|json`
-- Store current mode
-
-### T1.2 Formatters
-
-- `formatTable(rows)` - ASCII table
-- `formatCSV(rows)` - CSV output
-- `formatList(rows)` - List format
-- `formatJSON(rows)` - JSON output
-
-### T1.3 Test Cases
-
-| Test | Description |
-|------|-------------|
-| `.mode csv` | Proper CSV output |
-| `.mode table` | ASCII table with borders |
-| `.mode list` | Column: value format |
-| `.mode json` | Valid JSON array |
-
----
-
-## Track 2: Query Timer
-
-### T2.1 Timer Toggle
-
-- Parse `.timer on|off`
-- Store timer state
-
-### T2.2 Measure Time
-
-- Wrap query execution with timer
-- Print elapsed time
-
-### T2.3 Test Cases
-
-| Test | Description |
-|------|-------------|
-| `.timer on` then query | Shows time |
-| `.timer off` then query | No time shown |
-| `.timer` | Shows current state |
-
----
-
-## Track 3: Import/Export
-
-### T3.1 Import CSV
-
-- Read CSV file
-- Parse headers
-- Infer column types
-- Create table if needed
-- Insert data
-
-### T3.2 Export CSV
-
-- Execute query
-- Write results to CSV
-- Include headers
-
-### T3.3 Export JSON
-
-- Execute query
-- Convert to JSON
-- Write to file
-
-### T3.4 Test Cases
-
-| Test | Description |
-|------|-------------|
-| `.import file.csv t` | Import CSV into table |
-| `.export csv file.csv` | Export to CSV |
-| `.export json file.json` | Export to JSON |
-
----
-
-## Track 4: File I/O
-
-### T4.1 Read SQL File
-
-- Read file content
-- Split by semicolon
-- Execute each statement
-
-### T4.2 Output Redirection
-
-- Open output file
-- Redirect stdout to file
-- Restore on `.output stdout`
-
-### T4.3 Test Cases
-
-| Test | Description |
-|------|-------------|
-| `.read file.sql` | Execute SQL from file |
-| `.output file.txt` then query | Output to file |
-| `.output stdout` | Restore stdout |
-
----
-
-## Track 5: NULL Display
-
-### T5.1 NULL Value Config
-
-- Parse `.nullvalue STRING`
-- Store NULL display string
-
-### T5.2 Apply to Output
-
-- Replace nil values with custom string
-- Apply in all formatters
-
-### T5.3 Test Cases
-
-| Test | Description |
-|------|-------------|
-| `.nullvalue N/A` | NULL shows as "N/A" |
-| `.nullvalue ''` | NULL shows as "" |
-
----
-
-## Track 6: Column Width
-
-### T6.1 Width Parser
-
-- Parse `.width N1 N2 N3...`
-- Parse `.width -N` for auto
-- Store widths
-
-### T6.2 Apply to Output
-
-- Truncate/pad columns
-- Apply in table formatter
-
-### T6.3 Test Cases
-
-| Test | Description |
-|------|-------------|
-| `.width 10` | First column 10 chars |
-| `.width -1` | Auto-size column 1 |
-
----
-
-## Track 7: Tests
-
-### T7.1 Integration Tests
-
-| Test | Description |
-|------|-------------|
-| Output modes | All modes produce correct format |
-| Timer | Shows correct time |
-| Import | CSV imports correctly |
-| Export | CSV/JSON exports correctly |
-| File I/O | Read/write works |
-| NULL display | Custom NULL shown |
-| Column width | Columns sized correctly |
 
 ---
 
@@ -389,10 +220,15 @@ graph TD
 
 | File | Action | Description |
 |------|--------|-------------|
-| `cmd/sv-cli/main.go` | MODIFY | Add all CLI commands |
+| `cmd/sv-cli/main.go` | MODIFY | CLI commands |
 | `cmd/sv-cli/formatter.go` | NEW | Output formatters |
-| `cmd/sv-cli/importer.go` | NEW | Import functionality |
-| `cmd/sv-cli/exporter.go` | NEW | Export functionality |
+| `cmd/sv-cli/importer.go` | NEW | Import |
+| `cmd/sv-cli/exporter.go` | NEW | Export |
+| `internal/QP/parser.go` | MODIFY | Generated columns, deferrable, trigger WHEN |
+| `internal/QP/tokenizer.go` | MODIFY | New keywords |
+| `pkg/sqlvibe/database.go` | MODIFY | Generated column handling |
+| `pkg/sqlvibe/error_code.go` | MODIFY | Add error codes |
+| `pkg/sqlvibe/database.go` | MODIFY | Deferrable constraint checking |
 
 ---
 
@@ -400,15 +236,11 @@ graph TD
 
 | Criterion | Target |
 |-----------|--------|
-| `.mode csv` | CSV output works |
-| `.mode table` | ASCII table works |
-| `.mode list` | List format works |
-| `.mode json` | JSON output works |
-| `.timer on` | Shows execution time |
-| `.import file.csv t` | Imports CSV |
-| `.export csv file` | Exports CSV |
-| `.read file.sql` | Executes SQL file |
-| `.output file` | Redirects output |
-| `.nullvalue TEXT` | Custom NULL display |
-| `.width N` | Column width works |
+| CLI output modes | csv/table/list/json work |
+| CLI timer | Shows execution time |
+| CLI import/export | CSV/JSON import/export works |
+| Generated columns | Computed on insert/update |
+| Deferrable constraints | Deferred checking works |
+| Trigger WHEN | Condition evaluated |
+| Error codes | All common errors typed |
 | 100% tests pass | Regression suite |
