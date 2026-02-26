@@ -8,6 +8,7 @@ import (
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
+	"github.com/cyw0ng95/sqlvibe/internal/VM"
 )
 
 // applyTypeAffinity coerces row values to match declared column type affinities.
@@ -548,11 +549,6 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 	newIdx := len(ctx.db.data[tableName]) - 1
 	ctx.db.addToIndexes(tableName, row, newIdx)
 
-	// Update storage engine
-	rowID := int64(len(ctx.db.data[tableName]))
-	serialized := ctx.db.serializeRow(row)
-	ctx.db.engine.Insert(tableName, uint64(rowID), serialized)
-
 	// Fire AFTER INSERT triggers
 	if err := ctx.db.fireTriggers(tableName, "INSERT", "AFTER", nil, row, 0); err != nil {
 		return err
@@ -588,17 +584,17 @@ func (ctx *dbVmContext) evaluateCheckConstraint(expr QP.Expr, row map[string]int
 		// Perform the operation
 		switch e.Op {
 		case QP.TokenEq:
-			return ctx.db.engine.CompareVals(left, right) == 0
+			return VM.CompareVals(left, right) == 0
 		case QP.TokenNe:
-			return ctx.db.engine.CompareVals(left, right) != 0
+			return VM.CompareVals(left, right) != 0
 		case QP.TokenLt:
-			return ctx.db.engine.CompareVals(left, right) < 0
+			return VM.CompareVals(left, right) < 0
 		case QP.TokenLe:
-			return ctx.db.engine.CompareVals(left, right) <= 0
+			return VM.CompareVals(left, right) <= 0
 		case QP.TokenGt:
-			return ctx.db.engine.CompareVals(left, right) > 0
+			return VM.CompareVals(left, right) > 0
 		case QP.TokenGe:
-			return ctx.db.engine.CompareVals(left, right) >= 0
+			return VM.CompareVals(left, right) >= 0
 		case QP.TokenAnd:
 			// AND: both must be truthy
 			return isTruthy(left) && isTruthy(right)

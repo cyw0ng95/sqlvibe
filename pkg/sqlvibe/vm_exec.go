@@ -356,7 +356,7 @@ func (db *Database) execSelectStmtWithContext(stmt *QP.SelectStmt, outerRow map[
 		if stmt.Distinct {
 			topK = 0 // full sort; LIMIT applied after dedup below
 		}
-		results = db.engine.SortRowsTopK(results, stmt.OrderBy, allCols, topK)
+		results = VM.SortRowsTopK(results, stmt.OrderBy, allCols, topK)
 		// Apply DISTINCT after sort so the dedup key uses only projected columns.
 		if stmt.Distinct {
 			results = deduplicateRowsN(results, numSelectCols)
@@ -883,7 +883,7 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 		if stmt.Distinct {
 			topK = 0 // full sort; LIMIT applied after dedup below
 		}
-		results = db.engine.SortRowsTopK(results, stmt.OrderBy, fullCols, topK)
+		results = VM.SortRowsTopK(results, stmt.OrderBy, fullCols, topK)
 		// Apply DISTINCT after sort so only projected columns form the dedup key.
 		if stmt.Distinct {
 			results = deduplicateRowsN(results, len(cols))
