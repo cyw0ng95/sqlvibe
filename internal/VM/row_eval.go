@@ -45,6 +45,7 @@ func EvalExprRowErrWithData(row map[string]interface{}, expr QP.Expr, data map[s
 	val := qe.evalValue(row, expr)
 	return val, qe.LastError()
 }
+
 // EvalBoolRow evaluates an AST boolean expression against a row map without cursor state.
 func EvalBoolRow(row map[string]interface{}, expr QP.Expr) bool {
 	return EvalBoolRowWithData(row, expr, nil)
