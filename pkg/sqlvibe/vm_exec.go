@@ -100,37 +100,35 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 	return &Rows{Columns: cols, Data: rows}, nil
 }
 
-// execSelectStmt executes a SelectStmt directly using VM compilation
+// execSelectStmt executes a SelectStmt directly using the bytecode engine.
 func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
-	// v0.10.0: try bytecode path first (opt-in via PRAGMA use_bytecode = 1).
-	if db.useBytecode {
-		if rows, err := db.execBytecode(stmt); err == nil {
-			return rows, nil
-		}
-		// Fall through to legacy path on any compilation error.
+	// v0.10.0: always try bytecode path first; fall through on unsupported forms.
+	if rows, err := db.execBytecode(stmt); err == nil {
+		return rows, nil
 	}
 
+	// Queries with no FROM clause: handle set operations (UNION/INTERSECT/EXCEPT) by
+	// splitting into left and right parts and combining results.
 	if stmt.From == nil {
-		// SELECT without FROM - compile and execute directly
-		compiler := CG.NewCompiler()
-		program := compiler.CompileSelect(stmt)
-
-		vm := VM.NewVMWithContext(program, &dbVmContext{db: db})
-		err := vm.Run(nil)
-		if err != nil {
-			return nil, err
+		if stmt.SetOp != "" && stmt.SetOpRight != nil {
+			leftStmt := *stmt
+			leftStmt.SetOp = ""
+			leftStmt.SetOpAll = false
+			leftStmt.SetOpRight = nil
+			leftRows, err := db.execSelectStmt(&leftStmt)
+			if err != nil {
+				return nil, err
+			}
+			rightRows, err := db.execSelectStmt(stmt.SetOpRight)
+			if err != nil {
+				return nil, err
+			}
+			combined := db.applySetOp(leftRows.Data, rightRows.Data, stmt.SetOp, stmt.SetOpAll)
+			return &Rows{Columns: leftRows.Columns, Data: combined}, nil
 		}
-
-		results := vm.Results()
-		cols := make([]string, len(stmt.Columns))
-		for i := range stmt.Columns {
-			cols[i] = fmt.Sprintf("col%d", i)
-		}
-
-		return &Rows{Columns: cols, Data: results}, nil
+		// No FROM and no set op: bytecode already failed — unsupported form.
+		return nil, fmt.Errorf("unsupported SELECT form")
 	}
-
-	// SELECT with FROM - use existing VM query execution
 
 	// Handle derived table in FROM clause (nested subqueries)
 	if stmt.From.Subquery != nil {

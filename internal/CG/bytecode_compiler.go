@@ -60,6 +60,12 @@ func (bc *BytecodeCompiler) CompileDelete(_ *QP.DeleteStmt) (*VM.BytecodeProg, e
 // compileSelectNoFrom handles SELECT without FROM (e.g. SELECT 1+1, 'hi').
 func (bc *BytecodeCompiler) compileSelectNoFrom(stmt *QP.SelectStmt) (*VM.BytecodeProg, error) {
 	cols := stmt.Columns
+	if len(cols) == 0 {
+		return nil, fmt.Errorf("bytecode compiler: SELECT with no columns")
+	}
+	if stmt.SetOp != "" {
+		return nil, fmt.Errorf("bytecode compiler: set operations (UNION/INTERSECT/EXCEPT) not supported yet")
+	}
 	colNames := make([]string, len(cols))
 	regs := make([]int32, len(cols))
 
@@ -87,6 +93,23 @@ func (bc *BytecodeCompiler) compileSelectFromTable(stmt *QP.SelectStmt) (*VM.Byt
 	}
 	if stmt.GroupBy != nil || stmt.SetOp != "" {
 		return nil, fmt.Errorf("bytecode compiler: GROUP BY / set ops not supported yet")
+	}
+	if stmt.OrderBy != nil || stmt.Limit != nil {
+		return nil, fmt.Errorf("bytecode compiler: ORDER BY / LIMIT not supported yet")
+	}
+	if stmt.Distinct || stmt.Having != nil {
+		return nil, fmt.Errorf("bytecode compiler: DISTINCT / HAVING not supported yet")
+	}
+
+	// Reject if any projected column uses an aggregate function.
+	for _, col := range stmt.Columns {
+		if containsAggregateFunc(col) {
+			return nil, fmt.Errorf("bytecode compiler: aggregate functions not supported yet")
+		}
+	}
+	// Reject if WHERE contains a subquery expression.
+	if stmt.Where != nil && containsSubquery(stmt.Where) {
+		return nil, fmt.Errorf("bytecode compiler: subquery in WHERE not supported yet")
 	}
 
 	tableName := stmt.From.Name
@@ -243,4 +266,75 @@ func bcExprName(expr QP.Expr, idx int) string {
 		return fmt.Sprintf("%v", e.Value)
 	}
 	return fmt.Sprintf("col%d", idx)
+}
+
+// aggregateFuncs is the set of SQL aggregate function names.
+var aggregateFuncs = map[string]bool{
+	"count": true, "sum": true, "avg": true, "min": true, "max": true,
+	"group_concat": true, "total": true,
+}
+
+// containsAggregateFunc reports whether expr contains any aggregate FuncCall.
+func containsAggregateFunc(expr QP.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *QP.FuncCall:
+		if aggregateFuncs[strings.ToLower(e.Name)] {
+			return true
+		}
+		for _, a := range e.Args {
+			if containsAggregateFunc(a) {
+				return true
+			}
+		}
+	case *QP.BinaryExpr:
+		return containsAggregateFunc(e.Left) || containsAggregateFunc(e.Right)
+	case *QP.UnaryExpr:
+		return containsAggregateFunc(e.Expr)
+	case *QP.AliasExpr:
+		return containsAggregateFunc(e.Expr)
+	case *QP.CaseExpr:
+		for _, w := range e.Whens {
+			if containsAggregateFunc(w.Condition) || containsAggregateFunc(w.Result) {
+				return true
+			}
+		}
+		return containsAggregateFunc(e.Else)
+	case *QP.CastExpr:
+		return containsAggregateFunc(e.Expr)
+	}
+	return false
+}
+
+// containsSubquery reports whether expr contains any SubqueryExpr node.
+func containsSubquery(expr QP.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *QP.SubqueryExpr:
+		return e != nil
+	case *QP.BinaryExpr:
+		return containsSubquery(e.Left) || containsSubquery(e.Right)
+	case *QP.UnaryExpr:
+		return containsSubquery(e.Expr)
+	case *QP.AliasExpr:
+		return containsSubquery(e.Expr)
+	case *QP.FuncCall:
+		for _, a := range e.Args {
+			if containsSubquery(a) {
+				return true
+			}
+		}
+	case *QP.CaseExpr:
+		for _, w := range e.Whens {
+			if containsSubquery(w.Condition) || containsSubquery(w.Result) {
+				return true
+			}
+		}
+		return containsSubquery(e.Else)
+	}
+	return false
 }

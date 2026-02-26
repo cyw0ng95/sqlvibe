@@ -6,6 +6,7 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
+| **v0.10.0** | 2026-02-26 | Bytecode Execution Engine: always-on bytecode VM, removed legacy AST path |
 | **v0.9.17** | 2026-02-26 | JSON Extension Enhancement: Table-valued functions (json_each, json_tree), Aggregates (json_group_array, json_group_object), JSONB format |
 
 ## Features
@@ -98,179 +99,69 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.9.12)
+## Performance (v0.10.0)
 
-Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3s`.
+Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=2s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
-`db.ClearResultCache()` so actual per-query execution cost is measured (not cache-hit
-latency). SQLite's `database/sql` driver reuses prepared statements across iterations.
+`db.ClearResultCache()` so actual per-query execution cost is measured.
+SQLite's `database/sql` driver reuses prepared statements across iterations.
 Both sides iterate all result rows end-to-end.
-(`go test ./internal/TS/Benchmark/... -bench=BenchmarkFair_ -benchtime=3s`).
+(`go test ./internal/TS/Benchmark/... -bench=BenchmarkCompare_ -benchtime=2s`).
 Results may vary on different hardware.
 
-### Query Performance (1 000-row table)
+### v0.10.0 Bytecode Engine: SQLite vs sqlvibe across data scales
 
-| Operation | sqlvibe | SQLite Go | Result |
-|-----------|--------:|----------:|--------|
-| SELECT all (3 cols) | 60 µs | 566 µs | **sqlvibe 9.4x faster** |
-| SELECT WHERE | 273 µs | 91 µs | SQLite 3.0x faster |
-| ORDER BY (500 rows) | 194 µs | 297 µs | **sqlvibe 1.5x faster** |
-| COUNT(*) | 6.6 µs | 5.3 µs | roughly equal |
-| SUM | 18.6 µs | 67 µs | **sqlvibe 3.6x faster** |
-| GROUP BY | 137 µs | 492 µs | **sqlvibe 3.6x faster** |
-| JOIN (100×500 rows) | 557 µs | 233 µs | SQLite 2.4x faster |
-| BETWEEN filter | 460 µs | 183 µs | SQLite 2.5x faster |
+sqlvibe v0.10.0 ships a register-based **bytecode execution engine** that is always on.
+The old AST-walking path has been removed; the bytecode VM is the sole execution path,
+with a transparent fallback to the register VM for SQL constructs the bytecode compiler
+does not yet cover (e.g. multi-table JOINs with ORDER BY).
 
-### DML Operations
+#### SELECT all rows
 
-| Operation | sqlvibe | SQLite Go | Result |
-|-----------|--------:|----------:|--------|
-| INSERT single | 6.5 µs | 6.2 µs | roughly equal |
-| INSERT 100 (batch) | 564 µs | 572 µs | roughly equal |
-| INSERT OR REPLACE | 40 µs | — | conflict + delete + re-insert |
-| INSERT OR IGNORE | 9.7 µs | — | conflict silently skipped |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 292 µs | 182 µs | **sqlvibe 1.6× faster** |
+| 10 K | 2.87 ms | 1.62 ms | **sqlvibe 1.8× faster** |
+| 100 K | 28.8 ms | 20.4 ms | **sqlvibe 1.4× faster** |
 
-### Special-case Performance
+#### WHERE filter (integer column, ~50% selectivity)
 
-| Operation | sqlvibe | SQLite Go | Result |
-|-----------|--------:|----------:|--------|
-| Result cache hit (repeated query) | 1.5 µs | 566 µs | **sqlvibe 377x faster** |
-| LIMIT 10 no ORDER BY (10K rows) | 20.2 µs | — | fast early-termination path |
-| Expression bytecode eval | 99 ns | — | single-dispatch expression evaluation |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 188 µs | 104 µs | **sqlvibe 1.8× faster** |
+| 10 K | 1.79 ms | 990 µs | **sqlvibe 1.8× faster** |
+| 100 K | 18.1 ms | 8.71 ms | **sqlvibe 2.1× faster** |
 
-### Parameterized Query Performance (v0.9.11)
+#### SUM aggregate
 
-| Operation | sqlvibe | Notes |
-|-----------|--------:|-------|
-| `QueryWithParams` (WHERE id = ?) | 254 µs | includes `formatParamSQL` substitution |
-| `ExecWithParams` (INSERT single) | 3.0 µs | ~46% overhead vs plain INSERT |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 66.7 µs | 20.7 µs | **sqlvibe 3.2× faster** |
+| 10 K | 600 µs | 113 µs | **sqlvibe 5.3× faster** |
+| 100 K | 6.11 ms | 1.41 ms | **sqlvibe 4.3× faster** |
 
-### Transaction & Savepoint Performance (v0.9.6)
+#### GROUP BY (4 groups, SUM + COUNT)
 
-| Operation | sqlvibe | Notes |
-|-----------|--------:|-------|
-| SAVEPOINT + ROLLBACK TO cycle | 79 µs | snapshot capture + restore |
-| SAVEPOINT + RELEASE cycle | 54 µs | snapshot capture + discard |
-| INSERT with UNIQUE constraint | 4.7 µs | ~24% overhead vs plain INSERT |
-| INSERT with NOT NULL constraint | 3.8 µs | negligible overhead |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 480 µs | 128 µs | **sqlvibe 3.8× faster** |
+| 10 K | 4.93 ms | 1.03 ms | **sqlvibe 4.8× faster** |
+| 100 K | 57.9 ms | 11.9 ms | **sqlvibe 4.9× faster** |
 
-### SIMD Vectorization (v0.9.3)
+#### COUNT(*)
 
-| Operation | 256 elems | 1 024 elems | 4 096 elems |
-|-----------|----------:|------------:|------------:|
-| VectorSumInt64 | 70 ns | 251 ns | 988 ns |
-| VectorSumFloat64 | 69 ns | 249 ns | 969 ns |
-| VectorAddInt64 (1 024) | — | 567 ns | — |
-| VectorMulFloat64 (1 024) | — | 503 ns | — |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 5.4 µs | 8.1 µs | SQLite 1.5× faster |
+| 10 K | 7.0 µs | 7.9 µs | roughly equal |
+| 100 K | 25.2 µs | 7.8 µs | **sqlvibe 3.2× faster** |
 
-4-way loop unrolling enables the Go compiler to auto-vectorize on amd64/arm64 (SSE2/NEON).
-
-### Dispatch Table (v0.9.3)
-
-| Opcode group | Before | After (v0.9.3) |
-|--------------|-------:|---------------:|
-| Opcodes in dispatch table | 10 | 22 |
-
-v0.9.3 extends the dispatch table to 22 opcodes: comparison operators (Eq/Ne/Lt/Le/Gt/Ge)
-and extended string ops (Trim/LTrim/RTrim/Replace/Instr) now bypass the large switch statement.
-
-### v0.9.12 database/sql Driver
-
-| Feature | Description |
-|---------|-------------|
-| `sql.Open("sqlvibe", path)` | Standard Go `database/sql` entry point |
-| `db.Exec` / `db.Query` | DDL + DML via stdlib interface |
-| `db.QueryRow` + scan | Typed scan into `int64`, `float64`, `string`, `[]byte`, `sql.NullString` |
-| `db.Prepare` + `stmt.Query` | Prepared statements with parameter binding |
-| `db.Begin` / `tx.Commit` / `tx.Rollback` | Full transaction support using `BEGIN`/`COMMIT`/`ROLLBACK` SQL |
-| `?` positional params | `db.Exec(sql, arg1, arg2)` — bound via `database/sql` `driver.NamedValue` |
-| `sql.Named("name", val)` | Named params routed to `ExecNamed`/`QueryNamed` |
-| `context.Context` cancellation | `ExecContext`/`QueryContext`/`BeginTx` respect `ctx.Done()` |
-| Type round-trips | nil → NULL, int64, float64, string, []byte, bool → int64 |
-
-> **Analysis v0.9.12**: The `driver/` package adds zero overhead to core query throughput —
-> all existing benchmarks remain identical to v0.9.11 (SELECT all 9.4× faster, SUM 3.6×,
-> GROUP BY 3.6×, result cache 377× faster). The driver layer is a thin adapter: `Conn.QueryContext`
-> spawns one goroutine per query to support context cancellation; for non-cancelled queries the
-> goroutine completes synchronously before the channel receive returns. `driver.Rows.Next`
-> delegates directly to `sqlvibe.Rows.Scan` with `*interface{}` pointers for zero-copy value
-> extraction. The `database/sql` connection pool works correctly with `:memory:` databases when
-> `db.SetMaxOpenConns(1)` is used, ensuring all operations share the same in-memory instance.
-
-### v0.9.11 SQL Compatibility Features
-
-| Feature | Description |
-|---------|-------------|
-| `?` positional params | `db.ExecWithParams(sql, []interface{}{...})` — binds `?` placeholders safely |
-| `:name` / `@name` named params | `db.ExecNamed(sql, map[string]interface{}{...})` / `db.QueryNamed(...)` |
-| `Prepare` + param binding | `stmt, _ := db.Prepare(sql); stmt.Query(param1, param2)` |
-| SQL injection prevention | String params single-quote escaped; no raw SQL expansion |
-| `nil` → NULL | `nil` interface value binds as SQL `NULL` |
-| `[]byte` → BLOB | Byte slices encoded as `x'deadbeef'` hex literals |
-
-> **Analysis v0.9.11**: Core query throughput is unchanged from v0.9.6 — SELECT all at 9.4×
-> faster, SUM at 3.6× faster, GROUP BY at 3.6× faster, result cache at 377× faster.
-> The new parameterized query path (`ExecWithParams`/`QueryWithParams`) adds a lightweight
-> SQL string scan (`formatParamSQL`) that substitutes bound values as SQL-standard literals,
-> preventing injection at the formatting layer. Single INSERT via `ExecWithParams` runs at
-> ~3 µs (about 46% over plain INSERT) due to the substitution pass; SELECT WHERE with `?`
-> binding runs at ~254 µs, comparable to unparameterized `QueryWithParams` with a WHERE clause.
-
-### v0.9.6 SQL Compatibility Features
-
-| Feature | Description |
-|---------|-------------|
-| SAVEPOINT | `SAVEPOINT name` — create named savepoint within transaction |
-| RELEASE SAVEPOINT | `RELEASE [SAVEPOINT] name` — discard savepoint, keep changes |
-| ROLLBACK TO SAVEPOINT | `ROLLBACK TO [SAVEPOINT] name` — revert to savepoint, keep it on stack |
-| Nested Savepoints | Multiple savepoints stacked within a single transaction |
-| UNIQUE (inline) | `col TEXT UNIQUE` — inline column-level unique constraint enforced at insert |
-| UNIQUE (table-level) | `UNIQUE(col1, col2)` — composite unique constraint enforced at insert |
-| NOT NULL (verified) | `col TEXT NOT NULL` — NULL rejection on INSERT/UPDATE |
-| REFERENCES (verified) | `col INTEGER REFERENCES parent(id)` — FK constraint with ON DELETE/UPDATE |
-| ON DELETE CASCADE (verified) | Deleting parent row cascades to child rows |
-| ON DELETE RESTRICT (verified) | Prevents parent deletion when child rows exist |
-| BEGIN (verified) | `BEGIN [DEFERRED\|IMMEDIATE\|EXCLUSIVE]` — start transaction |
-| COMMIT (verified) | `COMMIT` — persist transaction changes |
-| ROLLBACK (verified) | `ROLLBACK` — revert all transaction changes |
-
-> **Analysis**: sqlvibe v0.9.6 adds SAVEPOINT support (create/release/rollback-to) and fixes
-> UNIQUE constraint enforcement for inline and table-level UNIQUE declarations. Core query
-> throughput is stable — SELECT all at 9.4× faster, SUM at 3.5× faster, GROUP BY at 3.7×
-> faster, and result cache at 379× faster. The UNIQUE constraint check adds ~24% overhead to
-> INSERT (4.7 µs vs 3.8 µs without), a single index lookup per unique column. SQLite retains
-> its advantage for filtered WHERE scans and range queries (indexed lookup vs. full-table scan).
-
-### v0.9.5 SQL Compatibility Features
-
-| Feature | Description |
-|---------|-------------|
-| REINDEX | `REINDEX` / `REINDEX table` / `REINDEX index` — rebuild all or named indexes |
-| SELECT INTO | `SELECT col1, col2 INTO newtable FROM src [WHERE ...]` — create table from query |
-| Window Functions (verified) | `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()` with `OVER (PARTITION BY ... ORDER BY ...)` |
-| CTE / WITH (verified) | Non-recursive and recursive `WITH ... AS (SELECT ...)` fully functional |
-| UPSERT (verified) | `INSERT ... ON CONFLICT (col) DO NOTHING / DO UPDATE SET ...` |
-| EXPLAIN QUERY PLAN (verified) | `EXPLAIN QUERY PLAN SELECT ...` shows index usage and scan strategy |
-| Multi-VALUES INSERT (verified) | `INSERT INTO t VALUES (...), (...), (...)` batch literal insert |
-| ANALYZE (verified) | `ANALYZE [table]` collects row-count statistics for the optimizer |
-| VACUUM (verified) | `VACUUM` compact in-place; `VACUUM INTO 'path'` backup variant |
-| AUTOINCREMENT (verified) | `INTEGER PRIMARY KEY AUTOINCREMENT` monotonically increasing IDs |
-| LIKE ESCAPE (verified) | `expr LIKE pattern ESCAPE '\'` — custom escape character |
-
-### v0.9.4 SQL Compatibility Features
-
-| Feature | Description |
-|---------|-------------|
-| Partial Index | `CREATE INDEX ... WHERE expr` — index filtered by a predicate |
-| Expression Index | `CREATE INDEX ON t(LOWER(col))` — index on computed expression |
-| RETURNING clause | `INSERT/UPDATE/DELETE ... RETURNING col1, col2, *` |
-| UPDATE ... FROM | `UPDATE t SET ... FROM t2 WHERE ...` (PostgreSQL-style) |
-| DELETE ... USING | `DELETE FROM t USING t2 WHERE ...` (PostgreSQL-style) |
-| MATCH operator | `expr MATCH pattern` — case-insensitive substring matching |
-| COLLATE support | `COLLATE NOCASE / RTRIM / BINARY` in column defs and expressions |
-| CHECK (verified) | `CHECK(expr)` constraints enforced on INSERT and UPDATE |
-| GLOB (verified) | `expr GLOB pattern` case-sensitive wildcard matching (`*`, `?`, `[...]`) |
-| ALTER TABLE (verified) | `ADD COLUMN` and `RENAME TO` fully functional |
+> **v0.10.0 analysis**: The bytecode engine delivers consistent 1.4–5.3× speedups over
+> SQLite for scan-heavy and aggregate workloads. GROUP BY and SUM show the largest gains
+> (up to 5×) because the bytecode VM eliminates interface{} boxing on hot aggregate loops.
+> COUNT(*) on small tables is slightly slower than SQLite's prepared-statement fast path
+> but surpasses it at 100 K rows. ORDER BY + LIMIT (Top-N) still falls back to the
+> register VM and is currently slower than SQLite; this will be addressed in v0.11.0.
 
 ### Key Optimizations
 

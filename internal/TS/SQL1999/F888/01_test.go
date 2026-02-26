@@ -1,5 +1,5 @@
 // Package F888 provides end-to-end tests for the v0.10.0 bytecode execution engine.
-// Tests are run with PRAGMA use_bytecode = 1 to exercise the bytecode path.
+// Bytecode is now the always-on execution path.
 package F888
 
 import (
@@ -14,9 +14,6 @@ func openDB(t *testing.T) *sqlvibe.Database {
 	db, err := sqlvibe.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
-	}
-	if _, err := db.Exec("PRAGMA use_bytecode = 1"); err != nil {
-		t.Fatalf("PRAGMA use_bytecode: %v", err)
 	}
 	return db
 }
@@ -151,45 +148,23 @@ func TestF888_SelectArithmetic(t *testing.T) {
 	}
 }
 
-// TestF888_PragmaToggle tests that PRAGMA use_bytecode can be toggled.
-func TestF888_PragmaToggle(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
+// TestF888_BytecodeAlwaysOn verifies that the bytecode engine is always active
+// (PRAGMA use_bytecode has been removed; bytecode is the only execution path).
+func TestF888_BytecodeAlwaysOn(t *testing.T) {
+	db := openDB(t)
 	defer db.Close()
 
-	// Default should be 0
-	rows, err := db.Query("PRAGMA use_bytecode")
+	// Simple literal via bytecode path.
+	rows, err := db.Query("SELECT 6 * 7")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("SELECT 6*7: %v", err)
 	}
-	if len(rows.Data) == 0 || fmt.Sprintf("%v", rows.Data[0][0]) != "0" {
-		t.Errorf("default use_bytecode = %v, want 0", rows.Data)
+	if len(rows.Data) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows.Data))
 	}
-
-	// Enable
-	if _, err := db.Exec("PRAGMA use_bytecode = 1"); err != nil {
-		t.Fatal(err)
-	}
-	rows, err = db.Query("PRAGMA use_bytecode")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows.Data) == 0 || fmt.Sprintf("%v", rows.Data[0][0]) != "1" {
-		t.Errorf("use_bytecode after enable = %v, want 1", rows.Data)
-	}
-
-	// Disable
-	if _, err := db.Exec("PRAGMA use_bytecode = 0"); err != nil {
-		t.Fatal(err)
-	}
-	rows, err = db.Query("PRAGMA use_bytecode")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows.Data) == 0 || fmt.Sprintf("%v", rows.Data[0][0]) != "0" {
-		t.Errorf("use_bytecode after disable = %v, want 0", rows.Data)
+	got := fmt.Sprintf("%v", rows.Data[0][0])
+	if got != "42" {
+		t.Errorf("SELECT 6*7 = %v, want 42", got)
 	}
 }
 
