@@ -8,37 +8,23 @@ import (
 )
 
 // TestRegression_NullPropagationArith_v0100 verifies NULL propagation in arithmetic.
-// Regression: NULL + x should always be NULL (both legacy and bytecode paths).
+// Regression: NULL + x should always be NULL (bytecode path is now always-on).
 func TestRegression_NullPropagationArith_v0100(t *testing.T) {
-	for _, useBytecode := range []bool{false, true} {
-		name := "legacy"
-		if useBytecode {
-			name = "bytecode"
-		}
-		t.Run(name, func(t *testing.T) {
-			db, err := sqlvibe.Open(":memory:")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer db.Close()
+	db, err := sqlvibe.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
 
-			if useBytecode {
-				if _, err := db.Exec("PRAGMA use_bytecode = 1"); err != nil {
-					t.Fatal(err)
-				}
-			}
-
-			rows, err := db.Query("SELECT NULL + 1")
-			if err != nil {
-				t.Fatalf("SELECT NULL + 1: %v", err)
-			}
-			if len(rows.Data) == 0 {
-				t.Fatal("expected 1 row")
-			}
-			if rows.Data[0][0] != nil {
-				t.Errorf("NULL + 1 = %v, want nil", rows.Data[0][0])
-			}
-		})
+	rows, err := db.Query("SELECT NULL + 1")
+	if err != nil {
+		t.Fatalf("SELECT NULL + 1: %v", err)
+	}
+	if len(rows.Data) == 0 {
+		t.Fatal("expected 1 row")
+	}
+	if rows.Data[0][0] != nil {
+		t.Errorf("NULL + 1 = %v, want nil", rows.Data[0][0])
 	}
 }
 
@@ -50,10 +36,6 @@ func TestRegression_IntegerOverflowWrap_v0100(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-
-	if _, err := db.Exec("PRAGMA use_bytecode = 1"); err != nil {
-		t.Fatal(err)
-	}
 
 	// 9223372036854775807 + 1 overflows int64 — should not panic.
 	rows, err := db.Query("SELECT 9223372036854775807 + 1")

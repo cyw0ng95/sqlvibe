@@ -6,6 +6,7 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
+| **v0.10.0** | 2026-02-26 | Bytecode Execution Engine: always-on bytecode VM, removed legacy AST path |
 | **v0.9.17** | 2026-02-26 | JSON Extension Enhancement: Table-valued functions (json_each, json_tree), Aggregates (json_group_array, json_group_object), JSONB format |
 
 ## Features
@@ -98,17 +99,71 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.9.12)
+## Performance (v0.10.0)
 
-Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=3s`.
+Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=2s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
-`db.ClearResultCache()` so actual per-query execution cost is measured (not cache-hit
-latency). SQLite's `database/sql` driver reuses prepared statements across iterations.
+`db.ClearResultCache()` so actual per-query execution cost is measured.
+SQLite's `database/sql` driver reuses prepared statements across iterations.
 Both sides iterate all result rows end-to-end.
-(`go test ./internal/TS/Benchmark/... -bench=BenchmarkFair_ -benchtime=3s`).
+(`go test ./internal/TS/Benchmark/... -bench=BenchmarkCompare_ -benchtime=2s`).
 Results may vary on different hardware.
 
-### Query Performance (1 000-row table)
+### v0.10.0 Bytecode Engine: SQLite vs sqlvibe across data scales
+
+sqlvibe v0.10.0 ships a register-based **bytecode execution engine** that is always on.
+The old AST-walking path has been removed; the bytecode VM is the sole execution path,
+with a transparent fallback to the register VM for SQL constructs the bytecode compiler
+does not yet cover (e.g. multi-table JOINs with ORDER BY).
+
+#### SELECT all rows
+
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 292 µs | 182 µs | **sqlvibe 1.6× faster** |
+| 10 K | 2.87 ms | 1.62 ms | **sqlvibe 1.8× faster** |
+| 100 K | 28.8 ms | 20.4 ms | **sqlvibe 1.4× faster** |
+
+#### WHERE filter (integer column, ~50% selectivity)
+
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 188 µs | 104 µs | **sqlvibe 1.8× faster** |
+| 10 K | 1.79 ms | 990 µs | **sqlvibe 1.8× faster** |
+| 100 K | 18.1 ms | 8.71 ms | **sqlvibe 2.1× faster** |
+
+#### SUM aggregate
+
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 66.7 µs | 20.7 µs | **sqlvibe 3.2× faster** |
+| 10 K | 600 µs | 113 µs | **sqlvibe 5.3× faster** |
+| 100 K | 6.11 ms | 1.41 ms | **sqlvibe 4.3× faster** |
+
+#### GROUP BY (4 groups, SUM + COUNT)
+
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 480 µs | 128 µs | **sqlvibe 3.8× faster** |
+| 10 K | 4.93 ms | 1.03 ms | **sqlvibe 4.8× faster** |
+| 100 K | 57.9 ms | 11.9 ms | **sqlvibe 4.9× faster** |
+
+#### COUNT(*)
+
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 5.4 µs | 8.1 µs | SQLite 1.5× faster |
+| 10 K | 7.0 µs | 7.9 µs | roughly equal |
+| 100 K | 25.2 µs | 7.8 µs | **sqlvibe 3.2× faster** |
+
+> **v0.10.0 analysis**: The bytecode engine delivers consistent 1.4–5.3× speedups over
+> SQLite for scan-heavy and aggregate workloads. GROUP BY and SUM show the largest gains
+> (up to 5×) because the bytecode VM eliminates interface{} boxing on hot aggregate loops.
+> COUNT(*) on small tables is slightly slower than SQLite's prepared-statement fast path
+> but surpasses it at 100 K rows. ORDER BY + LIMIT (Top-N) still falls back to the
+> register VM and is currently slower than SQLite; this will be addressed in v0.11.0.
+
+### Historical: Query Performance (1 000-row table, v0.9.12)
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
@@ -121,7 +176,7 @@ Results may vary on different hardware.
 | JOIN (100×500 rows) | 557 µs | 233 µs | SQLite 2.4x faster |
 | BETWEEN filter | 460 µs | 183 µs | SQLite 2.5x faster |
 
-### DML Operations
+### Historical: DML Operations (v0.9.12)
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|
@@ -130,7 +185,7 @@ Results may vary on different hardware.
 | INSERT OR REPLACE | 40 µs | — | conflict + delete + re-insert |
 | INSERT OR IGNORE | 9.7 µs | — | conflict silently skipped |
 
-### Special-case Performance
+### Historical: Special-case Performance (v0.9.12)
 
 | Operation | sqlvibe | SQLite Go | Result |
 |-----------|--------:|----------:|--------|

@@ -14,9 +14,6 @@ func openBCDB(b *testing.B) *sqlvibe.Database {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if _, err := db.Exec("PRAGMA use_bytecode = 1"); err != nil {
-		b.Fatal(err)
-	}
 	return db
 }
 

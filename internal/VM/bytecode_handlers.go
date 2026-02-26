@@ -3,6 +3,7 @@ package VM
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 )
 
@@ -503,6 +504,69 @@ func bcCallBuiltin(name string, args []VmVal) VmVal {
 			return args[0]
 		}
 		return VmNull()
+	case "cast_integer", "cast_int":
+		if len(args) < 1 || args[0].IsNull() {
+			return VmNull()
+		}
+		switch args[0].T {
+		case TagInt:
+			return args[0]
+		case TagBool:
+			return args[0]
+		case TagFloat:
+			return VmInt(int64(args[0].Float()))
+		case TagText:
+			s := strings.TrimSpace(args[0].S)
+			// Try integer parse first
+			if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+				return VmInt(n)
+			}
+			// Try float parse and truncate
+			if f, err := strconv.ParseFloat(s, 64); err == nil {
+				return VmInt(int64(f))
+			}
+			return VmInt(0)
+		case TagBlob:
+			return VmInt(0)
+		}
+		return VmNull()
+	case "cast_real", "cast_numeric", "cast_float", "cast_double":
+		if len(args) < 1 || args[0].IsNull() {
+			return VmNull()
+		}
+		switch args[0].T {
+		case TagFloat:
+			return args[0]
+		case TagInt:
+			return VmFloat(float64(args[0].Int()))
+		case TagBool:
+			return VmFloat(float64(args[0].N))
+		case TagText:
+			s := strings.TrimSpace(args[0].S)
+			if f, err := strconv.ParseFloat(s, 64); err == nil {
+				return VmFloat(f)
+			}
+			return VmFloat(0)
+		case TagBlob:
+			return VmFloat(0)
+		}
+		return VmNull()
+	case "cast_text":
+		if len(args) < 1 || args[0].IsNull() {
+			return VmNull()
+		}
+		return VmText(args[0].Text())
+	case "cast_blob":
+		if len(args) < 1 || args[0].IsNull() {
+			return VmNull()
+		}
+		// CAST to BLOB: store as blob tag with the raw bytes
+		switch args[0].T {
+		case TagBlob:
+			return args[0]
+		default:
+			return VmBlob([]byte(args[0].Text()))
+		}
 	}
 	return VmNull()
 }

@@ -100,14 +100,11 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 	return &Rows{Columns: cols, Data: rows}, nil
 }
 
-// execSelectStmt executes a SelectStmt directly using VM compilation
+// execSelectStmt executes a SelectStmt directly using the bytecode engine.
 func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
-	// v0.10.0: try bytecode path first (opt-in via PRAGMA use_bytecode = 1).
-	if db.useBytecode {
-		if rows, err := db.execBytecode(stmt); err == nil {
-			return rows, nil
-		}
-		// Fall through to legacy path on any compilation error.
+	// v0.10.0: always try bytecode path first; fall through on unsupported forms.
+	if rows, err := db.execBytecode(stmt); err == nil {
+		return rows, nil
 	}
 
 	if stmt.From == nil {
