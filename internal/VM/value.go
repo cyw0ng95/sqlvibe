@@ -3,6 +3,8 @@ package VM
 import (
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 )
 
 // ValTag identifies the runtime type of a VmVal.
@@ -214,7 +216,38 @@ func CompareVmVal(a, b VmVal) int {
 	if b.T == TagNull {
 		return 1
 	}
-	// Numeric comparison
+	// Fast path: both integers (most common in SQL WHERE/ORDER BY)
+	if a.T == TagInt && b.T == TagInt {
+		if a.N < b.N {
+			return -1
+		}
+		if a.N > b.N {
+			return 1
+		}
+		return 0
+	}
+	// Fast path: both floats
+	if a.T == TagFloat && b.T == TagFloat {
+		af, bf := a.Float(), b.Float()
+		if af < bf {
+			return -1
+		}
+		if af > bf {
+			return 1
+		}
+		return 0
+	}
+	// Fast path: both text
+	if a.T == TagText && b.T == TagText {
+		if a.S < b.S {
+			return -1
+		}
+		if a.S > b.S {
+			return 1
+		}
+		return 0
+	}
+	// Numeric comparison (mixed int/float/bool)
 	if (a.T == TagInt || a.T == TagFloat || a.T == TagBool) &&
 		(b.T == TagInt || b.T == TagFloat || b.T == TagBool) {
 		af, bf := toFloat(a), toFloat(b)
@@ -244,8 +277,7 @@ func toFloat(v VmVal) float64 {
 	case TagInt, TagBool:
 		return float64(v.N)
 	case TagText:
-		var f float64
-		fmt.Sscanf(v.S, "%g", &f)
+		f, _ := strconv.ParseFloat(strings.TrimSpace(v.S), 64)
 		return f
 	}
 	return 0
@@ -256,9 +288,9 @@ func vmValToText(v VmVal) string {
 	case TagText, TagBlob:
 		return v.S
 	case TagInt:
-		return fmt.Sprintf("%d", v.N)
+		return strconv.FormatInt(v.N, 10)
 	case TagFloat:
-		return fmt.Sprintf("%g", v.Float())
+		return strconv.FormatFloat(v.Float(), 'g', -1, 64)
 	case TagBool:
 		if v.N != 0 {
 			return "1"
