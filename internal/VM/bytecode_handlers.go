@@ -5,6 +5,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 // bcOpNoop is a no-op.
@@ -301,11 +303,21 @@ func bcOpRowid(vm *BytecodeVM, inst Instr) (int, error) {
 // bcOpResultRow: emit result row from regs[A..A+B-1].
 func bcOpResultRow(vm *BytecodeVM, inst Instr) (int, error) {
 	n := int(inst.B)
-	row := make([]VmVal, n)
-	for i := 0; i < n; i++ {
-		row[i] = *vm.reg(inst.A + int32(i))
+	util.Assert(int(inst.A)+n <= len(vm.regs), "bcOpResultRow: register range [%d,%d) out of bounds (numRegs=%d)", inst.A, int(inst.A)+n, len(vm.regs))
+	start := len(vm.flatBuf)
+	needed := start + n
+	if needed > cap(vm.flatBuf) {
+		const minGrowth = 64
+		newCap := needed*2 + minGrowth
+		newBuf := make([]VmVal, start, newCap)
+		copy(newBuf, vm.flatBuf)
+		vm.flatBuf = newBuf
 	}
-	vm.resultRows = append(vm.resultRows, row)
+	vm.flatBuf = vm.flatBuf[:start+n]
+	for i := 0; i < n; i++ {
+		vm.flatBuf[start+i] = vm.regs[int(inst.A)+i]
+	}
+	vm.resultRows = append(vm.resultRows, vm.flatBuf[start:start+n])
 	return vm.pc + 1, nil
 }
 
@@ -391,14 +403,25 @@ func bcOpAggFinal(vm *BytecodeVM, inst Instr) (int, error) {
 func bcOpCall(vm *BytecodeVM, inst Instr) (int, error) {
 	name := strings.ToLower(vm.constVal(inst.A).Text())
 	nArgs := int(inst.B)
-	// args are in regs[C-nArgs .. C-1]
-	args := make([]VmVal, nArgs)
 	base := int(inst.C) - nArgs
-	for i := 0; i < nArgs; i++ {
-		args[i] = *vm.reg(int32(base + i))
+	util.Assert(int(inst.C) < len(vm.regs), "bcOpCall: destination register %d out of bounds (numRegs=%d)", inst.C, len(vm.regs))
+	util.Assert(base >= 0 && base+nArgs <= len(vm.regs), "bcOpCall: arg registers [%d,%d) out of bounds (numRegs=%d)", base, base+nArgs, len(vm.regs))
+	// Use a fixed-size stack array to avoid heap allocation for ≤8 args (covers all builtins).
+	var smallArgs [8]VmVal
+	var args []VmVal
+	if nArgs <= 8 {
+		for i := 0; i < nArgs; i++ {
+			smallArgs[i] = vm.regs[base+i]
+		}
+		args = smallArgs[:nArgs]
+	} else {
+		args = make([]VmVal, nArgs)
+		for i := 0; i < nArgs; i++ {
+			args[i] = vm.regs[base+i]
+		}
 	}
 	result := bcCallBuiltin(name, args)
-	*vm.reg(inst.C) = result
+	vm.regs[inst.C] = result
 	return vm.pc + 1, nil
 }
 

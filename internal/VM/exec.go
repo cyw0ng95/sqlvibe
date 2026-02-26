@@ -2273,12 +2273,21 @@ func numericAdd(a, b interface{}) interface{} {
 	if a == nil || b == nil {
 		return nil
 	}
+	// Fast path: both int64 (most common in SQL arithmetic)
+	ai, aIsInt := a.(int64)
+	bi, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		return ai + bi
+	}
+	// Fast path: both float64
+	af, aIsFloat := a.(float64)
+	bf, bIsFloat := b.(float64)
+	if aIsFloat && bIsFloat {
+		return af + bf
+	}
+	// Mixed/general path
 	av := reflectVal(a)
 	bv := reflectVal(b)
-
-	if av.typ == "int" && bv.typ == "int" {
-		return av.v.(int64) + bv.v.(int64)
-	}
 	return av.toFloat() + bv.toFloat()
 }
 
@@ -2286,12 +2295,18 @@ func numericSubtract(a, b interface{}) interface{} {
 	if a == nil || b == nil {
 		return nil
 	}
+	ai, aIsInt := a.(int64)
+	bi, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		return ai - bi
+	}
+	af, aIsFloat := a.(float64)
+	bf, bIsFloat := b.(float64)
+	if aIsFloat && bIsFloat {
+		return af - bf
+	}
 	av := reflectVal(a)
 	bv := reflectVal(b)
-
-	if av.typ == "int" && bv.typ == "int" {
-		return av.v.(int64) - bv.v.(int64)
-	}
 	return av.toFloat() - bv.toFloat()
 }
 
@@ -2299,12 +2314,18 @@ func numericMultiply(a, b interface{}) interface{} {
 	if a == nil || b == nil {
 		return nil
 	}
+	ai, aIsInt := a.(int64)
+	bi, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		return ai * bi
+	}
+	af, aIsFloat := a.(float64)
+	bf, bIsFloat := b.(float64)
+	if aIsFloat && bIsFloat {
+		return af * bf
+	}
 	av := reflectVal(a)
 	bv := reflectVal(b)
-
-	if av.typ == "int" && bv.typ == "int" {
-		return av.v.(int64) * bv.v.(int64)
-	}
 	return av.toFloat() * bv.toFloat()
 }
 
@@ -2312,34 +2333,45 @@ func numericDivide(a, b interface{}) interface{} {
 	if a == nil || b == nil {
 		return nil
 	}
+	ai, aIsInt := a.(int64)
+	bi, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		if bi == 0 {
+			return nil
+		}
+		return ai / bi
+	}
+	af, aIsFloat := a.(float64)
+	bf, bIsFloat := b.(float64)
+	if aIsFloat && bIsFloat {
+		if bf == 0 {
+			return nil
+		}
+		return af / bf
+	}
 	av := reflectVal(a)
 	bv := reflectVal(b)
-
-	if bv.toFloat() == 0 {
+	bFloat := bv.toFloat()
+	if bFloat == 0 {
 		return nil
 	}
-
-	if av.typ == "int" && bv.typ == "int" && bv.v.(int64) != 0 {
-		return av.v.(int64) / bv.v.(int64)
-	}
-	return av.toFloat() / bv.toFloat()
+	return av.toFloat() / bFloat
 }
 
 func numericRemainder(a, b interface{}) interface{} {
 	if a == nil || b == nil {
 		return nil
 	}
-	av := reflectVal(a)
-	bv := reflectVal(b)
-
-	// Both integers
-	if av.typ == "int" && bv.typ == "int" {
-		if bv.v.(int64) == 0 {
+	ai, aIsInt := a.(int64)
+	bi, bIsInt := b.(int64)
+	if aIsInt && bIsInt {
+		if bi == 0 {
 			return nil
 		}
-		return av.v.(int64) % bv.v.(int64)
+		return ai % bi
 	}
-
+	av := reflectVal(a)
+	bv := reflectVal(b)
 	// At least one is float - use math.Mod
 	if av.isNumeric() && bv.isNumeric() {
 		bFloat := bv.toFloat()
@@ -2348,7 +2380,6 @@ func numericRemainder(a, b interface{}) interface{} {
 		}
 		return math.Mod(av.toFloat(), bFloat)
 	}
-
 	return nil
 }
 

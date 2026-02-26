@@ -34,15 +34,16 @@ type aggState struct {
 
 // BytecodeVM executes a BytecodeProg.
 type BytecodeVM struct {
-	prog    *BytecodeProg
-	regs    []VmVal
-	pc      int
-	ctx     BcVmContext
-	cursors [256]*bcCursor
-	aggSlots [256]*aggState
-	bcTable [NumBcOpcodes]BcOpHandler
+	prog       *BytecodeProg
+	regs       []VmVal
+	pc         int
+	ctx        BcVmContext
+	cursors    [256]*bcCursor
+	aggSlots   [256]*aggState
+	bcTable    [NumBcOpcodes]BcOpHandler
 	resultCols []string
 	resultRows [][]VmVal
+	flatBuf    []VmVal // flat backing buffer for zero-alloc result rows
 }
 
 // NewBytecodeVM creates a VM for prog using ctx for storage access.
@@ -67,6 +68,7 @@ func maxInt(a, b int) int {
 func (vm *BytecodeVM) Run() error {
 	vm.pc = 0
 	vm.resultRows = vm.resultRows[:0]
+	vm.flatBuf = vm.flatBuf[:0]
 	instrs := vm.prog.Instrs
 	for vm.pc < len(instrs) {
 		inst := instrs[vm.pc]
@@ -106,12 +108,10 @@ func (vm *BytecodeVM) ResultColNames() []string {
 }
 
 // reg returns a pointer to the register at index r.
-// Grows the slice if needed.
+// The constructor pre-allocates max(prog.NumRegs, 16) registers, so r must
+// always be in bounds for valid bytecode. The Go runtime bounds check panics
+// with "index out of range" if the compiler emits an invalid register index.
 func (vm *BytecodeVM) reg(r int32) *VmVal {
-	if int(r) >= len(vm.regs) {
-		extra := make([]VmVal, int(r)+1-len(vm.regs))
-		vm.regs = append(vm.regs, extra...)
-	}
 	return &vm.regs[r]
 }
 

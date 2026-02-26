@@ -164,5 +164,5 @@ func (ca *CursorArray) Reset() {
 	for i := range ca.cursors {
 		ca.cursors[i] = nil
 	}
-	ca.cursors = make([]*Cursor, 0)
+	ca.cursors = ca.cursors[:0]
 }
