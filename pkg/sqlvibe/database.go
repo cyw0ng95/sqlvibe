@@ -70,7 +70,6 @@ func (c *queryResultCache) Invalidate() {
 type Database struct {
 	pm                *DS.PageManager
 	cache             *DS.Cache
-	engine            *VM.QueryEngine
 	tx                *Transaction
 	txMgr             *TM.TransactionManager
 	activeTx          *TM.Transaction
@@ -353,13 +352,11 @@ func Open(path string) (*Database, error) {
 	}
 
 	data := make(map[string][]map[string]interface{})
-	engine := VM.NewQueryEngine(pm, data)
 	txMgr := TM.NewTransactionManager(pm)
 
 	db := &Database{
 		pm:                 pm,
 		cache:              DS.NewCache(-2000),
-		engine:             engine,
 		txMgr:              txMgr,
 		activeTx:           nil,
 		dbPath:             path,
@@ -462,14 +459,14 @@ func (db *Database) evalConstantExpression(stmt *QP.SelectStmt) (*Rows, error) {
 		case *QP.AliasExpr:
 			colName = c.Alias
 			if c.Expr != nil {
-				colValue = db.engine.EvalExpr(emptyRow, c.Expr)
+				colValue = VM.EvalExprRowWithData(emptyRow, c.Expr, db.data)
 			}
 		case *QP.BinaryExpr:
 			colName = "expr"
-			colValue = db.engine.EvalExpr(emptyRow, c)
+			colValue = VM.EvalExprRowWithData(emptyRow, c, db.data)
 		case *QP.UnaryExpr:
 			colName = "expr"
-			colValue = db.engine.EvalExpr(emptyRow, c)
+			colValue = VM.EvalExprRowWithData(emptyRow, c, db.data)
 		case *QP.Literal:
 			colName = "expr"
 			colValue = c.Value
@@ -480,18 +477,18 @@ func (db *Database) evalConstantExpression(stmt *QP.SelectStmt) (*Rows, error) {
 				return nil, fmt.Errorf("no such column: %s", c.Name)
 			}
 			colName = c.Name
-			colValue = db.engine.EvalExpr(emptyRow, c)
+			var evalErr error
+			colValue, evalErr = VM.EvalExprRowErrWithData(emptyRow, c, db.data)
+			if evalErr != nil {
+				return nil, evalErr
+			}
 		default:
 			colName = "expr"
-			colValue = db.engine.EvalExpr(emptyRow, c)
+			colValue = VM.EvalExprRowWithData(emptyRow, c, db.data)
 		}
 
 		cols = append(cols, colName)
 		row = append(row, colValue)
-		// Propagate any "no such function" errors from EvalExpr.
-		if err := db.engine.LastError(); err != nil {
-			return nil, err
-		}
 	}
 
 	return &Rows{Columns: cols, Data: [][]interface{}{row}}, nil
@@ -551,7 +548,6 @@ func (db *Database) Exec(sql string) (Result, error) {
 			return db.execCreateTableAsSelect(stmt)
 		}
 
-		schema := make(map[string]VM.ColumnType)
 		colTypes := make(map[string]string)
 		var pkCols []string
 		db.columnDefaults[stmt.Name] = make(map[string]interface{})
@@ -566,7 +562,6 @@ func (db *Database) Exec(sql string) (Result, error) {
 				return Result{}, fmt.Errorf("duplicate column name: %s", col.Name)
 			}
 			seenCols[col.Name] = true
-			schema[col.Name] = VM.ColumnType{Name: col.Name, Type: col.Type}
 			colTypes[col.Name] = col.Type
 			if col.PrimaryKey {
 				pkCols = append(pkCols, col.Name)
@@ -599,7 +594,6 @@ func (db *Database) Exec(sql string) (Result, error) {
 		if len(allFKs) > 0 {
 			db.foreignKeys[stmt.Name] = allFKs
 		}
-		db.engine.RegisterTable(stmt.Name, schema)
 		db.tables[stmt.Name] = colTypes
 		var colOrder []string
 		for _, col := range stmt.Columns {
@@ -1410,7 +1404,7 @@ func (db *Database) sortResultsTopK(rows *Rows, orderBy []QP.OrderBy, topK int) 
 		}
 	}
 
-	sorted := db.engine.SortRowsTopK(rows.Data, orderBy, rows.Columns, topK)
+	sorted := VM.SortRowsTopK(rows.Data, orderBy, rows.Columns, topK)
 	return &Rows{Columns: rows.Columns, Data: sorted}, nil
 }
 
@@ -1615,19 +1609,61 @@ func (tx *Transaction) Query(sql string) (*Rows, error) {
 }
 
 func (db *Database) extractValue(expr QP.Expr) interface{} {
-	return db.engine.ExtractValue(expr)
+	return db.extractValueTyped(expr, "")
 }
 
 func (db *Database) extractValueTyped(expr QP.Expr, colType string) interface{} {
-	return db.engine.ExtractValueTyped(expr, colType)
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *QP.Literal:
+		val := e.Value
+		if strVal, ok := val.(string); ok {
+			return db.convertStringToType(strVal, colType)
+		}
+		return val
+	case *QP.ColumnRef:
+		return e.Name
+	case *QP.UnaryExpr:
+		val := db.extractValueTyped(e.Expr, colType)
+		if e.Op == QP.TokenMinus {
+			return db.negateValue(val)
+		}
+		return val
+	default:
+		return nil
+	}
 }
 
 func (db *Database) negateValue(val interface{}) interface{} {
-	return db.engine.Negate(val)
+	if val == nil {
+		return nil
+	}
+	switch v := val.(type) {
+	case int64:
+		return -v
+	case float64:
+		return -v
+	case int:
+		return -v
+	}
+	return val
 }
 
 func (db *Database) convertStringToType(val string, colType string) interface{} {
-	return db.engine.ConvertStringToType(val, colType)
+	switch colType {
+	case "INTEGER", "INT", "BIGINT", "SMALLINT":
+		var intVal int64
+		fmt.Sscanf(val, "%d", &intVal)
+		return intVal
+	case "REAL", "FLOAT", "DOUBLE", "DOUBLE PRECISION", "NUMERIC", "DECIMAL":
+		var floatVal float64
+		fmt.Sscanf(val, "%f", &floatVal)
+		return floatVal
+	default:
+		return val
+	}
 }
 
 func (db *Database) MustExec(sql string, params ...interface{}) Result {
@@ -1783,21 +1819,54 @@ func formatSQLLiteral(v interface{}) string {
 }
 
 func (db *Database) tryUseIndex(tableName string, where QP.Expr) []map[string]interface{} {
-	// Convert IndexInfo to VM.IndexInfo
-	qeIndexes := make(map[string]*VM.IndexInfo)
-	for name, idx := range db.indexes {
-		qeIndexes[name] = &VM.IndexInfo{
-			Name:    idx.Name,
-			Table:   idx.Table,
-			Columns: idx.Columns,
-			Unique:  idx.Unique,
+	if where == nil {
+		return nil
+	}
+	binExpr, ok := where.(*QP.BinaryExpr)
+	if !ok {
+		return nil
+	}
+	if binExpr.Op != QP.TokenEq {
+		return nil
+	}
+	var colName string
+	var colValue interface{}
+	if colRef, ok := binExpr.Left.(*QP.ColumnRef); ok {
+		if lit, ok := binExpr.Right.(*QP.Literal); ok {
+			colName = colRef.Name
+			colValue = lit.Value
+		}
+	} else if colRef, ok := binExpr.Right.(*QP.ColumnRef); ok {
+		if lit, ok := binExpr.Left.(*QP.Literal); ok {
+			colName = colRef.Name
+			colValue = lit.Value
 		}
 	}
-	return db.engine.TryUseIndex(tableName, where, qeIndexes)
+	if colName == "" {
+		return nil
+	}
+	for _, idx := range db.indexes {
+		if idx.Table == tableName && len(idx.Columns) > 0 && idx.Columns[0] == colName {
+			return db.scanByIndexValue(tableName, colName, colValue, idx.Unique)
+		}
+	}
+	return nil
 }
 
 func (db *Database) scanByIndexValue(tableName, colName string, value interface{}, unique bool) []map[string]interface{} {
-	return db.engine.ScanByIndexValue(tableName, colName, value, unique)
+	tableData := db.data[tableName]
+	result := make([]map[string]interface{}, 0)
+	for _, row := range tableData {
+		if rowVal, ok := row[colName]; ok {
+			if VM.CompareVals(rowVal, value) == 0 {
+				result = append(result, row)
+				if unique {
+					return result
+				}
+			}
+		}
+	}
+	return result
 }
 
 // normalizeIndexKey converts a value to a comparable map key.
@@ -1958,7 +2027,7 @@ func (db *Database) buildPKHashSet(tableName string) {
 // checkUniqueIndexes, buildIndexData, indexAdd, and removeFromIndexes.
 func (db *Database) buildIndexKey(idx *IndexInfo, row map[string]interface{}) interface{} {
 	if len(idx.Exprs) > 0 && idx.Exprs[0] != nil {
-		return normalizeIndexKey(db.engine.EvalExpr(row, idx.Exprs[0]))
+		return normalizeIndexKey(VM.EvalExprRow(row, idx.Exprs[0]))
 	}
 	if len(idx.Columns) == 1 {
 		return normalizeIndexKey(row[idx.Columns[0]])
@@ -2556,7 +2625,7 @@ func (db *Database) applyOrderBy(data [][]interface{}, orderBy []QP.OrderBy, col
 	if len(orderBy) == 0 || len(data) == 0 {
 		return data
 	}
-	return db.engine.SortRows(data, orderBy, cols)
+	return VM.SortRows(data, orderBy, cols)
 }
 
 func (db *Database) applyLimit(rows *Rows, limitExpr QP.Expr, offsetExpr QP.Expr) (*Rows, error) {
@@ -2584,7 +2653,7 @@ func (db *Database) applyLimit(rows *Rows, limitExpr QP.Expr, offsetExpr QP.Expr
 	}
 
 	// Use QE's ApplyLimit
-	rows.Data = db.engine.ApplyLimit(rows.Data, limit, offset)
+	rows.Data = VM.ApplyLimit(rows.Data, limit, offset)
 	return rows, nil
 }
 
@@ -3485,7 +3554,7 @@ func (db *Database) evalWhereOnMap(expr QP.Expr, row map[string]interface{}) boo
 		default:
 			lv := db.evalExprOnMap(e.Left, row)
 			rv := db.evalExprOnMap(e.Right, row)
-			return db.engine.CompareVals(lv, rv) == 0
+			return VM.CompareVals(lv, rv) == 0
 		}
 	case *QP.UnaryExpr:
 		if e.Op == QP.TokenNot {
@@ -3659,7 +3728,6 @@ func (db *Database) execCreateTableAsSelect(stmt *QP.CreateTableStmt) (Result, e
 	}
 
 	// Create the table with columns from SELECT result
-	schema := make(map[string]VM.ColumnType)
 	colTypes := make(map[string]string)
 	db.columnDefaults[stmt.Name] = make(map[string]interface{})
 	db.columnNotNull[stmt.Name] = make(map[string]bool)
@@ -3668,10 +3736,8 @@ func (db *Database) execCreateTableAsSelect(stmt *QP.CreateTableStmt) (Result, e
 	for _, col := range rows.Columns {
 		// Try to infer column type from the source table schema
 		colType := db.inferColumnTypeFromSelect(col, stmt.AsSelect)
-		schema[col] = VM.ColumnType{Name: col, Type: colType}
 		colTypes[col] = colType
 	}
-	db.engine.RegisterTable(stmt.Name, schema)
 	db.tables[stmt.Name] = colTypes
 	db.columnOrder[stmt.Name] = rows.Columns
 
@@ -3712,17 +3778,14 @@ func (db *Database) execSelectInto(stmt *QP.SelectStmt) (*Rows, error) {
 	}
 
 	// Create the new table with inferred schema.
-	schema := make(map[string]VM.ColumnType)
 	colTypes := make(map[string]string)
 	db.columnDefaults[tableName] = make(map[string]interface{})
 	db.columnNotNull[tableName] = make(map[string]bool)
 	db.columnChecks[tableName] = make(map[string]QP.Expr)
 	for _, col := range rows.Columns {
 		colType := db.inferColumnTypeFromSelect(col, &selectStmt)
-		schema[col] = VM.ColumnType{Name: col, Type: colType}
 		colTypes[col] = colType
 	}
-	db.engine.RegisterTable(tableName, schema)
 	db.tables[tableName] = colTypes
 	db.columnOrder[tableName] = rows.Columns
 
@@ -3813,7 +3876,6 @@ func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 		col := stmt.Column
 		db.tables[stmt.Table][col.Name] = col.Type
 		db.columnOrder[stmt.Table] = append(db.columnOrder[stmt.Table], col.Name)
-		db.engine.RegisterTable(stmt.Table, db.buildSchema(stmt.Table))
 
 		// Add default value for existing rows
 		var defaultVal interface{}
@@ -3941,7 +4003,6 @@ func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 				}
 			}
 		}
-		db.engine.RegisterTable(stmt.Table, db.buildSchema(stmt.Table))
 		db.hybridStoresDirty[stmt.Table] = true
 		return Result{}, nil
 
@@ -4005,7 +4066,6 @@ func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 				}
 			}
 		}
-		db.engine.RegisterTable(stmt.Table, db.buildSchema(stmt.Table))
 		db.hybridStoresDirty[stmt.Table] = true
 		return Result{}, nil
 
@@ -4040,14 +4100,6 @@ func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 		return Result{}, nil
 	}
 	return Result{}, nil
-}
-
-func (db *Database) buildSchema(tableName string) map[string]VM.ColumnType {
-	schema := make(map[string]VM.ColumnType)
-	for col, typ := range db.tables[tableName] {
-		schema[col] = VM.ColumnType{Name: col, Type: typ}
-	}
-	return schema
 }
 
 // evalConstExpr evaluates a constant expression (literal, etc.)
@@ -4660,7 +4712,7 @@ func (db *Database) projectReturning(returning []QP.Expr, rows []map[string]inte
 			}
 		} else {
 			for _, expr := range returning {
-				rowData = append(rowData, db.engine.EvalExpr(row, expr))
+				rowData = append(rowData, VM.EvalExprRow(row, expr))
 			}
 		}
 		result = append(result, rowData)
@@ -4706,7 +4758,7 @@ func (db *Database) execUpdateReturning(stmt *QP.UpdateStmt, sql string) (*Rows,
 	allRows := db.data[tableName]
 	var matchedRows []map[string]interface{}
 	for _, row := range allRows {
-		if db.engine.EvalBool(row, stmt.Where) {
+		if VM.EvalBoolRow(row, stmt.Where) {
 			matchedRows = append(matchedRows, row)
 		}
 	}
@@ -4723,7 +4775,7 @@ func (db *Database) execDeleteReturning(stmt *QP.DeleteStmt, sql string) (*Rows,
 	allRows := db.data[tableName]
 	var toDelete []map[string]interface{}
 	for _, row := range allRows {
-		if db.engine.EvalBool(row, stmt.Where) {
+		if VM.EvalBoolRow(row, stmt.Where) {
 			// Make a copy
 			rowCopy := make(map[string]interface{}, len(row))
 			for k, v := range row {
@@ -4788,7 +4840,7 @@ func (db *Database) execUpdateFrom(stmt *QP.UpdateStmt) (Result, error) {
 			for k, v := range fRow {
 				joinedRow[k] = v
 			}
-			if !db.engine.EvalBool(joinedRow, stmt.Where) {
+			if !VM.EvalBoolRow(joinedRow, stmt.Where) {
 				continue
 			}
 			// Apply SET clauses
@@ -4801,7 +4853,7 @@ func (db *Database) execUpdateFrom(stmt *QP.UpdateStmt) (Result, error) {
 				if !ok {
 					continue
 				}
-				newRow[colRef.Name] = db.engine.EvalExpr(joinedRow, set.Value)
+				newRow[colRef.Name] = VM.EvalExprRow(joinedRow, set.Value)
 			}
 			db.applyTypeAffinity(tableName, newRow)
 			if err := ctx.UpdateRow(tableName, i, newRow); err != nil {
@@ -4849,7 +4901,7 @@ func (db *Database) execDeleteUsing(stmt *QP.DeleteStmt) (Result, error) {
 		// For simplicity, try all combinations (nested loop)
 		// Build all combinations of USING rows
 		if len(usingData) == 0 {
-			if db.engine.EvalBool(joinedRow, stmt.Where) {
+			if VM.EvalBoolRow(joinedRow, stmt.Where) {
 				matched = true
 			}
 		} else {
@@ -4880,7 +4932,7 @@ func (db *Database) execDeleteUsing(stmt *QP.DeleteStmt) (Result, error) {
 // evalUsingCombinations evaluates WHERE condition across all combinations of USING rows.
 func (db *Database) evalUsingCombinations(where QP.Expr, baseRow map[string]interface{}, usingTables []string, usingData map[string][]map[string]interface{}, idx int) bool {
 	if idx >= len(usingTables) {
-		return db.engine.EvalBool(baseRow, where)
+		return VM.EvalBoolRow(baseRow, where)
 	}
 	tableName := db.resolveTableName(usingTables[idx])
 	for _, uRow := range usingData[tableName] {
