@@ -25,3 +25,14 @@ func GetVTabModule(name string) (DS.VTabModule, bool) {
 	vtabMu.RUnlock()
 	return mod, ok
 }
+
+// ListVTabModules returns the names of all registered virtual table modules.
+func ListVTabModules() []string {
+	vtabMu.RLock()
+	names := make([]string, 0, len(vtabModules))
+	for k := range vtabModules {
+		names = append(names, k)
+	}
+	vtabMu.RUnlock()
+	return names
+}

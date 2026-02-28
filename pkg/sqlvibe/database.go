@@ -723,10 +723,23 @@ func (db *Database) Exec(sql string) (Result, error) {
 		return result, err
 	case "DropTableStmt":
 		stmt := ast.(*QP.DropTableStmt)
-		if _, exists := db.tables[stmt.Name]; !exists {
+		// Check regular tables first, then virtual tables.
+		_, isRegular := db.tables[stmt.Name]
+		_, isVirtual := db.virtualTables[stmt.Name]
+		if !isRegular && !isVirtual {
 			if stmt.IfExists {
 				return Result{}, nil
 			}
+			return Result{}, fmt.Errorf("no such table: %s", stmt.Name)
+		}
+		if isVirtual {
+			if vt, ok := db.virtualTables[stmt.Name]; ok {
+				if err := vt.Destroy(); err != nil {
+					return Result{}, fmt.Errorf("drop virtual table %s: %w", stmt.Name, err)
+				}
+			}
+			delete(db.virtualTables, stmt.Name)
+			return Result{}, nil
 		}
 		delete(db.tables, stmt.Name)
 		delete(db.data, stmt.Name)

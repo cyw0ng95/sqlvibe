@@ -712,11 +712,15 @@ func (p *Parser) parseTableRef() *TableRef {
 			}
 			ref.TableFunc = &FuncCall{Name: ref.Name, Args: args}
 			ref.Name = ""
-			// Parse optional AS alias(cols)
+			// Parse optional alias: either "AS name" or just a bare identifier.
+			// Never treat unquoted SQL keywords (WHERE, ORDER, LIMIT, ...) as an
+			// implicit alias unless they are preceded by an explicit AS keyword.
+			hasExplicitAS := false
 			if p.current().Type == TokenKeyword && p.current().Literal == "AS" {
 				p.advance()
+				hasExplicitAS = true
 			}
-			if p.current().Type == TokenIdentifier || (p.current().Type == TokenKeyword) {
+			if p.current().Type == TokenIdentifier || (hasExplicitAS && p.current().Type == TokenKeyword) {
 				ref.Alias = p.current().Literal
 				p.advance()
 				// Optional column list: (col1, col2, ...)
