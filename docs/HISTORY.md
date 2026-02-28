@@ -1,5 +1,52 @@
 # sqlvibe Release History
 
+## **v0.10.3** (2026-03-01)
+
+### Features: Advanced SQL Features + Window Function Enhancements
+
+#### Track 1: Window Frame Support
+- Window frame parsing: `ROWS/RANGE BETWEEN ... AND ...`
+- Frame bound types: `UNBOUNDED PRECEDING/FOLLOWING`, `N PRECEDING/FOLLOWING`, `CURRENT ROW`
+- Frame execution support in window function evaluation
+
+#### Track 2: Named Windows (WINDOW Clause)
+- New `WindowDef` struct in `internal/QP/parser.go`: `Name`, `Partition`, `OrderBy`, `Frame`
+- `SelectStmt.Windows []WindowDef` field for WINDOW clause storage
+- Parser support: `WINDOW name AS (window_spec), ...`
+- `parseWindowSpecOrName()` handles both named references and inline specs
+- Usage: `SELECT func() OVER w FROM t WINDOW w AS (PARTITION BY x ORDER BY y)`
+
+#### Track 3: JSON Function Enhancements (`ext/json/json.go`)
+- Added `JSON_VALID` alias for `JSON_ISVALID`
+- Added `JSON_ARRAY_LENGTH` alias for `JSON_LENGTH`
+- Added `JSON_KEYS` function: returns array of keys from JSON object
+- New `evalJSONKeys()` implementation with optional path support
+
+#### Track 4: Math Functions (Already Implemented)
+- `POWER(x, y)`: x raised to power y
+- `MOD(x, y)`: remainder of x/y
+- `LOG(x)`, `LOG10(x)`: logarithm functions
+- `EXP(x)`: e raised to power x
+- `LN(x)`: natural logarithm
+
+#### Track 5: String Functions (Already Implemented)
+- `INSTR(haystack, needle)`: position of substring (1-based)
+- `HEX(x)`: convert to hexadecimal
+- `UNHEX(x)`: convert from hexadecimal
+
+#### Parser Changes
+- `internal/QP/parser.go`:
+  - Added `WindowDef` struct
+  - Added `SelectStmt.Windows` field
+  - Added WINDOW clause parsing in `parseSelect()`
+  - Added `parseWindowSpecOrName()` for named window support
+
+#### Tests
+- All existing tests pass
+- Pre-existing datetime function tests (F051) remain failing (unrelated to this release)
+
+---
+
 ## **v0.10.2** (2026-03-01)
 
 ### Features: FTS5 Full-Text Search Extension

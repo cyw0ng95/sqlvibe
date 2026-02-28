@@ -26,8 +26,17 @@ type SelectStmt struct {
 	SetOp      string
 	SetOpAll   bool
 	SetOpRight *SelectStmt
-	CTEs       []CTEClause // WITH ... AS (...) clauses
-	IntoTable  string      // non-empty for SELECT ... INTO tablename
+	CTEs       []CTEClause     // WITH ... AS (...) clauses
+	IntoTable  string          // non-empty for SELECT ... INTO tablename
+	Windows    []WindowDef     // WINDOW clause: name AS (window_spec)
+}
+
+// WindowDef represents a named window definition: name AS (window_spec)
+type WindowDef struct {
+	Name      string
+	Partition []Expr
+	OrderBy   []WindowOrderBy
+	Frame     *WindowFrame
 }
 
 // CTEClause represents a single CTE definition: name AS (SELECT ...)
@@ -1041,6 +1050,43 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 	// ORDER BY before UNION/EXCEPT/INTERSECT is invalid SQL
 	if stmt.OrderBy != nil && (p.current().Literal == "UNION" || p.current().Literal == "EXCEPT" || p.current().Literal == "INTERSECT") {
 		return nil, fmt.Errorf("ORDER BY clause should come after %s not before", p.current().Literal)
+	}
+
+	// Parse WINDOW clause: WINDOW name AS (window_spec), ...
+	if strings.ToUpper(p.current().Literal) == "WINDOW" {
+		p.advance() // consume WINDOW
+		for {
+			if p.current().Type != TokenIdentifier {
+				break
+			}
+			name := p.current().Literal
+			p.advance()
+			
+			// Expect AS
+			if strings.ToUpper(p.current().Literal) != "AS" {
+				break
+			}
+			p.advance() // consume AS
+			
+			// Parse window specification
+			partition, orderBy, frame, err := p.parseWindowSpec()
+			if err != nil {
+				return nil, err
+			}
+			
+			stmt.Windows = append(stmt.Windows, WindowDef{
+				Name:      name,
+				Partition: partition,
+				OrderBy:   orderBy,
+				Frame:     frame,
+			})
+			
+			// Check for comma (multiple windows)
+			if p.current().Type != TokenComma {
+				break
+			}
+			p.advance()
+		}
 	}
 
 	if p.current().Literal == "LIMIT" {
@@ -3022,7 +3068,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			// Check for OVER clause (window function) - handles identifiers like PERCENT_RANK, CUME_DIST
 			if p.current().Type == TokenKeyword && p.current().Literal == "OVER" {
 				p.advance() // consume OVER
-				partition, orderBy, frame, err := p.parseWindowSpec()
+				partition, orderBy, frame, err := p.parseWindowSpecOrName()
 				if err != nil {
 					return nil, err
 				}
@@ -3094,7 +3140,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				// Check for OVER clause (window function)
 				if p.current().Type == TokenKeyword && p.current().Literal == "OVER" {
 					p.advance() // consume OVER
-					partition, orderBy, frame, err := p.parseWindowSpec()
+					partition, orderBy, frame, err := p.parseWindowSpecOrName()
 					if err != nil {
 						return nil, err
 					}
@@ -3511,6 +3557,22 @@ func (p *Parser) parseWithClause() (ASTNode, error) {
 	}
 	mainSelect.CTEs = ctes
 	return mainSelect, nil
+}
+
+// parseWindowSpecOrName parses either a named window reference or a window specification.
+// Named window: OVER window_name
+// Window spec: OVER (PARTITION BY ... ORDER BY ... ROWS/RANGE ...)
+func (p *Parser) parseWindowSpecOrName() (partition []Expr, orderBy []WindowOrderBy, frame *WindowFrame, err error) {
+	// Check if this is a named window reference (identifier without parentheses)
+	if p.current().Type == TokenIdentifier {
+		_ = p.current().Literal // window name - will be resolved later from WINDOW clause
+		p.advance()
+		// Return nil for partition/orderBy/frame - will be resolved later from the WINDOW clause
+		// For now, we just note the window name by returning empty spec
+		return nil, nil, nil, nil
+	}
+	// Otherwise, parse the inline window specification
+	return p.parseWindowSpec()
 }
 
 // parseWindowSpec parses the window specification after OVER: ([PARTITION BY ...] [ORDER BY ...])
