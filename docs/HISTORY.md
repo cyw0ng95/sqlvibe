@@ -1,5 +1,82 @@
 # sqlvibe Release History
 
+## **v0.10.2** (2026-03-01)
+
+### Features: FTS5 Full-Text Search Extension
+
+#### Track 1: Tokenizers (`ext/fts5/tokenizer.go`)
+- New `Tokenizer` interface: `Tokenize(text) []Token`
+- `ASCIITokenizer`: whitespace/punctuation splitting, lowercase normalization
+- `PorterTokenizer`: Porter stemming algorithm (reduces words to root form)
+- `Unicode61Tokenizer`: Unicode character classification, multi-language support
+- `GetTokenizer(name)` factory function for tokenizer selection
+
+#### Track 2: Inverted Index (`ext/fts5/index.go`)
+- New `FTS5Index` struct with term → document inverted index
+- `DocInfo` struct: `DocID`, `Column`, `Position` for occurrence tracking
+- `DocMeta` struct: `TokenCount`, `Lengths` per column
+- `Insert(docID, values)`: adds document to index with tokenization
+- `Delete(docID, values)`: removes document from index
+- `QueryTerm(term)`: finds all documents containing a term
+- `QueryPrefix(prefix)`: finds documents with terms starting with prefix
+- `QueryPhrase(terms)`: finds documents containing exact phrase
+- `GetTermCount(term)`: returns document frequency for BM25
+- `GetDocCount()`: returns total document count
+
+#### Track 3: Query Parser (`ext/fts5/query.go`)
+- New `MatchExpr` AST: `Op`, `Term`, `Column`, `Children`
+- `MatchOp` constants: `MatchTerm`, `MatchAnd`, `MatchOr`, `MatchNot`, `MatchPhrase`, `MatchPrefix`
+- `QueryParser` with recursive descent parsing
+- Supported syntax:
+  - Term search: `hello`
+  - Prefix search: `test*`
+  - Phrase search: `"hello world"`
+  - Boolean AND: `hello AND world`
+  - Boolean OR: `hello OR goodbye`
+  - Boolean NOT: `NOT world`
+  - Column filter: `title:hello`
+- `ExecuteQuery(index, expr)`: executes match expression against index
+
+#### Track 4: BM25 Ranking (`ext/fts5/rank.go`)
+- `BM25(docLen, avgDL, tf, df, N, params)`: core BM25 scoring function
+- `BM25Params` struct: `K1` (term frequency saturation), `B` (length normalization)
+- `DefaultBM25Params()`: returns k1=1.2, b=0.75
+- `Ranker` struct: `ScoreDocument(docID, terms)`, `ScoreDocuments(docIDs, terms)`
+- `Highlighter` struct: `Highlight(text, terms)` with configurable tags
+- `SnippetExtractor` struct: `Snippet(text, terms)` with context window
+
+#### Track 5: Virtual Table Module (`ext/fts5/fts5.go`)
+- `FTS5Module` implements `DS.VTabModule`: `Create`, `Connect`
+- `FTS5Table` struct: virtual table instance with index, tokenizer, ranker
+- `fts5Cursor` implements `DS.VTabCursor`:
+  - `Filter(idxNum, idxStr, args)`: parses MATCH expression, executes query
+  - `Next()`: moves to next matching document
+  - `Column(col)`: returns column value (score or docID)
+  - `RowID()`: returns document ID
+  - `Eof()`: checks end of results
+  - `Close()`: closes cursor
+- Helper methods: `GetBM25()`, `GetHighlight(col, text)`, `GetSnippet(col, text)`
+
+#### Track 6: Module Registration (`ext/fts5/init.go`)
+- `init()` registers `"fts5"` module via `IS.RegisterVTabModule`
+- Auto-loaded when `ext/fts5` package is imported
+
+#### Tests
+- New `ext/fts5/fts5_test.go`: 50+ unit tests
+  - Tokenizer tests: ASCII, Porter, Unicode61
+  - Index tests: Insert, Delete, QueryTerm, QueryPrefix, QueryPhrase
+  - Parser tests: term, AND, OR, NOT, prefix, column filter
+  - Query execution tests: simple, AND, OR
+  - BM25 tests: basic scoring, zero documents, ranker
+  - Highlight/Snippet tests
+  - Virtual table tests: Create, Insert, Filter, Next, Column, RowID, GetBM25, GetHighlight, GetSnippet
+- Code coverage: 75.5%
+
+#### Documentation
+- New `ext/fts5/README.md`: usage guide, MATCH syntax, tokenizer options, API reference
+
+---
+
 ## **v0.10.1** (2026-02-28)
 
 ### Features: VIRTUAL TABLE Framework
