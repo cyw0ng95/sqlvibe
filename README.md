@@ -6,9 +6,9 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
+| **v0.10.8** | 2026-03-01 | SQL:1999: Window functions, Recursive CTEs; CLI: history, auto-complete |
 | **v0.10.7** | 2026-03-01 | Query Optimizer: index-only scan, cost-based planning, query cache size |
 | **v0.10.6** | 2026-03-01 | CLI: output modes, timer, import/export; Generated columns (parser) |
-| **v0.10.5** | 2026-03-01 | Observability: EXPLAIN ANALYZE, query profiling, slow query log (SVDB_EXT_PROFILING) |
 | **v0.10.2** | 2026-03-01 | FTS5 Full-Text Search Extension: inverted index, BM25 ranking, MATCH queries, tokenizers (ASCII/Porter/Unicode61) |
 | **v0.9.17** | 2026-02-26 | JSON Extension Enhancement: Table-valued functions (json_each, json_tree), Aggregates (json_group_array, json_group_object), JSONB format |
 

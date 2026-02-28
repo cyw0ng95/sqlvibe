@@ -45,13 +45,23 @@ func main() {
 	}
 
 	fmt.Println("sv-cli - sqlvibe database shell")
-	fmt.Println("Type '.help' for help, 'exit' or 'quit' to exit")
+	fmt.Println("Type '.help' for help, '.history' for command history, 'exit' or 'quit' to exit")
+	fmt.Println("Use TAB for auto-completion (keywords, tables, columns)")
 	fmt.Println()
 
 	// Create formatter
 	formatter := NewFormatter()
 	importer := NewImporter(db)
 	exporter := NewExporter(db)
+	
+	// Create history manager and auto-completer
+	history := NewHistoryManager()
+	if err := history.Load(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not load history: %v\n", err)
+	}
+	
+	autoComplete := NewAutoCompleter()
+	autoComplete.UpdateSchema(db)
 
 	// State
 	timerEnabled := false
@@ -69,9 +79,22 @@ func main() {
 		if line == "" {
 			continue
 		}
+		
+		// Handle history command
+		if line == ".history" {
+			printHistory(history)
+			continue
+		}
+		
+		// Handle tab completion hint
+		if line == ".complete" {
+			fmt.Println("Auto-completion: type partial keyword/table/column and press TAB")
+			fmt.Println("(Note: TAB completion requires terminal support)")
+			continue
+		}
 
 		if strings.HasPrefix(line, ".") {
-			if handleMetaCommand(db, line, formatter, importer, exporter, &timerEnabled, &nullValue, &outputFile) {
+			if handleMetaCommand(db, line, formatter, importer, exporter, &timerEnabled, &nullValue, &outputFile, history) {
 				break
 			}
 			continue
@@ -79,6 +102,22 @@ func main() {
 
 		if line == "exit" || line == "quit" {
 			break
+		}
+
+		// Add to history
+		history.Add(line)
+		
+		// Update schema cache periodically
+		autoComplete.UpdateSchema(db)
+		
+		// Show completion suggestions (simplified - just print them)
+		if strings.HasSuffix(line, "\t") {
+			prefix := strings.TrimSuffix(line, "\t")
+			suggestions := autoComplete.Complete(prefix)
+			if len(suggestions) > 0 {
+				fmt.Printf("\nSuggestions: %s\n", strings.Join(suggestions, "  "))
+			}
+			continue
 		}
 
 		if *echoMode {
@@ -131,7 +170,7 @@ func main() {
 }
 
 // handleMetaCommand processes dot commands. Returns true to exit the shell.
-func handleMetaCommand(db *sqlvibe.Database, line string, formatter *Formatter, importer *Importer, exporter *Exporter, timerEnabled *bool, nullValue *string, outputFile *string) bool {
+func handleMetaCommand(db *sqlvibe.Database, line string, formatter *Formatter, importer *Importer, exporter *Exporter, timerEnabled *bool, nullValue *string, outputFile *string, history *HistoryManager) bool {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
 		return false
@@ -142,6 +181,10 @@ func handleMetaCommand(db *sqlvibe.Database, line string, formatter *Formatter, 
 
 	switch cmd {
 	case ".exit", ".quit":
+		// Save history before exiting
+		if err := history.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not save history: %v\n", err)
+		}
 		return true
 
 	case ".help":
@@ -215,8 +258,28 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("Other:")
 	fmt.Println("  .timer on|off         Toggle query timer")
+	fmt.Println("  .history              Show command history")
+	fmt.Println("  .complete             Show auto-completion help")
 	fmt.Println("  .help                 Show this help")
 	fmt.Println("  .exit, .quit          Exit the shell")
+}
+
+// printHistory prints the command history.
+func printHistory(h *HistoryManager) {
+	history := h.GetHistory()
+	if len(history) == 0 {
+		fmt.Println("No command history.")
+		return
+	}
+	
+	fmt.Println("Command history:")
+	start := len(history) - 20
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < len(history); i++ {
+		fmt.Printf("  %d: %s\n", i+1, history[i])
+	}
 }
 
 func listTables(db *sqlvibe.Database) {

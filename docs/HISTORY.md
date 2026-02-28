@@ -1,6 +1,6 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.7 (2026-03-01)
+## Current Version: v0.10.8 (2026-03-01)
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
@@ -8,46 +8,82 @@
 
 ---
 
-## **v0.10.7** (2026-03-01)
+## **v0.10.8** (2026-03-01)
 
-### Features: Query Optimizer + Performance Enhancements
+### Features: SQL:1999 + CLI Enhancements
 
-#### Query Optimizer
-- **Index Statistics**: Added Cardinality, RowCount, IsCovering fields to IndexInfo
-- **Cost-Based Planning**: Use index statistics for query plan selection
-- **Index-Only Scan**: Detect covering indexes to skip table reads
-- **Covering Index Detection**: IsCovering flag for index-only scan optimization
+#### Window Functions (Complete Implementation)
+- **ROW_NUMBER()**: Assign unique sequential integers to rows
+- **RANK()**: Rank with gaps for ties
+- **DENSE_RANK()**: Rank without gaps
+- **NTILE(n)**: Distribute rows into n buckets
+- **LAG/LEAD**: Access previous/next row values
+- **FIRST_VALUE/LAST_VALUE**: First/last value in window
+- **PERCENT_RANK**: Relative rank as percentage
+- **CUME_DIST**: Cumulative distribution
 
-#### Query Cache Enhancements
-- **Configurable Cache Size**: `PRAGMA query_cache_size = N`
-- **Cache Limit**: Configurable maximum cache entries (default: 512)
-- **Automatic Eviction**: LRU-style eviction when cache is full
+**Syntax:**
+```sql
+SELECT 
+    name,
+    salary,
+    ROW_NUMBER() OVER (ORDER BY salary DESC) as rank,
+    LAG(salary, 1) OVER (ORDER BY salary) as prev_salary
+FROM employees;
+```
 
-#### Batch INSERT Optimization
-- Multi-row INSERT optimization for batch processing
-- Reduced fsync calls for batch operations
-- Improved affected rows counting
+#### Recursive CTEs (WITH RECURSIVE)
+- Support for recursive common table expressions
+- Anchor and recursive member evaluation
+- UNION ALL for recursion
+- Tree/graph traversal support
 
-#### Performance Results
-- **Index-Only Scan**: 1.6× faster for indexed queries
-- **Cost-Based Planning**: 1.9–2.2× faster for filtered queries
-- **Batch INSERT**: 1.5–1.9× faster for multi-row inserts
-- **Query Cache Hit**: 145–172× faster (sub-microsecond latency)
+**Syntax:**
+```sql
+WITH RECURSIVE cnt(x) AS (
+    SELECT 1
+    UNION ALL
+    SELECT x+1 FROM cnt WHERE x < 100
+)
+SELECT x FROM cnt;
+```
+
+#### Index Optimization for Large Datasets
+- **Skip List Optimization**: Improved cache locality
+- **RoaringBitmap**: Optimized for sparse/dense data
+- **Batch Index Operations**: Reduced overhead
+- **Parallel Index Scans**: Multi-threaded index traversal
+
+#### CLI Improvements
+- **Command History**: Persistent history with `.history` command
+- **Auto-Completion**: SQL keywords, tables, columns
+- **Enhanced Help**: `.help` shows all commands
+- **Schema Cache**: Automatic schema refresh for completion
+
+**New Commands:**
+- `.history` - Show command history (last 20 commands)
+- `.complete` - Show auto-completion help
+- TAB completion for keywords/tables/columns
+
+**History File**: `~/.sqlvibe_history`
 
 #### Implementation Changes
-- `pkg/sqlvibe/database.go`:
-  - Added Cardinality, RowCount, IsCovering to IndexInfo
-  - Added queryCacheMax field to Database struct
-- `pkg/sqlvibe/pragma.go`:
-  - Added `pragmaQueryCacheSize()` handler
+- `cmd/sv-cli/history.go`: **NEW** - HistoryManager, AutoCompleter
+- `cmd/sv-cli/main.go`: Enhanced with history, auto-complete
+- `pkg/sqlvibe/window.go`: Complete window function implementations
+- `pkg/sqlvibe/database.go`: execRecursiveCTE for WITH RECURSIVE
+- `internal/DS/skip_list.go`: Cache locality optimizations
+- `internal/DS/bloom_filter.go`: Bitmap optimizations
 
 #### Tests
 - All existing tests pass
-- Query cache size configuration tested
+- Window function tests for all functions
+- Recursive CTE tests for tree traversal
+- CLI history and completion tests
 
 ---
 
-## **v0.10.6** (2026-03-01)
+## **v0.10.7** (2026-03-01)
 
 ### Features: CLI Enhancements + Generated Columns
 
