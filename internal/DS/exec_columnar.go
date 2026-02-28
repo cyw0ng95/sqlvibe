@@ -1,22 +1,20 @@
-package sqlvibe
+package DS
 
 import (
 	"context"
 	"strings"
-
-	"github.com/cyw0ng95/sqlvibe/internal/DS"
 )
 
 // VectorizedFilter applies op against val across all non-null rows of col and
 // returns a RoaringBitmap of matching row indices.
 // Supported ops: "=", "!=", "<", "<=", ">", ">="
-func VectorizedFilter(col *DS.ColumnVector, op string, val DS.Value) *DS.RoaringBitmap {
-	rb := DS.NewRoaringBitmap()
+func VectorizedFilter(col *ColumnVector, op string, val Value) *RoaringBitmap {
+	rb := NewRoaringBitmap()
 	for i := 0; i < col.Len(); i++ {
 		if col.IsNull(i) {
 			continue
 		}
-		cmp := DS.Compare(col.Get(i), val)
+		cmp := Compare(col.Get(i), val)
 		var match bool
 		switch op {
 		case "=":
@@ -40,7 +38,7 @@ func VectorizedFilter(col *DS.ColumnVector, op string, val DS.Value) *DS.Roaring
 }
 
 // ColumnarSum returns the sum of all non-null TypeInt and TypeFloat values in col.
-func ColumnarSum(col *DS.ColumnVector) float64 {
+func ColumnarSum(col *ColumnVector) float64 {
 	var sum float64
 	for i := 0; i < col.Len(); i++ {
 		if col.IsNull(i) {
@@ -48,9 +46,9 @@ func ColumnarSum(col *DS.ColumnVector) float64 {
 		}
 		v := col.Get(i)
 		switch v.Type {
-		case DS.TypeInt:
+		case TypeInt:
 			sum += float64(v.Int)
-		case DS.TypeFloat:
+		case TypeFloat:
 			sum += v.Float
 		}
 	}
@@ -58,7 +56,7 @@ func ColumnarSum(col *DS.ColumnVector) float64 {
 }
 
 // ColumnarCount returns the number of non-null values in col.
-func ColumnarCount(col *DS.ColumnVector) int64 {
+func ColumnarCount(col *ColumnVector) int64 {
 	var n int64
 	for i := 0; i < col.Len(); i++ {
 		if !col.IsNull(i) {
@@ -69,14 +67,14 @@ func ColumnarCount(col *DS.ColumnVector) int64 {
 }
 
 // ColumnarMin returns the minimum non-null value, or NullValue if the column is empty/all-null.
-func ColumnarMin(col *DS.ColumnVector) DS.Value {
-	min := DS.NullValue()
+func ColumnarMin(col *ColumnVector) Value {
+	min := NullValue()
 	for i := 0; i < col.Len(); i++ {
 		if col.IsNull(i) {
 			continue
 		}
 		v := col.Get(i)
-		if min.IsNull() || DS.Compare(v, min) < 0 {
+		if min.IsNull() || Compare(v, min) < 0 {
 			min = v
 		}
 	}
@@ -84,14 +82,14 @@ func ColumnarMin(col *DS.ColumnVector) DS.Value {
 }
 
 // ColumnarMax returns the maximum non-null value, or NullValue if the column is empty/all-null.
-func ColumnarMax(col *DS.ColumnVector) DS.Value {
-	max := DS.NullValue()
+func ColumnarMax(col *ColumnVector) Value {
+	max := NullValue()
 	for i := 0; i < col.Len(); i++ {
 		if col.IsNull(i) {
 			continue
 		}
 		v := col.Get(i)
-		if max.IsNull() || DS.Compare(v, max) > 0 {
+		if max.IsNull() || Compare(v, max) > 0 {
 			max = v
 		}
 	}
@@ -100,7 +98,7 @@ func ColumnarMax(col *DS.ColumnVector) DS.Value {
 
 // ColumnarAvg returns the average of all non-null TypeInt and TypeFloat values,
 // and whether any qualifying values existed (false means no data / all NULL).
-func ColumnarAvg(col *DS.ColumnVector) (float64, bool) {
+func ColumnarAvg(col *ColumnVector) (float64, bool) {
 	var sum float64
 	var count int64
 	for i := 0; i < col.Len(); i++ {
@@ -109,10 +107,10 @@ func ColumnarAvg(col *DS.ColumnVector) (float64, bool) {
 		}
 		v := col.Get(i)
 		switch v.Type {
-		case DS.TypeInt:
+		case TypeInt:
 			sum += float64(v.Int)
 			count++
-		case DS.TypeFloat:
+		case TypeFloat:
 			sum += v.Float
 			count++
 		}
@@ -127,8 +125,8 @@ func ColumnarAvg(col *DS.ColumnVector) (float64, bool) {
 type groupState struct {
 	sum    float64
 	count  int64
-	min    DS.Value
-	max    DS.Value
+	min    Value
+	max    Value
 	hasVal bool
 }
 
@@ -136,7 +134,7 @@ type groupState struct {
 // agg may be "sum", "count", "min", "max", or "avg".
 // The returned map key is the string representation of each group key value.
 // Rows where keyCol is null are skipped.
-func ColumnarGroupBy(keyCol, valCol *DS.ColumnVector, agg string) map[string]DS.Value {
+func ColumnarGroupBy(keyCol, valCol *ColumnVector, agg string) map[string]Value {
 	groups := make(map[string]*groupState)
 	keyOrder := make([]string, 0)
 
@@ -163,9 +161,9 @@ func ColumnarGroupBy(keyCol, valCol *DS.ColumnVector, agg string) map[string]DS.
 		v := valCol.Get(i)
 		gs.count++
 		switch v.Type {
-		case DS.TypeInt:
+		case TypeInt:
 			gs.sum += float64(v.Int)
-		case DS.TypeFloat:
+		case TypeFloat:
 			gs.sum += v.Float
 		}
 		if !gs.hasVal {
@@ -173,43 +171,43 @@ func ColumnarGroupBy(keyCol, valCol *DS.ColumnVector, agg string) map[string]DS.
 			gs.max = v
 			gs.hasVal = true
 		} else {
-			if DS.Compare(v, gs.min) < 0 {
+			if Compare(v, gs.min) < 0 {
 				gs.min = v
 			}
-			if DS.Compare(v, gs.max) > 0 {
+			if Compare(v, gs.max) > 0 {
 				gs.max = v
 			}
 		}
 	}
 
-	result := make(map[string]DS.Value, len(groups))
+	result := make(map[string]Value, len(groups))
 	for _, key := range keyOrder {
 		gs := groups[key]
 		switch agg {
 		case "sum":
-			result[key] = DS.FloatValue(gs.sum)
+			result[key] = FloatValue(gs.sum)
 		case "count":
-			result[key] = DS.IntValue(gs.count)
+			result[key] = IntValue(gs.count)
 		case "min":
 			if gs.hasVal {
 				result[key] = gs.min
 			} else {
-				result[key] = DS.NullValue()
+				result[key] = NullValue()
 			}
 		case "max":
 			if gs.hasVal {
 				result[key] = gs.max
 			} else {
-				result[key] = DS.NullValue()
+				result[key] = NullValue()
 			}
 		case "avg":
 			if gs.count == 0 {
-				result[key] = DS.NullValue()
+				result[key] = NullValue()
 			} else {
-				result[key] = DS.FloatValue(gs.sum / float64(gs.count))
+				result[key] = FloatValue(gs.sum / float64(gs.count))
 			}
 		default:
-			result[key] = DS.NullValue()
+			result[key] = NullValue()
 		}
 	}
 	return result
@@ -219,13 +217,13 @@ func ColumnarGroupBy(keyCol, valCol *DS.ColumnVector, agg string) map[string]DS.
 // 4-way unrolled loops that the Go compiler can auto-vectorize on amd64/arm64.
 // Returns a RoaringBitmap of matching row indices.
 // Supported ops: "=", "!=", "<", "<=", ">", ">=".
-func VectorizedFilterSIMD(col *DS.ColumnVector, op string, val DS.Value) *DS.RoaringBitmap {
+func VectorizedFilterSIMD(col *ColumnVector, op string, val Value) *RoaringBitmap {
 	switch col.Type {
-	case DS.TypeInt, DS.TypeBool:
+	case TypeInt, TypeBool:
 		return vectorizedFilterInt64(col.Ints(), col, op, val.Int)
-	case DS.TypeFloat:
+	case TypeFloat:
 		return vectorizedFilterFloat64(col.Floats(), col, op, val.Float)
-	case DS.TypeString:
+	case TypeString:
 		return vectorizedFilterString(col.Strings(), col, op, val.Str)
 	}
 	return VectorizedFilter(col, op, val) // fallback for other types
@@ -233,8 +231,8 @@ func VectorizedFilterSIMD(col *DS.ColumnVector, op string, val DS.Value) *DS.Roa
 
 // vectorizedFilterInt64 applies a comparison against an int64 column using
 // 4-way loop unrolling. The nulls slice is checked via col.IsNull.
-func vectorizedFilterInt64(data []int64, col *DS.ColumnVector, op string, val int64) *DS.RoaringBitmap {
-	rb := DS.NewRoaringBitmap()
+func vectorizedFilterInt64(data []int64, col *ColumnVector, op string, val int64) *RoaringBitmap {
+	rb := NewRoaringBitmap()
 	n := len(data)
 	i := 0
 	switch op {
@@ -358,8 +356,8 @@ func vectorizedFilterInt64(data []int64, col *DS.ColumnVector, op string, val in
 
 // vectorizedFilterFloat64 applies a comparison against a float64 column using
 // 4-way loop unrolling.
-func vectorizedFilterFloat64(data []float64, col *DS.ColumnVector, op string, val float64) *DS.RoaringBitmap {
-	rb := DS.NewRoaringBitmap()
+func vectorizedFilterFloat64(data []float64, col *ColumnVector, op string, val float64) *RoaringBitmap {
+	rb := NewRoaringBitmap()
 	n := len(data)
 	i := 0
 	switch op {
@@ -482,8 +480,8 @@ func vectorizedFilterFloat64(data []float64, col *DS.ColumnVector, op string, va
 
 // vectorizedFilterString applies a comparison against a string column using
 // 4-way loop unrolling.
-func vectorizedFilterString(data []string, col *DS.ColumnVector, op string, val string) *DS.RoaringBitmap {
-	rb := DS.NewRoaringBitmap()
+func vectorizedFilterString(data []string, col *ColumnVector, op string, val string) *RoaringBitmap {
+	rb := NewRoaringBitmap()
 	n := len(data)
 	i := 0
 	switch op {
@@ -607,7 +605,7 @@ func vectorizedFilterString(data []string, col *DS.ColumnVector, op string, val 
 // ColumnarHashJoinBloom performs an inner join using a bloom filter as a pre-filter
 // before the hash table lookup. The bloom filter eliminates hash-table probes for
 // keys that are definitely not in the right side, reducing overhead for sparse joins.
-func ColumnarHashJoinBloom(left, right *DS.HybridStore, leftCol, rightCol string) [][]DS.Value {
+func ColumnarHashJoinBloom(left, right *HybridStore, leftCol, rightCol string) [][]Value {
 	lci := left.ColIndex(leftCol)
 	rci := right.ColIndex(rightCol)
 	if lci < 0 || rci < 0 {
@@ -616,8 +614,8 @@ func ColumnarHashJoinBloom(left, right *DS.HybridStore, leftCol, rightCol string
 
 	rightRows := right.Scan()
 	// Build bloom filter + hash table from the right side.
-	bloom := DS.NewBloomFilter(len(rightRows)+1, 0.01)
-	hash := make(map[interface{}][][]DS.Value, len(rightRows))
+	bloom := NewBloomFilter(len(rightRows)+1, 0.01)
+	hash := make(map[interface{}][][]Value, len(rightRows))
 	for _, rRow := range rightRows {
 		key := joinHashKey(rRow[rci])
 		bloom.Add(key)
@@ -625,7 +623,7 @@ func ColumnarHashJoinBloom(left, right *DS.HybridStore, leftCol, rightCol string
 	}
 
 	// Probe with left side — skip hash lookup if bloom says "definitely not".
-	var out [][]DS.Value
+	var out [][]Value
 	lCols := len(left.Columns())
 	rCols := len(right.Columns())
 	for _, lRow := range left.Scan() {
@@ -638,7 +636,7 @@ func ColumnarHashJoinBloom(left, right *DS.HybridStore, leftCol, rightCol string
 			continue
 		}
 		for _, rRow := range matches {
-			merged := make([]DS.Value, lCols+rCols)
+			merged := make([]Value, lCols+rCols)
 			copy(merged[:lCols], lRow)
 			copy(merged[lCols:], rRow)
 			out = append(out, merged)
@@ -647,16 +645,16 @@ func ColumnarHashJoinBloom(left, right *DS.HybridStore, leftCol, rightCol string
 	return out
 }
 
-// joinHashKey returns a hashable key for a DS.Value without allocation for the
+// joinHashKey returns a hashable key for a Value without allocation for the
 // common int64/float64/string cases.  For rare types (bytes, etc.) it falls
 // back to the string representation.
-func joinHashKey(v DS.Value) interface{} {
+func joinHashKey(v Value) interface{} {
 	switch v.Type {
-	case DS.TypeInt, DS.TypeBool:
+	case TypeInt, TypeBool:
 		return v.Int
-	case DS.TypeFloat:
+	case TypeFloat:
 		return v.Float
-	case DS.TypeString:
+	case TypeString:
 		return v.Str
 	default:
 		return v.String()
@@ -667,13 +665,13 @@ func joinHashKey(v DS.Value) interface{} {
 // column pair (leftCol = rightCol).  The result is a slice of merged value rows
 // where the first len(left.Columns()) values are from the left row and the
 // remaining values are from the right row.
-func ColumnarHashJoin(left, right *DS.HybridStore, leftCol, rightCol string) [][]DS.Value {
+func ColumnarHashJoin(left, right *HybridStore, leftCol, rightCol string) [][]Value {
 	return ColumnarHashJoinContext(context.Background(), left, right, leftCol, rightCol)
 }
 
 // ColumnarHashJoinContext is a context-aware variant of ColumnarHashJoin.
 // It checks ctx.Done() every 256 rows in the build phase and returns nil on cancellation.
-func ColumnarHashJoinContext(ctx context.Context, left, right *DS.HybridStore, leftCol, rightCol string) [][]DS.Value {
+func ColumnarHashJoinContext(ctx context.Context, left, right *HybridStore, leftCol, rightCol string) [][]Value {
 	lci := left.ColIndex(leftCol)
 	rci := right.ColIndex(rightCol)
 	if lci < 0 || rci < 0 {
@@ -682,7 +680,7 @@ func ColumnarHashJoinContext(ctx context.Context, left, right *DS.HybridStore, l
 
 	// Build hash table from the smaller side (right).
 	// Use interface{} key to avoid fmt.Sprintf allocation for int/float/string values.
-	hash := make(map[interface{}][][]DS.Value)
+	hash := make(map[interface{}][][]Value)
 	var buildCount int64
 	for _, rRow := range right.Scan() {
 		key := joinHashKey(rRow[rci])
@@ -698,7 +696,7 @@ func ColumnarHashJoinContext(ctx context.Context, left, right *DS.HybridStore, l
 	}
 
 	// Probe with left side.
-	var out [][]DS.Value
+	var out [][]Value
 	lCols := len(left.Columns())
 	rCols := len(right.Columns())
 	for _, lRow := range left.Scan() {
@@ -708,7 +706,7 @@ func ColumnarHashJoinContext(ctx context.Context, left, right *DS.HybridStore, l
 			continue
 		}
 		for _, rRow := range matches {
-			merged := make([]DS.Value, lCols+rCols)
+			merged := make([]Value, lCols+rCols)
 			copy(merged[:lCols], lRow)
 			copy(merged[lCols:], rRow)
 			out = append(out, merged)
@@ -721,7 +719,7 @@ func ColumnarHashJoinContext(ctx context.Context, left, right *DS.HybridStore, l
 // aggregate functions on aggCol.  agg may be "sum", "count", "min", "max", or "avg".
 // Each returned row contains the group-key values (in the order of groupCols)
 // followed by the aggregate result.
-func VectorizedGroupBy(hs *DS.HybridStore, groupCols []string, aggCol, agg string) [][]DS.Value {
+func VectorizedGroupBy(hs *HybridStore, groupCols []string, aggCol, agg string) [][]Value {
 	colIdx := make([]int, len(groupCols))
 	for i, c := range groupCols {
 		colIdx[i] = hs.ColIndex(c)
@@ -729,11 +727,11 @@ func VectorizedGroupBy(hs *DS.HybridStore, groupCols []string, aggCol, agg strin
 	aggCI := hs.ColIndex(aggCol)
 
 	type aggState struct {
-		keyVals []DS.Value // representative key values for this group
+		keyVals []Value // representative key values for this group
 		sum     float64
 		count   int64
-		min     DS.Value
-		max     DS.Value
+		min     Value
+		max     Value
 		hasVal  bool
 	}
 
@@ -756,7 +754,7 @@ func VectorizedGroupBy(hs *DS.HybridStore, groupCols []string, aggCol, agg strin
 		gs, ok := groups[key]
 		if !ok {
 			// Store representative key values from the first row in this group.
-			keyVals := make([]DS.Value, len(groupCols))
+			keyVals := make([]Value, len(groupCols))
 			for i, ci := range colIdx {
 				if ci >= 0 && ci < len(row) {
 					keyVals[i] = row[ci]
@@ -772,7 +770,7 @@ func VectorizedGroupBy(hs *DS.HybridStore, groupCols []string, aggCol, agg strin
 			continue
 		}
 
-		var v DS.Value
+		var v Value
 		if aggCI >= 0 && aggCI < len(row) {
 			v = row[aggCI]
 		}
@@ -781,9 +779,9 @@ func VectorizedGroupBy(hs *DS.HybridStore, groupCols []string, aggCol, agg strin
 		}
 		gs.count++
 		switch v.Type {
-		case DS.TypeInt:
+		case TypeInt:
 			gs.sum += float64(v.Int)
-		case DS.TypeFloat:
+		case TypeFloat:
 			gs.sum += v.Float
 		}
 		if !gs.hasVal {
@@ -791,45 +789,45 @@ func VectorizedGroupBy(hs *DS.HybridStore, groupCols []string, aggCol, agg strin
 			gs.max = v
 			gs.hasVal = true
 		} else {
-			if DS.Compare(v, gs.min) < 0 {
+			if Compare(v, gs.min) < 0 {
 				gs.min = v
 			}
-			if DS.Compare(v, gs.max) > 0 {
+			if Compare(v, gs.max) > 0 {
 				gs.max = v
 			}
 		}
 	}
 
-	out := make([][]DS.Value, 0, len(keyOrder))
+	out := make([][]Value, 0, len(keyOrder))
 	for _, key := range keyOrder {
 		gs := groups[key]
 
-		var aggVal DS.Value
+		var aggVal Value
 		switch agg {
 		case "sum":
-			aggVal = DS.FloatValue(gs.sum)
+			aggVal = FloatValue(gs.sum)
 		case "count":
-			aggVal = DS.IntValue(gs.count)
+			aggVal = IntValue(gs.count)
 		case "min":
 			if gs.hasVal {
 				aggVal = gs.min
 			} else {
-				aggVal = DS.NullValue()
+				aggVal = NullValue()
 			}
 		case "max":
 			if gs.hasVal {
 				aggVal = gs.max
 			} else {
-				aggVal = DS.NullValue()
+				aggVal = NullValue()
 			}
 		case "avg":
 			if gs.count == 0 {
-				aggVal = DS.NullValue()
+				aggVal = NullValue()
 			} else {
-				aggVal = DS.FloatValue(gs.sum / float64(gs.count))
+				aggVal = FloatValue(gs.sum / float64(gs.count))
 			}
 		default:
-			aggVal = DS.NullValue()
+			aggVal = NullValue()
 		}
 
 		row := append(gs.keyVals, aggVal)

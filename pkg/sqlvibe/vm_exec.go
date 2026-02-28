@@ -1254,7 +1254,7 @@ func (db *Database) tryVectorizedFilterFastPath(stmt *QP.SelectStmt) *Rows {
 		return nil
 	}
 
-	rb := VectorizedFilter(colVec, info.op, info.value)
+	rb := DS.VectorizedFilter(colVec, info.op, info.value)
 	if rb == nil {
 		return nil
 	}
