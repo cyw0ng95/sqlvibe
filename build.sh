@@ -36,7 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/.build"
 
 # Build tags required to enable JSON and MATH extensions
-EXT_TAGS="SVDB_EXT_JSON,SVDB_EXT_MATH"
+EXT_TAGS="SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_EXT_FTS5"
 
 # Defaults
 RUN_TESTS=0
