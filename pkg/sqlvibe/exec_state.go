@@ -2,7 +2,9 @@ package sqlvibe
 
 import (
 	"context"
-	"errors"
+	stderrors "errors"
+
+	"github.com/cyw0ng95/sqlvibe/internal/SF/errors"
 )
 
 // RowCallback is reserved for future streaming result delivery (v0.9.14+).
@@ -50,14 +52,14 @@ func (s *execState) checkEvery256() error {
 }
 
 // wrapCtxErr maps context errors to sqlvibe native error codes.
-// context.DeadlineExceeded → SVDB_QUERY_TIMEOUT
+// context.DeadlineExceeded → errors.SVDB_QUERY_TIMEOUT
 // context.Canceled → returned as-is (user cancellation)
 func wrapCtxErr(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return Errorf(SVDB_QUERY_TIMEOUT, "query timeout: %v", err)
+	if stderrors.Is(err, context.DeadlineExceeded) {
+		return errors.Errorf(errors.SVDB_QUERY_TIMEOUT, "query timeout: %v", err)
 	}
 	return err
 }

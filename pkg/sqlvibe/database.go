@@ -16,6 +16,7 @@ import (
 	"github.com/cyw0ng95/sqlvibe/internal/IS"
 	"github.com/cyw0ng95/sqlvibe/internal/PB"
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/errors"
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 	"github.com/cyw0ng95/sqlvibe/internal/TM"
 	"github.com/cyw0ng95/sqlvibe/internal/VM"
@@ -1501,7 +1502,7 @@ func (db *Database) applyQueryTimeout(ctx context.Context) (context.Context, con
 	return ctx, func() {}
 }
 
-// checkMaxMemory estimates the memory occupied by rows and returns SVDB_OOM_LIMIT
+// checkMaxMemory estimates the memory occupied by rows and returns errors.SVDB_OOM_LIMIT
 // when it exceeds db.maxMemoryBytes.  Returns nil when the limit is not set.
 func (db *Database) checkMaxMemory(rows [][]interface{}) error {
 	if db.maxMemoryBytes <= 0 || len(rows) == 0 {
@@ -1511,7 +1512,7 @@ func (db *Database) checkMaxMemory(rows [][]interface{}) error {
 	// Heuristic: 64 bytes per value cell covers int64, float64, short strings.
 	estimatedBytes := int64(len(rows)) * int64(cols) * 64
 	if estimatedBytes > db.maxMemoryBytes {
-		return Errorf(SVDB_OOM_LIMIT,
+		return errors.Errorf(errors.SVDB_OOM_LIMIT,
 			"result set exceeds max_memory limit (%d bytes estimated > %d bytes limit)",
 			estimatedBytes, db.maxMemoryBytes)
 	}
@@ -3997,7 +3998,7 @@ func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 		// Cannot drop a primary key column
 		for _, pkCol := range db.primaryKeys[stmt.Table] {
 			if pkCol == colName {
-				return Result{}, NewError(SVDB_ALTER_CONFLICT, fmt.Sprintf("cannot drop PRIMARY KEY column: %s", colName))
+				return Result{}, errors.NewError(errors.SVDB_ALTER_CONFLICT, fmt.Sprintf("cannot drop PRIMARY KEY column: %s", colName))
 			}
 		}
 		// Cannot drop a column used in a multi-column index
@@ -4012,7 +4013,7 @@ func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 				}
 			}
 			if usedInIdx && len(idx.Columns) > 1 {
-				return Result{}, NewError(SVDB_ALTER_CONFLICT, fmt.Sprintf("column %s is used in multi-column index %s", colName, idxName))
+				return Result{}, errors.NewError(errors.SVDB_ALTER_CONFLICT, fmt.Sprintf("column %s is used in multi-column index %s", colName, idxName))
 			}
 		}
 		// Remove from schema
