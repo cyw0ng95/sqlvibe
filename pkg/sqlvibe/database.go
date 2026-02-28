@@ -116,26 +116,6 @@ type Database struct {
 	maxMemoryBytes int64 // max result-set memory in bytes (0 = no limit)
 	// v0.10.1: virtual tables
 	virtualTables map[string]DS.VTab // virtual table name -> VTab instance
-	// v0.10.5: observability
-	profileEnabled  bool              // PRAGMA profile = ON/OFF
-	profileBuffer   []QueryProfile    // ring buffer of last N profiles
-	slowLogThreshold int64             // PRAGMA slowlog = N (milliseconds), 0 = disabled
-	slowLogBuffer   []SlowQueryEntry  // buffer of slow queries
-}
-
-// QueryProfile holds profiling information for a query.
-type QueryProfile struct {
-	Query   string
-	Plan    string
-	TimeMs  float64
-	Rows    int64
-}
-
-// SlowQueryEntry holds a slow query log entry.
-type SlowQueryEntry struct {
-	Query    string
-	TimeMs   float64
-	Plan     string
 }
 
 // savepointEntry holds the name and snapshot for a named savepoint.
@@ -412,11 +392,6 @@ func Open(path string) (*Database, error) {
 		tableStats:         make(map[string]int64),
 		savepointStack:     nil,
 		virtualTables:      make(map[string]DS.VTab),
-		// v0.10.5: observability
-		profileEnabled:     false,
-		profileBuffer:      make([]QueryProfile, 0, 100),
-		slowLogThreshold:   0,
-		slowLogBuffer:      make([]SlowQueryEntry, 0, 100),
 	}
 
 	// A2: WAL Startup Replay - if a WAL file exists for this database, open

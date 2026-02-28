@@ -6,7 +6,7 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v0.10.5** | 2026-03-01 | Observability: EXPLAIN ANALYZE, query profiling, slow query log |
+| **v0.10.5** | 2026-03-01 | Observability: EXPLAIN ANALYZE, query profiling, slow query log (SVDB_EXT_PROFILING) |
 | **v0.10.4** | 2026-03-01 | Storage Enhancements: WAL truncate, memory stats, cache budget, streaming backup |
 | **v0.10.3** | 2026-03-01 | Advanced SQL: WINDOW clause, window frames, JSON functions (JSON_KEYS, JSON_VALID, JSON_ARRAY_LENGTH) |
 | **v0.10.2** | 2026-03-01 | FTS5 Full-Text Search Extension: inverted index, BM25 ranking, MATCH queries, tokenizers (ASCII/Porter/Unicode61) |

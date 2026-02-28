@@ -10,7 +10,10 @@
 
 ## **v0.10.5** (2026-03-01)
 
-### Features: Observability + Statistics
+### Features: Observability + Statistics (SVDB_EXT_PROFILING extension)
+
+**Note**: Profiling features are debug-only and require the `SVDB_EXT_PROFILING` build tag.
+They are not included in release builds.
 
 #### EXPLAIN ANALYZE
 - Runtime execution statistics for queries
@@ -20,28 +23,30 @@
 
 #### Query Profiling
 - `PRAGMA profile = ON/OFF`: Enable/disable query profiling
-- `PRAGMA profile`: Returns collected query profiles
+- `SELECT * FROM sqlvibe_profile()`: Returns collected query profiles
 - Profile includes: query, plan, time_ms, rows
 
 #### Slow Query Log
 - `PRAGMA slowlog = N`: Set slow query threshold (milliseconds)
 - `PRAGMA slowlog = 0`: Disable slow query logging
-- `PRAGMA slowlog`: Returns slow query log entries
+- `SELECT * FROM sqlvibe_slowlog()`: Returns slow query log entries
 - Log includes: query, time_ms, plan
 
-#### Implementation Changes
+#### Implementation
+- `ext/profiling/profiling.go`: New extension module
+  - `ProfilingExtension` struct with profile/slow buffers
+  - Table functions: `sqlvibe_profile()`, `sqlvibe_slowlog()`
+  - `ExplainAnalyze()` function for EXPLAIN ANALYZE
+  - `WrapQuery()` helper for query profiling
 - `internal/QP/parser.go`:
   - Added `ExplainStmt.Analyze` field
   - Updated `parseExplain()` to handle ANALYZE keyword
 - `pkg/sqlvibe/explain.go`:
-  - Added `explainAnalyze()` function
-  - Added `buildSelectPlanForExplain()` helper
-- `pkg/sqlvibe/database.go`:
-  - Added `QueryProfile` and `SlowQueryEntry` types
-  - Added profiling fields to `Database` struct
-- `pkg/sqlvibe/pragma.go`:
-  - Added `pragmaProfile()` handler
-  - Added `pragmaSlowlog()` handler
+  - Returns error message when EXPLAIN ANALYZE used without extension
+
+#### Build
+- Enable with: `go build -tags SVDB_EXT_PROFILING ./...`
+- Not included in release builds by default
 
 #### Tests
 - All existing tests pass
