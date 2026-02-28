@@ -92,6 +92,7 @@ type Database struct {
 	indexData         map[string]map[interface{}][]int    // index name -> col value -> []row indices
 	planCache         *CG.PlanCache                       // compiled query plan cache
 	queryCache        *queryResultCache                   // full query result cache (columns + rows)
+	queryCacheMax     int                                 // maximum query cache entries
 	schemaCache       *IS.SchemaCache                     // information_schema result cache (DDL-invalidated)
 	hybridStores      map[string]*DS.HybridStore          // table name -> columnar hybrid store (analytical fast path)
 	hybridStoresDirty map[string]bool                     // table name -> needs rebuild on next access
@@ -234,6 +235,10 @@ type IndexInfo struct {
 	Exprs     []QP.Expr // parallel to Columns; non-nil means expression index
 	Unique    bool
 	WhereExpr QP.Expr // non-nil for partial index
+	// v0.10.7: Index statistics for cost-based optimization
+	Cardinality int64   // estimated number of distinct values
+	RowCount    int64   // total rows indexed
+	IsCovering  bool    // true if index covers all query columns (for index-only scan)
 }
 
 type Conn interface {
@@ -377,6 +382,7 @@ func Open(path string) (*Database, error) {
 		pkHashSet:          make(map[string]map[interface{}]struct{}),
 		indexData:          make(map[string]map[interface{}][]int),
 		planCache:          CG.NewPlanCache(256),
+		queryCacheMax:      512,
 		queryCache:         newQueryResultCache(512),
 		schemaCache:        IS.NewSchemaCache(),
 		hybridStores:       make(map[string]*DS.HybridStore),

@@ -153,6 +153,8 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		return db.pragmaCacheMemory(stmt)
 	case "max_rows":
 		return db.pragmaMaxRows(stmt)
+	case "query_cache_size":
+		return db.pragmaQueryCacheSize(stmt)
 	default:
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
@@ -996,5 +998,20 @@ func (db *Database) pragmaMaxRows(stmt *QP.PragmaStmt) (*Rows, error) {
 	}
 	v := db.getPragmaInt("max_rows", 0)
 	return &Rows{Columns: []string{"max_rows"}, Data: [][]interface{}{{int64(v)}}}, nil
+}
+
+// pragmaQueryCacheSize handles PRAGMA query_cache_size = N.
+// Sets the maximum number of cached query results.
+func (db *Database) pragmaQueryCacheSize(stmt *QP.PragmaStmt) (*Rows, error) {
+	if stmt.Value != nil {
+		val := pragmaIntValue(stmt.Value)
+		if val < 0 {
+			val = 0
+		}
+		db.queryCacheMax = int(val)
+		db.queryCache = newQueryResultCache(int(val))
+		return &Rows{Columns: []string{"query_cache_size"}, Data: [][]interface{}{{int64(val)}}}, nil
+	}
+	return &Rows{Columns: []string{"query_cache_size"}, Data: [][]interface{}{{int64(db.queryCacheMax)}}}, nil
 }
 
