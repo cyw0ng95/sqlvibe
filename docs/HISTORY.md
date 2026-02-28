@@ -50,15 +50,11 @@
 #### Tests
 
 All tests run via `./build.sh -t` with build tags `SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_EXT_FTS5`:
-- ✅ SQL:1999 compatibility (84+ test suites)
+- ✅ SQL:1999 compatibility (84+ test suites) - **ALL PASSING**
 - ✅ Unit tests (75%+ coverage in core packages)
 - ✅ Integration tests
 - ✅ SQLite comparison tests
 - ✅ Benchmarks
-- ⚠️ F051 datetime functions (known limitation: timezone differences in test environment)
-
-**Known Test Limitations**:
-- `TestSQL1999_F507_F05107_L1` (CURRENT_DATE, CURRENT_TIME, CURRENT_TIMESTAMP): Fails due to timezone differences between Go SQLite driver and sqlvibe. Our implementation correctly returns UTC values per SQLite specification. The test environment has inconsistent timezone handling between the two databases.
 
 ---
 
