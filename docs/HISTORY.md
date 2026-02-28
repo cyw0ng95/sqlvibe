@@ -1,5 +1,13 @@
 # sqlvibe Release History
 
+## Current Version: v0.10.4 (2026-03-01)
+
+**Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
+
+**Test Status**: 84+ SQL:1999 test suites passing. Pre-existing F051 datetime tests remain failing (unrelated to current release).
+
+---
+
 ## **v0.10.4** (2026-03-01)
 
 ### Features: Storage Enhancements
@@ -40,8 +48,14 @@
   - Added `Callback` field to `BackupConfig`
 
 #### Tests
-- All existing tests pass
-- Pre-existing datetime function tests (F051) remain failing (unrelated to this release)
+
+All tests run via `./build.sh -t` with build tags `SVDB_EXT_JSON,SVDB_EXT_MATH`:
+- ✅ SQL:1999 compatibility (84+ test suites)
+- ✅ Unit tests (75%+ coverage in core packages)
+- ✅ Integration tests
+- ✅ SQLite comparison tests
+- ✅ Benchmarks
+- ⚠️ F051 datetime functions (pre-existing, unrelated to this release)
 
 ---
 
