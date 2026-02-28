@@ -90,7 +90,7 @@ if [[ $RUN_TESTS -eq 1 ]]; then
         # avoid the "go: no such tool covdata" error that fires for packages
         # without test files in Go 1.25+.
         COVERPKG=$(go list -tags "$EXT_TAGS" -f '{{.ImportPath}}' ./... 2>/dev/null \
-            | grep -vE "internal/TS|cmd/|driver$|/benchdata$|internal/SF/vfs$|internal/SF$|ext/math$" \
+            | grep -vE "internal/TS|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata" \
             | tr '\n' ',' | sed 's/,$//')
         TEST_COVER_ARGS+=(-coverprofile="$COVER_PROF_TESTS" -covermode=atomic -coverpkg="$COVERPKG")
         COVER_PROFILES+=("$COVER_PROF_TESTS")
@@ -119,7 +119,7 @@ if [[ $RUN_BENCH -eq 1 ]]; then
     if [[ $COVERAGE -eq 1 ]]; then
         COVER_PROF_BENCH="$BUILD_DIR/coverage_bench.out"
         COVERPKG=$(go list -tags "$EXT_TAGS" -f '{{.ImportPath}}' ./... 2>/dev/null \
-            | grep -vE "internal/TS|cmd/|driver$|/benchdata$|internal/SF/vfs$|internal/SF$|ext/math$" \
+            | grep -vE "internal/TS|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata" \
             | tr '\n' ',' | sed 's/,$//')
         BENCH_COVER_ARGS+=(-coverprofile="$COVER_PROF_BENCH" -covermode=atomic -coverpkg="$COVERPKG")
         COVER_PROFILES+=("$COVER_PROF_BENCH")
