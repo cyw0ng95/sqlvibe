@@ -1,9 +1,7 @@
-package sqlvibe
+package errors
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"testing"

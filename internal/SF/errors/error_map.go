@@ -1,4 +1,4 @@
-package sqlvibe
+package errors
 
 import (
 	"context"
