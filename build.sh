@@ -85,19 +85,21 @@ if [[ $RUN_TESTS -eq 1 ]]; then
     TEST_COVER_ARGS=()
     if [[ $COVERAGE -eq 1 ]]; then
         COVER_PROF_TESTS="$BUILD_DIR/coverage_tests.out"
-        # Collect coverage only for packages that have test files to avoid
-        # the "go: no such tool covdata" error on packages with no tests.
-        readarray -t COVER_TEST_PKGS < <(
-            go list -tags "$EXT_TAGS" \
-                -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' \
-                ./... 2>/dev/null | grep -v '^$'
-        )
-        TEST_COVER_ARGS+=(-coverprofile="$COVER_PROF_TESTS" -covermode=atomic)
+        # Build a -coverpkg list from production packages only (no cmd/, driver/,
+        # internal/TS/, internal/VM/benchdata, internal/SF/vfs, ext/math) to
+        # avoid the "go: no such tool covdata" error that fires for packages
+        # without test files in Go 1.25+.
+        COVERPKG=$(go list -tags "$EXT_TAGS" -f '{{.ImportPath}}' ./... 2>/dev/null \
+            | grep -vE "internal/TS|cmd/|driver$|/benchdata$|internal/SF/vfs$|internal/SF$|ext/math$" \
+            | tr '\n' ',' | sed 's/,$//')
+        TEST_COVER_ARGS+=(-coverprofile="$COVER_PROF_TESTS" -covermode=atomic -coverpkg="$COVERPKG")
         COVER_PROFILES+=("$COVER_PROF_TESTS")
-        echo "  CMD: go test -tags $EXT_TAGS ${TEST_COVER_ARGS[*]:-} <test-packages>"
+        echo "  CMD: go test -tags $EXT_TAGS -coverpkg=<prod-pkgs> ${VERBOSE_FLAG:-} ./..."
+        # shellcheck disable=SC2086
         go test -tags "$EXT_TAGS" \
             "${TEST_COVER_ARGS[@]}" \
-            "${COVER_TEST_PKGS[@]}" 2>&1 | tee "$BUILD_DIR/test.log"
+            ${VERBOSE_FLAG} \
+            ./... 2>&1 | tee "$BUILD_DIR/test.log"
     else
         echo "  CMD: go test -tags $EXT_TAGS ${VERBOSE_FLAG:-} ./..."
         # shellcheck disable=SC2086
@@ -116,7 +118,10 @@ if [[ $RUN_BENCH -eq 1 ]]; then
     BENCH_COVER_ARGS=()
     if [[ $COVERAGE -eq 1 ]]; then
         COVER_PROF_BENCH="$BUILD_DIR/coverage_bench.out"
-        BENCH_COVER_ARGS+=(-coverprofile="$COVER_PROF_BENCH" -covermode=atomic)
+        COVERPKG=$(go list -tags "$EXT_TAGS" -f '{{.ImportPath}}' ./... 2>/dev/null \
+            | grep -vE "internal/TS|cmd/|driver$|/benchdata$|internal/SF/vfs$|internal/SF$|ext/math$" \
+            | tr '\n' ',' | sed 's/,$//')
+        BENCH_COVER_ARGS+=(-coverprofile="$COVER_PROF_BENCH" -covermode=atomic -coverpkg="$COVERPKG")
         COVER_PROFILES+=("$COVER_PROF_BENCH")
     fi
     echo "  CMD: go test -tags $EXT_TAGS -run ^$ -bench . -benchmem ${BENCH_COVER_ARGS[*]:-} ./internal/TS/Benchmark/..."

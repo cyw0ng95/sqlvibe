@@ -625,3 +625,262 @@ type dummyModule struct {
 func (m *dummyModule) Create(args []string) (DS.VTab, error) { return nil, nil }
 func (m *dummyModule) Connect(args []string) (DS.VTab, error) { return nil, nil }
 
+// ---------------------------------------------------------------------------
+// Coverage gap tests
+// ---------------------------------------------------------------------------
+
+// TestVTabCursorHybridStore_RowID verifies that HybridStoreCursor.RowID returns
+// a sequential position.
+func TestVTabCursorHybridStore_RowID(t *testing.T) {
+	hs := DS.NewHybridStore([]string{"v"}, []DS.ValueType{DS.TypeInt})
+	hs.Insert([]DS.Value{DS.IntValue(10)})
+	hs.Insert([]DS.Value{DS.IntValue(20)})
+
+	cursor := DS.NewHybridStoreCursor(hs)
+	_ = cursor.Filter(0, "", nil)
+	for i := 0; !cursor.Eof(); i++ {
+		id, err := cursor.RowID()
+		if err != nil {
+			t.Fatalf("RowID: %v", err)
+		}
+		if id != int64(i) {
+			t.Errorf("position %d: expected RowID %d, got %d", i, i, id)
+		}
+		_ = cursor.Next()
+	}
+}
+
+// TestSeriesVTab_CursorRowID verifies seriesCursor.RowID returns correct values.
+func TestSeriesVTab_CursorRowID(t *testing.T) {
+	mod, ok := IS.GetVTabModule("series")
+	if !ok {
+		t.Fatal("series module not found")
+	}
+	vt, err := mod.Create([]string{"1", "5"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	cursor, err := vt.Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = cursor.Filter(0, "", nil)
+	for i := 0; !cursor.Eof(); i++ {
+		id, err := cursor.RowID()
+		if err != nil {
+			t.Fatalf("RowID: %v", err)
+		}
+		if id != int64(i) {
+			t.Errorf("step %d: expected RowID %d, got %d", i, i, id)
+		}
+		_ = cursor.Next()
+	}
+	_ = cursor.Close()
+}
+
+// TestSeriesVTab_CursorColumnOutOfRange verifies seriesCursor.Column returns
+// an error for invalid column indices.
+func TestSeriesVTab_CursorColumnOutOfRange(t *testing.T) {
+	mod, ok := IS.GetVTabModule("series")
+	if !ok {
+		t.Fatal("series module not found")
+	}
+	vt, err := mod.Create([]string{"1", "3"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	cursor, err := vt.Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = cursor.Filter(0, "", nil)
+	_, err = cursor.Column(1) // only col 0 exists
+	if err == nil {
+		t.Error("expected error for Column(1) on series cursor, got nil")
+	}
+	_ = cursor.Close()
+}
+
+// TestSeriesVTab_BestIndex verifies seriesVTab.BestIndex is callable (no-op).
+func TestSeriesVTab_BestIndex(t *testing.T) {
+	mod, ok := IS.GetVTabModule("series")
+	if !ok {
+		t.Fatal("series module not found")
+	}
+	vt, err := mod.Create([]string{"1", "10"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := vt.BestIndex(&DS.IndexInfo{}); err != nil {
+		t.Errorf("BestIndex returned unexpected error: %v", err)
+	}
+}
+
+// TestSeriesVTab_Connect verifies Connect produces a working vtab (same as Create).
+func TestSeriesVTab_Connect(t *testing.T) {
+	mod, ok := IS.GetVTabModule("series")
+	if !ok {
+		t.Fatal("series module not found")
+	}
+	vt, err := mod.Connect([]string{"1", "3"})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	cols := vt.Columns()
+	if len(cols) != 1 || cols[0] != "value" {
+		t.Errorf("expected [value], got %v", cols)
+	}
+	cursor, err := vt.Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = cursor.Filter(0, "", nil)
+	var count int
+	for !cursor.Eof() {
+		count++
+		_ = cursor.Next()
+	}
+	if count != 3 {
+		t.Errorf("expected 3 rows, got %d", count)
+	}
+	_ = cursor.Close()
+}
+
+// TestSeriesVTab_Disconnect verifies Disconnect does not error.
+func TestSeriesVTab_Disconnect(t *testing.T) {
+	mod, ok := IS.GetVTabModule("series")
+	if !ok {
+		t.Fatal("series module not found")
+	}
+	vt, err := mod.Create([]string{"1", "5"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := vt.Disconnect(); err != nil {
+		t.Errorf("Disconnect returned unexpected error: %v", err)
+	}
+}
+
+// TestTableModule_BestIndex verifies the embedded TableModule.BestIndex no-op.
+func TestTableModule_BestIndex(t *testing.T) {
+	var m DS.TableModule
+	if err := m.BestIndex(&DS.IndexInfo{}); err != nil {
+		t.Errorf("TableModule.BestIndex returned unexpected error: %v", err)
+	}
+}
+
+// TestVTabCursorRowStore_ColumnOutOfPos verifies Column returns an error when the
+// cursor position is out of range (exhausted cursor).
+func TestVTabCursorRowStore_ColumnOutOfPos(t *testing.T) {
+	rs := DS.NewRowStore([]string{"v"}, []DS.ValueType{DS.TypeInt})
+	rs.Insert(DS.NewRow([]DS.Value{DS.IntValue(1)}))
+
+	cursor := DS.NewRowStoreCursor(rs)
+	_ = cursor.Filter(0, "", nil)
+	// Advance past end.
+	for !cursor.Eof() {
+		_ = cursor.Next()
+	}
+	// Now cursor is at len(rows) — out of range.
+	_, err := cursor.Column(0)
+	if err == nil {
+		t.Error("expected error when Column called past Eof, got nil")
+	}
+	cursor.Close()
+}
+
+// TestVTabCursorRowStore_BytesAndBool verifies dsValueToInterface handles TypeBytes
+// and TypeBool values via RowStoreCursor.
+func TestVTabCursorRowStore_BytesAndBool(t *testing.T) {
+	rs := DS.NewRowStore(
+		[]string{"b", "f"},
+		[]DS.ValueType{DS.TypeBytes, DS.TypeBool},
+	)
+	rs.Insert(DS.NewRow([]DS.Value{
+		DS.BytesValue([]byte("hello")),
+		DS.BoolValue(true),
+	}))
+
+	cursor := DS.NewRowStoreCursor(rs)
+	_ = cursor.Filter(0, "", nil)
+
+	vBytes, err := cursor.Column(0)
+	if err != nil {
+		t.Fatalf("Column(0): %v", err)
+	}
+	if b, ok := vBytes.([]byte); !ok || string(b) != "hello" {
+		t.Errorf("expected []byte('hello'), got %T %v", vBytes, vBytes)
+	}
+
+	vBool, err := cursor.Column(1)
+	if err != nil {
+		t.Fatalf("Column(1): %v", err)
+	}
+	if b, ok := vBool.(bool); !ok || !b {
+		t.Errorf("expected bool(true), got %T %v", vBool, vBool)
+	}
+	cursor.Close()
+}
+
+// TestSeriesVTab_ParseArgsInvalidStart verifies that a non-integer start arg errors.
+func TestSeriesVTab_ParseArgsInvalidStart(t *testing.T) {
+	db := mustOpen(t)
+	_, err := db.Exec("CREATE VIRTUAL TABLE bad USING series(abc, 10)")
+	if err == nil {
+		t.Error("expected error for non-integer start, got nil")
+	}
+}
+
+// TestSeriesVTab_ParseArgsInvalidStop verifies that a non-integer stop arg errors.
+func TestSeriesVTab_ParseArgsInvalidStop(t *testing.T) {
+	db := mustOpen(t)
+	_, err := db.Exec("CREATE VIRTUAL TABLE bad USING series(1, xyz)")
+	if err == nil {
+		t.Error("expected error for non-integer stop, got nil")
+	}
+}
+
+// TestSeriesVTab_ParseArgsInvalidStep verifies that a non-integer step arg errors.
+func TestSeriesVTab_ParseArgsInvalidStep(t *testing.T) {
+	db := mustOpen(t)
+	_, err := db.Exec("CREATE VIRTUAL TABLE bad USING series(1, 10, bad)")
+	if err == nil {
+		t.Error("expected error for non-integer step, got nil")
+	}
+}
+
+// TestVTabCursorHybridStore_ColumnPastEof verifies HybridStoreCursor.Column returns
+// an error when the cursor is past Eof.
+func TestVTabCursorHybridStore_ColumnPastEof(t *testing.T) {
+	hs := DS.NewHybridStore([]string{"v"}, []DS.ValueType{DS.TypeInt})
+	hs.Insert([]DS.Value{DS.IntValue(1)})
+
+	cursor := DS.NewHybridStoreCursor(hs)
+	_ = cursor.Filter(0, "", nil)
+	for !cursor.Eof() {
+		_ = cursor.Next()
+	}
+	_, err := cursor.Column(0)
+	if err == nil {
+		t.Error("expected error when Column called past Eof on HybridStoreCursor, got nil")
+	}
+	cursor.Close()
+}
+
+// TestVTabCursorRowStore_NullValue verifies dsValueToInterface handles TypeNull (nil).
+func TestVTabCursorRowStore_NullValue(t *testing.T) {
+	rs := DS.NewRowStore([]string{"n"}, []DS.ValueType{DS.TypeNull})
+	rs.Insert(DS.NewRow([]DS.Value{DS.NullValue()}))
+
+	cursor := DS.NewRowStoreCursor(rs)
+	_ = cursor.Filter(0, "", nil)
+	v, err := cursor.Column(0)
+	if err != nil {
+		t.Fatalf("Column(0): %v", err)
+	}
+	if v != nil {
+		t.Errorf("expected nil for TypeNull, got %v", v)
+	}
+	cursor.Close()
+}
+
