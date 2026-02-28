@@ -131,6 +131,8 @@ var keywords = map[string]TokenType{
 	"NATURAL":           TokenKeyword,
 	"USING":             TokenKeyword,
 	"VIRTUAL":           TokenKeyword,
+	"GENERATED":         TokenKeyword,
+	"STORED":            TokenKeyword,
 	"AS":                TokenKeyword,
 	"ORDER":             TokenKeyword,
 	"BY":                TokenKeyword,

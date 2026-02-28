@@ -176,6 +176,9 @@ type ColumnDef struct {
 	IsAutoincrement bool                  // AUTOINCREMENT
 	ForeignKey      *ForeignKeyConstraint // inline REFERENCES clause
 	Collation       string                // COLLATE name (e.g., NOCASE, RTRIM, BINARY)
+	// Generated columns (v0.10.6)
+	GeneratedExpr   Expr   // Expression for GENERATED ALWAYS AS
+	GeneratedStored bool   // true for STORED, false for VIRTUAL
 }
 
 // CreateTriggerStmt represents CREATE TRIGGER
@@ -1665,6 +1668,37 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 						p.advance()
 						col.Collation = strings.ToUpper(p.current().Literal)
 						p.advance()
+					} else if keyword == "GENERATED" {
+						// GENERATED ALWAYS AS (expr) [STORED|VIRTUAL]
+						p.advance()
+						if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "ALWAYS" {
+							p.advance()
+						}
+						if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "AS" {
+							p.advance()
+						}
+						if p.current().Type == TokenLeftParen {
+							p.advance()
+							genExpr, err := p.parseExpr()
+							if err != nil {
+								return nil, err
+							}
+							col.GeneratedExpr = genExpr
+							if p.current().Type == TokenRightParen {
+								p.advance()
+							}
+						}
+						// Check for STORED or VIRTUAL
+						if p.current().Type == TokenKeyword {
+							kw := strings.ToUpper(p.current().Literal)
+							if kw == "STORED" {
+								col.GeneratedStored = true
+								p.advance()
+							} else if kw == "VIRTUAL" {
+								col.GeneratedStored = false
+								p.advance()
+							}
+						}
 					} else {
 						// Stop at unknown keywords or table-level constraints
 						break

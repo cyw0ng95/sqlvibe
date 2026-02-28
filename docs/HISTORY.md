@@ -1,6 +1,6 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.5 (2026-03-01)
+## Current Version: v0.10.6 (2026-03-01)
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
@@ -8,53 +8,69 @@
 
 ---
 
-## **v0.10.5** (2026-03-01)
+## **v0.10.6** (2026-03-01)
 
-### Features: Observability + Statistics (SVDB_EXT_PROFILING extension)
+### Features: CLI Enhancements + Generated Columns
 
-**Note**: Profiling features are debug-only and require the `SVDB_EXT_PROFILING` build tag.
-They are not included in release builds.
+#### CLI Enhancements
 
-#### EXPLAIN ANALYZE
-- Runtime execution statistics for queries
-- `EXPLAIN ANALYZE SELECT ...` returns query plan with:
-  - `run_time_ms`: Total execution time in milliseconds
-  - `rows_returned`: Number of rows returned
+**Output Modes:**
+- `.mode csv` - Comma-separated values
+- `.mode table` - ASCII table with borders (default)
+- `.mode list` - Column=value format
+- `.mode json` - JSON array output
 
-#### Query Profiling
-- `PRAGMA profile = ON/OFF`: Enable/disable query profiling
-- `SELECT * FROM sqlvibe_profile()`: Returns collected query profiles
-- Profile includes: query, plan, time_ms, rows
+**Query Timer:**
+- `.timer on` - Show query execution time
+- `.timer off` - Disable timer
 
-#### Slow Query Log
-- `PRAGMA slowlog = N`: Set slow query threshold (milliseconds)
-- `PRAGMA slowlog = 0`: Disable slow query logging
-- `SELECT * FROM sqlvibe_slowlog()`: Returns slow query log entries
-- Log includes: query, time_ms, plan
+**Import/Export:**
+- `.import FILE TABLE` - Import CSV file into table
+- `.export csv FILE` - Export table to CSV
+- `.export json FILE` - Export table to JSON
 
-#### Implementation
-- `ext/profiling/profiling.go`: New extension module
-  - `ProfilingExtension` struct with profile/slow buffers
-  - Table functions: `sqlvibe_profile()`, `sqlvibe_slowlog()`
-  - `ExplainAnalyze()` function for EXPLAIN ANALYZE
-  - `WrapQuery()` helper for query profiling
-- `internal/QP/parser.go`:
-  - Added `ExplainStmt.Analyze` field
-  - Updated `parseExplain()` to handle ANALYZE keyword
-- `pkg/sqlvibe/explain.go`:
-  - Returns error message when EXPLAIN ANALYZE used without extension
+**File I/O:**
+- `.read FILE` - Execute SQL from file
+- `.output FILE` - Redirect output to file
+- `.output stdout` - Restore output to stdout
 
-#### Build
-- Enable with: `go build -tags SVDB_EXT_PROFILING ./...`
-- Not included in release builds by default
+**Display Options:**
+- `.nullvalue TEXT` - Set string for NULL values
+- `.width N1 N2 ...` - Set column widths
+- `.headers on|off` - Toggle column headers
+
+#### Generated Columns
+
+**Syntax:**
+```sql
+CREATE TABLE t (
+    id INTEGER PRIMARY KEY,
+    first_name TEXT,
+    last_name TEXT,
+    full_name TEXT GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED
+);
+```
+
+**Implementation:**
+- Parser support for `GENERATED ALWAYS AS (expr) [STORED|VIRTUAL]`
+- Added `GeneratedExpr` and `GeneratedStored` fields to `ColumnDef`
+- New keywords: `GENERATED`, `STORED`
+
+#### Implementation Changes
+- `cmd/sv-cli/formatter.go`: **NEW** - Output formatters (table, CSV, list, JSON)
+- `cmd/sv-cli/importer.go`: **NEW** - CSV import and SQL file execution
+- `cmd/sv-cli/exporter.go`: **NEW** - CSV/JSON export
+- `cmd/sv-cli/main.go`: Enhanced with new meta-commands
+- `internal/QP/parser.go`: Generated column parsing
+- `internal/QP/tokenizer.go`: Added GENERATED, STORED keywords
 
 #### Tests
 - All existing tests pass
-- EXPLAIN ANALYZE tested with various queries
+- CLI output modes tested manually
 
 ---
 
-## **v0.10.4** (2026-03-01)
+## **v0.10.5** (2026-03-01)
 
 ### Features: Storage Enhancements
 
