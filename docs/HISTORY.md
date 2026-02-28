@@ -1,10 +1,51 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.4 (2026-03-01)
+## Current Version: v0.10.5 (2026-03-01)
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
-**Test Status**: 84+ SQL:1999 test suites passing. Pre-existing F051 datetime tests remain failing (unrelated to current release).
+**Test Status**: All 84+ SQL:1999 test suites passing.
+
+---
+
+## **v0.10.5** (2026-03-01)
+
+### Features: Observability + Statistics
+
+#### EXPLAIN ANALYZE
+- Runtime execution statistics for queries
+- `EXPLAIN ANALYZE SELECT ...` returns query plan with:
+  - `run_time_ms`: Total execution time in milliseconds
+  - `rows_returned`: Number of rows returned
+
+#### Query Profiling
+- `PRAGMA profile = ON/OFF`: Enable/disable query profiling
+- `PRAGMA profile`: Returns collected query profiles
+- Profile includes: query, plan, time_ms, rows
+
+#### Slow Query Log
+- `PRAGMA slowlog = N`: Set slow query threshold (milliseconds)
+- `PRAGMA slowlog = 0`: Disable slow query logging
+- `PRAGMA slowlog`: Returns slow query log entries
+- Log includes: query, time_ms, plan
+
+#### Implementation Changes
+- `internal/QP/parser.go`:
+  - Added `ExplainStmt.Analyze` field
+  - Updated `parseExplain()` to handle ANALYZE keyword
+- `pkg/sqlvibe/explain.go`:
+  - Added `explainAnalyze()` function
+  - Added `buildSelectPlanForExplain()` helper
+- `pkg/sqlvibe/database.go`:
+  - Added `QueryProfile` and `SlowQueryEntry` types
+  - Added profiling fields to `Database` struct
+- `pkg/sqlvibe/pragma.go`:
+  - Added `pragmaProfile()` handler
+  - Added `pragmaSlowlog()` handler
+
+#### Tests
+- All existing tests pass
+- EXPLAIN ANALYZE tested with various queries
 
 ---
 
