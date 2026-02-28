@@ -1,6 +1,7 @@
 package F884
 
 import (
+	sferrors "github.com/cyw0ng95/sqlvibe/internal/SF/errors"
 	"context"
 	"errors"
 	"sync"
@@ -140,11 +141,11 @@ func TestSQL1999_F884_PragmaMaxMemory_L1(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected OOM error, got nil")
 	}
-	svErr, ok := err.(*sqlvibe.Error)
+	svErr, ok := err.(*sferrors.Error)
 	if !ok {
-		t.Fatalf("expected sqlvibe.Error, got %T: %v", err, err)
+		t.Fatalf("expected sferrors.Error, got %T: %v", err, err)
 	}
-	if svErr.Code != sqlvibe.SVDB_OOM_LIMIT {
+	if svErr.Code != sferrors.SVDB_OOM_LIMIT {
 		t.Fatalf("expected SVDB_OOM_LIMIT, got %v", svErr.Code)
 	}
 }
