@@ -78,8 +78,11 @@ go build -tags "SVDB_EXT_JSON" ./...
 # With Math extension
 go build -tags "SVDB_EXT_MATH" ./...
 
-# Both
-go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" ./...
+# With FTS5 extension (Full-Text Search)
+go build -tags "SVDB_EXT_FTS5" ./...
+
+# Multiple extensions
+go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH SVDB_EXT_FTS5" ./...
 ```
 
 Query which extensions are loaded:
@@ -89,6 +92,7 @@ SELECT * FROM sqlvibe_extensions;
 -- name | description       | functions
 -- json | JSON extension    | json,json_array,json_extract,...
 -- math | Math extension    | POWER,SQRT,MOD,...
+-- fts5 | FTS5 extension    | MATCH,BM25,rank,tokenize,...
 ```
 
 ## Architecture
@@ -212,7 +216,8 @@ Configure extensions at build time using `-tags`:
 | Flag | Extensions | Description |
 |------|------------|-------------|
 | `SVDB_EXT_JSON` | JSON extension | SQLite JSON1 functions |
-| `SVDB_EXT_MATH` | Math extension | ABS, CEIl, FLOOR, ROUND, POWER, SQRT, MOD, EXP, LN, LOG, etc. |
+| `SVDB_EXT_MATH` | Math extension | ABS, CEIL, FLOOR, ROUND, POWER, SQRT, MOD, EXP, LN, LOG, etc. |
+| `SVDB_EXT_FTS5` | FTS5 extension | Full-Text Search: MATCH, BM25, rank, tokenizers |
 
 ### Examples
 
@@ -223,8 +228,11 @@ go build -tags "SVDB_EXT_JSON" -o sqlvibe .
 # With Math extension
 go build -tags "SVDB_EXT_MATH" -o sqlvibe .
 
+# With FTS5 extension
+go build -tags "SVDB_EXT_FTS5" -o sqlvibe .
+
 # With multiple extensions
-go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH" -o sqlvibe .
+go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH SVDB_EXT_FTS5" -o sqlvibe .
 ```
 
 ### Checking Extensions
