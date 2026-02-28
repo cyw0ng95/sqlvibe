@@ -606,18 +606,55 @@ sqlvibe/
 
 ## 11. Build and Test Commands
 
+**Always use `build.sh` to run tests, benchmarks, fuzzing, and coverage.**
+Output is collected under `.build/` (excluded from git).
+
+```bash
+# Run all unit tests (default when no flag is given)
+./build.sh -t
+
+# Run all unit tests + generate HTML coverage report (.build/coverage.html)
+./build.sh -t -c
+
+# Run benchmarks only
+./build.sh -b
+
+# Run tests + benchmarks + merged coverage report
+./build.sh -t -b -c
+
+# Run fuzz seed corpus (30 s per target by default)
+./build.sh -f
+
+# Fuzz for a longer duration per target
+./build.sh -f --fuzz-time 5m
+
+# Everything: tests + benchmarks + fuzz + coverage
+./build.sh -t -b -f -c
+
+# Verbose output
+./build.sh -t -v
+```
+
+Options summary:
+
+| Flag | Description |
+|------|-------------|
+| `-t` | Run unit tests (`go test -tags SVDB_EXT_JSON,SVDB_EXT_MATH ./...`) |
+| `-b` | Run benchmarks (`./internal/TS/Benchmark/...`) |
+| `-f` | Run fuzz seed corpus for `FuzzSQL` and `FuzzDBFile` |
+| `-c` | Collect coverage and produce `.build/coverage.html` |
+| `--fuzz-time D` | Duration per fuzz target (e.g. `30s`, `5m`) |
+| `-v` | Verbose test output |
+| `-h` | Print help |
+
+Direct `go test` commands (for IDE integration or CI):
+
 ```bash
 # Build the project
 go build ./...
 
-# Run all tests
-go test ./...
-
-# Run all tests including extensions (recommended for full coverage)
+# Run all tests (with extension tags)
 go test -tags SVDB_EXT_JSON,SVDB_EXT_MATH ./...
-
-# Run SQLite comparison tests
-go test ./test/sqllogictest/...
 
 # Run specific test
 go test -run TestName ./...
