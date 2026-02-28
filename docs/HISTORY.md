@@ -1,5 +1,50 @@
 # sqlvibe Release History
 
+## **v0.10.4** (2026-03-01)
+
+### Features: Storage Enhancements
+
+#### Track 1: WAL Improvements
+- `PRAGMA wal_truncate = ON/OFF`: Truncate WAL file after successful checkpoint
+- `PRAGMA synchronous = OFF|NORMAL|FULL|EXTRA`: Support all SQLite synchronous modes
+- `PRAGMA journal_size_limit = N`: Limit WAL file size in bytes
+
+#### Track 2: Memory Management
+- `PRAGMA cache_memory = N`: Set memory budget for page cache (bytes)
+- `PRAGMA max_rows = N`: Set limit on rows per table
+- `PRAGMA memory_stats`: Return detailed memory usage statistics
+  - `page_cache_used`: Current page cache bytes
+  - `page_cache_max`: Configured max bytes
+  - `row_store_used`: Row store bytes (estimated)
+  - `wal_size`: WAL file bytes
+  - `total_memory`: Total memory used
+
+#### Track 3: Backup Enhancements
+- `BackupToWithCallback(path, callback)`: Streaming backup with progress callback
+- `BackupToWriter(io.Writer)`: Backup to any io.Writer destination
+- `BackupManifest` struct: Enhanced metadata with version, page size, compression, row count
+- `GetBackupManifest()`: Return database metadata for backup
+
+#### Implementation Changes
+- `pkg/sqlvibe/pragma.go`:
+  - Added `pragmaWALTruncate()`: Handle wal_truncate PRAGMA
+  - Added `pragmaMemoryStats()`: Return memory statistics
+  - Added `pragmaCacheMemory()`: Handle cache_memory PRAGMA
+  - Added `pragmaMaxRows()`: Handle max_rows PRAGMA
+- `internal/DS/manager.go`:
+  - Added `SetMaxPages()`: Enforce page cache memory budget
+- `pkg/sqlvibe/backup.go`:
+  - Added `BackupToWithCallback()`: Progress callback support
+  - Added `BackupToWriter()`: Stream backup to io.Writer
+  - Added `BackupManifest` struct and `GetBackupManifest()`
+  - Added `Callback` field to `BackupConfig`
+
+#### Tests
+- All existing tests pass
+- Pre-existing datetime function tests (F051) remain failing (unrelated to this release)
+
+---
+
 ## **v0.10.3** (2026-03-01)
 
 ### Features: Advanced SQL Features + Window Function Enhancements

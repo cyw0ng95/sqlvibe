@@ -144,6 +144,15 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		return db.pragmaQueryTimeout(stmt)
 	case "max_memory":
 		return db.pragmaMaxMemory(stmt)
+	// v0.10.4 additions
+	case "wal_truncate":
+		return db.pragmaWALTruncate(stmt)
+	case "memory_stats":
+		return db.pragmaMemoryStats()
+	case "cache_memory":
+		return db.pragmaCacheMemory(stmt)
+	case "max_rows":
+		return db.pragmaMaxRows(stmt)
 	default:
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
@@ -888,5 +897,104 @@ func (db *Database) pragmaMaxMemory(stmt *QP.PragmaStmt) (*Rows, error) {
 		return &Rows{Columns: []string{"max_memory"}, Data: [][]interface{}{{int64(val)}}}, nil
 	}
 	return &Rows{Columns: []string{"max_memory"}, Data: [][]interface{}{{db.maxMemoryBytes}}}, nil
+}
+
+// --- v0.10.4 new PRAGMAs ---
+
+// pragmaWALTruncate handles PRAGMA wal_truncate = ON/OFF.
+// When enabled, WAL file is truncated after successful checkpoint.
+func (db *Database) pragmaWALTruncate(stmt *QP.PragmaStmt) (*Rows, error) {
+	if stmt.Value != nil {
+		val := pragmaIntValue(stmt.Value)
+		db.pragmaSettings["wal_truncate"] = val
+		// If WAL exists and truncate is enabled, checkpoint and truncate now
+		if db.wal != nil && val != 0 {
+			_, _ = db.wal.Checkpoint()
+		}
+		return &Rows{Columns: []string{"wal_truncate"}, Data: [][]interface{}{{int64(val)}}}, nil
+	}
+	v := db.getPragmaInt("wal_truncate", 0)
+	return &Rows{Columns: []string{"wal_truncate"}, Data: [][]interface{}{{int64(v)}}}, nil
+}
+
+// pragmaMemoryStats returns detailed memory usage statistics.
+func (db *Database) pragmaMemoryStats() (*Rows, error) {
+	cols := []string{
+		"page_cache_used",
+		"page_cache_max",
+		"row_store_used",
+		"wal_size",
+		"total_memory",
+	}
+
+	var pageCacheUsed, pageCacheMax, rowStoreUsed, walSize, totalMemory int64
+
+	// Page cache stats
+	if db.pm != nil {
+		m := DS.CollectMetrics(db.pm, 0)
+		pageCacheUsed = int64(m.UsedPages * 4096) // assume 4KB pages
+		pageCacheMax = int64(m.PageCount * 4096)
+	}
+
+	// Row store stats (approximate by counting rows)
+	for _, rows := range db.data {
+		rowStoreUsed += int64(len(rows) * 256) // rough estimate per row
+	}
+
+	// WAL size
+	if db.wal != nil {
+		walSize = int64(db.wal.Size())
+	}
+
+	totalMemory = pageCacheUsed + rowStoreUsed + walSize
+
+	return &Rows{
+		Columns: cols,
+		Data: [][]interface{}{{
+			pageCacheUsed,
+			pageCacheMax,
+			rowStoreUsed,
+			walSize,
+			totalMemory,
+		}},
+	}, nil
+}
+
+// pragmaCacheMemory handles PRAGMA cache_memory = N (bytes).
+// Sets a memory budget for the page cache.
+func (db *Database) pragmaCacheMemory(stmt *QP.PragmaStmt) (*Rows, error) {
+	if stmt.Value != nil {
+		val := pragmaIntValue(stmt.Value)
+		if val < 0 {
+			val = 0
+		}
+		db.pragmaSettings["cache_memory"] = val
+		// Apply to page manager if available
+		if db.pm != nil && val > 0 {
+			// Set max pages based on budget (assume 4KB pages)
+			maxPages := int(val / 4096)
+			if maxPages > 0 {
+				db.pm.SetMaxPages(maxPages)
+			}
+		}
+		return &Rows{Columns: []string{"cache_memory"}, Data: [][]interface{}{{int64(val)}}}, nil
+	}
+	v := db.getPragmaInt("cache_memory", 0)
+	return &Rows{Columns: []string{"cache_memory"}, Data: [][]interface{}{{int64(v)}}}, nil
+}
+
+// pragmaMaxRows handles PRAGMA max_rows = N.
+// Sets a limit on the number of rows per table.
+func (db *Database) pragmaMaxRows(stmt *QP.PragmaStmt) (*Rows, error) {
+	if stmt.Value != nil {
+		val := pragmaIntValue(stmt.Value)
+		if val < 0 {
+			val = 0
+		}
+		db.pragmaSettings["max_rows"] = val
+		return &Rows{Columns: []string{"max_rows"}, Data: [][]interface{}{{int64(val)}}}, nil
+	}
+	v := db.getPragmaInt("max_rows", 0)
+	return &Rows{Columns: []string{"max_rows"}, Data: [][]interface{}{{int64(v)}}}, nil
 }
 

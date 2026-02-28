@@ -142,6 +142,18 @@ func (pm *PageManager) Sync() error {
 	return pm.file.Sync()
 }
 
+// SetMaxPages sets the maximum number of pages the page manager can allocate.
+// This is used to enforce memory budgets.
+func (pm *PageManager) SetMaxPages(maxPages int) {
+	if maxPages > 0 && uint32(maxPages) < pm.numPages {
+		// If current pages exceed limit, mark excess as free
+		for pm.numPages > uint32(maxPages) {
+			pm.freeList = append(pm.freeList, pm.numPages)
+			pm.numPages--
+		}
+	}
+}
+
 func (pm *PageManager) Close() error {
 	if err := pm.file.Sync(); err != nil {
 		return err

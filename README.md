@@ -6,9 +6,9 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
+| **v0.10.4** | 2026-03-01 | Storage Enhancements: WAL truncate, memory stats, cache budget, streaming backup |
 | **v0.10.3** | 2026-03-01 | Advanced SQL: WINDOW clause, window frames, JSON functions (JSON_KEYS, JSON_VALID, JSON_ARRAY_LENGTH) |
 | **v0.10.2** | 2026-03-01 | FTS5 Full-Text Search Extension: inverted index, BM25 ranking, MATCH queries, tokenizers (ASCII/Porter/Unicode61) |
-| **v0.10.1** | 2026-02-28 | Coverage Improvement: +25% test coverage in critical packages (QP, CG, sqlvibe) |
 | **v0.9.17** | 2026-02-26 | JSON Extension Enhancement: Table-valued functions (json_each, json_tree), Aggregates (json_group_array, json_group_object), JSONB format |
 
 ## Features
