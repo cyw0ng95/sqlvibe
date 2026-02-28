@@ -28,6 +28,8 @@ Add runtime performance analysis and extended statistics:
 | Slow Query Log | Log queries exceeding threshold |
 | Statistics Tables | Extended stats with sqlvibe_ prefix |
 
+Extract explain into SVDB_EXT_EXPLAIN, since it is a debug feature which is not delivered in release mode
+
 ---
 
 ## 1. EXPLAIN ANALYZE
