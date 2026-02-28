@@ -9,6 +9,7 @@ import (
 	"github.com/cyw0ng95/sqlvibe/ext"
 	"github.com/cyw0ng95/sqlvibe/internal/CG"
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
+	IS "github.com/cyw0ng95/sqlvibe/internal/IS"
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
 	"github.com/cyw0ng95/sqlvibe/internal/VM"
 )
@@ -138,6 +139,13 @@ func (db *Database) execSelectStmt(stmt *QP.SelectStmt) (*Rows, error) {
 	// Handle table-valued function: FROM json_each(...) AS t
 	if stmt.From.TableFunc != nil {
 		return db.execTableFuncQuery(stmt)
+	}
+
+	// Handle virtual table referenced by name: FROM vtab_name [AS alias]
+	if stmt.From != nil && stmt.From.TableFunc == nil && stmt.From.Subquery == nil {
+		if vtab, ok := db.virtualTables[stmt.From.Name]; ok {
+			return db.execVTabQuerySelect(stmt.From.Name, vtab, stmt)
+		}
 	}
 
 	// Delegate to execVMQuery which handles ORDER BY + LIMIT correctly
@@ -2111,6 +2119,38 @@ tf := fromRef.TableFunc
 evalArgs := make([]interface{}, len(tf.Args))
 for i, arg := range tf.Args {
 evalArgs[i] = evalLiteralExpr(arg)
+}
+
+// Check vtab module registry first (e.g. series module)
+if mod, ok := IS.GetVTabModule(tf.Name); ok {
+strArgs := make([]string, len(evalArgs))
+for i, a := range evalArgs {
+switch v := a.(type) {
+case int64:
+strArgs[i] = strconv.FormatInt(v, 10)
+case float64:
+strArgs[i] = strconv.FormatFloat(v, 'f', -1, 64)
+case string:
+strArgs[i] = v
+default:
+strArgs[i] = fmt.Sprintf("%v", a)
+}
+}
+vtab, err := mod.Create(strArgs)
+if err != nil {
+return nil, err
+}
+alias := fromRef.Alias
+if alias == "" {
+alias = strings.ToLower(tf.Name)
+}
+// Temporarily register as a vtab so execVTabQuerySelect works.
+db.virtualTables[alias] = vtab
+stmt.From = &QP.TableRef{Name: alias, Alias: alias}
+result, execErr := db.execVTabQuerySelect(alias, vtab, stmt)
+stmt.From = fromRef
+delete(db.virtualTables, alias)
+return result, execErr
 }
 
 // Look up table function in extension registry

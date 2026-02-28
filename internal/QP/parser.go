@@ -146,6 +146,16 @@ type CreateTableStmt struct {
 
 func (c *CreateTableStmt) NodeType() string { return "CreateTableStmt" }
 
+// CreateVirtualTableStmt represents CREATE VIRTUAL TABLE ... USING module(args).
+type CreateVirtualTableStmt struct {
+	TableName   string
+	IfNotExists bool
+	ModuleName  string
+	ModuleArgs  []string
+}
+
+func (c *CreateVirtualTableStmt) NodeType() string { return "CreateVirtualTableStmt" }
+
 type ColumnDef struct {
 	Name            string
 	Type            string
@@ -1435,6 +1445,11 @@ func (p *Parser) parseCreate() (ASTNode, error) {
 		return p.parseCreateTrigger()
 	}
 
+	// Handle CREATE VIRTUAL TABLE
+	if strings.ToUpper(p.current().Literal) == "VIRTUAL" {
+		return p.parseCreateVirtualTable()
+	}
+
 	// Handle TEMPORARY/TEMP prefix
 	temporary := false
 	if strings.ToUpper(p.current().Literal) == "TEMPORARY" || strings.ToUpper(p.current().Literal) == "TEMP" {
@@ -1919,6 +1934,62 @@ func (p *Parser) parseCreateTrigger() (ASTNode, error) {
 			}
 		}
 	}
+	return stmt, nil
+}
+
+// parseCreateVirtualTable parses CREATE VIRTUAL TABLE [IF NOT EXISTS] name USING module[(arg, ...)].
+func (p *Parser) parseCreateVirtualTable() (ASTNode, error) {
+	// consume VIRTUAL
+	p.advance()
+	// expect TABLE
+	if strings.ToUpper(p.current().Literal) != "TABLE" {
+		return nil, fmt.Errorf("expected TABLE after VIRTUAL, got %q", p.current().Literal)
+	}
+	p.advance()
+
+	stmt := &CreateVirtualTableStmt{}
+
+	// optional IF NOT EXISTS
+	if p.current().Type == TokenKeyword && strings.ToUpper(p.current().Literal) == "IF" {
+		p.advance()
+		if p.current().Type == TokenNot {
+			p.advance()
+			if p.current().Type == TokenExists {
+				stmt.IfNotExists = true
+				p.advance()
+			}
+		}
+	}
+
+	// table name
+	stmt.TableName = p.current().Literal
+	p.advance()
+
+	// expect USING
+	if strings.ToUpper(p.current().Literal) != "USING" {
+		return nil, fmt.Errorf("expected USING after table name in CREATE VIRTUAL TABLE, got %q", p.current().Literal)
+	}
+	p.advance()
+
+	// module name
+	stmt.ModuleName = p.current().Literal
+	p.advance()
+
+	// optional (arg1, arg2, ...)
+	if p.current().Type == TokenLeftParen {
+		p.advance()
+		for p.current().Type != TokenRightParen && p.current().Type != TokenEOF {
+			stmt.ModuleArgs = append(stmt.ModuleArgs, p.current().Literal)
+			p.advance()
+			if p.current().Type == TokenComma {
+				p.advance()
+			}
+		}
+		if p.current().Type == TokenRightParen {
+			p.advance()
+		}
+	}
+
 	return stmt, nil
 }
 

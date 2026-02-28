@@ -114,6 +114,8 @@ type Database struct {
 	// v0.9.13: context & memory limits
 	queryTimeoutMs int64 // default per-query timeout in milliseconds (0 = no limit)
 	maxMemoryBytes int64 // max result-set memory in bytes (0 = no limit)
+	// v0.10.1: virtual tables
+	virtualTables map[string]DS.VTab // virtual table name -> VTab instance
 }
 
 // savepointEntry holds the name and snapshot for a named savepoint.
@@ -389,6 +391,7 @@ func Open(path string) (*Database, error) {
 		pragmaSettings:     make(map[string]interface{}),
 		tableStats:         make(map[string]int64),
 		savepointStack:     nil,
+		virtualTables:      make(map[string]DS.VTab),
 	}
 
 	// A2: WAL Startup Replay - if a WAL file exists for this database, open
@@ -532,6 +535,29 @@ func (db *Database) Exec(sql string) (Result, error) {
 	}
 
 	switch ast.NodeType() {
+	case "CreateVirtualTableStmt":
+		stmt := ast.(*QP.CreateVirtualTableStmt)
+		// Check if virtual table already exists
+		if _, exists := db.virtualTables[stmt.TableName]; exists {
+			if stmt.IfNotExists {
+				return Result{}, nil
+			}
+			return Result{}, fmt.Errorf("table %s already exists", stmt.TableName)
+		}
+		// Prevent shadowing an existing regular table
+		if resolved := db.resolveTableName(stmt.TableName); resolved != "" {
+			if _, exists := db.tables[resolved]; exists {
+				if stmt.IfNotExists {
+					return Result{}, nil
+				}
+				return Result{}, fmt.Errorf("table %s already exists", stmt.TableName)
+			}
+		}
+		if err := db.execCreateVirtualTable(stmt); err != nil {
+			return Result{}, err
+		}
+		return Result{}, nil
+
 	case "CreateTableStmt":
 		stmt := ast.(*QP.CreateTableStmt)
 		// Case-insensitive existence check
@@ -1106,6 +1132,11 @@ func (db *Database) Query(sql string) (*Rows, error) {
 			if strings.ToLower(vn) == lowerTbl {
 				return db.queryView(vs, stmt, sql)
 			}
+		}
+
+		// Handle virtual tables
+		if vtab, ok := db.virtualTables[tableName]; ok {
+			return db.execVTabQuerySelect(tableName, vtab, stmt)
 		}
 
 		// Handle information_schema virtual tables

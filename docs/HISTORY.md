@@ -1,5 +1,44 @@
 # sqlvibe Release History
 
+## **v0.10.1** (2026-02-28)
+
+### Features: VIRTUAL TABLE Framework
+
+#### Track 1: Core Interfaces (`internal/DS/vtab.go`)
+- New `VTabCursor` interface: `Filter`, `Next`, `Column`, `RowID`, `Eof`, `Close`
+- New `VTab` interface: `BestIndex`, `Open`, `Columns`, `Disconnect`, `Destroy`
+- New `VTabModule` interface: `Create`, `Connect`
+- New `IndexInfo`, `IndexConstraint`, `IndexOrderBy` structs for query planning
+
+#### Track 1: Module Base (`internal/DS/vtab_module.go`)
+- `TableModule` embed struct with default no-op `BestIndex` implementation
+
+#### Track 1: Store Cursors (`internal/DS/vtab_cursor.go`)
+- `RowStoreCursor` wraps `RowStore` to implement `VTabCursor`
+- `HybridStoreCursor` wraps `HybridStore` to implement `VTabCursor`
+
+#### Track 1: Registry (`internal/IS/vtab_registry.go`)
+- Thread-safe global module registry: `RegisterVTabModule` / `GetVTabModule`
+
+#### Track 2: Parser Support
+- Added `VIRTUAL` keyword to tokenizer
+- New `CreateVirtualTableStmt` AST node: `IfNotExists`, `ModuleName`, `ModuleArgs`
+- New `parseCreateVirtualTable()` hooked into `parseCreate()`
+
+#### Track 4: Built-in Series Module (`pkg/sqlvibe/vtab_series.go`)
+- `seriesModule` implements `DS.VTabModule` for integer sequence generation
+- `SELECT * FROM series(start, stop[, step])` — generates integer sequence
+- `CREATE VIRTUAL TABLE t USING series(start, stop)` — named virtual table
+- Registered via `init()` as `"series"` module
+
+#### Track 4: Execution (`pkg/sqlvibe/vtab_exec.go`)
+- `execCreateVirtualTable` handles `CREATE VIRTUAL TABLE` statements
+- `execVTabQuery` materializes virtual table rows via cursor
+- `execVTabQuerySelect` routes SELECT queries through virtual tables (with type inference)
+
+#### Track 5: Tests (`internal/TS/Vtab/vtab_test.go`)
+- 7 tests: registry, RowStoreCursor scan, series basic range, step, CREATE VIRTUAL TABLE, empty range, IF NOT EXISTS
+
 ## **v0.10.0** (2026-02-27)
 
 ### Features: Real Bytecode Execution Engine

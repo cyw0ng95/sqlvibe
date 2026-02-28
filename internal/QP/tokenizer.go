@@ -130,6 +130,7 @@ var keywords = map[string]TokenType{
 	"CROSS":             TokenKeyword,
 	"NATURAL":           TokenKeyword,
 	"USING":             TokenKeyword,
+	"VIRTUAL":           TokenKeyword,
 	"AS":                TokenKeyword,
 	"ORDER":             TokenKeyword,
 	"BY":                TokenKeyword,
