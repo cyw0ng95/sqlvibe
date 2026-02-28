@@ -55,6 +55,9 @@ test_output/
 /dist/
 sv-*
 
+# build.sh output directory (tests, benchmarks, coverage, fuzz logs)
+/.build/
+
 # Temporary files
 tmp/
 temp/

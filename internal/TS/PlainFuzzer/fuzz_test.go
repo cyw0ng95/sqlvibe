@@ -522,6 +522,40 @@ func FuzzSQL(f *testing.F) {
 	f.Add("PRAGMA wal_autocheckpoint = -1")
 	f.Add("PRAGMA wal_autocheckpoint = 10000")
 
+	// ===== VIRTUAL TABLE: series module =====
+	// Table-function style (no CREATE VIRTUAL TABLE required)
+	f.Add("SELECT * FROM series(1, 5)")
+	f.Add("SELECT * FROM series(1, 10, 2)")
+	f.Add("SELECT * FROM series(10, 1, -1)")
+	f.Add("SELECT * FROM series(0, 0)")
+	f.Add("SELECT value FROM series(1, 100)")
+	f.Add("SELECT * FROM series(1, 10) WHERE value > 5")
+	f.Add("SELECT * FROM series(1, 100) LIMIT 10")
+	f.Add("SELECT * FROM series(1, 100) LIMIT 5 OFFSET 3")
+	f.Add("SELECT * FROM series(1, 10) ORDER BY value DESC")
+	f.Add("SELECT COUNT(*) FROM series(1, 10)")
+	f.Add("SELECT SUM(value) FROM series(1, 10)")
+	f.Add("SELECT MIN(value), MAX(value) FROM series(1, 10)")
+	f.Add("SELECT value * 2 FROM series(1, 5)")
+	f.Add("SELECT * FROM series(1, 10) WHERE value % 2 = 0")
+	// CREATE VIRTUAL TABLE and subsequent queries
+	f.Add("CREATE VIRTUAL TABLE s1 USING series(1, 10)")
+	f.Add("CREATE VIRTUAL TABLE s1 USING series(1, 10); SELECT * FROM s1")
+	f.Add("CREATE VIRTUAL TABLE s1 USING series(1, 10, 2); SELECT COUNT(*) FROM s1")
+	f.Add("CREATE VIRTUAL TABLE IF NOT EXISTS s1 USING series(1, 5)")
+	f.Add("CREATE VIRTUAL TABLE IF NOT EXISTS s1 USING series(1, 5); CREATE VIRTUAL TABLE IF NOT EXISTS s1 USING series(6, 10)")
+	f.Add("CREATE VIRTUAL TABLE s1 USING series(1, 10); DROP TABLE s1")
+	f.Add("CREATE VIRTUAL TABLE s1 USING series(1, 10); SELECT * FROM s1 WHERE value > 5")
+	f.Add("CREATE VIRTUAL TABLE s1 USING series(1, 10); SELECT * FROM s1 ORDER BY value DESC")
+	f.Add("CREATE VIRTUAL TABLE s1 USING series(1, 10); SELECT * FROM s1 LIMIT 3")
+	// Error / edge cases that should not panic
+	f.Add("SELECT * FROM series()")             // too few args
+	f.Add("SELECT * FROM series(1)")            // too few args
+	f.Add("SELECT * FROM series(1, 10, 0)")     // step = 0
+	f.Add("SELECT * FROM series('a', 'b')")     // non-numeric args
+	f.Add("CREATE VIRTUAL TABLE s1 USING nomodule(1, 2)") // unknown module
+	f.Add("CREATE VIRTUAL TABLE s1 USING series(1, 10); CREATE VIRTUAL TABLE s1 USING series(1, 10)") // duplicate
+
 	f.Fuzz(func(t *testing.T, query string) {
 		if len(query) == 0 || len(query) > 3000 {
 			t.Skip()

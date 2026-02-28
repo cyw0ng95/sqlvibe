@@ -298,13 +298,13 @@ graph TD
 
 ## Success Criteria
 
-| Criterion | Target |
-|-----------|--------|
-| VIRTUAL TABLE framework complete | Module/VTable/Cursor interfaces |
-| CREATE VIRTUAL TABLE parsing | Parse correctly |
-| Internal tables switch to VTab | RowStore → VTabCursor |
-| json_each module works | `SELECT * FROM json_each('[1,2,3]')` |
-| json_tree module works | `SELECT * FROM json_tree('{"a":1}')` |
-| series module works | `SELECT * FROM series(1, 10, 1)` |
-| No performance regression | Same as before switch |
-| 100% tests pass | SQL:1999 regression |
+| Criterion | Target | Status |
+|-----------|--------|--------|
+| VIRTUAL TABLE framework complete | Module/VTable/Cursor interfaces | ✅ Done |
+| CREATE VIRTUAL TABLE parsing | Parse correctly | ✅ Done |
+| Internal tables switch to VTab | RowStore → VTabCursor | ✅ Done (wrappers created) |
+| json_each module works | `SELECT * FROM json_each('[1,2,3]')` | existing ext |
+| json_tree module works | `SELECT * FROM json_tree('{"a":1}')` | existing ext |
+| series module works | `SELECT * FROM series(1, 10, 1)` | ✅ Done |
+| No performance regression | Same as before switch | ✅ Done |
+| 100% tests pass | SQL:1999 regression | ✅ Done |
