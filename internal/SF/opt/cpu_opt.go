@@ -1,4 +1,4 @@
-package sqlvibe
+package opt
 
 import "sync/atomic"
 

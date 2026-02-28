@@ -1,4 +1,4 @@
-package sqlvibe
+package opt
 
 // simd.go provides vectorized batch operations for columnar int64 and float64 data.
 // These functions use 4-way loop unrolling, which the Go compiler can leverage for
