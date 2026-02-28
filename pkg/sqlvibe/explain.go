@@ -3,6 +3,7 @@ package sqlvibe
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cyw0ng95/sqlvibe/internal/CG"
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
@@ -12,6 +13,10 @@ import (
 func (db *Database) handleExplain(stmt *QP.ExplainStmt, sql string) (*Rows, error) {
 	if stmt.QueryPlan {
 		return db.explainQueryPlan(stmt)
+	}
+	
+	if stmt.Analyze {
+		return db.explainAnalyze(stmt, sql)
 	}
 
 	sqlType := stmt.Query.NodeType()
@@ -162,4 +167,68 @@ func (db *Database) explainProgram(program *VM.Program) (*Rows, error) {
 	}
 
 	return &Rows{Columns: cols, Data: rows}, nil
+}
+
+// explainAnalyze executes the query and returns runtime statistics.
+func (db *Database) explainAnalyze(stmt *QP.ExplainStmt, sql string) (*Rows, error) {
+	// Strip "EXPLAIN ANALYZE" prefix from SQL
+	innerSQL := strings.TrimPrefix(sql, "EXPLAIN ANALYZE ")
+	innerSQL = strings.TrimPrefix(innerSQL, "EXPLAIN")
+	innerSQL = strings.TrimSpace(innerSQL)
+
+	// Execute the query and collect statistics
+	startTime := time.Now()
+	resultRows, err := db.Query(innerSQL)
+	execTime := time.Since(startTime).Seconds() * 1000 // Convert to ms
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Count rows returned
+	rowCount := int64(0)
+	for resultRows.Next() {
+		rowCount++
+	}
+
+	// Build output
+	cols := []string{"QUERY PLAN", "ANALYZE"}
+	queryPlan := db.buildSelectPlanForExplain(stmt.Query)
+	
+	analyzeInfo := fmt.Sprintf("run_time=%.3f ms, rows_returned=%d", execTime, rowCount)
+	
+	analyzeRows := make([][]interface{}, 0)
+	for i, line := range queryPlan {
+		if i == 0 {
+			analyzeRows = append(analyzeRows, []interface{}{line, analyzeInfo})
+		} else {
+			analyzeRows = append(analyzeRows, []interface{}{line, ""})
+		}
+	}
+
+	return &Rows{Columns: cols, Data: analyzeRows}, nil
+}
+
+// buildSelectPlanForExplain builds plan lines for EXPLAIN ANALYZE.
+func (db *Database) buildSelectPlanForExplain(query QP.ASTNode) []string {
+	if query.NodeType() != "SelectStmt" {
+		return []string{"|--" + strings.ToUpper(query.NodeType())}
+	}
+	
+	sel := query.(*QP.SelectStmt)
+	var lines []string
+
+	if sel.From != nil {
+		lines = append(lines, db.buildTableRefPlan(sel.From, sel.Where)...)
+	}
+
+	if len(sel.GroupBy) > 0 {
+		lines = append(lines, "|--USE TEMP B-TREE (GROUP BY)")
+	}
+
+	if len(sel.OrderBy) > 0 {
+		lines = append(lines, "|--USE TEMP B-TREE (ORDER BY)")
+	}
+
+	return lines
 }

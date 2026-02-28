@@ -265,6 +265,7 @@ func (p *PragmaStmt) NodeType() string { return "PragmaStmt" }
 
 type ExplainStmt struct {
 	QueryPlan bool
+	Analyze   bool    // EXPLAIN ANALYZE - runtime statistics
 	Query     ASTNode
 }
 
@@ -3268,11 +3269,20 @@ func (p *Parser) parseExplain() (ASTNode, error) {
 	explain := &ExplainStmt{}
 
 	isQueryPlan := false
-	if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) && strings.EqualFold(p.current().Literal, "QUERY") {
-		p.advance()
-		if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) && strings.EqualFold(p.current().Literal, "PLAN") {
+	isAnalyze := false
+	
+	// Check for QUERY PLAN or ANALYZE keywords
+	if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) {
+		lit := strings.ToUpper(p.current().Literal)
+		if lit == "QUERY" {
 			p.advance()
-			isQueryPlan = true
+			if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) && strings.EqualFold(p.current().Literal, "PLAN") {
+				p.advance()
+				isQueryPlan = true
+			}
+		} else if lit == "ANALYZE" {
+			p.advance()
+			isAnalyze = true
 		}
 	}
 
@@ -3305,6 +3315,7 @@ func (p *Parser) parseExplain() (ASTNode, error) {
 	}
 
 	explain.QueryPlan = isQueryPlan
+	explain.Analyze = isAnalyze
 	return explain, nil
 }
 

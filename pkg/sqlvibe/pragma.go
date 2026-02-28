@@ -153,6 +153,11 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		return db.pragmaCacheMemory(stmt)
 	case "max_rows":
 		return db.pragmaMaxRows(stmt)
+	// v0.10.5: observability
+	case "profile":
+		return db.pragmaProfile(stmt)
+	case "slowlog":
+		return db.pragmaSlowlog(stmt)
 	default:
 		return &Rows{Columns: []string{}, Data: [][]interface{}{}}, nil
 	}
@@ -996,5 +1001,54 @@ func (db *Database) pragmaMaxRows(stmt *QP.PragmaStmt) (*Rows, error) {
 	}
 	v := db.getPragmaInt("max_rows", 0)
 	return &Rows{Columns: []string{"max_rows"}, Data: [][]interface{}{{int64(v)}}}, nil
+}
+
+// --- v0.10.5 observability PRAGMAs ---
+
+// pragmaProfile handles PRAGMA profile = ON/OFF and PRAGMA profile (returns profiles).
+func (db *Database) pragmaProfile(stmt *QP.PragmaStmt) (*Rows, error) {
+	if stmt.Value != nil {
+		// Set profile enabled/disabled
+		val := strings.ToUpper(pragmaStrValue(stmt.Value))
+		db.profileEnabled = (val == "ON" || val == "1")
+		return &Rows{Columns: []string{"profile"}, Data: [][]interface{}{{val}}}, nil
+	}
+	
+	// Return collected profiles
+	cols := []string{"query", "plan", "time_ms", "rows"}
+	rows := make([][]interface{}, 0, len(db.profileBuffer))
+	for _, p := range db.profileBuffer {
+		rows = append(rows, []interface{}{
+			p.Query,
+			p.Plan,
+			p.TimeMs,
+			p.Rows,
+		})
+	}
+	return &Rows{Columns: cols, Data: rows}, nil
+}
+
+// pragmaSlowlog handles PRAGMA slowlog = N (milliseconds) to set slow query threshold.
+func (db *Database) pragmaSlowlog(stmt *QP.PragmaStmt) (*Rows, error) {
+	if stmt.Value != nil {
+		val := pragmaIntValue(stmt.Value)
+		if val < 0 {
+			val = 0
+		}
+		db.slowLogThreshold = val
+		return &Rows{Columns: []string{"slowlog"}, Data: [][]interface{}{{int64(val)}}}, nil
+	}
+	
+	// Return slow query log
+	cols := []string{"query", "time_ms", "plan"}
+	rows := make([][]interface{}, 0, len(db.slowLogBuffer))
+	for _, s := range db.slowLogBuffer {
+		rows = append(rows, []interface{}{
+			s.Query,
+			s.TimeMs,
+			s.Plan,
+		})
+	}
+	return &Rows{Columns: cols, Data: rows}, nil
 }
 
