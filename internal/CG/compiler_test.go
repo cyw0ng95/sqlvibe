@@ -7,115 +7,277 @@ import (
 	VM "github.com/cyw0ng95/sqlvibe/internal/VM"
 )
 
-func TestNewCompiler(t *testing.T) {
+func TestCompiler_CompileInsert(t *testing.T) {
 	c := NewCompiler()
-	if c == nil {
-		t.Error("NewCompiler should not return nil")
-	}
-	if c.program == nil {
-		t.Error("program should not be nil")
-	}
-	if c.ra == nil {
-		t.Error("ra should not be nil")
-	}
-	if c.optimizer == nil {
-		t.Error("optimizer should not be nil")
-	}
-}
 
-func TestOptimizer_New(t *testing.T) {
-	o := NewOptimizer()
-	if o == nil {
-		t.Error("NewOptimizer should not return nil")
+	stmt := &QP.InsertStmt{
+		Table:   "users",
+		Columns: []string{"id", "name"},
+		Values: [][]QP.Expr{
+			{
+				&QP.Literal{Value: int64(1)},
+				&QP.Literal{Value: "Alice"},
+			},
+		},
 	}
-}
 
-func TestOptimizer_Optimize(t *testing.T) {
-	o := NewOptimizer()
-
-	program := VM.NewProgram()
-	program.Emit(VM.OpNoop)
-	program.Emit(VM.OpHalt)
-
-	result := o.Optimize(program)
-	if result == nil {
-		t.Error("Optimize should not return nil")
+	prog := c.CompileInsert(stmt)
+	if prog == nil {
+		t.Error("CompileInsert should not return nil")
 	}
-}
+	if len(prog.Instructions) == 0 {
+		t.Error("Program should have instructions")
+	}
 
-func TestOptimizer_Optimize_Nil(t *testing.T) {
-	o := NewOptimizer()
-
-	result := o.Optimize(nil)
-	if result != nil {
-		t.Error("Optimize(nil) should return nil")
+	// Check for OpInsert instruction
+	foundInsert := false
+	for _, inst := range prog.Instructions {
+		if inst.Op == VM.OpInsert {
+			foundInsert = true
+			break
+		}
+	}
+	if !foundInsert {
+		t.Error("Program should contain OpInsert instruction")
 	}
 }
 
-func TestOptimizer_Optimize_Empty(t *testing.T) {
-	o := NewOptimizer()
+func TestCompiler_CompileInsert_Defaults(t *testing.T) {
+	c := NewCompiler()
 
-	program := VM.NewProgram()
-	result := o.Optimize(program)
-	if result == nil {
-		t.Error("Optimize should not return nil for empty program")
+	stmt := &QP.InsertStmt{
+		Table:       "users",
+		UseDefaults: true,
+	}
+
+	prog := c.CompileInsert(stmt)
+	if prog == nil {
+		t.Error("CompileInsert should not return nil")
+	}
+
+	// Check for OpInsert instruction
+	foundInsert := false
+	for _, inst := range prog.Instructions {
+		if inst.Op == VM.OpInsert {
+			foundInsert = true
+			break
+		}
+	}
+	if !foundInsert {
+		t.Error("Program should contain OpInsert instruction for defaults")
 	}
 }
 
-func TestDirectCompiler_New(t *testing.T) {
-	dc := NewDirectCompiler(func(table string) ([]string, error) {
-		return []string{"id", "name"}, nil
-	}, nil)
-	if dc == nil {
-		t.Error("NewDirectCompiler should not return nil")
+func TestCompiler_CompileInsert_MultipleRows(t *testing.T) {
+	c := NewCompiler()
+
+	stmt := &QP.InsertStmt{
+		Table:   "users",
+		Columns: []string{"id", "name"},
+		Values: [][]QP.Expr{
+			{
+				&QP.Literal{Value: int64(1)},
+				&QP.Literal{Value: "Alice"},
+			},
+			{
+				&QP.Literal{Value: int64(2)},
+				&QP.Literal{Value: "Bob"},
+			},
+		},
+	}
+
+	prog := c.CompileInsert(stmt)
+	if prog == nil {
+		t.Error("CompileInsert should not return nil")
+	}
+
+	// Should have two OpInsert instructions
+	insertCount := 0
+	for _, inst := range prog.Instructions {
+		if inst.Op == VM.OpInsert {
+			insertCount++
+		}
+	}
+	if insertCount != 2 {
+		t.Errorf("Expected 2 OpInsert instructions, got %d", insertCount)
 	}
 }
 
-func TestCanFastPath(t *testing.T) {
-	tests := []struct {
-		sql    string
-		expect bool
-	}{
-		{"SELECT 1", true},
-		{"SELECT * FROM t", true},
-		{"SELECT id, name FROM t", true},
-		{"SELECT id FROM t WHERE id = 1", true},
-		{"", false},
-		{"INSERT INTO t VALUES(1)", false},
-		{"UPDATE t SET id = 1", false},
-		{"DELETE FROM t", false},
-		{"SELECT * FROM t1 JOIN t2 ON t1.id = t2.id", false},
-		{"SELECT * FROM t UNION SELECT * FROM t2", false},
-		{"WITH cte AS (SELECT 1) SELECT * FROM cte", false},
-		// Note: OVER() without space is not currently detected
-		{"SELECT row_number() FROM t", true},
+func TestCompiler_CompileUpdate(t *testing.T) {
+	c := NewCompiler()
+
+	stmt := &QP.UpdateStmt{
+		Table: "users",
+		Set: []QP.SetClause{
+			{
+				Column: &QP.ColumnRef{Name: "name"},
+				Value:  &QP.Literal{Value: "Updated"},
+			},
+		},
 	}
 
-	for _, tt := range tests {
-		result := canFastPath(tt.sql)
-		if result != tt.expect {
-			t.Errorf("canFastPath(%q) = %v, want %v", tt.sql, result, tt.expect)
+	prog := c.CompileUpdate(stmt)
+	if prog == nil {
+		t.Error("CompileUpdate should not return nil")
+	}
+	if len(prog.Instructions) == 0 {
+		t.Error("Program should have instructions")
+	}
+
+	// Check for OpUpdate instruction
+	foundUpdate := false
+	for _, inst := range prog.Instructions {
+		if inst.Op == VM.OpUpdate {
+			foundUpdate = true
+			break
+		}
+	}
+	if !foundUpdate {
+		t.Error("Program should contain OpUpdate instruction")
+	}
+}
+
+func TestCompiler_CompileUpdate_WithWhere(t *testing.T) {
+	c := NewCompiler()
+
+	stmt := &QP.UpdateStmt{
+		Table: "users",
+		Set: []QP.SetClause{
+			{
+				Column: &QP.ColumnRef{Name: "name"},
+				Value:  &QP.Literal{Value: "Updated"},
+			},
+		},
+		Where: &QP.BinaryExpr{
+			Op:    QP.TokenEq,
+			Left:  &QP.ColumnRef{Name: "id"},
+			Right: &QP.Literal{Value: int64(1)},
+		},
+	}
+
+	prog := c.CompileUpdate(stmt)
+	if prog == nil {
+		t.Error("CompileUpdate should not return nil")
+	}
+
+	// Check for OpIfNot instruction (for WHERE clause)
+	foundIfNot := false
+	for _, inst := range prog.Instructions {
+		if inst.Op == VM.OpIfNot {
+			foundIfNot = true
+			break
+		}
+	}
+	if !foundIfNot {
+		t.Error("Program should contain OpIfNot instruction for WHERE clause")
+	}
+}
+
+func TestCompiler_CompileUpdate_MultipleColumns(t *testing.T) {
+	c := NewCompiler()
+
+	stmt := &QP.UpdateStmt{
+		Table: "users",
+		Set: []QP.SetClause{
+			{
+				Column: &QP.ColumnRef{Name: "name"},
+				Value:  &QP.Literal{Value: "NewName"},
+			},
+			{
+				Column: &QP.ColumnRef{Name: "age"},
+				Value:  &QP.Literal{Value: int64(30)},
+			},
+		},
+	}
+
+	prog := c.CompileUpdate(stmt)
+	if prog == nil {
+		t.Error("CompileUpdate should not return nil")
+	}
+
+	// Check for OpUpdate instruction with multiple columns
+	for _, inst := range prog.Instructions {
+		if inst.Op == VM.OpUpdate {
+			setInfo, ok := inst.P4.(map[string]int)
+			if !ok {
+				t.Error("OpUpdate P4 should be map[string]int")
+			}
+			if len(setInfo) != 2 {
+				t.Errorf("Expected 2 columns in update, got %d", len(setInfo))
+			}
+			break
 		}
 	}
 }
 
-func TestIsFastPath(t *testing.T) {
-	if !IsFastPath("SELECT 1") {
-		t.Error("IsFastPath should return true for SELECT 1")
+func TestCompiler_CompileDelete(t *testing.T) {
+	c := NewCompiler()
+
+	stmt := &QP.DeleteStmt{
+		Table: "users",
 	}
-	if IsFastPath("SELECT * FROM t JOIN t2") {
-		t.Error("IsFastPath should return false for JOIN")
+
+	prog := c.CompileDelete(stmt)
+	if prog == nil {
+		t.Error("CompileDelete should not return nil")
+	}
+	if len(prog.Instructions) == 0 {
+		t.Error("Program should have instructions")
+	}
+
+	// Check for OpDelete instruction
+	foundDelete := false
+	for _, inst := range prog.Instructions {
+		if inst.Op == VM.OpDelete {
+			foundDelete = true
+			break
+		}
+	}
+	if !foundDelete {
+		t.Error("Program should contain OpDelete instruction")
 	}
 }
 
-func TestCompiler_CompileSelect_Literal(t *testing.T) {
+func TestCompiler_CompileDelete_WithWhere(t *testing.T) {
 	c := NewCompiler()
+
+	stmt := &QP.DeleteStmt{
+		Table: "users",
+		Where: &QP.BinaryExpr{
+			Op:    QP.TokenEq,
+			Left:  &QP.ColumnRef{Name: "id"},
+			Right: &QP.Literal{Value: int64(1)},
+		},
+	}
+
+	prog := c.CompileDelete(stmt)
+	if prog == nil {
+		t.Error("CompileDelete should not return nil")
+	}
+
+	// Check for OpIfNot instruction (for WHERE clause)
+	foundIfNot := false
+	for _, inst := range prog.Instructions {
+		if inst.Op == VM.OpIfNot {
+			foundIfNot = true
+			break
+		}
+	}
+	if !foundIfNot {
+		t.Error("Program should contain OpIfNot instruction for WHERE clause")
+	}
+}
+
+func TestCompiler_CompileSelect_WithFrom(t *testing.T) {
+	c := NewCompiler()
+	c.TableColIndices = map[string]int{"id": 0, "name": 1}
 
 	stmt := &QP.SelectStmt{
 		Columns: []QP.Expr{
-			&QP.Literal{Value: 1},
-			&QP.Literal{Value: "hello"},
+			&QP.ColumnRef{Name: "id"},
+			&QP.ColumnRef{Name: "name"},
 		},
+		From: &QP.TableRef{Name: "users"},
 	}
 
 	prog := c.CompileSelect(stmt)
@@ -127,72 +289,263 @@ func TestCompiler_CompileSelect_Literal(t *testing.T) {
 	}
 }
 
-func TestCompiler_CompileSelect_Empty(t *testing.T) {
+func TestCompiler_CompileSelect_WithWhere(t *testing.T) {
 	c := NewCompiler()
+	c.TableColIndices = map[string]int{"id": 0, "name": 1}
 
 	stmt := &QP.SelectStmt{
-		Columns: []QP.Expr{},
+		Columns: []QP.Expr{
+			&QP.ColumnRef{Name: "id"},
+		},
+		From: &QP.TableRef{Name: "users"},
+		Where: &QP.BinaryExpr{
+			Op:    QP.TokenGt,
+			Left:  &QP.ColumnRef{Name: "id"},
+			Right: &QP.Literal{Value: int64(10)},
+		},
 	}
 
 	prog := c.CompileSelect(stmt)
 	if prog == nil {
 		t.Error("CompileSelect should not return nil")
 	}
+	if len(prog.Instructions) == 0 {
+		t.Error("Program should have instructions")
+	}
+
+	// Verify program contains comparison operations
+	foundComparison := false
+	for _, inst := range prog.Instructions {
+		if inst.Op == VM.OpGt {
+			foundComparison = true
+			break
+		}
+	}
+	if !foundComparison {
+		t.Error("Program should contain OpGt instruction for WHERE clause")
+	}
 }
 
-func TestHasAggregates(t *testing.T) {
+func TestCompiler_CompileAggregate_Count(t *testing.T) {
+	c := NewCompiler()
+
 	stmt := &QP.SelectStmt{
 		Columns: []QP.Expr{
-			&QP.FuncCall{Name: "COUNT", Args: []QP.Expr{&QP.Literal{Value: 1}}},
+			&QP.FuncCall{Name: "COUNT", Args: []QP.Expr{&QP.Literal{Value: int64(1)}}},
 		},
+		From: &QP.TableRef{Name: "users"},
 	}
 
-	if !hasAggregates(stmt) {
-		t.Error("Should detect aggregate function")
+	prog := c.CompileAggregate(stmt)
+	if prog == nil {
+		t.Error("CompileAggregate should not return nil")
+	}
+	if len(prog.Instructions) == 0 {
+		t.Error("Program should have instructions")
 	}
 
-	stmt2 := &QP.SelectStmt{
+	// Check for OpAggregate instruction
+	foundAggregate := false
+	for _, inst := range prog.Instructions {
+		if inst.Op == VM.OpAggregate {
+			foundAggregate = true
+			break
+		}
+	}
+	if !foundAggregate {
+		t.Error("Program should contain OpAggregate instruction")
+	}
+}
+
+func TestCompiler_CompileAggregate_WithGroupBy(t *testing.T) {
+	c := NewCompiler()
+
+	stmt := &QP.SelectStmt{
 		Columns: []QP.Expr{
-			&QP.Literal{Value: 1},
+			&QP.ColumnRef{Name: "dept"},
+			&QP.FuncCall{Name: "COUNT", Args: []QP.Expr{&QP.Literal{Value: int64(1)}}},
+		},
+		From: &QP.TableRef{Name: "users"},
+		GroupBy: []QP.Expr{
+			&QP.ColumnRef{Name: "dept"},
 		},
 	}
 
-	if hasAggregates(stmt2) {
-		t.Error("Should not detect aggregate in literal")
+	prog := c.CompileAggregate(stmt)
+	if prog == nil {
+		t.Error("CompileAggregate should not return nil")
+	}
+
+	// Find OpAggregate and verify GroupByExprs
+	for _, inst := range prog.Instructions {
+		if inst.Op == VM.OpAggregate {
+			aggInfo, ok := inst.P4.(*VM.AggregateInfo)
+			if !ok {
+				t.Error("P4 should be *AggregateInfo")
+			}
+			if len(aggInfo.GroupByExprs) != 1 {
+				t.Errorf("Expected 1 group by expression, got %d", len(aggInfo.GroupByExprs))
+			}
+			break
+		}
 	}
 }
 
-func TestCompiler_compileLiteral(t *testing.T) {
+func TestCompiler_CompileAggregate_SumAvgMinMax(t *testing.T) {
 	c := NewCompiler()
 
-	lit := &QP.Literal{Value: 42}
-	reg := c.compileLiteral(lit)
-	if reg < 0 {
-		t.Errorf("compileLiteral should return valid register, got %d", reg)
+	tests := []struct {
+		name string
+		stmt *QP.SelectStmt
+	}{
+		{
+			name: "SUM",
+			stmt: &QP.SelectStmt{
+				Columns: []QP.Expr{
+					&QP.FuncCall{Name: "SUM", Args: []QP.Expr{&QP.ColumnRef{Name: "salary"}}},
+				},
+				From: &QP.TableRef{Name: "employees"},
+			},
+		},
+		{
+			name: "AVG",
+			stmt: &QP.SelectStmt{
+				Columns: []QP.Expr{
+					&QP.FuncCall{Name: "AVG", Args: []QP.Expr{&QP.ColumnRef{Name: "age"}}},
+				},
+				From: &QP.TableRef{Name: "users"},
+			},
+		},
+		{
+			name: "MIN",
+			stmt: &QP.SelectStmt{
+				Columns: []QP.Expr{
+					&QP.FuncCall{Name: "MIN", Args: []QP.Expr{&QP.ColumnRef{Name: "price"}}},
+				},
+				From: &QP.TableRef{Name: "products"},
+			},
+		},
+		{
+			name: "MAX",
+			stmt: &QP.SelectStmt{
+				Columns: []QP.Expr{
+					&QP.FuncCall{Name: "MAX", Args: []QP.Expr{&QP.ColumnRef{Name: "price"}}},
+				},
+				From: &QP.TableRef{Name: "products"},
+			},
+		},
 	}
 
-	lit2 := &QP.Literal{Value: "test"}
-	reg2 := c.compileLiteral(lit2)
-	if reg2 < 0 {
-		t.Errorf("compileLiteral should return valid register, got %d", reg2)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prog := c.CompileAggregate(tt.stmt)
+			if prog == nil {
+				t.Errorf("CompileAggregate for %s should not return nil", tt.name)
+			}
+		})
 	}
 }
 
-func TestCompiler_compileExpr_Nil(t *testing.T) {
+func TestCompiler_CompileAggregate_Having(t *testing.T) {
 	c := NewCompiler()
 
-	reg := c.compileExpr(nil)
-	if reg < 0 {
-		t.Errorf("compileExpr(nil) should return valid register, got %d", reg)
+	stmt := &QP.SelectStmt{
+		Columns: []QP.Expr{
+			&QP.ColumnRef{Name: "dept"},
+			&QP.FuncCall{Name: "COUNT", Args: []QP.Expr{&QP.Literal{Value: int64(1)}}},
+		},
+		From: &QP.TableRef{Name: "users"},
+		GroupBy: []QP.Expr{
+			&QP.ColumnRef{Name: "dept"},
+		},
+		Having: &QP.BinaryExpr{
+			Op:    QP.TokenGt,
+			Left:  &QP.FuncCall{Name: "COUNT", Args: []QP.Expr{&QP.Literal{Value: int64(1)}}},
+			Right: &QP.Literal{Value: int64(5)},
+		},
+	}
+
+	prog := c.CompileAggregate(stmt)
+	if prog == nil {
+		t.Error("CompileAggregate should not return nil")
+	}
+
+	// Verify HavingExpr is stored
+	for _, inst := range prog.Instructions {
+		if inst.Op == VM.OpAggregate {
+			aggInfo, ok := inst.P4.(*VM.AggregateInfo)
+			if !ok {
+				t.Error("P4 should be *AggregateInfo")
+			}
+			if aggInfo.HavingExpr == nil {
+				t.Error("HavingExpr should be set")
+			}
+			break
+		}
 	}
 }
 
-func TestCompiler_compileExpr_Default(t *testing.T) {
+func TestCompiler_SetMultiTableSchema(t *testing.T) {
 	c := NewCompiler()
 
-	expr := &QP.Literal{Value: nil}
-	reg := c.compileExpr(expr)
-	if reg < 0 {
-		t.Errorf("compileExpr should return valid register, got %d", reg)
+	schemas := map[string]map[string]int{
+		"users":    {"id": 0, "name": 1},
+		"orders":   {"id": 0, "user_id": 1, "amount": 2},
+		"products": {"id": 0, "price": 1},
+	}
+	colOrder := []string{"id", "name", "user_id", "amount", "price"}
+
+	c.SetMultiTableSchema(schemas, colOrder)
+
+	if c.TableSchemas == nil {
+		t.Error("TableSchemas should be set")
+	}
+	if len(c.TableSchemas) != 3 {
+		t.Errorf("Expected 3 table schemas, got %d", len(c.TableSchemas))
+	}
+}
+
+func TestCompiler_ResolveColumnCount(t *testing.T) {
+	c := NewCompiler()
+
+	// Test with regular columns
+	columns := []QP.Expr{
+		&QP.ColumnRef{Name: "id"},
+		&QP.ColumnRef{Name: "name"},
+	}
+	count := c.resolveColumnCount(columns)
+	if count != 2 {
+		t.Errorf("Expected 2 columns, got %d", count)
+	}
+
+	// Test with star column
+	c.TableColOrder = []string{"id", "name", "email"}
+	starColumns := []QP.Expr{
+		&QP.ColumnRef{Name: "*"},
+	}
+	count = c.resolveColumnCount(starColumns)
+	if count != 3 {
+		t.Errorf("Expected 3 columns for star, got %d", count)
+	}
+}
+
+func TestHasAggregates_NilStmt(t *testing.T) {
+	if HasAggregates(nil) {
+		t.Error("HasAggregates(nil) should return false")
+	}
+}
+
+func TestHasAggregates_WithGroupBy(t *testing.T) {
+	stmt := &QP.SelectStmt{
+		Columns: []QP.Expr{
+			&QP.ColumnRef{Name: "dept"},
+		},
+		GroupBy: []QP.Expr{
+			&QP.ColumnRef{Name: "dept"},
+		},
+	}
+
+	if !HasAggregates(stmt) {
+		t.Error("HasAggregates should return true for GROUP BY")
 	}
 }

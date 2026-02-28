@@ -1,6 +1,7 @@
 package sqlvibe
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -391,5 +392,357 @@ func TestDatabase_GetHybridStore(t *testing.T) {
 	}
 	if hs.LiveCount() != 5 {
 		t.Fatalf("expected 5 rows, got %d", hs.LiveCount())
+	}
+}
+
+// ---- VectorizedFilterSIMD tests ----
+
+func TestVectorizedFilterSIMD_IntEqual(t *testing.T) {
+	col := buildIntCol([]int64{1, 2, 3, 4, 5, 6, 7, 8}, nil)
+	rb := VectorizedFilterSIMD(col, "=", DS.IntValue(4))
+	got := rb.ToSlice()
+	if len(got) != 1 || got[0] != 3 {
+		t.Fatalf("expected [3], got %v", got)
+	}
+}
+
+func TestVectorizedFilterSIMD_IntLessThan(t *testing.T) {
+	col := buildIntCol([]int64{5, 3, 8, 1, 9, 2, 7, 4}, nil)
+	rb := VectorizedFilterSIMD(col, "<", DS.IntValue(5))
+	got := rb.ToSlice()
+	// Values < 5: 3, 1, 2, 4 at indices 1, 3, 5, 7
+	if len(got) != 4 {
+		t.Fatalf("expected 4 results, got %d: %v", len(got), got)
+	}
+}
+
+func TestVectorizedFilterSIMD_IntGreaterThan(t *testing.T) {
+	col := buildIntCol([]int64{1, 2, 3, 4, 5, 6, 7, 8}, nil)
+	rb := VectorizedFilterSIMD(col, ">", DS.IntValue(4))
+	got := rb.ToSlice()
+	if len(got) != 4 {
+		t.Fatalf("expected 4 results, got %d", len(got))
+	}
+}
+
+func TestVectorizedFilterSIMD_IntNotEqual(t *testing.T) {
+	col := buildIntCol([]int64{1, 2, 2, 3, 2, 4}, nil)
+	rb := VectorizedFilterSIMD(col, "!=", DS.IntValue(2))
+	got := rb.ToSlice()
+	// Indices with values != 2: 0, 3, 5
+	if len(got) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(got))
+	}
+}
+
+func TestVectorizedFilterSIMD_IntLessEqual(t *testing.T) {
+	col := buildIntCol([]int64{1, 2, 3, 4, 5}, nil)
+	rb := VectorizedFilterSIMD(col, "<=", DS.IntValue(3))
+	got := rb.ToSlice()
+	if len(got) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(got))
+	}
+}
+
+func TestVectorizedFilterSIMD_IntGreaterEqual(t *testing.T) {
+	col := buildIntCol([]int64{1, 2, 3, 4, 5}, nil)
+	rb := VectorizedFilterSIMD(col, ">=", DS.IntValue(3))
+	got := rb.ToSlice()
+	if len(got) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(got))
+	}
+}
+
+func TestVectorizedFilterSIMD_FloatEqual(t *testing.T) {
+	col := buildFloatCol([]float64{1.1, 2.2, 3.3, 2.2, 4.4}, nil)
+	rb := VectorizedFilterSIMD(col, "=", DS.FloatValue(2.2))
+	got := rb.ToSlice()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(got))
+	}
+}
+
+func TestVectorizedFilterSIMD_FloatLessThan(t *testing.T) {
+	col := buildFloatCol([]float64{5.0, 3.0, 8.0, 1.0, 9.0, 2.0, 7.0, 4.0}, nil)
+	rb := VectorizedFilterSIMD(col, "<", DS.FloatValue(5.0))
+	got := rb.ToSlice()
+	if len(got) != 4 {
+		t.Fatalf("expected 4 results, got %d", len(got))
+	}
+}
+
+func TestVectorizedFilterSIMD_StringEqual(t *testing.T) {
+	col := buildStringCol([]string{"apple", "banana", "cherry", "banana", "date"}, nil)
+	rb := VectorizedFilterSIMD(col, "=", DS.StringValue("banana"))
+	got := rb.ToSlice()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(got))
+	}
+}
+
+func TestVectorizedFilterSIMD_StringLessThan(t *testing.T) {
+	col := buildStringCol([]string{"delta", "alpha", "charlie", "bravo"}, nil)
+	rb := VectorizedFilterSIMD(col, "<", DS.StringValue("charlie"))
+	got := rb.ToSlice()
+	// "alpha", "bravo" < "charlie"
+	if len(got) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(got))
+	}
+}
+
+func TestVectorizedFilterSIMD_WithNulls(t *testing.T) {
+	col := buildIntCol([]int64{1, 2, 3, 4, 5}, []bool{false, true, false, true, false})
+	rb := VectorizedFilterSIMD(col, ">", DS.IntValue(2))
+	got := rb.ToSlice()
+	// Only non-null values > 2: 3, 5 at indices 2, 4
+	if len(got) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(got))
+	}
+}
+
+// ---- ColumnarHashJoinBloom tests ----
+
+func TestColumnarHashJoinBloom_Basic(t *testing.T) {
+	left := DS.NewHybridStore([]string{"id", "name"}, []DS.ValueType{DS.TypeInt, DS.TypeString})
+	left.Insert([]DS.Value{DS.IntValue(1), DS.StringValue("alice")})
+	left.Insert([]DS.Value{DS.IntValue(2), DS.StringValue("bob")})
+
+	right := DS.NewHybridStore([]string{"uid", "score"}, []DS.ValueType{DS.TypeInt, DS.TypeInt})
+	right.Insert([]DS.Value{DS.IntValue(1), DS.IntValue(90)})
+	right.Insert([]DS.Value{DS.IntValue(2), DS.IntValue(85)})
+
+	rows := ColumnarHashJoinBloom(left, right, "id", "uid")
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+}
+
+func TestColumnarHashJoinBloom_NoMatches(t *testing.T) {
+	left := DS.NewHybridStore([]string{"id"}, []DS.ValueType{DS.TypeInt})
+	left.Insert([]DS.Value{DS.IntValue(1)})
+
+	right := DS.NewHybridStore([]string{"id"}, []DS.ValueType{DS.TypeInt})
+	right.Insert([]DS.Value{DS.IntValue(99)})
+
+	rows := ColumnarHashJoinBloom(left, right, "id", "id")
+	if len(rows) != 0 {
+		t.Fatalf("expected 0 rows, got %d", len(rows))
+	}
+}
+
+func TestColumnarHashJoinBloom_InvalidColumn(t *testing.T) {
+	left := DS.NewHybridStore([]string{"id"}, []DS.ValueType{DS.TypeInt})
+	left.Insert([]DS.Value{DS.IntValue(1)})
+
+	right := DS.NewHybridStore([]string{"uid"}, []DS.ValueType{DS.TypeInt})
+	right.Insert([]DS.Value{DS.IntValue(1)})
+
+	// Invalid column name should return nil
+	rows := ColumnarHashJoinBloom(left, right, "nonexistent", "uid")
+	if rows != nil {
+		t.Fatal("expected nil for invalid column")
+	}
+}
+
+// ---- ColumnarHashJoinContext tests ----
+
+func TestColumnarHashJoinContext_Basic(t *testing.T) {
+	left := DS.NewHybridStore([]string{"id", "val"}, []DS.ValueType{DS.TypeInt, DS.TypeInt})
+	left.Insert([]DS.Value{DS.IntValue(1), DS.IntValue(100)})
+
+	right := DS.NewHybridStore([]string{"id", "score"}, []DS.ValueType{DS.TypeInt, DS.TypeInt})
+	right.Insert([]DS.Value{DS.IntValue(1), DS.IntValue(90)})
+
+	ctx := context.Background()
+	rows := ColumnarHashJoinContext(ctx, left, right, "id", "id")
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+}
+
+func TestColumnarHashJoinContext_Cancelled(t *testing.T) {
+	left := DS.NewHybridStore([]string{"id"}, []DS.ValueType{DS.TypeInt})
+	for i := 0; i < 300; i++ {
+		left.Insert([]DS.Value{DS.IntValue(int64(i))})
+	}
+
+	right := DS.NewHybridStore([]string{"id"}, []DS.ValueType{DS.TypeInt})
+	for i := 0; i < 300; i++ {
+		right.Insert([]DS.Value{DS.IntValue(int64(i))})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	rows := ColumnarHashJoinContext(ctx, left, right, "id", "id")
+	// Should return nil due to cancellation
+	if rows != nil {
+		t.Fatal("expected nil for cancelled context")
+	}
+}
+
+// ---- joinHashKey tests (via exported function) ----
+
+func TestColumnarHashJoin_FloatKey(t *testing.T) {
+	left := DS.NewHybridStore([]string{"val"}, []DS.ValueType{DS.TypeFloat})
+	left.Insert([]DS.Value{DS.FloatValue(1.5)})
+
+	right := DS.NewHybridStore([]string{"val"}, []DS.ValueType{DS.TypeFloat})
+	right.Insert([]DS.Value{DS.FloatValue(1.5)})
+
+	rows := ColumnarHashJoin(left, right, "val", "val")
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+}
+
+func TestColumnarHashJoin_StringKey(t *testing.T) {
+	left := DS.NewHybridStore([]string{"name"}, []DS.ValueType{DS.TypeString})
+	left.Insert([]DS.Value{DS.StringValue("test")})
+
+	right := DS.NewHybridStore([]string{"name"}, []DS.ValueType{DS.TypeString})
+	right.Insert([]DS.Value{DS.StringValue("test")})
+
+	rows := ColumnarHashJoin(left, right, "name", "name")
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+}
+
+// ---- Edge case tests ----
+
+func TestVectorizedFilter_EmptyColumn(t *testing.T) {
+	col := buildIntCol([]int64{}, nil)
+	rb := VectorizedFilter(col, "=", DS.IntValue(1))
+	if rb.Cardinality() != 0 {
+		t.Error("expected empty result for empty column")
+	}
+}
+
+func TestColumnarSum_EmptyColumn(t *testing.T) {
+	col := buildIntCol([]int64{}, nil)
+	if got := ColumnarSum(col); got != 0 {
+		t.Errorf("expected 0 for empty column, got %v", got)
+	}
+}
+
+func TestColumnarCount_EmptyColumn(t *testing.T) {
+	col := buildIntCol([]int64{}, nil)
+	if got := ColumnarCount(col); got != 0 {
+		t.Errorf("expected 0 for empty column, got %v", got)
+	}
+}
+
+func TestColumnarMin_EmptyColumn(t *testing.T) {
+	col := buildIntCol([]int64{}, nil)
+	v := ColumnarMin(col)
+	if !v.IsNull() {
+		t.Error("expected NULL for empty column min")
+	}
+}
+
+func TestColumnarMax_EmptyColumn(t *testing.T) {
+	col := buildIntCol([]int64{}, nil)
+	v := ColumnarMax(col)
+	if !v.IsNull() {
+		t.Error("expected NULL for empty column max")
+	}
+}
+
+func TestColumnarAvg_EmptyColumn(t *testing.T) {
+	col := buildIntCol([]int64{}, nil)
+	_, ok := ColumnarAvg(col)
+	if ok {
+		t.Error("expected ok=false for empty column avg")
+	}
+}
+
+func TestColumnarGroupBy_EmptyColumns(t *testing.T) {
+	keys := buildStringCol([]string{}, nil)
+	vals := buildIntCol([]int64{}, nil)
+	res := ColumnarGroupBy(keys, vals, "sum")
+	if len(res) != 0 {
+		t.Errorf("expected empty result, got %d groups", len(res))
+	}
+}
+
+func TestColumnarGroupBy_UnknownAggregate(t *testing.T) {
+	keys := buildStringCol([]string{"a"}, nil)
+	vals := buildIntCol([]int64{1}, nil)
+	res := ColumnarGroupBy(keys, vals, "unknown_agg")
+	if len(res) != 1 {
+		t.Fatal("expected 1 group")
+	}
+	// Unknown aggregate should return NULL
+	if !res["a"].IsNull() {
+		t.Error("expected NULL for unknown aggregate")
+	}
+}
+
+// ---- VectorizedGroupBy additional tests ----
+
+func TestVectorizedGroupBy_Count(t *testing.T) {
+	hs := DS.NewHybridStore(
+		[]string{"cat", "val"},
+		[]DS.ValueType{DS.TypeString, DS.TypeInt},
+	)
+	hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(10)})
+	hs.Insert([]DS.Value{DS.StringValue("B"), DS.IntValue(20)})
+	hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(5)})
+
+	rows := VectorizedGroupBy(hs, []string{"cat"}, "val", "count")
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(rows))
+	}
+}
+
+func TestVectorizedGroupBy_Min(t *testing.T) {
+	hs := DS.NewHybridStore(
+		[]string{"cat", "val"},
+		[]DS.ValueType{DS.TypeString, DS.TypeInt},
+	)
+	hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(10)})
+	hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(5)})
+
+	rows := VectorizedGroupBy(hs, []string{"cat"}, "val", "min")
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(rows))
+	}
+	if rows[0][1].Int != 5 {
+		t.Errorf("expected min 5, got %v", rows[0][1])
+	}
+}
+
+func TestVectorizedGroupBy_Max(t *testing.T) {
+	hs := DS.NewHybridStore(
+		[]string{"cat", "val"},
+		[]DS.ValueType{DS.TypeString, DS.TypeInt},
+	)
+	hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(10)})
+	hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(5)})
+
+	rows := VectorizedGroupBy(hs, []string{"cat"}, "val", "max")
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(rows))
+	}
+	if rows[0][1].Int != 10 {
+		t.Errorf("expected max 10, got %v", rows[0][1])
+	}
+}
+
+func TestVectorizedGroupBy_Avg(t *testing.T) {
+	hs := DS.NewHybridStore(
+		[]string{"cat", "val"},
+		[]DS.ValueType{DS.TypeString, DS.TypeInt},
+	)
+	hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(10)})
+	hs.Insert([]DS.Value{DS.StringValue("A"), DS.IntValue(20)})
+
+	rows := VectorizedGroupBy(hs, []string{"cat"}, "val", "avg")
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(rows))
+	}
+	if rows[0][1].Float != 15.0 {
+		t.Errorf("expected avg 15.0, got %v", rows[0][1])
 	}
 }
