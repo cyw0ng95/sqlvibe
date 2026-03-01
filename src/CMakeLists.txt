@@ -41,6 +41,12 @@ set(SVDB_CORE_SOURCES
     core/DS/roaring.cpp
     core/DS/compression.cpp
     core/DS/value.cpp
+    core/DS/page.cpp
+    core/DS/freelist.cpp
+    core/DS/balance.cpp
+    core/DS/manager.cpp
+    core/DS/wal.cpp
+    core/DS/skip_list.cpp
 
     # VM - Virtual Machine
     core/VM/hash.cpp

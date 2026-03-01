@@ -31,6 +31,12 @@ add_library(svdb_ds SHARED
     simd.cpp
     roaring.cpp
     compression.cpp
+    page.cpp
+    freelist.cpp
+    balance.cpp
+    manager.cpp
+    wal.cpp
+    skip_list.cpp
 )
 
 target_include_directories(svdb_ds PUBLIC
