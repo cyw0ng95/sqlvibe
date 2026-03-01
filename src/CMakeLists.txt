@@ -72,6 +72,9 @@ set(SVDB_CORE_SOURCES
     # SF - Standard Functions (optimization)
     core/SF/opt.cpp
 
+    # IS - Information Schema
+    core/IS/schema.cpp
+
     # Wrapper - Invoke chain
     core/wrapper/invoke_chain_wrapper.cpp
 
@@ -91,6 +94,7 @@ target_include_directories(svdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/TM
     ${CMAKE_CURRENT_SOURCE_DIR}/core/PB
     ${CMAKE_CURRENT_SOURCE_DIR}/core/SF
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/IS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/wrapper
     ${CMAKE_CURRENT_SOURCE_DIR}/core/cgo
 )
