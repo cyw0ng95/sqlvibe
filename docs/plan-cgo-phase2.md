@@ -1,10 +1,11 @@
-# Plan CGO Switch - Phase 2 & 3: Query Execution + Code Generator
+# Plan CGO Switch - Phase 2, 3 & 4: Complete CGO Architecture
 
 ## Summary
 
-Implement Phase 2 and Phase 3 of CGO optimization:
+Implement Phase 2, 3, and 4 of CGO optimization:
 - **Phase 2**: Query execution layer (`pkg/sqlvibe/`)
 - **Phase 3**: Code Generator subsystem (`internal/CG/`)
+- **Phase 4**: Module Integration (connect all CGO modules)
 
 ## Overview
 
@@ -42,7 +43,26 @@ See [`docs/plan-cgo-phase3-cg.md`](docs/plan-cgo-phase3-cg.md) for detailed Phas
 **Phase 3 Summary:**
 - **Total Estimated Effort:** 6 weeks
 - **Expected Speedup:** 2-4× for query compilation
-- **Key Components:** Compiler, ExprCompiler, Optimizer, PlanCache, SIMD eval
+
+### Phase 4: Module Integration
+
+Phase 4 integrates individual CGO modules into cohesive subsystems for maximum performance.
+
+See [`docs/plan-cgo-phase4-integration.md`](docs/plan-cgo-phase4-integration.md) for detailed Phase 4 plan.
+
+| Phase | Module | Library | Status |
+|-------|--------|---------|--------|
+| Phase 4.1 | Integrated Query Engine | libsvdb_integrated | Pending |
+| Phase 4.2 | Expression Pipeline | libsvdb_integrated | Pending |
+| Phase 4.3 | Storage Engine | libsvdb_integrated | Pending |
+| Phase 4.4 | Integrated Optimizer | libsvdb_integrated | Pending |
+| Phase 4.5 | Integration Testing | libsvdb_integrated | Pending |
+| Phase 4.6 | Cleanup | libsvdb_integrated | Pending |
+
+**Phase 4 Summary:**
+- **Total Estimated Effort:** 12 weeks (3 months)
+- **Expected Speedup:** 3-5× for typical queries
+- **Key Goal:** Reduce CGO boundary crossings from 100s to 10s per query
 
 ---
 

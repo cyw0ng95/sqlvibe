@@ -49,6 +49,45 @@ See [`docs/plan-cgo-phase2.md`](docs/plan-cgo-phase2.md) for detailed Phase 2 pl
 - **Expected Speedup:** 1.5-3× for remaining bottlenecks
 - **Priority:** Phase 20 (Hash JOIN) and Phase 21 (Batch DML) are critical
 
+## Phase 3 - Code Generator (CG) Subsystem (New)
+
+Phase 3 replaces the pure Go Code Generator with a high-performance C++ implementation.
+
+See [`docs/plan-cgo-phase3-cg.md`](docs/plan-cgo-phase3-cg.md) for detailed Phase 3 plan.
+
+| Phase | Module | Library | Status |
+|-------|--------|---------|--------|
+| Phase 3.1 | CGO Infrastructure | libsvdb_cg | Pending |
+| Phase 3.2 | C++ Compiler | libsvdb_cg | Pending |
+| Phase 3.3 | SIMD Optimizations | libsvdb_cg | Pending |
+| Phase 3.4 | Integration Testing | libsvdb_cg | Pending |
+| Phase 3.5 | Remove Pure Go | libsvdb_cg | Pending |
+
+**Phase 3 Summary:**
+- **Total Estimated Effort:** 6 weeks
+- **Expected Speedup:** 2-4× for query compilation
+- **Key Components:** Compiler, ExprCompiler, Optimizer, PlanCache, SIMD eval
+
+## Phase 4 - Module Integration (New)
+
+Phase 4 integrates individual CGO modules into cohesive subsystems for maximum performance.
+
+See [`docs/plan-cgo-phase4-integration.md`](docs/plan-cgo-phase4-integration.md) for detailed Phase 4 plan.
+
+| Phase | Module | Library | Status |
+|-------|--------|---------|--------|
+| Phase 4.1 | Integrated Query Engine | libsvdb_integrated | Pending |
+| Phase 4.2 | Expression Pipeline | libsvdb_integrated | Pending |
+| Phase 4.3 | Storage Engine | libsvdb_integrated | Pending |
+| Phase 4.4 | Integrated Optimizer | libsvdb_integrated | Pending |
+| Phase 4.5 | Integration Testing | libsvdb_integrated | Pending |
+| Phase 4.6 | Cleanup | libsvdb_integrated | Pending |
+
+**Phase 4 Summary:**
+- **Total Estimated Effort:** 12 weeks (3 months)
+- **Expected Speedup:** 3-5× for typical queries
+- **Key Goal:** Reduce CGO boundary crossings from 100s to 10s per query
+
 ---
 
 ## 1. Build System
