@@ -1,8 +1,8 @@
 package CG
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/cgo/../../../.build/cmake/lib -lsvdb
-#cgo CFLAGS: -I${SRCDIR}/cgo/../../../src/core/CG
+#cgo LDFLAGS: -L${SRCDIR}/../../.build/cmake/lib -lsvdb
+#cgo CFLAGS: -I${SRCDIR}/../../src/core/CG
 #include "cg.h"
 #include <stdlib.h>
 */
