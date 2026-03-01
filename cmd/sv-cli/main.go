@@ -53,13 +53,13 @@ func main() {
 	formatter := NewFormatter()
 	importer := NewImporter(db)
 	exporter := NewExporter(db)
-	
+
 	// Create history manager and auto-completer
 	history := NewHistoryManager()
 	if err := history.Load(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not load history: %v\n", err)
 	}
-	
+
 	autoComplete := NewAutoCompleter()
 	autoComplete.UpdateSchema(db)
 
@@ -79,13 +79,13 @@ func main() {
 		if line == "" {
 			continue
 		}
-		
+
 		// Handle history command
 		if line == ".history" {
 			printHistory(history)
 			continue
 		}
-		
+
 		// Handle tab completion hint
 		if line == ".complete" {
 			fmt.Println("Auto-completion: type partial keyword/table/column and press TAB")
@@ -106,10 +106,10 @@ func main() {
 
 		// Add to history
 		history.Add(line)
-		
+
 		// Update schema cache periodically
 		autoComplete.UpdateSchema(db)
-		
+
 		// Show completion suggestions (simplified - just print them)
 		if strings.HasSuffix(line, "\t") {
 			prefix := strings.TrimSuffix(line, "\t")
@@ -148,7 +148,7 @@ func main() {
 		if rows != nil && len(rows.Columns) > 0 {
 			// Format output
 			output := formatter.Format(rows)
-			
+
 			// Redirect to file if set
 			if outputFile != "" {
 				f, err := os.OpenFile(outputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -175,7 +175,7 @@ func handleMetaCommand(db *sqlvibe.Database, line string, formatter *Formatter, 
 	if len(parts) == 0 {
 		return false
 	}
-	
+
 	cmd := strings.ToLower(parts[0])
 	args := parts[1:]
 
@@ -271,7 +271,7 @@ func printHistory(h *HistoryManager) {
 		fmt.Println("No command history.")
 		return
 	}
-	
+
 	fmt.Println("Command history:")
 	start := len(history) - 20
 	if start < 0 {
@@ -356,13 +356,13 @@ func setOutputMode(formatter *Formatter, args []string) {
 	}
 	switch strings.ToLower(args[0]) {
 	case "csv":
-		formatter.SetMode(OutputCSV)
+		formatter.SetMode("csv")
 	case "table":
-		formatter.SetMode(OutputTable)
+		formatter.SetMode("table")
 	case "list":
-		formatter.SetMode(OutputList)
+		formatter.SetMode("list")
 	case "json":
-		formatter.SetMode(OutputJSON)
+		formatter.SetMode("json")
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown mode: %s\n", args[0])
 	}
@@ -443,7 +443,7 @@ func exportData(exporter *Exporter, args []string) {
 	}
 	format := strings.ToLower(args[0])
 	filename := args[1]
-	
+
 	// For now, export current table (would need to track current table)
 	fmt.Fprintf(os.Stderr, "Export format '%s' to '%s' - requires table name\n", format, filename)
 }
