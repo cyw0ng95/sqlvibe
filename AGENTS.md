@@ -766,3 +766,28 @@ All tests passing (except pre-existing datetime tests):
 3. Improve WAL performance with async checkpoint
 4. Add compression (LZ4, ZSTD)
 5. Enhance concurrency with MVCC
+
+---
+
+## 14. CI / Security Scanning
+
+### 14.1 CodeQL
+
+**CodeQL is disabled for this repository** (`if: false` in `.github/workflows/codeql.yml`).
+
+**Reasons:**
+1. The project builds CGO shared libraries (`.so` files via cmake) before `go build`.
+   CodeQL's default autobuild cannot satisfy this dependency, causing false build
+   failures and misleading alerts.
+2. The C++ sources intentionally use manual memory management and SIMD pointer
+   arithmetic. These patterns produce large volumes of false-positive alerts.
+3. Go-layer security is reviewed by `go vet` and manual inspection.
+
+**If you need to re-enable CodeQL:**
+1. Edit `.github/workflows/codeql.yml` and remove the `if: false` line.
+2. Add a custom build step that runs `./build.sh` **before** the CodeQL autobuild
+   so that all required `.so` files exist at analysis time.
+3. Suppress false positives in C++ sources with `// lgtm[cpp/...]` annotations
+   or a `.github/codeql/codeql-config.yml` exclusion list.
+
+**Agents must NOT re-enable CodeQL without following the steps above.**

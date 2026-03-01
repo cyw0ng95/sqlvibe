@@ -39,7 +39,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/internal/DS/cgo/CMakeLists.txt)
     add_subdirectory(internal/DS/cgo)
 endif()
 
-# Add VM CGO library
+# Add VM CGO library (includes Phase 1 + Phase 2 merged)
 if(EXISTS ${CMAKE_SOURCE_DIR}/internal/VM/cgo/CMakeLists.txt)
     add_subdirectory(internal/VM/cgo)
 endif()
@@ -54,9 +54,9 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/internal/CG/cgo/CMakeLists.txt)
     add_subdirectory(internal/CG/cgo)
 endif()
 
-# Add pkg/sqlvibe CGO library (Phase 2)
-if(EXISTS ${CMAKE_SOURCE_DIR}/pkg/sqlvibe/cgo/CMakeLists.txt)
-    add_subdirectory(pkg/sqlvibe/cgo)
+# Add Phase 4 invoke chain wrapper library
+if(EXISTS ${CMAKE_SOURCE_DIR}/internal/wrapper/cgo/CMakeLists.txt)
+    add_subdirectory(internal/wrapper/cgo)
 endif()
 
 # Build all C++ targets

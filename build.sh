@@ -76,6 +76,7 @@ echo "      - Data Storage: B-Tree, SIMD, Roaring bitmap"
 echo "      - VM: Hash functions, batch execution, expression eval, dispatch, type conv, strings, datetime, aggregates"
 echo "      - QP: Fast tokenizer"
 echo "      - CG: Bytecode optimizer, plan cache, expression compiler"
+echo "      - Wrapper: Phase 4 invoke chain (hash+filter, batch compare, scan+aggregate)"
 
 # Build C++ extensions
 if [[ -f "CMakeLists.txt" ]]; then
