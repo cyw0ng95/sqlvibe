@@ -29,7 +29,7 @@ func newCGOTokenizer(typ TokenizerType) *cgoTokenizer {
 	return nil
 }
 
-// Pure Go ranker factory  
+// Pure Go ranker factory
 func newCGORanker(index *FTS5Index, k1, b float64) *cgoRanker {
 	// In pure Go build, return nil - the Go implementation will be used
 	return nil

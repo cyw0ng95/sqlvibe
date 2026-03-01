@@ -127,12 +127,16 @@ if [[ $RUN_TESTS -eq 1 ]]; then
             | tr '\n' ',' | sed 's/,$//')
         TEST_COVER_ARGS+=(-coverprofile="$COVER_PROF_TESTS" -covermode=atomic -coverpkg="$COVERPKG")
         COVER_PROFILES+=("$COVER_PROF_TESTS")
-        go test -tags "$EXT_TAGS" \
+        # Export LD_LIBRARY_PATH for test binaries to find shared libraries
+        export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
+        env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
             "${TEST_COVER_ARGS[@]}" \
             ${VERBOSE_FLAG} \
             ./... 2>&1 | tee "$BUILD_DIR/test.log"
     else
-        go test -tags "$EXT_TAGS" \
+        # Export LD_LIBRARY_PATH for test binaries to find shared libraries
+        export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
+        env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
             ${VERBOSE_FLAG} \
             ./... 2>&1 | tee "$BUILD_DIR/test.log"
     fi
