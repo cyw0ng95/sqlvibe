@@ -2,7 +2,7 @@
 
 ## Summary
 
-Refactor ext/math to use C++ for core math operations, demonstrating hybrid Go+C++ architecture.
+Refactor ext/math to use C++ for core math operations, demonstrating hybrid Go+C++ architecture, controlled by build tag.
 
 ## Background
 
@@ -11,10 +11,28 @@ Refactor ext/math to use C++ for core math operations, demonstrating hybrid Go+C
 - Uses gomath standard library
 - 20+ math functions implemented
 
-### Why C++?
-- **Proof of Concept**: First step toward hybrid Go+C++ architecture
-- **Performance**: SIMD optimizations possible for batch operations
-- **Learning**: Team gains C++ experience
+### Build Tags
+
+| Tag | Description | Default |
+|-----|-------------|---------|
+| `SVDB_ENABLE_CGO` | Enable C++ math functions | No |
+| `SVDB_EXT_MATH` | Enable math extension | No |
+
+### Build Examples
+
+```bash
+# Default: Pure Go
+go build ./...
+
+# With Go math extension
+go build -tags SVDB_EXT_MATH ./...
+
+# With C++ math extension (requires CGO)
+go build -tags "SVDB_EXT_MATH SVDB_ENABLE_CGO" ./...
+
+# Pure Go, no extensions
+go build ./...
+```
 
 ---
 
@@ -24,10 +42,72 @@ Refactor ext/math to use C++ for core math operations, demonstrating hybrid Go+C
 
 ```
 ext/math/
-├── math.go           # Go: Extension registration & CGO bridge
+├── math.go           # Go: Extension registration (always)
+├── math_cgo.go     # [+build SVDB_ENABLE_CGO] CGO bridge
+├── math_pure.go    # [-build SVDB_ENABLE_CGO] Pure Go implementation
 ├── math.h           # C++: Header declarations
 ├── math.cpp         # C++: Implementation
 └── CMakeLists.txt   # C++ build config
+```
+
+### Build Tag Switching
+
+```go
+// math.go - Common registration
+package math
+
+import "github.com/cyw0ng95/sqlvibe/ext"
+
+func init() {
+    ext.Register("math", &MathExtension{})
+}
+
+// math_cgo.go - C++ implementation
+// +build SVDB_ENABLE_CGO
+
+package math
+
+/*
+#include "math.h"
+#include <stdlib.h>
+*/
+import "C"
+
+type MathExtension struct{}
+
+func (e *MathExtension) CallFunc(name string, args []interface{}) interface{} {
+    switch name {
+    case "ABS":
+        return callAbsCGO(args)
+    case "POWER":
+        return callPowerCGO(args)
+    // ... other CGO calls
+    }
+    return nil
+}
+
+// math_pure.go - Pure Go fallback
+// +build !SVDB_ENABLE_CGO
+
+package math
+
+import (
+    gomath "math"
+    mathrand "math/rand"
+)
+
+type MathExtension struct{}
+
+func (e *MathExtension) CallFunc(name string, args []interface{}) interface{} {
+    switch name {
+    case "ABS":
+        return evalAbs(args)  // Pure Go
+    case "POWER":
+        return evalPower(args)  // Pure Go
+    // ... pure Go implementations
+    }
+    return nil
+}
 ```
 
 ### Data Flow
@@ -205,6 +285,14 @@ func init() {
 
 ## 4. Build System
 
+### Build Tags Usage
+
+| Build Command | math Implementation |
+|--------------|---------------------|
+| `go build ./...` | No math extension |
+| `-tags SVDB_EXT_MATH` | Pure Go math |
+| `-tags "SVDB_EXT_MATH SVDB_ENABLE_CGO"` | C++ math (requires CGO) |
+
 ### CMakeLists.txt
 
 ```cmake
@@ -234,14 +322,17 @@ install(TARGETS svdb_math
 ### Go build integration
 
 ```go
-// build.go
-//go:build cgo
-// +build cgo
+// math_cgo.go
+// +build SVDB_ENABLE_CGO
 
-package main
+package math
 
+/*
 #cgo LDFLAGS: -L${SRCDIR}/lib -lsvdb_math
 #cgo CFLAGS: -I${SRCDIR}/include
+#include "math.h"
+#include <stdlib.h>
+*/
 import "C"
 ```
 
