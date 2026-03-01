@@ -41,6 +41,12 @@ set(SVDB_CORE_SOURCES
     core/DS/roaring.cpp
     core/DS/compression.cpp
     core/DS/value.cpp
+    core/DS/page.cpp
+    core/DS/freelist.cpp
+    core/DS/balance.cpp
+    core/DS/manager.cpp
+    core/DS/wal.cpp
+    core/DS/skip_list.cpp
 
     # VM - Virtual Machine
     core/VM/hash.cpp
@@ -55,9 +61,20 @@ set(SVDB_CORE_SOURCES
     core/VM/aggregate.cpp
     core/VM/string_pool.cpp
     core/VM/registers.cpp
+    core/VM/opcodes.cpp
+    core/VM/instruction.cpp
+    core/VM/cursor.cpp
+    core/VM/program.cpp
+    core/VM/query_engine.cpp
+    core/VM/exec.cpp
 
     # QP - Query Processing
     core/QP/tokenizer.cpp
+    core/QP/analyzer.cpp
+    core/QP/normalize.cpp
+    core/QP/type_infer.cpp
+    core/QP/dag.cpp
+    core/QP/binder.cpp
 
     # CG - Code Generation
     core/CG/compiler.cpp
@@ -65,6 +82,8 @@ set(SVDB_CORE_SOURCES
     core/CG/optimizer.cpp
     core/CG/plan_cache.cpp
     core/CG/register.cpp
+    core/CG/bytecode_compiler.cpp
+    core/CG/direct_compiler.cpp
 
     # TM - Transaction Management
     core/TM/transaction.cpp
