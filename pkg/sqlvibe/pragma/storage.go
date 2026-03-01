@@ -1,6 +1,8 @@
 package pragma
 
 import (
+	"runtime"
+
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
 )
 
@@ -94,5 +96,38 @@ func HandleFreelistCount(ctx Ctx) ([]string, [][]interface{}, error) {
 func HandlePageCount(ctx Ctx) ([]string, [][]interface{}, error) {
 	m := ctx.StorageMetrics()
 	cols, rows := Result("page_count", int64(m.PageCount))
+	return cols, rows, nil
+}
+
+// HandleMemoryStatus returns Go runtime memory statistics in a format
+// compatible with SQLite's sqlite3_memory_status()/PRAGMA memory_status.
+func HandleMemoryStatus() ([]string, [][]interface{}, error) {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	cols := []string{"heap_alloc", "heap_sys", "heap_in_use", "heap_idle", "heap_released", "num_gc", "total_alloc"}
+	rows := [][]interface{}{{
+		int64(ms.HeapAlloc),
+		int64(ms.HeapSys),
+		int64(ms.HeapInuse),
+		int64(ms.HeapIdle),
+		int64(ms.HeapReleased),
+		int64(ms.NumGC),
+		int64(ms.TotalAlloc),
+	}}
+	return cols, rows, nil
+}
+
+// HandleHeapLimit handles PRAGMA heap_limit [= N].
+// Sets or queries the advisory maximum heap size in bytes.
+// This is informational only – Go's GC manages actual heap limits.
+func HandleHeapLimit(ctx Ctx, stmt *QP.PragmaStmt) ([]string, [][]interface{}, error) {
+	if stmt.Value != nil {
+		val := IntValue(stmt.Value)
+		ctx.SetMaxMemoryBytes(val)
+		cols, rows := Result("heap_limit", val)
+		return cols, rows, nil
+	}
+	v := ctx.GetMaxMemoryBytes()
+	cols, rows := Result("heap_limit", v)
 	return cols, rows, nil
 }

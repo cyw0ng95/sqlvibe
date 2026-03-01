@@ -1,10 +1,59 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.13 (2026-03-01)
+## Current Version: v0.10.14 (2026-03-01)
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
 **Test Status**: All 84+ SQL:1999 test suites passing.
+
+---
+
+## **v0.10.14** (2026-03-01)
+
+### Features
+
+#### Arena Memory Optimizations
+- **Larger chunk size**: Default arena chunk size increased from 64 KB to 256 KB,
+  reducing chunk-allocation frequency in hot query paths.
+- **Chunk pool (`sync.Pool`)**: Arena now recycles freed 256 KB chunks via a
+  package-level pool, avoiding repeated GC-visible allocations across queries.
+- **New statistics methods** on `Arena`:
+  - `TotalBytesAllocated()` — cumulative bytes allocated since creation.
+  - `NumAllocs()` — total number of `Alloc`/`AllocSlice` calls since creation.
+
+#### Memory Pragmas
+- `PRAGMA memory_status` — returns Go runtime `MemStats`: `heap_alloc`,
+  `heap_sys`, `heap_in_use`, `heap_idle`, `heap_released`, `num_gc`,
+  `total_alloc`.
+- `PRAGMA heap_limit [= N]` — read or set the advisory maximum heap size in
+  bytes (backed by `max_memory`; actual GC limits are still managed by Go).
+
+#### engine/ Subpackage (`internal/VM/engine/`)
+New standalone query engine utilities, fully testable without the
+`QueryEngine` struct:
+
+- **select.go**: `FilterRows`, `ProjectRow`, `ProjectRows`, `ApplyDistinct`,
+  `ApplyLimitOffset`, `ColNames`.
+- **aggregate.go**: `GroupRows`, `CountRows`, `SumRows`, `AvgRows`,
+  `MinRows`, `MaxRows`, `GroupByAndAggregate`.
+- **sort.go**: `SortKey`, `SortOrder`, `NullOrder`, `SortRowsByKeys`,
+  `TopKRows`, `ReverseRows`.
+- **join.go**: `MergeRows`, `MergeRowsWithAlias`, `CrossJoin`, `InnerJoin`,
+  `LeftOuterJoin`.
+- **window.go**: `PartitionRows`, `RowNumbers`, `Ranks`, `DenseRanks`,
+  `LagValues`, `LeadValues`, `NthValues`, `FirstValues`, `LastValues`.
+- **subquery.go**: `ExistsRows`, `ScalarRow`, `InRows`, `NotInRows`,
+  `AllRows`, `AnyRows`, `FilteredRows`.
+
+### Tests
+- `engine/select_test.go` — 7 tests for SELECT utilities.
+- `engine/aggregate_test.go` — 9 tests for aggregate helpers.
+- `engine/sort_test.go` — 7 tests for sort operations.
+- `engine/join_test.go` — 7 tests for join operations.
+- `engine/window_test.go` — 7 tests for window function helpers.
+- `pragma/storage_test.go` — 3 new tests for `memory_status` and `heap_limit`.
+
+**Total new tests**: ~40
 
 ---
 
