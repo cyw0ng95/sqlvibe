@@ -47,6 +47,7 @@ set(SVDB_CORE_SOURCES
     core/VM/sort.cpp
     core/VM/expr_eval.cpp
     core/VM/vm_dispatch.cpp
+    core/VM/dispatch.cpp
     core/VM/type_conv.cpp
     core/VM/string_funcs.cpp
     core/VM/datetime.cpp
