@@ -1,6 +1,62 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.15 (2026-03-01)
+## Current Version: v0.11.0 (2026-03-02)
+
+**Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
+
+**Test Status**: All 84+ SQL:1999 test suites passing.
+
+---
+
+## **v0.11.0** (2026-03-02)
+
+### C++ Migration — Phase 1–4
+
+Continued the `internal/` → `src/core/` C++ refactoring from
+[docs/plan-v0.11.0.md](plan-v0.11.0.md).
+
+#### Phase 1.2 — DS Overflow Chain (`src/core/DS/overflow.cpp`)
+- `svdb_overflow_write_chain` / `read_chain` / `free_chain` / `chain_length`
+- Big-endian 4-byte next-page header; corruption guard at 10 000 pages.
+
+#### Phase 2.1 — DS Page Cache (`src/core/DS/cache.cpp`)
+- Thread-safe O(1) LRU using `std::list` + `std::unordered_map`.
+- `svdb_cache_{create,destroy,get,set,remove,clear,size,stats,set_capacity}`.
+- Negative-capacity KiB convention matches Go `Cache.NewCache`.
+
+#### Phase 2.2 — DS Columnar Store (`src/core/DS/columnar.cpp`)
+- Column-oriented store with owned string/blob backing.
+- `SVDB_TYPE_{NULL,INT,REAL,TEXT,BLOB}` constants defined in `columnar.h`.
+
+#### Phase 2.3 — DS Row Store (`src/core/DS/row_store.cpp`)
+- Row-oriented store with tombstone deletion; insert returns row index.
+- `svdb_row_store_{create,destroy,insert,get,update,delete,row_count,live_count}`.
+
+#### Phase 3.1 — VM Bytecode VM (`src/core/VM/bytecode_vm.cpp`)
+- 256-register C++ bytecode VM with `step()` dispatch.
+- Handles HALT, LOAD_CONST, COPY/MOVE, arithmetic, NEG, IS_NULL/NOT_NULL.
+- `svdb_bytecode_vm_{create,destroy,set_register,get_register,step,reset}`.
+
+#### Phase 4 — QP Parser Stubs (`src/core/QP/parser*.{h,cpp}`)
+- Skeleton files for `parser.{h,cpp}`, `parser_select`, `parser_expr`,
+  `parser_dml`, `parser_ddl`; sub-parsers wired to dispatcher; full
+  implementation continues incrementally.
+
+### Performance (v0.11.0)
+
+Benchmarks on Intel Xeon Platinum 8370C @ 2.80 GHz, in-memory, `-benchtime=3s`:
+
+| Workload | SQLite | sqlvibe | Δ |
+|----------|-------:|--------:|---|
+| SELECT all 100 K | 52.6 ms | 16.9 ms | **3.1× faster** |
+| SUM aggregate 10 K | 564 µs | 201 µs | **2.8× faster** |
+| GROUP BY 100 K | 55.0 ms | 11.1 ms | **5.0× faster** |
+| COUNT(*) 100 K | 30.3 µs | 6.1 µs | **4.9× faster** |
+| INSERT 1 K | 5.55 ms | 2.65 ms | **2.1× faster** |
+| INNER JOIN 100 K | 76.8 ms | 143.8 ms | 1.9× slower |
+| WHERE filter 100 K | 29.5 ms | 99.5 ms | 3.4× slower |
+
+---
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 

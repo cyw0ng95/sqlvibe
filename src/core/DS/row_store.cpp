@@ -11,14 +11,14 @@ struct StoredValue {
     svdb_value_t  val;
     std::string   backing; /* owns str_data or bytes_data content */
 
-    StoredValue() { val.val_type = 0; val.int_val = 0;
-                    val.float_val = 0; val.str_data = nullptr;
-                    val.str_len = 0; val.bytes_data = nullptr; val.bytes_len = 0; }
+    void clear() { val.val_type = 0; val.int_val = 0; val.float_val = 0;
+                   val.str_data = nullptr; val.str_len = 0;
+                   val.bytes_data = nullptr; val.bytes_len = 0; }
+
+    StoredValue() { clear(); }
 
     explicit StoredValue(const svdb_value_t* v) {
-        if (!v) { val.val_type = 0; val.int_val = 0; val.float_val = 0;
-                  val.str_data = nullptr; val.str_len = 0;
-                  val.bytes_data = nullptr; val.bytes_len = 0; return; }
+        if (!v) { clear(); return; }
         val = *v;
         if (v->val_type == 3 /* TEXT */ && v->str_data) {
             backing = std::string(v->str_data, v->str_len);

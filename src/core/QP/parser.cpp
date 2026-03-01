@@ -18,7 +18,7 @@ struct svdb_parser_t {
     std::string sql;
     std::string error_msg;
 
-    svdb_parser_t(const char* s, size_t len) : sql(s ? s : "", len) {}
+    svdb_parser_t(const char* s, size_t len) : sql(s ? std::string(s, len) : std::string()) {}
 };
 
 /* Return the first non-whitespace word (uppercase) from sql. */

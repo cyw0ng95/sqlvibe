@@ -162,16 +162,26 @@ int svdb_bytecode_vm_step(svdb_bytecode_vm_t* vm,
             if (opcode == SVDB_BC_ADD) result = lv + rv;
             else if (opcode == SVDB_BC_SUB) result = lv - rv;
             else if (opcode == SVDB_BC_MUL) result = lv * rv;
-            else if (opcode == SVDB_BC_DIV) result = (rv != 0.0) ? lv / rv : 0.0; /* div/0 → 0.0 (stub) */
-            else result = 0.0; /* MOD not meaningful for floats */
+            else if (opcode == SVDB_BC_DIV) {
+                if (rv == 0.0) { dest.val_type = 0; dest.int_val = 0; dest.real_val = 0.0; break; }
+                result = lv / rv;
+            }
+            /* MOD on floats produces NULL (SQL semantics) */
+            else { dest.val_type = 0; dest.int_val = 0; dest.real_val = 0.0; break; }
             copy_val_to_reg(dest, 2, 0, result, nullptr, 0);
         } else {
             int64_t result = 0;
             if (opcode == SVDB_BC_ADD) result = li + ri;
             else if (opcode == SVDB_BC_SUB) result = li - ri;
             else if (opcode == SVDB_BC_MUL) result = li * ri;
-            else if (opcode == SVDB_BC_DIV) result = (ri != 0) ? li / ri : 0; /* div/0 → 0 (stub) */
-            else result = (ri != 0) ? li % ri : 0; /* mod/0 → 0 (stub) */
+            else if (opcode == SVDB_BC_DIV) {
+                if (ri == 0) { dest.val_type = 0; dest.int_val = 0; dest.real_val = 0.0; break; }
+                result = li / ri;
+            }
+            else {
+                if (ri == 0) { dest.val_type = 0; dest.int_val = 0; dest.real_val = 0.0; break; }
+                result = li % ri;
+            }
             copy_val_to_reg(dest, 1, result, 0.0, nullptr, 0);
         }
         break;

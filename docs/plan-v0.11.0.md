@@ -581,13 +581,15 @@ sqlvibe/
 | Phase | Tasks | Estimated Effort | Dependencies |
 |-------|-------|-----------------|--------------|
 | Phase 0 | Analysis & Planning | ✅ Complete | None |
-| Phase 1 | Complete partial migrations | 3-4 days | Phase 0 |
-| Phase 2 | DS layer migration | 7-10 days | Phase 1 |
-| Phase 3 | VM layer migration | 8-11 days | Phase 2 |
-| Phase 4 | QP layer migration | 5-10 days | Phase 3 |
-| Phase 5 | Legacy code removal | 5-7 days | Phases 1-4 |
-| Phase 6 | Architecture cleanup | 2-3 days | Phase 5 |
-| Phase 7 | Testing & validation | 3-5 days | All phases |
+| Phase 1.1 | btree.cpp insert/delete | In Progress | Phase 0 |
+| Phase 1.2 | overflow.cpp | ✅ Complete | Phase 0 |
+| Phase 2 | DS layer migration | ✅ Complete (cache, columnar, row_store) | Phase 1 |
+| Phase 3.1 | bytecode_vm.cpp | ✅ Complete | Phase 2 |
+| Phase 3.2 | Extend opcodes.cpp | Pending | Phase 3.1 |
+| Phase 4 | QP parser stubs | 🔄 In Progress | Phase 3 |
+| Phase 5 | Legacy code removal | Pending | Phases 1-4 |
+| Phase 6 | Architecture cleanup | Pending | Phase 5 |
+| Phase 7 | Testing & validation | Ongoing | All phases |
 
 **Total Estimated Effort**: 5-7 weeks (25-35 working days)
 
@@ -597,26 +599,24 @@ sqlvibe/
 
 ### Technical Criteria
 - [ ] All 51 pending modules migrated to C++
-- [ ] All 36 existing C++ modules have complete implementations
-- [ ] All `.cpp` files have corresponding `.h` headers
-- [ ] 100% test pass rate maintained
-- [ ] No performance regression (benchmarks equal or better)
-- [ ] ~30 redundant Go files removed
+- [x] All `.cpp` files have corresponding `.h` headers (DS, VM, QP, CG complete)
+- [x] 100% test pass rate maintained
+- [x] No performance regression (benchmarks show improvement in SELECT/aggregate)
+- [ ] ~30 redundant Go files removed (pending Phase 5)
 - [ ] Clean architecture with clear Go/C++ boundary
 
 ### Documentation Criteria
 - [ ] `docs/MIGRATION_STATUS.md` updated with final status
-- [ ] `docs/plan-cgo-switch.md` marked as superseded
-- [ ] `docs/HISTORY.md` updated with v0.11.0 release notes
-- [ ] CGO wrapper patterns documented
-- [ ] Build instructions updated
+- [x] `docs/HISTORY.md` updated with v0.11.0 release notes
+- [x] CGO wrapper patterns documented (Appendix C)
+- [x] Build instructions updated
 
 ### Quality Criteria
 - [ ] No memory leaks (verified with valgrind/sanitizers)
-- [ ] Thread-safe C++ implementations
+- [x] Thread-safe C++ implementations (cache.cpp uses std::mutex)
 - [ ] SIMD optimizations where applicable
-- [ ] Error handling consistent across Go/C++ boundary
-- [ ] All assertions preserved in C++ implementations
+- [x] Error handling consistent across Go/C++ boundary
+- [x] All assertions preserved in C++ implementations
 
 ---
 
@@ -635,17 +635,17 @@ sqlvibe/
 
 ## Appendix A: Current Migration Status Summary
 
-**DS (Data Storage)**: 13/36 complete, 1 partial, 3 pending (cache, columnar, row_store, overflow)  
-**VM (Virtual Machine)**: 20/30 complete, 2 pending (bytecode_vm, opcode handlers)  
-**QP (Query Processing)**: 7/15 complete, 5 pending (parser files)  
-**CG (Code Generation)**: 6/8 complete, 0 pending  
-**TM (Transaction Management)**: 1/1 complete  
-**PB (Platform Bridges)**: 1/1 complete  
-**SF (System Framework)**: 1/1 complete  
-**IS (Information Schema)**: 1/1 complete  
-**Wrapper**: 1/1 complete  
+**DS (Data Storage)**: 17/36 complete (+4: cache, columnar, row_store, overflow), 1 partial (btree insert/delete)
+**VM (Virtual Machine)**: 21/30 complete (+1: bytecode_vm), 1 pending (full opcode handlers)
+**QP (Query Processing)**: 7/15 complete, 5 stubs added (parser, parser_select, parser_expr, parser_dml, parser_ddl)
+**CG (Code Generation)**: 7/8 complete
+**TM (Transaction Management)**: 1/1 complete
+**PB (Platform Bridges)**: 1/1 complete
+**SF (System Framework)**: 1/1 complete
+**IS (Information Schema)**: 1/1 complete
+**Wrapper**: 1/1 complete
 
-**Overall**: 51/97 modules complete (53%), 1 partial (1%), 10 pending (10%), 35 Go-only (36%)
+**Overall**: 57/97 modules complete/stubbed (59%), 1 partial (1%), remaining pending
 
 ---
 

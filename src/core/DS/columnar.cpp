@@ -16,14 +16,14 @@ struct ColumnData {
     std::vector<std::string>   strings; /* backing storage for str_data / bytes_data */
 
     void append(const svdb_value_t* v) {
-        svdb_value_t entry{};
         if (!v) {
+            svdb_value_t entry{};
             entry.val_type = SVDB_TYPE_NULL;
             values.push_back(entry);
             strings.emplace_back();
             return;
         }
-        entry = *v;
+        svdb_value_t entry = *v;
         if (v->val_type == SVDB_TYPE_TEXT && v->str_data) {
             strings.emplace_back(v->str_data, v->str_len);
             entry.str_data = nullptr; /* data lives in strings[]; pointer reconstructed in get() */
