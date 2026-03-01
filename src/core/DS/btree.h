@@ -18,21 +18,27 @@ typedef struct {
     uint32_t page_size;
 } svdb_btree_config_t;
 
+// Page manager callback function types
+typedef int (*read_page_fn)(void* user_data, uint32_t page_num, uint8_t** page_data, size_t* page_size);
+typedef int (*write_page_fn)(void* user_data, uint32_t page_num, const uint8_t* page_data, size_t page_size);
+typedef int (*allocate_page_fn)(void* user_data, uint32_t* page_num);
+typedef int (*free_page_fn)(void* user_data, uint32_t page_num);
+
 // Page manager callbacks (provided by Go)
 typedef struct {
     void* user_data;
-    
+
     // Read a page from disk
-    int (*read_page)(void* user_data, uint32_t page_num, uint8_t** page_data, size_t* page_size);
-    
+    read_page_fn read_page;
+
     // Write a page to disk
-    int (*write_page)(void* user_data, uint32_t page_num, const uint8_t* page_data, size_t page_size);
-    
+    write_page_fn write_page;
+
     // Allocate a new page
-    int (*allocate_page)(void* user_data, uint32_t* page_num);
-    
+    allocate_page_fn allocate_page;
+
     // Free a page
-    int (*free_page)(void* user_data, uint32_t page_num);
+    free_page_fn free_page;
 } svdb_page_manager_t;
 
 // Create a new B-Tree instance
