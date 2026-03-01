@@ -30,10 +30,9 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/ext/json/CMakeLists.txt)
     add_subdirectory(ext/json)
 endif()
 
-# Add more C++ extensions as needed
-# if(EXISTS ${CMAKE_SOURCE_DIR}/ext/fts5/CMakeLists.txt)
-#     add_subdirectory(ext/fts5)
-# endif()
+if(EXISTS ${CMAKE_SOURCE_DIR}/ext/fts5/CMakeLists.txt)
+    add_subdirectory(ext/fts5)
+endif()
 
 # Build all C++ targets
 add_custom_target(cpp-build

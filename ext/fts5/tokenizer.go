@@ -5,6 +5,15 @@ import (
 	"unicode"
 )
 
+// TokenizerType identifies the type of tokenizer.
+type TokenizerType int
+
+const (
+	TokenizerASCII TokenizerType = iota
+	TokenizerPorter
+	TokenizerUnicode61
+)
+
 // Token represents a tokenized term with position information.
 type Token struct {
 	Term     string
@@ -16,6 +25,7 @@ type Token struct {
 // Tokenizer defines the interface for tokenizing text.
 type Tokenizer interface {
 	Tokenize(text string) []Token
+	Close()
 }
 
 // ASCIITokenizer implements simple ASCII tokenization.
@@ -26,6 +36,8 @@ type ASCIITokenizer struct{}
 func NewASCIITokenizer() *ASCIITokenizer {
 	return &ASCIITokenizer{}
 }
+
+func (t *ASCIITokenizer) Close() {}
 
 func (t *ASCIITokenizer) Tokenize(text string) []Token {
 	var tokens []Token
@@ -84,6 +96,10 @@ func NewPorterTokenizer() *PorterTokenizer {
 	}
 }
 
+func (t *PorterTokenizer) Close() {
+	t.ascii.Close()
+}
+
 func (t *PorterTokenizer) Tokenize(text string) []Token {
 	rawTokens := t.ascii.Tokenize(text)
 	tokens := make([]Token, len(rawTokens))
@@ -107,6 +123,8 @@ type Unicode61Tokenizer struct{}
 func NewUnicode61Tokenizer() *Unicode61Tokenizer {
 	return &Unicode61Tokenizer{}
 }
+
+func (t *Unicode61Tokenizer) Close() {}
 
 func (t *Unicode61Tokenizer) Tokenize(text string) []Token {
 	var tokens []Token
@@ -405,6 +423,26 @@ func isConsonantRune(r rune) bool {
 
 // GetTokenizer returns a tokenizer by name.
 func GetTokenizer(name string) Tokenizer {
+	// Try CGO tokenizer first if available
+	cgoTyp := TokenizerASCII
+	switch name {
+	case "porter":
+		cgoTyp = TokenizerPorter
+	case "unicode61":
+		cgoTyp = TokenizerUnicode61
+	case "ascii", "simple", "":
+		cgoTyp = TokenizerASCII
+	default:
+		cgoTyp = TokenizerASCII
+	}
+
+	// Use CGO implementation if available
+	cgoTok := newCGOTokenizer(cgoTyp)
+	if cgoTok != nil && cgoTok.handle != nil {
+		return cgoTok
+	}
+
+	// Fallback to pure Go
 	switch name {
 	case "porter":
 		return NewPorterTokenizer()
