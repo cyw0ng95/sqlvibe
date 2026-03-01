@@ -2,20 +2,40 @@
 
 This document outlines the plan to migrate performance-critical code from Go (`internal/`) to C++ (`src/core/`) to maximize performance through native execution, SIMD optimizations, and reduced GC pressure.
 
+**See also**: [`MIGRATION_STATUS.md`](MIGRATION_STATUS.md) for detailed per-file migration status.
+
 ---
 
-## Current State
+## Current State (Updated: 2026-03-01)
 
 ```
 src/core/
-├── DS/     → btree, cell, compression, roaring, simd, varint (6 modules)
-├── VM/     → aggregate, compare, datetime, expr_eval, hash, hash_join, sort, string_funcs, type_conv, vm_dispatch (10 modules)
-├── QP/     → tokenizer (1 module)
-├── CG/     → compiler, expr_compiler, optimizer, plan_cache (4 modules)
-└── wrapper → invoke_chain_wrapper (1 module)
+├── CG/       → compiler, expr_compiler, optimizer, plan_cache, register (5 modules)
+├── cgo/      → hash_join (1 module)
+├── DS/       → btree (partial), btree_cursor, cell, compression, roaring, simd, value, varint (8 modules)
+├── IS/       → schema (1 module)
+├── PB/       → vfs (1 module)
+├── QP/       → tokenizer (1 module)
+├── SF/       → opt (1 module)
+├── TM/       → transaction (1 module)
+├── VM/       → aggregate, aggregate_engine, compare, datetime, dispatch, expr_engine,
+│               expr_eval, hash, registers, sort, string_funcs, string_pool,
+│               type_conv, vm_dispatch (14 modules)
+└── wrapper/  → invoke_chain_wrapper (1 module)
 ```
 
-**Total:** 22 C++ modules compiled into `libsvdb`
+**Total:** 34 C++ modules compiled into `libsvdb`
+
+### Migration Statistics
+
+| Status | Count | Description |
+|--------|-------|-------------|
+| ✅ Complete | 36 | C++ implementation exists and is used by Go wrapper |
+| 🟡 Partial | 1 | C++ exists but incomplete (`btree.cpp` - insert/delete are placeholders) |
+| ❌ Pending | 51 | Need C++ implementation |
+| 📋 Go-Only | 51 | Should remain in Go (orchestration, tests, Go-specific) |
+
+**Total files analyzed**: 139
 
 ---
 
@@ -232,29 +252,133 @@ type Value struct {
 
 ## Tracking Progress
 
-### Completed
+### Completed (36 modules)
+
+**Infrastructure:**
 - [x] Move `internal/*/cgo/` → `src/core/`
 - [x] Unified `libsvdb` library
 - [x] Update all CGO paths
-- [x] Remove redundant pure-Go fallbacks
-- [x] Phase 1 (partial): DS C++ backends — `btree`, `cell`, `compression`, `roaring`, `simd`, `varint`
-- [x] Phase 2 (partial): VM C++ backends — `aggregate`, `compare`, `datetime`, `expr_eval`, `hash`, `hash_join`, `sort`, `string_funcs`, `type_conv`, `vm_dispatch`
-- [x] Phase 3 (partial): QP C++ backend — `tokenizer`
-- [x] Phase 4: CG C++ backends — `compiler`, `expr_compiler`, `optimizer`, `plan_cache`
-- [x] Wrapper: Invoke chain wrapper (`pipeline_hash_filter`, `batch_eval_compare`, etc.)
+- [x] Update build system (CMakeLists.txt, build.sh)
 - [x] All tests passing with CGO enabled
-- [x] **Phase 1.1**: DS/value.go — Value type with comparison (C++ with CGO wrapper)
-- [x] **Phase 1.2**: DS/encoding.go — Varint encoding/decoding (uses existing C++ `svdb_put_varint`, `svdb_get_varint`)
-- [x] **Phase 1.3**: DS/compression.go — LZ4 and ZSTD compression (uses existing C++ `svdb_lz4_compress/decompress`, `svdb_zstd_compress/decompress`)
-- [x] **Phase 1.4**: DS/roaring_bitmap.go — Roaring bitmap (uses existing C++ `svdb_roaring_*` API, removed ~300 lines of pure Go)
-- [x] **Phase 2.1**: VM/string_pool.go — String interning pool (new C++ `StringPool` class with `std::unordered_set`)
-- [x] **Phase 2.2**: VM/registers.go — Register allocator (new C++ `RegisterAllocator` with bitmap + hash set)
 
-### Pending
-- [ ] Phase 1 remainder: `page`, `freelist`, `column_store`, `row_store`, `wal`
-- [ ] Phase 2 remainder: `bytecode_vm`, `bytecode_handlers`, `exec`, `cursor`
-- [ ] Phase 3 remainder: `parser`, `binder`, `analyzer`, `optimizer`
-- [ ] Phase 5: Clean up thin Go wrappers
+**DS (Data Storage) - 6 modules:**
+- [x] `cell.cpp` — Cell encoding/decoding
+- [x] `compression.cpp` — LZ4/ZSTD compression
+- [x] `roaring.cpp` — Roaring bitmap (removed ~300 lines of pure Go)
+- [x] `simd.cpp` — SIMD utilities
+- [x] `value.cpp` — SQL value type with comparison
+- [x] `varint.cpp` — Varint encoding/decoding
+
+**VM (Virtual Machine) - 14 modules:**
+- [x] `aggregate.cpp` / `aggregate_engine.cpp` — Aggregate functions
+- [x] `compare.cpp` — Comparison functions
+- [x] `datetime.cpp` — DateTime functions
+- [x] `dispatch.cpp` / `vm_dispatch.cpp` — Bytecode dispatch
+- [x] `expr_engine.cpp` / `expr_eval.cpp` — Expression evaluation
+- [x] `hash.cpp` — xxHash functions
+- [x] `hash_join.cpp` — Hash JOIN (in `cgo/`)
+- [x] `registers.cpp` — Register allocator
+- [x] `sort.cpp` — Sort utilities
+- [x] `string_funcs.cpp` — String functions
+- [x] `string_pool.cpp` — String interning pool
+- [x] `type_conv.cpp` — Type conversion
+
+**QP (Query Processing) - 1 module:**
+- [x] `tokenizer.cpp` — Fast token counting
+
+**CG (Code Generation) - 5 modules:**
+- [x] `compiler.cpp` — Bytecode compiler
+- [x] `expr_compiler.cpp` — Expression compiler
+- [x] `optimizer.cpp` — Query optimizer
+- [x] `plan_cache.cpp` — Plan caching
+- [x] `register.cpp` — Register management
+
+**TM (Transaction Management) - 1 module:**
+- [x] `transaction.cpp` — Transaction handling
+
+**PB (Platform Bridges) - 1 module:**
+- [x] `vfs.cpp` — VFS implementation
+
+**SF (System Framework) - 1 module:**
+- [x] `opt.cpp` — CPU optimization detection
+
+**IS (Information Schema) - 1 module:**
+- [x] `schema.cpp` — Schema handling
+
+**Wrapper - 1 module:**
+- [x] `invoke_chain_wrapper.cpp` — Phase 4 invoke chain wrappers
+
+### Partially Complete (1 module)
+
+**DS:**
+- [🟡] `btree.cpp` — Search implemented, **insert/delete are placeholders**
+
+### Pending (51 modules)
+
+**High Priority (DS Layer - storage foundation):**
+- [ ] `btree.cpp` — Complete insert/delete with page split logic
+- [ ] `btree_cursor.cpp` — Cursor traversal
+- [ ] `page.cpp` — Page management
+- [ ] `freelist.cpp` — Free list management
+- [ ] `manager.cpp` — PageManager implementation
+- [ ] `wal.cpp` — Write-ahead logging
+- [ ] `balance.cpp` — B-Tree balancing
+- [ ] `overflow.cpp` — Overflow page chains
+
+**Medium Priority (VM Layer — execution engine):**
+- [ ] `bytecode_vm.cpp` — Main VM loop
+- [ ] `opcodes.cpp` — Bytecode opcode implementations
+- [ ] `exec.cpp` — Query execution engine
+- [ ] `cursor.cpp` — Cursor management
+- [ ] `program.cpp` — Bytecode program
+- [ ] `instruction.cpp` — Instruction format
+
+**Medium Priority (QP Layer — parsing):**
+- [ ] `parser.cpp` — Main SQL parser
+- [ ] `parser_select.cpp` — SELECT parsing
+- [ ] `parser_expr.cpp` — Expression parsing
+- [ ] `parser_dml.cpp` — DML parsing
+- [ ] `parser_ddl.cpp` — DDL parsing
+- [ ] `binder.cpp` — Name resolution
+- [ ] `analyzer.cpp` — Semantic analysis
+- [ ] `dag.cpp` — Query DAG
+- [ ] `normalize.cpp` — Query normalization
+- [ ] `type_infer.cpp` — Type inference
+
+**Low Priority (CG Layer — compilation):**
+- [ ] `bytecode_compiler.cpp` — Bytecode generation
+- [ ] `direct_compiler.cpp` — Direct compilation
+
+**DS Layer (storage engines):**
+- [ ] `columnar.cpp` — Columnar storage
+- [ ] `row_store.cpp` — Row storage
+- [ ] `cache.cpp` — LRU/ARC cache
+- [ ] `skip_list.cpp` — Skip list
+
+### Go-Only (51 modules - should NOT migrate)
+
+These files implement Go-specific patterns or orchestration logic:
+
+**Orchestration:**
+- `hybrid_store.go`, `engine.go`, `compiler.go`, `transaction.go` (TM)
+
+**Go Concurrency:**
+- `worker_pool.go`, `parallel.go`, `prefetch.go`
+
+**Memory Management (Go-optimized):**
+- `arena.go`, `slab.go`, `cache.go` (DS)
+
+**Virtual Tables:**
+- `vtab.go`, `vtab_cursor.go`, `vtab_module.go`
+
+**Information Schema (all):**
+- `columns_view.go`, `constraints_view.go`, `information_schema.go`, etc.
+
+**Error Handling & Logging:**
+- `SF/errors/*.go`, `SF/log.go`
+
+**Utilities:**
+- `SF/util/assert.go`, `SF/util/pool.go`
 
 ---
 
