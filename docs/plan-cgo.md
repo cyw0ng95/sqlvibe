@@ -41,18 +41,18 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | `internal/DS/roaring_bitmap.go` | `src/core/DS/roaring.cpp` | ✅ CGO | |
 | `internal/DS/encoding.go` | `src/core/DS/varint.cpp` | ✅ CGO | varint encode/decode |
 | `internal/DS/cell.go` | `src/core/DS/cell.cpp` | ✅ CGO | Cell encode/decode |
-| `internal/DS/overflow.go` | `src/core/DS/overflow.cpp` | ✅ CGO | Pure Go fallback (`overflow_pure.go`) for non-CGO builds |
-| `internal/DS/cache_cgo.go` | `src/core/DS/cache.cpp` | ✅ CGO | **Direct C pointer** (no registry, self-contained); pure Go fallback in `cache.go` |
+| `internal/DS/overflow.go` | `src/core/DS/overflow.cpp` | ✅ CGO | Always-on CGO (no fallback); Direct C pointer for callbacks |
+| `internal/DS/cache_cgo.go` | `src/core/DS/cache.cpp` | ✅ CGO | **Always-on CGO** (no fallback); Direct C pointer, self-contained |
 
-**Architecture Note**: `cache_cgo.go` uses direct C pointer (no registry overhead) since C++ cache is self-contained. `overflow.go` requires registry for Go PageManager callbacks. See `docs/plan-cgo-architecture-fix.md`.
+**Architecture Note**: All CGO files are unconditional (no build tags) — matching the pattern of `value.go`, `encoding.go`. C++ is the only implementation. `cache_cgo.go` uses direct C pointer (no registry overhead). `overflow_cgo.go` requires registry for Go PageManager callbacks. See `docs/plan-cgo-architecture-fix.md`.
 
 ### ✅ C++ Complete, Go Implementation Still Active
 
 | Go File | C++ File | Status | Notes |
 |---------|----------|--------|-------|
 | `internal/DS/btree.go` | `src/core/DS/btree.cpp` | ⚠️ PARTIAL | C++ has insert/delete/search, Go wrapper NOT using CGO (needs cursor support) |
-| `internal/DS/column_store.go` | `src/core/DS/columnar.cpp` | ✅ CGO | CGO: Direct C pointer; pure Go fallback (`!SVDB_ENABLE_CGO_DS`) |
-| `internal/DS/row_store.go` | `src/core/DS/row_store.cpp` | ✅ CGO | CGO: Direct C pointer; pure Go fallback (`!SVDB_ENABLE_CGO_DS`) |
+| `internal/DS/column_store_cgo.go` | `src/core/DS/columnar.cpp` | ✅ CGO | **Always-on CGO** (no fallback); dual-layer: Go read-cache + C++ authoritative store |
+| `internal/DS/row_store_cgo.go` | `src/core/DS/row_store.cpp` | ✅ CGO | **Always-on CGO** (no fallback); dual-layer: Go read-cache + C++ authoritative store |
 
 ### 📋 Go-Only (No C++ Migration Planned)
 
@@ -242,7 +242,7 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
    - **TODO**: Create CGO wrapper
    - **TODO**: Remove Go implementation
 
-3. **Cache CGO Wrapper** (`internal/DS/cache.go`)
+3. **Cache CGO Wrapper** (`internal/DS/cache_cgo.go`)
    - C++ LRU cache complete
    - **TODO**: Create CGO wrapper
    - **TODO**: Remove Go implementation
@@ -423,7 +423,7 @@ func goBtreePageRead(userData unsafe.Pointer, ...) C.int {
 
 ### Phase 2: DS Layer - Storage Foundation (High Priority)
 
-#### 2.1 Migrate `column_store.go` → `columnar.cpp`
+#### 2.1 Migrate `column_store_cgo.go` → `columnar.cpp`
 - [x] C++ columnar store implemented
 - [x] Go CGO wrapper in `column_store_cgo.go` (Direct C Pointer pattern)
 - [x] Pure Go fallback in `column_store.go` (`!SVDB_ENABLE_CGO_DS`)
