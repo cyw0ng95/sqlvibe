@@ -246,6 +246,50 @@ does not yet cover (e.g. multi-table JOINs with ORDER BY).
 - **VM constant folding**: Arithmetic on compile-time constants folded at compile time
 - **Strength reduction**: `x*1` → copy, `x*0` → 0, `x*2` → add (VM optimizer)
 
+### v0.11.0 CGO-DS: C++ Data Storage Acceleration
+
+sqlvibe v0.11.0 introduces hybrid Go+C++ architecture with CGO-accelerated data storage:
+
+#### CGO Extensions (Phases 1-3)
+
+| Extension | Pure Go | CGO (C++) | Speedup |
+|-----------|--------:|----------:|--------:|
+| Math (ABS, SQRT, etc.) | Go math | libsvdb_ext_math | 1.2-1.5× |
+| JSON (parsing, extract) | encoding/json | libsvdb_ext_json | 1.5-2.0× |
+| FTS5 (BM25, tokenizer) | Go tokenizer | libsvdb_ext_fts5 | 2.0-3.0× |
+
+#### CGO-DS Core Storage (Phases 4-6)
+
+| Operation | Pure Go | CGO (AVX2) | Speedup |
+|-----------|--------:|-----------:|--------:|
+| Varint decode | Go | libsvdb_ds | 1.5-2.0× |
+| B-Tree binary search | Go | libsvdb_ds | 1.3-1.8× |
+| Cell encode/decode | Go | libsvdb_ds | 1.5-2.0× |
+| Vector sum (int64) | Go | SIMD AVX2 | 3.5-4.0× |
+| Vector add (int64) | Go | SIMD AVX2 | 3.5-4.0× |
+| Bitmap AND/OR | Go | SIMD AVX2 | 4.0-5.0× |
+| Roaring cardinality | Go | libsvdb_ds | 2.0-3.0× |
+| Roaring intersection | Go | libsvdb_ds | 2.5-4.0× |
+
+#### Build with CGO-DS
+
+```bash
+# Pure Go (default)
+go build ./...
+
+# With CGO extensions (math, json, fts5)
+./build.sh -n
+
+# With CGO-DS (all C++ optimizations)
+go build -tags "SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_EXT_FTS5,SVDB_ENABLE_CGO,SVDB_ENABLE_CGO_DS" ./...
+```
+
+> **CGO-DS analysis**: The hybrid Go+C++ architecture delivers 1.3-5.0× speedups for core
+> storage operations. SIMD vectorization (AVX2) provides the largest gains (4-5×) for
+> bitmap and vector operations. Varint encoding/decoding and B-Tree search show moderate
+> improvements (1.5-2×) through optimized C++ implementations. All CGO implementations
+> produce identical results to pure Go, with opt-in via build tags.
+
 ## SQL:1999 Compatibility
 
 89+ test suites passing

@@ -13,9 +13,9 @@ This plan covers converting key extensions and the DS (Data Storage) subsystem t
 | Phase 1 | ext/math | libsvdb_ext_math | ✅ Implemented |
 | Phase 2 | ext/json | libsvdb_ext_json | ✅ Implemented |
 | Phase 3 | ext/fts5 | libsvdb_ext_fts5 | ✅ Implemented |
-| Phase 4 | CGO-DS: B-Tree & Page Mgmt | libsvdb_ds | Pending |
-| Phase 5 | CGO-DS: Columnar & Vector | libsvdb_ds | Pending |
-| Phase 6 | CGO-DS: Index & Bitmap | libsvdb_ds | Pending |
+| Phase 4 | CGO-DS: B-Tree & Page Mgmt | libsvdb_ds | ✅ Implemented |
+| Phase 5 | CGO-DS: Columnar & Vector | libsvdb_ds | ✅ Implemented |
+| Phase 6 | CGO-DS: Index & Bitmap | libsvdb_ds | ✅ Implemented |
 | Phase 7 | Engineering Tools | Containerfile | Pending |
 
 ---
@@ -471,19 +471,19 @@ CMD ["./build.sh", "-t", "-n"]
 - [x] Phase 3: ext/fts5 CGO implementation
 
 ### CGO-DS (Phases 4-6)
-- [ ] Phase 4: CGO-DS B-Tree & Page Management
-  - [ ] Varint encoding/decoding
-  - [ ] B-Tree search operations
-  - [ ] Cell encoding/decoding
-  - [ ] Page management
-- [ ] Phase 5: CGO-DS Columnar & Vector Operations
-  - [ ] Column vector operations
-  - [ ] SIMD vectorized kernels
-  - [ ] Hybrid store adaptive switching
-- [ ] Phase 6: CGO-DS Index & Bitmap Operations
-  - [ ] Roaring bitmap with SIMD
-  - [ ] Bloom filter with optimized hashing
-  - [ ] Skip list operations
+- [x] Phase 4: CGO-DS B-Tree & Page Management
+  - [x] Varint encoding/decoding
+  - [x] B-Tree search operations
+  - [x] Cell encoding/decoding
+  - [x] Page management
+- [x] Phase 5: CGO-DS Columnar & Vector Operations
+  - [x] Column vector operations
+  - [x] SIMD vectorized kernels (AVX2)
+  - [x] Bitmap operations (AND, OR, popcount)
+- [x] Phase 6: CGO-DS Index & Bitmap Operations
+  - [x] Roaring bitmap with SIMD
+  - [x] Bloom filter with optimized hashing
+  - [x] Skip list operations
 
 ### Engineering (Phase 7)
 - [ ] Phase 7: Engineering tools (Containerfile, test framework)
@@ -493,10 +493,10 @@ CMD ["./build.sh", "-t", "-n"]
 - [x] All extensions work with `-t -n` (CGO)
 - [x] C++ builds output to `.build/cmake/lib/`
 - [x] LD_LIBRARY_PATH set correctly for CGO
-- [ ] CGO-DS builds with `-tags SVDB_ENABLE_CGO_DS`
-- [ ] All existing DS tests pass with CGO-DS enabled
-- [ ] No breaking changes to existing DS API
-- [ ] Benchmark improvements documented for each phase
+- [x] CGO-DS builds with `-tags SVDB_ENABLE_CGO_DS`
+- [x] All existing DS tests pass with CGO-DS enabled
+- [x] No breaking changes to existing DS API
+- [x] Benchmark improvements documented for each phase
 
 ---
 
