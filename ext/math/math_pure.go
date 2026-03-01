@@ -1,3 +1,6 @@
+//go:build !SVDB_ENABLE_CGO
+// +build !SVDB_ENABLE_CGO
+
 // Package math implements the sqlvibe Math extension, providing additional
 // mathematical SQL functions.
 //
@@ -16,7 +19,6 @@ import (
 	"github.com/cyw0ng95/sqlvibe/ext"
 )
 
-// MathExtension implements the Math extension.
 type MathExtension struct{}
 
 func (e *MathExtension) Name() string        { return "math" }
@@ -81,8 +83,6 @@ func init() {
 	ext.Register("math", &MathExtension{})
 }
 
-// ---------- helpers ----------
-
 func toFloat64Math(v interface{}) (float64, bool) {
 	if v == nil {
 		return 0, false
@@ -97,8 +97,6 @@ func toFloat64Math(v interface{}) (float64, bool) {
 	}
 	return 0, false
 }
-
-// ---------- function implementations ----------
 
 func evalAbs(args []interface{}) interface{} {
 	if len(args) < 1 {
@@ -276,14 +274,12 @@ func evalLog(args []interface{}) interface{} {
 		return nil
 	}
 	if len(args) == 1 {
-		// log(X) = natural log (same as LN)
 		v, ok := toFloat64Math(args[0])
 		if !ok || v <= 0 {
 			return nil
 		}
 		return gomath.Log(v)
 	}
-	// log(B, X) = log base B of X
 	b, ok1 := toFloat64Math(args[0])
 	x, ok2 := toFloat64Math(args[1])
 	if !ok1 || !ok2 || b <= 0 || b == 1 || x <= 0 {

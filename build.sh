@@ -12,6 +12,7 @@
 #                   .build/coverage.out and .build/coverage.html
 #   --fuzz-time D   Duration per fuzz target during -f (default: 30s)
 #   -v              Verbose output (passes -v to go test)
+#   -n              Enable CGO for C++ extensions (SVDB_ENABLE_CGO)
 #   -h              Print this help message
 #
 # Output directory:  <project-root>/.build/
@@ -45,6 +46,7 @@ RUN_FUZZ=0
 COVERAGE=0
 FUZZ_TIME="30s"
 VERBOSE=0
+ENABLE_CGO=0
 
 usage() {
     sed -n '2,/^set -euo/{ /^set -euo/d; s/^# \{0,1\}//; p }' "$0"
@@ -58,6 +60,7 @@ while [[ $# -gt 0 ]]; do
         -c)           COVERAGE=1 ;;
         --fuzz-time)  FUZZ_TIME="${2:?'--fuzz-time requires an argument'}"; shift ;;
         -v)           VERBOSE=1 ;;
+        -n)           ENABLE_CGO=1 ;;
         -h|--help)    usage; exit 0 ;;
         *)            echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
@@ -70,6 +73,26 @@ if [[ $RUN_TESTS -eq 0 && $RUN_BENCH -eq 0 && $RUN_FUZZ -eq 0 ]]; then
 fi
 
 mkdir -p "$BUILD_DIR"
+
+# If -n flag is used, add CGO support
+if [[ $ENABLE_CGO -eq 1 ]]; then
+    EXT_TAGS="$EXT_TAGS,SVDB_ENABLE_CGO"
+    echo "====> CGO enabled (SVDB_ENABLE_CGO)"
+    
+    # Build C++ extensions
+    if [[ -f "CMakeLists.txt" ]]; then
+        echo "====> Building C++ extensions..."
+        mkdir -p "$BUILD_DIR/cmake"
+        cd "$BUILD_DIR/cmake"
+        cmake "$SCRIPT_DIR" -DCMAKE_BUILD_TYPE=Release
+        cmake --build . -- -j$(nproc)
+        cd "$SCRIPT_DIR"
+    fi
+    
+    # Set LD_LIBRARY_PATH for CGO
+    export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
+    echo "====> LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+fi
 
 VERBOSE_FLAG=""
 [[ $VERBOSE -eq 1 ]] && VERBOSE_FLAG="-v"
