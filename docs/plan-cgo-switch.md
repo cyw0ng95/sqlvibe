@@ -16,7 +16,11 @@ This plan covers converting key extensions and the DS (Data Storage) subsystem t
 | Phase 4 | CGO-DS: B-Tree & Page Mgmt | libsvdb_ds | ✅ Implemented |
 | Phase 5 | CGO-DS: Columnar & Vector | libsvdb_ds | ✅ Implemented |
 | Phase 6 | CGO-DS: Index & Bitmap | libsvdb_ds | ✅ Implemented |
-| Phase 7 | Engineering Tools | Containerfile | Pending |
+| Phase 7 | VM: Hash Functions (JOIN) | libsvdb_vm | Pending |
+| Phase 8 | VM: String Comparison | libsvdb_vm | Pending |
+| Phase 9 | VM: Batch Execution | libsvdb_vm | Pending |
+| Phase 10 | VM: Sorting (ORDER BY) | libsvdb_vm | Pending |
+| Phase 11 | DS: Compression (LZ4/ZSTD) | libsvdb_ds | Pending |
 
 ---
 
@@ -31,6 +35,7 @@ This plan covers converting key extensions and the DS (Data Storage) subsystem t
 | `SVDB_EXT_JSON` | Enable JSON extension | No |
 | `SVDB_EXT_FTS5` | Enable FTS5 extension | No |
 | `SVDB_ENABLE_CGO_DS` | Enable CGO data storage | No |
+| `SVDB_ENABLE_CGO_VM` | Enable CGO VM execution | No |
 
 ### 1.2 Build Commands
 
@@ -416,54 +421,250 @@ internal/DS/cgo/
 
 ---
 
-## 10. Phase 7 - Engineering Tools (Pending)
+## 10. Phase 7 - VM: Hash Functions for JOIN (Pending)
 
-### Containerfile
+### Motivation
+- Hash JOIN is 1.5× slower than SQLite
+- Hash computation is called for every probe row
+- Go's hash is good but C libraries (xxHash, CityHash) are faster
 
-```dockerfile
-FROM golang:1.26-bookworm
+### Target Components
 
-RUN apt-get update && apt-get install -y \
-    cmake \
-    g++ \
-    ninja-build \
-    clang-format \
-    clang-tidy \
-    cppcheck \
-    lcov \
-    llvm \
-    ccache \
-    valgrind \
-    && rm -rf /var/lib/apt/lists/*
+#### 10.1 Hash Functions (`internal/VM/hash.go`)
+**Functions to CGO-ize:**
+- `HashRow(row []byte) uint64` - Row hashing for JOIN
+- `HashBatch(keys [][]byte) []uint64` - Batch hashing
+- `HashAggregate(groupKey []byte)` - GROUP BY hashing
 
-WORKDIR /workspace
+### Dependencies
+- **xxHash**: Extremely fast non-cryptographic hash
+- **CityHash**: Google's hash for strings
 
-CMD ["./build.sh", "-t", "-n"]
+### File Structure
+```
+internal/VM/cgo/
+├── hash.h              # Hash function header
+├── hash.cpp            # Hash implementation (xxHash/CityHash)
+├── CMakeLists.txt      # Build configuration
+└── xxhash/             # xxHash submodule
 ```
 
-### Test Framework
-- Google Test integration
-- Coverage: lcov + genhtml
+### CGO Integration Pattern
+```go
+// internal/VM/hash_cgo.go
+// +build SVDB_ENABLE_CGO_VM
 
-### Directory Structure
+package VM
+
+/*
+#cgo CFLAGS: -I${SRCDIR}/cgo/xxhash
+#cgo LDFLAGS: -L${SRCDIR}/cgo/xxhash -lxxhash
+#include "xxhash.h"
+*/
+import "C"
+
+func HashBatch(keys [][]byte) []uint64 {
+    // Single batch call instead of per-row hashing
+    hashes := make([]uint64, len(keys))
+    C.XXH64_hashBatch(...)
+    return hashes
+}
 ```
-.
-├── Containerfile
-├── cmake/
-│   ├── GoogleTest.cmake
-│   ├── Coverage.cmake
-│   └── Sanitizers.cmake
-└── tests/
-    ├── CMakeLists.txt
-    └── unit/
-        ├── test_math.cpp
-        ├── test_json.cpp
-        └── test_fts5.cpp
-```
+
+### Expected Performance Gains
+- 2-3× faster JOIN operations
+- 1.5-2× faster GROUP BY
+- Reduced GC pressure from fewer allocations
+
+### Implementation Notes
+- Use xxHash for its speed and MIT license
+- Batch hashing to amortize CGO overhead
+- Keep Go fallback for small datasets
 
 ---
 
-## 11. Success Criteria
+## 11. Phase 8 - VM: String/Byte Comparison (Pending)
+
+### Motivation
+- `bytes.Compare` called millions of times per query
+- Used in WHERE, JOIN, ORDER BY clauses
+- SIMD can compare 16-32 bytes per cycle
+
+### Target Components
+
+#### 11.1 Comparison Functions (`internal/VM/compare.go`)
+**Functions to CGO-ize:**
+- `Compare(a, b []byte) int` - General comparison
+- `CompareBatch(a, b [][]byte) []int` - Batch comparison
+- `Equal(a, b []byte) bool` - Equality check
+
+### File Structure
+```
+internal/VM/cgo/
+├── compare.h           # Comparison header
+├── compare.cpp         # SIMD comparison implementation
+└── CMakeLists.txt     # Build configuration (add to Phase 7)
+```
+
+### SIMD Optimizations
+**Target Operations:**
+- SSE4.2/AVX2 string comparison (16-32 bytes/cycle)
+- Early termination on mismatch
+- Vectorized equality checks
+
+### Expected Performance Gains
+- 1.5-2× faster WHERE clauses with string conditions
+- 2-3× faster hash JOIN (combined with Phase 7)
+- 1.5× faster ORDER BY with string columns
+
+---
+
+## 12. Phase 9 - VM: Batch Execution Engine (Pending)
+
+### Motivation
+- VM executes one instruction at a time
+- High dispatch overhead for simple operations
+- Batch execution reduces CGO boundary crossings
+
+### Target Components
+
+#### 12.1 VM Execution (`internal/VM/engine.go`)
+**Functions to CGO-ize:**
+- `ExecuteBatch(program []Instruction, batch int)` - Execute N rows
+- `VectorAdd(regs []Value, src1, src2 int)` - Vector addition
+- `VectorCompare(regs []Value, src1, src2 int)` - Vector comparison
+
+### File Structure
+```
+internal/VM/cgo/
+├── vm.h                # VM header
+├── vm.cpp              # Batch VM implementation
+└── CMakeLists.txt     # Build configuration (add to Phase 7)
+```
+
+### Design
+```cpp
+// Instead of per-instruction calls:
+// Execute batch of 1000 rows at once
+extern "C" void svdb_vm_execute_batch(
+    svdb_vm_t* vm,
+    const svdb_instruction_t* program,
+    int program_len,
+    svdb_value_t* registers,
+    int num_registers,
+    int batch_size
+);
+```
+
+### Expected Performance Gains
+- 2-4× faster for scan-heavy queries
+- Reduced CGO overhead (1 call per 1000 rows vs 1000 calls)
+- Better CPU cache utilization
+
+### Implementation Notes
+- High complexity - VM state management
+- Start with simple opcodes (Add, Sub, Compare)
+- Gradually add complex operations
+
+---
+
+## 13. Phase 10 - VM: Sorting (ORDER BY) (Pending)
+
+### Motivation
+- ORDER BY is 1.5-1.8× slower than SQLite
+- Go's `sort.Slice` has allocation overhead
+- Radix sort for integers is much faster
+
+### Target Components
+
+#### 13.1 Sorting (`internal/VM/sort.go`)
+**Functions to CGO-ize:**
+- `SortRows(rows []Row, columns []int)` - Multi-column sort
+- `RadixSortInt64(data []int64)` - Integer radix sort
+- `QuickSortStrings(data []string)` - String quicksort
+
+### File Structure
+```
+internal/VM/cgo/
+├── sort.h              # Sort header
+├── sort.cpp            # Sort implementation
+└── CMakeLists.txt     # Build configuration (add to Phase 7)
+```
+
+### Algorithms
+- **Radix sort** for integers (O(n) vs O(n log n))
+- **SIMD-accelerated quicksort** for strings
+- **Multi-key sort** for ORDER BY multiple columns
+
+### Expected Performance Gains
+- 2-3× faster ORDER BY queries
+- 5-10× faster for integer column sorting (radix)
+- Reduced allocation pressure
+
+---
+
+## 14. Phase 11 - DS: Compression (LZ4/ZSTD) (Pending)
+
+### Motivation
+- Compression mentioned in README but not implemented
+- C libraries (LZ4, ZSTD) are 5-10× faster than pure Go
+- Reduces memory footprint for large datasets
+
+### Target Components
+
+#### 14.1 Compression (`internal/DS/compression.go`)
+**Functions to CGO-ize:**
+- `Compress(data []byte) []byte` - Compress page
+- `Decompress(data []byte) []byte` - Decompress page
+- `CompressBatch(pages [][]byte) [][]byte` - Batch compression
+
+### Dependencies
+- **LZ4**: Extremely fast compression/decompression
+- **ZSTD**: Better compression ratio, slightly slower
+
+### File Structure
+```
+internal/DS/cgo/
+├── compression.h       # Compression header
+├── compression.cpp     # LZ4/ZSTD wrapper
+├── CMakeLists.txt     # Build configuration (add to Phase 7)
+└── lz4/               # LZ4 submodule
+└── zstd/              # ZSTD submodule
+```
+
+### CGO Integration
+```go
+// internal/DS/compression_cgo.go
+// +build SVDB_ENABLE_CGO_DS
+
+package DS
+
+/*
+#cgo CFLAGS: -I${SRCDIR}/cgo/lz4
+#cgo LDFLAGS: -L${SRCDIR}/cgo/lz4 -llz4
+#include "lz4.h"
+*/
+import "C"
+
+func Compress(data []byte) []byte {
+    // Single call to LZ4
+    // Much faster than pure Go
+}
+```
+
+### Expected Performance Gains
+- 5-10× faster compression/decompression
+- 50-70% reduction in memory usage
+- Faster I/O for disk-based operations
+
+### Implementation Notes
+- Use LZ4 for speed-critical paths
+- Use ZSTD for storage (better ratio)
+- Add PRAGMA to select compression algorithm
+
+---
+
+## 15. Success Criteria
 
 ### Extension CGO (Phases 1-3)
 - [x] Phase 1: ext/math CGO implementation
@@ -485,8 +686,30 @@ CMD ["./build.sh", "-t", "-n"]
   - [x] Bloom filter with optimized hashing
   - [x] Skip list operations
 
-### Engineering (Phase 7)
-- [ ] Phase 7: Engineering tools (Containerfile, test framework)
+### CGO-VM (Phases 7-10)
+- [ ] Phase 7: VM Hash Functions (JOIN)
+  - [ ] xxHash/CityHash integration
+  - [ ] Batch hashing API
+  - [ ] JOIN performance improvement (2-3×)
+- [ ] Phase 8: VM String Comparison
+  - [ ] SIMD comparison kernels
+  - [ ] Batch comparison API
+  - [ ] WHERE/JOIN improvement (1.5-2×)
+- [ ] Phase 9: VM Batch Execution
+  - [ ] Batch instruction execution
+  - [ ] Vector operations
+  - [ ] General query improvement (2-4×)
+- [ ] Phase 10: VM Sorting
+  - [ ] Radix sort for integers
+  - [ ] SIMD quicksort for strings
+  - [ ] ORDER BY improvement (2-3×)
+
+### DS Compression (Phase 11)
+- [ ] Phase 11: DS Compression
+  - [ ] LZ4 integration
+  - [ ] ZSTD integration
+  - [ ] PRAGMA compression support
+  - [ ] 5-10× compression speedup
 
 ### General Requirements
 - [x] All extensions work with `-t` (pure Go)
@@ -497,6 +720,10 @@ CMD ["./build.sh", "-t", "-n"]
 - [x] All existing DS tests pass with CGO-DS enabled
 - [x] No breaking changes to existing DS API
 - [x] Benchmark improvements documented for each phase
+- [ ] CGO-VM builds with `-tags SVDB_ENABLE_CGO_VM`
+- [ ] All existing VM tests pass with CGO-VM enabled
+- [ ] JOIN performance matches or exceeds SQLite
+- [ ] ORDER BY performance matches or exceeds SQLite
 
 ---
 
@@ -534,3 +761,33 @@ CMD ["./build.sh", "-t", "-n"]
    - Integration tests with full DS subsystem
    - Fuzz testing for encoding/decoding functions
    - Comparison tests against pure Go implementations
+
+### CGO-VM Specific Guidelines
+
+1. **Minimize CGO Boundary Crossings**
+   - Batch operations (1000+ rows per call)
+   - Avoid per-row CGO calls
+   - Keep data in C memory across operations
+
+2. **Target High-Impact Operations First**
+   - Phase 7: Hash functions (JOIN bottleneck)
+   - Phase 8: String comparison (WHERE, JOIN, ORDER BY)
+   - Phase 9: Batch VM execution (general queries)
+   - Phase 10: Sorting (ORDER BY bottleneck)
+
+3. **Use Mature C Libraries**
+   - xxHash for hashing (MIT license, extremely fast)
+   - LZ4/ZSTD for compression (BSD license, industry standard)
+   - Avoid custom implementations when possible
+
+4. **Performance Targets**
+   - JOIN: Match or exceed SQLite (currently 1.5× slower)
+   - ORDER BY: Match or exceed SQLite (currently 1.5-1.8× slower)
+   - Hash operations: 2-3× speedup
+   - Comparison: 1.5-2× speedup
+
+5. **Testing Requirements**
+   - All existing VM tests must pass with CGO-VM
+   - JOIN correctness tests (various join types)
+   - ORDER BY correctness tests (multi-column, DESC)
+   - Benchmark comparison against pure Go and SQLite
