@@ -107,11 +107,11 @@ Improve context and window test coverage
 
 ## 5. Success Criteria
 
-- [ ] .dump enhancements working
-- [ ] Import/export enhancements working
-- [ ] Additional functions implemented
-- [ ] context/ subpackage created
-- [ ] window/ subpackage created
-- [ ] context/*_test.go added (~18 tests)
-- [ ] window/*_test.go added (~18 tests)
-- [ ] All tests pass
+- [x] .dump enhancements working
+- [x] Import/export enhancements working
+- [x] Additional functions implemented (any_value, mode)
+- [x] context/ subpackage created
+- [x] window/ subpackage created
+- [x] context/*_test.go added (~18 tests)
+- [x] window/*_test.go added (~18 tests)
+- [x] All tests pass

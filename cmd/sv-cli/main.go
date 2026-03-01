@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -221,7 +222,10 @@ func handleMetaCommand(db *sqlvibe.Database, line string, formatter *Formatter, 
 		importCSV(importer, args)
 
 	case ".export":
-		exportData(exporter, args)
+		exportData(db, exporter, args)
+
+	case ".dump":
+		dumpDatabase(db, args)
 
 	case ".read":
 		readSQLFile(db, args)
@@ -252,8 +256,9 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("I/O:")
 	fmt.Println("  .import FILE TABLE    Import CSV file into table")
-	fmt.Println("  .export csv FILE      Export current table to CSV")
-	fmt.Println("  .export json FILE     Export current table to JSON")
+	fmt.Println("  .export csv FILE TABLE  Export table to CSV")
+	fmt.Println("  .export json FILE TABLE Export table to JSON")
+	fmt.Println("  .dump [FILE] [--data-only|--schema-only|--inserts]  Dump database as SQL")
 	fmt.Println("  .read FILE            Execute SQL from file")
 	fmt.Println()
 	fmt.Println("Other:")
@@ -436,16 +441,77 @@ func importCSV(importer *Importer, args []string) {
 	fmt.Printf("Imported %d rows\n", count)
 }
 
-func exportData(exporter *Exporter, args []string) {
+func exportData(db *sqlvibe.Database, exporter *Exporter, args []string) {
 	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: .export csv|json FILE\n")
+		fmt.Fprintf(os.Stderr, "Usage: .export csv|json FILE TABLE\n")
 		return
 	}
 	format := strings.ToLower(args[0])
 	filename := args[1]
+	var tableName string
+	if len(args) >= 3 {
+		tableName = args[2]
+	}
 
-	// For now, export current table (would need to track current table)
-	fmt.Fprintf(os.Stderr, "Export format '%s' to '%s' - requires table name\n", format, filename)
+	var err error
+	switch format {
+	case "csv":
+		if tableName == "" {
+			// Export current query result; without a table name use ExportCSV with SELECT *
+			fmt.Fprintf(os.Stderr, "Usage: .export csv FILE TABLE\n")
+			return
+		}
+		err = exporter.ExportCSV(filename, tableName)
+	case "json":
+		if tableName == "" {
+			fmt.Fprintf(os.Stderr, "Usage: .export json FILE TABLE\n")
+			return
+		}
+		err = exporter.ExportJSON(filename, tableName)
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown export format '%s' (supported: csv, json)\n", format)
+		return
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return
+	}
+	fmt.Printf("Exported to '%s'\n", filename)
+}
+
+func dumpDatabase(db *sqlvibe.Database, args []string) {
+	opts := sqlvibe.DumpOptions{}
+	var outfile string
+
+	for _, arg := range args {
+		switch strings.ToLower(arg) {
+		case "--data-only":
+			opts.DataOnly = true
+		case "--schema-only":
+			opts.SchemaOnly = true
+		case "--inserts":
+			opts.UseInserts = true
+		default:
+			outfile = arg
+		}
+	}
+
+	var w io.Writer = os.Stdout
+	var f *os.File
+	if outfile != "" {
+		var err error
+		f, err = os.Create(outfile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating file: %v\n", err)
+			return
+		}
+		defer f.Close()
+		w = f
+	}
+
+	if err := db.Dump(w, opts); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	}
 }
 
 func readSQLFile(db *sqlvibe.Database, args []string) {

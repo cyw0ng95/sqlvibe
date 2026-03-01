@@ -1,10 +1,48 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.14 (2026-03-01)
+## Current Version: v0.10.15 (2026-03-01)
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
 **Test Status**: All 84+ SQL:1999 test suites passing.
+
+---
+
+## **v0.10.15** (2026-03-01)
+
+### Features
+
+#### context/ Subpackage (`pkg/sqlvibe/context/`)
+New standalone helper subpackage extracted from `vm_context.go` for improved testability:
+- **eval.go**: `IsTruthy`, `AddVals`, `SubVals`, `MulVals`, `DivVals` — pure arithmetic/truthiness helpers.
+- **check.go**: `EvalCheckExpr`, `CheckPasses` — standalone CHECK constraint evaluation.
+- **aggregate.go**: `AnyValueAcc`, `ModeAcc` / `NewModeAcc` — accumulators for `ANY_VALUE()` and `MODE()`.
+
+#### window/ Subpackage (`pkg/sqlvibe/window/`)
+New standalone helper subpackage extracted from `window.go` for improved testability:
+- **partition.go**: `RowSet`, `BuildPartitionGroups`, `SortRowIndices`, `SameOrderKey`,
+  `MakeRowMap`, `EvalExprOnRow`, `ComputeKey`, `GetArgVal`, `CompareVals`, `ToFloat64`.
+- **frame.go**: `ResolveFrameBounds`, `ResolveFramePos`, `FrameBoundOffset` — window frame helpers.
+- **func.go**: `ComputePartitionValues`, `ComputeWindowAgg`, `ComputeOrderedWindowValues`,
+  `ComputeRankValues`, `ComputeRankFloat`, `ComputeCumeDist`, `ComputeLag`, `ComputeLead`.
+
+#### Aggregate Functions
+- `ANY_VALUE(expr)` — returns the first non-NULL value in a group.
+- `MODE(expr)` — returns the most frequent value in a group (first-seen tie-breaking).
+
+#### CLI: .dump Enhancements
+- `Database.Dump(w, DumpOptions)` — dump schema + data as SQL statements.
+- `Database.DumpDataOnly(w)` — dump only INSERT statements.
+- `Database.DumpSchemaOnly(w)` — dump only CREATE TABLE/VIEW/INDEX statements.
+- CLI `.dump [FILE] [--data-only|--schema-only|--inserts]` — dump current database.
+
+#### CLI: .export Fix
+- `.export csv|json FILE TABLE` — now correctly exports a table to CSV or JSON file
+  (previously printed an error instead of writing the file).
+
+### Tests
+- Added ~18 tests in `pkg/sqlvibe/context/` (eval_test.go, check_test.go, aggregate_test.go).
+- Added ~18 tests in `pkg/sqlvibe/window/` (partition_test.go, frame_test.go, func_test.go).
 
 ---
 
