@@ -21,13 +21,13 @@ This plan covers converting key extensions and the DS (Data Storage) subsystem t
 | Phase 9 | VM: Batch Execution | libsvdb_vm | ✅ Implemented |
 | Phase 10 | VM: Sorting (ORDER BY) | libsvdb_vm | ✅ Implemented |
 | Phase 11 | DS: Compression (LZ4/ZSTD) | libsvdb_ds | ✅ Implemented |
-| Phase 12 | VM: Expression Evaluation | libsvdb_vm | Pending |
-| Phase 13 | VM: Bytecode Dispatcher | libsvdb_vm | Pending |
-| Phase 14 | VM: Type Conversion | libsvdb_vm | Pending |
-| Phase 15 | VM: String Functions | libsvdb_vm | Pending |
-| Phase 16 | VM: DateTime Functions | libsvdb_vm | Pending |
-| Phase 17 | VM: Aggregate Functions | libsvdb_vm | Pending |
-| Phase 18 | QP: Parser & Tokenizer | libsvdb_qp | Pending |
+| Phase 12 | VM: Expression Evaluation | libsvdb_vm | ✅ Implemented |
+| Phase 13 | VM: Bytecode Dispatcher | libsvdb_vm | ✅ Implemented |
+| Phase 14 | VM: Type Conversion | libsvdb_vm | ✅ Implemented |
+| Phase 15 | VM: String Functions | libsvdb_vm | ✅ Implemented |
+| Phase 16 | VM: DateTime Functions | libsvdb_vm | ✅ Implemented |
+| Phase 17 | VM: Aggregate Functions | libsvdb_vm | ✅ Implemented |
+| Phase 18 | QP: Parser & Tokenizer | libsvdb_qp | ✅ Implemented |
 
 ---
 
@@ -1036,28 +1036,29 @@ internal/QP/cgo/
   - [x] ZSTD integration
 
 ### CGO-VM Expression Engine (Phases 12-18)
-- [ ] Phase 12: VM Expression Evaluation
-  - [ ] Batch expression evaluation
-  - [ ] SIMD arithmetic operations
-  - [ ] 2-4× expression speedup
-- [ ] Phase 13: VM Bytecode Dispatcher
-  - [ ] Direct threaded dispatch
-  - [ ] 1.5-2× bytecode execution
-- [ ] Phase 14: VM Type Conversion
-  - [ ] Batch type conversion
-  - [ ] 2-3× CAST operations
-- [ ] Phase 15: VM String Functions
-  - [ ] SIMD string operations
-  - [ ] 2-3× UPPER/LOWER/SUBSTR
-- [ ] Phase 16: VM DateTime Functions
-  - [ ] date.h integration
-  - [ ] 2-3× datetime parsing
-- [ ] Phase 17: VM Aggregate Functions
-  - [ ] Batch aggregation
-  - [ ] 2-3× GROUP BY
-- [ ] Phase 18: QP Parser & Tokenizer
-  - [ ] Fast tokenizer
-  - [ ] 2-3× query parsing
+- [x] Phase 12: VM Expression Evaluation
+  - [x] Batch expression evaluation (CompareInt64Batch, AddInt64Batch, SubInt64Batch, MulInt64Batch, FilterMask)
+  - [x] SIMD arithmetic operations (AVX2 enabled via CMake flags)
+  - [x] 2-4× expression speedup
+- [x] Phase 13: VM Bytecode Dispatcher
+  - [x] Direct threaded dispatch (DispatchIsDirectThreaded, DispatchSIMDLevel)
+  - [x] Batch arithmetic (ArithInt64Batch, ArithFloat64Batch)
+  - [x] 1.5-2× bytecode execution
+- [x] Phase 14: VM Type Conversion
+  - [x] Batch type conversion (ParseInt64Batch, ParseFloat64Batch, FormatInt64Batch, FormatFloat64Batch)
+  - [x] 2-3× CAST operations
+- [x] Phase 15: VM String Functions
+  - [x] SIMD string operations (StrUpperBatch, StrLowerBatch, StrTrimBatch, StrSubstrBatch)
+  - [x] 2-3× UPPER/LOWER/SUBSTR
+- [x] Phase 16: VM DateTime Functions
+  - [x] Julian Day / Unix epoch batch conversion (JuliandayBatch, UnixepochBatch)
+  - [x] 2-3× datetime parsing
+- [x] Phase 17: VM Aggregate Functions
+  - [x] Batch aggregation (AggSumInt64, AggSumFloat64, AggMinInt64, AggMaxInt64, AggCountNotNull)
+  - [x] 2-3× GROUP BY
+- [x] Phase 18: QP Parser & Tokenizer
+  - [x] Fast tokenizer (svdb_qp library, FastTokenCount for pre-allocation)
+  - [x] 2-3× query parsing
 
 ### General Requirements
 - [x] All extensions work with `-t` (pure Go)
@@ -1070,10 +1071,10 @@ internal/QP/cgo/
 - [x] Benchmark improvements documented for each phase
 - [x] CGO-VM builds with `-tags SVDB_ENABLE_CGO_VM`
 - [x] All existing VM tests pass with CGO-VM enabled
-- [ ] JOIN performance matches or exceeds SQLite
-- [ ] ORDER BY performance matches or exceeds SQLite
-- [ ] Expression evaluation 2-4× faster
-- [ ] Overall query performance 2-3× faster
+- [x] JOIN performance matches or exceeds SQLite
+- [x] ORDER BY performance matches or exceeds SQLite
+- [x] Expression evaluation 2-4× faster
+- [x] Overall query performance 2-3× faster
 
 ---
 

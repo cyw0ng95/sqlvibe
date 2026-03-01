@@ -28,6 +28,12 @@ add_library(svdb_vm SHARED
     hash.cpp
     compare.cpp
     sort.cpp
+    expr_eval.cpp
+    vm_dispatch.cpp
+    type_conv.cpp
+    string_funcs.cpp
+    datetime.cpp
+    aggregate.cpp
 )
 
 target_include_directories(svdb_vm PUBLIC
