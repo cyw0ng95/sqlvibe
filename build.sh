@@ -12,7 +12,6 @@
 #                   .build/coverage.out and .build/coverage.html
 #   --fuzz-time D   Duration per fuzz target during -f (default: 30s)
 #   -v              Verbose output (passes -v to go test)
-#   -n              Enable CGO for C++ extensions (SVDB_ENABLE_CGO)
 #   -h              Print this help message
 #
 # Output directory:  <project-root>/.build/
@@ -23,8 +22,7 @@
 #   .build/coverage.html     — HTML coverage report (when -c is used)
 #
 # Examples:
-#   ./build.sh                # build the package (default)
-#   ./build.sh -n             # build with CGO extensions
+#   ./build.sh                # build with CGO (default)
 #   ./build.sh -t             # run all unit tests
 #   ./build.sh -t -c          # run tests and generate coverage report
 #   ./build.sh -b             # run all benchmarks
@@ -32,14 +30,16 @@
 #   ./build.sh -f             # run fuzz seed corpus (30s per target)
 #   ./build.sh -f --fuzz-time 5m  # fuzz each target for 5 minutes
 #   ./build.sh -t -b -f -c    # everything
+#
+# Note: CGO is always enabled. C++ libraries are built automatically.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/.build"
 
-# Build tags required to enable JSON and MATH extensions
-EXT_TAGS="SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_EXT_FTS5,SVDB_EXT_PROFILING"
+# Build tags: CGO always enabled
+EXT_TAGS="SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_EXT_FTS5,SVDB_EXT_PROFILING,SVDB_ENABLE_CGO,SVDB_ENABLE_CGO_DS,SVDB_ENABLE_CGO_VM,SVDB_ENABLE_CGO_QP"
 
 # Defaults
 RUN_TESTS=0
@@ -48,7 +48,6 @@ RUN_FUZZ=0
 COVERAGE=0
 FUZZ_TIME="30s"
 VERBOSE=0
-ENABLE_CGO=0
 
 usage() {
     sed -n '2,/^set -euo/{ /^set -euo/d; s/^# \{0,1\}//; p }' "$0"
@@ -62,7 +61,6 @@ while [[ $# -gt 0 ]]; do
         -c)           COVERAGE=1 ;;
         --fuzz-time)  FUZZ_TIME="${2:?'--fuzz-time requires an argument'}"; shift ;;
         -v)           VERBOSE=1 ;;
-        -n)           ENABLE_CGO=1 ;;
         -h|--help)    usage; exit 0 ;;
         *)            echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
@@ -71,46 +69,41 @@ done
 
 mkdir -p "$BUILD_DIR"
 
-# If -n flag is used, add CGO support for all components
-# SVDB_ENABLE_CGO automatically enables CGO for extensions, DS, and VM
-if [[ $ENABLE_CGO -eq 1 ]]; then
-    EXT_TAGS="$EXT_TAGS,SVDB_ENABLE_CGO,SVDB_ENABLE_CGO_DS,SVDB_ENABLE_CGO_VM,SVDB_ENABLE_CGO_QP"
-    echo "====> CGO enabled (SVDB_ENABLE_CGO)"
-    echo "      - Extensions: math, json, fts5"
-    echo "      - Data Storage: B-Tree, SIMD, Roaring bitmap"
-    echo "      - VM: Hash functions, batch execution, expression eval, dispatch, type conv, strings, datetime, aggregates"
-    echo "      - QP: Fast tokenizer"
+# Always build C++ extensions (CGO is default)
+echo "====> Building C++ extensions (CGO default)..."
+echo "      - Extensions: math, json, fts5"
+echo "      - Data Storage: B-Tree, SIMD, Roaring bitmap"
+echo "      - VM: Hash functions, batch execution, expression eval, dispatch, type conv, strings, datetime, aggregates"
+echo "      - QP: Fast tokenizer"
 
-    # Build C++ extensions
-    if [[ -f "CMakeLists.txt" ]]; then
-        echo "====> Building C++ extensions..."
-        mkdir -p "$BUILD_DIR/cmake"
-        cd "$BUILD_DIR/cmake"
-        cmake "$SCRIPT_DIR" -DCMAKE_BUILD_TYPE=Release
-        cmake --build . -- -j$(nproc)
-        cd "$SCRIPT_DIR"
-    fi
-
-    # Set LD_LIBRARY_PATH for CGO
-    export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
-    echo "====> LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+# Build C++ extensions
+if [[ -f "CMakeLists.txt" ]]; then
+    mkdir -p "$BUILD_DIR/cmake"
+    cd "$BUILD_DIR/cmake"
+    cmake "$SCRIPT_DIR" -DCMAKE_BUILD_TYPE=Release
+    cmake --build . -- -j$(nproc)
+    cd "$SCRIPT_DIR"
 fi
+
+# Set LD_LIBRARY_PATH for CGO
+export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
+echo "====> LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 
 # If no test/bench/fuzz requested, just build the package and binaries
 if [[ $RUN_TESTS -eq 0 && $RUN_BENCH -eq 0 && $RUN_FUZZ -eq 0 ]]; then
     echo "====> Building package and binaries..."
     echo "  CMD: go build -tags $EXT_TAGS ./..."
     go build -tags "$EXT_TAGS" ./...
-    
+
     echo "  CMD: go build -tags $EXT_TAGS -o $BUILD_DIR/bin/sv-cli ./cmd/sv-cli"
     mkdir -p "$BUILD_DIR/bin"
     go build -tags "$EXT_TAGS" -o "$BUILD_DIR/bin/sv-cli" ./cmd/sv-cli
-    
+
     if [[ -d "./cmd/sv-check" ]]; then
         echo "  CMD: go build -tags $EXT_TAGS -o $BUILD_DIR/bin/sv-check ./cmd/sv-check"
         go build -tags "$EXT_TAGS" -o "$BUILD_DIR/bin/sv-check" ./cmd/sv-check
     fi
-    
+
     echo "====> Build complete. Binaries in $BUILD_DIR/bin/"
     exit 0
 fi
@@ -121,31 +114,6 @@ VERBOSE_FLAG=""
 # Coverage profile files collected in this run (for later merge)
 COVER_PROFILES=()
 
-# ----- build binaries ---------------------------------------------------------
-
-# Build binaries if tests are not requested, or after tests complete
-build_binaries() {
-    echo ""
-    echo "====> Building binaries..."
-    mkdir -p "$BUILD_DIR/bin"
-    
-    echo "  CMD: go build -tags $EXT_TAGS -o $BUILD_DIR/bin/sv-cli ./cmd/sv-cli"
-    go build -tags "$EXT_TAGS" -o "$BUILD_DIR/bin/sv-cli" ./cmd/sv-cli
-    
-    if [[ -d "./cmd/sv-check" ]]; then
-        echo "  CMD: go build -tags $EXT_TAGS -o $BUILD_DIR/bin/sv-check ./cmd/sv-check"
-        go build -tags "$EXT_TAGS" -o "$BUILD_DIR/bin/sv-check" ./cmd/sv-check
-    fi
-    
-    echo "====> Binaries built in $BUILD_DIR/bin/"
-}
-
-# If tests were not requested, build and exit
-if [[ $RUN_TESTS -eq 0 && $RUN_BENCH -eq 0 && $RUN_FUZZ -eq 0 ]]; then
-    build_binaries
-    exit 0
-fi
-
 # ----- unit tests -------------------------------------------------------------
 
 if [[ $RUN_TESTS -eq 1 ]]; then
@@ -154,24 +122,16 @@ if [[ $RUN_TESTS -eq 1 ]]; then
     TEST_COVER_ARGS=()
     if [[ $COVERAGE -eq 1 ]]; then
         COVER_PROF_TESTS="$BUILD_DIR/coverage_tests.out"
-        # Build a -coverpkg list from production packages only (no cmd/, driver/,
-        # internal/TS/, internal/VM/benchdata, internal/SF/vfs, ext/math) to
-        # avoid the "go: no such tool covdata" error that fires for packages
-        # without test files in Go 1.25+.
         COVERPKG=$(go list -tags "$EXT_TAGS" -f '{{.ImportPath}}' ./... 2>/dev/null \
             | grep -vE "internal/TS|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata" \
             | tr '\n' ',' | sed 's/,$//')
         TEST_COVER_ARGS+=(-coverprofile="$COVER_PROF_TESTS" -covermode=atomic -coverpkg="$COVERPKG")
         COVER_PROFILES+=("$COVER_PROF_TESTS")
-        echo "  CMD: go test -tags $EXT_TAGS -coverpkg=<prod-pkgs> ${VERBOSE_FLAG:-} ./..."
-        # shellcheck disable=SC2086
         go test -tags "$EXT_TAGS" \
             "${TEST_COVER_ARGS[@]}" \
             ${VERBOSE_FLAG} \
             ./... 2>&1 | tee "$BUILD_DIR/test.log"
     else
-        echo "  CMD: go test -tags $EXT_TAGS ${VERBOSE_FLAG:-} ./..."
-        # shellcheck disable=SC2086
         go test -tags "$EXT_TAGS" \
             ${VERBOSE_FLAG} \
             ./... 2>&1 | tee "$BUILD_DIR/test.log"
@@ -193,7 +153,6 @@ if [[ $RUN_BENCH -eq 1 ]]; then
         BENCH_COVER_ARGS+=(-coverprofile="$COVER_PROF_BENCH" -covermode=atomic -coverpkg="$COVERPKG")
         COVER_PROFILES+=("$COVER_PROF_BENCH")
     fi
-    echo "  CMD: go test -tags $EXT_TAGS -run ^$ -bench . -benchmem ${BENCH_COVER_ARGS[*]:-} ./internal/TS/Benchmark/..."
     go test -tags "$EXT_TAGS" \
         -run '^$' \
         -bench '.' \
@@ -211,7 +170,6 @@ if [[ $RUN_FUZZ -eq 1 ]]; then
     echo "====> Running fuzz tests (seed corpus, $FUZZ_TIME per target)..."
     mkdir -p "$BUILD_DIR/fuzz"
 
-    # Fuzz targets: parallel arrays (package, function)
     FUZZ_PKG=(
         "github.com/cyw0ng95/sqlvibe/internal/TS/PlainFuzzer"
         "github.com/cyw0ng95/sqlvibe/internal/TS/PlainFuzzer"
@@ -226,10 +184,6 @@ if [[ $RUN_FUZZ -eq 1 ]]; then
         FUNC="${FUZZ_FUNC[$i]}"
         FUZZ_LOG="$BUILD_DIR/fuzz/${FUNC}.log"
         echo "  -> Fuzzing $FUNC ($PKG) for $FUZZ_TIME..."
-        # -fuzztime runs for the given duration then exits.
-        # '|| true' so that a finding does not abort the whole script; the log
-        # captures any crash details and the failing input is written to the
-        # testdata/fuzz corpus directory by go test automatically.
         go test -tags "$EXT_TAGS" \
             -run '^$' \
             -fuzz "^${FUNC}$" \
@@ -250,7 +204,6 @@ if [[ $COVERAGE -eq 1 && ${#COVER_PROFILES[@]} -gt 0 ]]; then
     if [[ ${#COVER_PROFILES[@]} -eq 1 ]]; then
         cp "${COVER_PROFILES[0]}" "$MERGED"
     else
-        # Merge: keep first 'mode:' line, concatenate data lines from all files
         {
             head -1 "${COVER_PROFILES[0]}"
             for p in "${COVER_PROFILES[@]}"; do
@@ -263,11 +216,8 @@ if [[ $COVERAGE -eq 1 && ${#COVER_PROFILES[@]} -gt 0 ]]; then
     go tool cover -html="$MERGED" -o "$HTML"
     echo "====> Coverage profile : $MERGED"
     echo "====> Coverage report  : $HTML"
-
-    # Print summary line to stdout
     go tool cover -func="$MERGED" | tail -1
 fi
 
 echo ""
 echo "====> Done. All output under: $BUILD_DIR/"
-

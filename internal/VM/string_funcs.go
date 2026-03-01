@@ -1,5 +1,3 @@
-//go:build SVDB_ENABLE_CGO_VM
-// +build SVDB_ENABLE_CGO_VM
 
 package VM
 
