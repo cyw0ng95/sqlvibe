@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	QP "github.com/cyw0ng95/sqlvibe/internal/QP"
+	svwin "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/window"
 )
 
 // windowFuncInfo tracks a window function column position and its definition.
@@ -224,31 +225,12 @@ func applyWindowFunctionsToRows(rows *Rows, funcs []windowFuncInfo, extraCols in
 			values = computeCumeDist(rows, wf.expr)
 
 		case "LAG":
-			offset := getLagLeadOffset(wf.expr)
-			values = computeOrderedWindowValues(rows, wf.expr, func(sortedIndices []int, posInPartition int) interface{} {
-				prevPos := posInPartition - offset
-				if prevPos < 0 || prevPos >= len(sortedIndices) {
-					// Return default (3rd arg) or NULL
-					if len(wf.expr.Args) >= 3 {
-						return evalConstWindowArg(wf.expr.Args[2])
-					}
-					return nil
-				}
-				return getRowColumnValue(rows, sortedIndices[prevPos], wf.expr.Args[:1])
-			})
+			rs := &svwin.RowSet{Columns: rows.Columns, Data: rows.Data}
+			values = svwin.ComputeLag(rs, wf.expr)
 
 		case "LEAD":
-			offset := getLagLeadOffset(wf.expr)
-			values = computeOrderedWindowValues(rows, wf.expr, func(sortedIndices []int, posInPartition int) interface{} {
-				nextPos := posInPartition + offset
-				if nextPos < 0 || nextPos >= len(sortedIndices) {
-					if len(wf.expr.Args) >= 3 {
-						return evalConstWindowArg(wf.expr.Args[2])
-					}
-					return nil
-				}
-				return getRowColumnValue(rows, sortedIndices[nextPos], wf.expr.Args[:1])
-			})
+			rs := &svwin.RowSet{Columns: rows.Columns, Data: rows.Data}
+			values = svwin.ComputeLead(rs, wf.expr)
 
 		case "FIRST_VALUE":
 			values = computeOrderedWindowValues(rows, wf.expr, func(sortedIndices []int, _ int) interface{} {
@@ -341,446 +323,115 @@ func stripExtraColumns(rows *Rows, n int) *Rows {
 
 // computePartitionValues computes a value for each row based on its partition.
 func computePartitionValues(rows *Rows, wf *QP.WindowFuncExpr, compute func(partRows []int, rowIdx int) interface{}) []interface{} {
-	n := len(rows.Data)
-	result := make([]interface{}, n)
-	partGroups := buildPartitionGroups(rows, wf.Partition)
-
-	for _, group := range partGroups {
-		for _, ri := range group {
-			result[ri] = compute(group, ri)
-		}
-	}
-	return result
+	rs := &svwin.RowSet{Columns: rows.Columns, Data: rows.Data}
+	return svwin.ComputePartitionValues(rs, wf, compute)
 }
 
 // computeWindowAgg computes a window aggregate for each row.
-// If wf has a Frame spec, uses frame-based per-row computation; otherwise full-partition agg.
+// Delegates to the window subpackage.
 func computeWindowAgg(rows *Rows, wf *QP.WindowFuncExpr, agg func(rowIndices []int) interface{}) []interface{} {
-	n := len(rows.Data)
-	result := make([]interface{}, n)
-	partGroups := buildPartitionGroups(rows, wf.Partition)
-
-	// If there are ORDER BY expressions or a frame spec, compute per-row frame values
-	if len(wf.OrderBy) > 0 || wf.Frame != nil {
-		for _, group := range partGroups {
-			sortedGroup := sortRowIndices(rows, group, wf.OrderBy)
-			total := len(sortedGroup)
-			// Build reverse map: original row index → position in sorted group
-			posMap := make(map[int]int, total)
-			for pos, ri := range sortedGroup {
-				posMap[ri] = pos
-			}
-			for _, ri := range group {
-				pos := posMap[ri]
-				start, end := resolveFrameBounds(wf.Frame, pos, total)
-				frameIndices := sortedGroup[start : end+1]
-				result[ri] = agg(frameIndices)
-			}
-		}
-		return result
-	}
-
-	// No ORDER BY / frame: aggregate over full partition
-	for _, group := range partGroups {
-		val := agg(group)
-		for _, ri := range group {
-			result[ri] = val
-		}
-	}
-	return result
+	rs := &svwin.RowSet{Columns: rows.Columns, Data: rows.Data}
+	return svwin.ComputeWindowAgg(rs, wf, agg)
 }
 
-// resolveFrameBounds returns the [start, end] (inclusive) positions within a sorted partition
-// for the given frame spec and current position. Default frame when no spec:
-//   - With ORDER BY: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-//   - Without ORDER BY (handled by caller): full partition
+// resolveFrameBounds returns the [start, end] (inclusive) positions within a sorted partition.
+// Delegates to the window subpackage.
 func resolveFrameBounds(frame *QP.WindowFrame, pos, total int) (start, end int) {
-	if total == 0 {
-		return 0, 0
-	}
-	if frame == nil {
-		// Default with ORDER BY: from beginning to current row
-		return 0, pos
-	}
-	start = resolveFramePos(frame.Start, pos, total, true)
-	end = resolveFramePos(frame.End, pos, total, false)
-	// Clamp
-	if start < 0 {
-		start = 0
-	}
-	if end >= total {
-		end = total - 1
-	}
-	if start > end {
-		start = end
-	}
-	return start, end
+	return svwin.ResolveFrameBounds(frame, pos, total)
 }
 
 // resolveFramePos resolves a FrameBound to an absolute position.
-// isStart indicates whether this is the start bound (for FOLLOWING, use pos+offset).
+// Delegates to the window subpackage.
 func resolveFramePos(fb QP.FrameBound, pos, total int, isStart bool) int {
-	switch fb.Type {
-	case "UNBOUNDED":
-		if isStart {
-			return 0
-		}
-		return total - 1
-	case "CURRENT":
-		return pos
-	case "PRECEDING":
-		offset := frameBoundOffset(fb.Value)
-		return pos - offset
-	case "FOLLOWING":
-		offset := frameBoundOffset(fb.Value)
-		return pos + offset
-	default:
-		if isStart {
-			return 0
-		}
-		return total - 1
-	}
+	return svwin.ResolveFramePos(fb, pos, total, isStart)
 }
 
 // frameBoundOffset extracts the integer offset from a FrameBound value expression.
+// Delegates to the window subpackage.
 func frameBoundOffset(expr QP.Expr) int {
-	if expr == nil {
-		return 0
-	}
-	if lit, ok := expr.(*QP.Literal); ok {
-		switch v := lit.Value.(type) {
-		case int64:
-			return int(v)
-		case float64:
-			return int(v)
-		}
-	}
-	return 0
+	return svwin.FrameBoundOffset(expr)
 }
 
 // computeOrderedWindowValues computes per-row values based on position within ordered partition.
-// computeFn receives the sorted row indices for the partition and the position of the current row within it.
+// Delegates to the window subpackage.
 func computeOrderedWindowValues(rows *Rows, wf *QP.WindowFuncExpr, computeFn func(sortedIndices []int, posInPartition int) interface{}) []interface{} {
-	n := len(rows.Data)
-	result := make([]interface{}, n)
-	partGroups := buildPartitionGroups(rows, wf.Partition)
-
-	for _, group := range partGroups {
-		sortedGroup := sortRowIndices(rows, group, wf.OrderBy)
-		// Build a map from original row index to position in sortedGroup
-		posMap := make(map[int]int, len(sortedGroup))
-		for pos, ri := range sortedGroup {
-			posMap[ri] = pos
-		}
-		for _, ri := range group {
-			pos := posMap[ri]
-			result[ri] = computeFn(sortedGroup, pos)
-		}
-	}
-	return result
+	rs := &svwin.RowSet{Columns: rows.Columns, Data: rows.Data}
+	return svwin.ComputeOrderedWindowValues(rs, wf, computeFn)
 }
 
 // computeRankValues computes RANK or DENSE_RANK window values.
+// Delegates to the window subpackage.
 func computeRankValues(rows *Rows, wf *QP.WindowFuncExpr, dense bool) []interface{} {
-	n := len(rows.Data)
-	result := make([]interface{}, n)
-	partGroups := buildPartitionGroups(rows, wf.Partition)
-
-	for _, group := range partGroups {
-		sortedGroup := sortRowIndices(rows, group, wf.OrderBy)
-		rank := int64(1)
-		denseRank := int64(1)
-		for pos, ri := range sortedGroup {
-			if pos > 0 {
-				prevRi := sortedGroup[pos-1]
-				if !sameOrderKey(rows, prevRi, ri, wf.OrderBy) {
-					if dense {
-						denseRank++
-					} else {
-						rank = int64(pos) + 1
-					}
-				}
-			}
-			if dense {
-				result[ri] = denseRank
-			} else {
-				result[ri] = rank
-			}
-		}
-	}
-	return result
+	rs := &svwin.RowSet{Columns: rows.Columns, Data: rows.Data}
+	return svwin.ComputeRankValues(rs, wf, dense)
 }
 
 func computeRankValuesFloat(rows *Rows, wf *QP.WindowFuncExpr) []interface{} {
-	n := len(rows.Data)
-	result := make([]interface{}, n)
-	partGroups := buildPartitionGroups(rows, wf.Partition)
-
-	for _, group := range partGroups {
-		sortedGroup := sortRowIndices(rows, group, wf.OrderBy)
-		total := len(sortedGroup)
-		if total <= 1 {
-			for _, ri := range sortedGroup {
-				result[ri] = float64(0)
-			}
-			continue
-		}
-		rank := 1
-		for pos, ri := range sortedGroup {
-			if pos > 0 {
-				prevRi := sortedGroup[pos-1]
-				if !sameOrderKey(rows, prevRi, ri, wf.OrderBy) {
-					rank = pos + 1
-				}
-			}
-			result[ri] = float64(rank-1) / float64(total-1)
-		}
-	}
-	return result
+	rs := &svwin.RowSet{Columns: rows.Columns, Data: rows.Data}
+	return svwin.ComputeRankFloat(rs, wf)
 }
 
 func computeCumeDist(rows *Rows, wf *QP.WindowFuncExpr) []interface{} {
-	n := len(rows.Data)
-	result := make([]interface{}, n)
-	partGroups := buildPartitionGroups(rows, wf.Partition)
-
-	for _, group := range partGroups {
-		sortedGroup := sortRowIndices(rows, group, wf.OrderBy)
-		total := len(sortedGroup)
-		pos := 0
-		for pos < len(sortedGroup) {
-			end := pos + 1
-			for end < len(sortedGroup) && sameOrderKey(rows, sortedGroup[pos], sortedGroup[end], wf.OrderBy) {
-				end++
-			}
-			cumeDist := float64(end) / float64(total)
-			for i := pos; i < end; i++ {
-				result[sortedGroup[i]] = cumeDist
-			}
-			pos = end
-		}
-	}
-	return result
+	rs := &svwin.RowSet{Columns: rows.Columns, Data: rows.Data}
+	return svwin.ComputeCumeDist(rs, wf)
 }
 
 // buildPartitionGroups groups row indices by PARTITION BY key.
+// Delegates to the window subpackage.
 func buildPartitionGroups(rows *Rows, partExprs []QP.Expr) [][]int {
-	if len(partExprs) == 0 {
-		// No partition: single group with all rows
-		all := make([]int, len(rows.Data))
-		for i := range all {
-			all[i] = i
-		}
-		return [][]int{all}
-	}
-
-	groupMap := make(map[string][]int)
-	var groupOrder []string
-
-	for i, rowData := range rows.Data {
-		row := makeRowMap(rows.Columns, rowData)
-		key := computeWindowKey(row, rows.Columns, partExprs)
-		if _, exists := groupMap[key]; !exists {
-			groupOrder = append(groupOrder, key)
-		}
-		groupMap[key] = append(groupMap[key], i)
-	}
-
-	result := make([][]int, len(groupOrder))
-	for i, key := range groupOrder {
-		result[i] = groupMap[key]
-	}
-	return result
+	rs := &svwin.RowSet{Columns: rows.Columns, Data: rows.Data}
+	return svwin.BuildPartitionGroups(rs, partExprs)
 }
 
 // sortRowIndices sorts a slice of row indices by the ORDER BY expressions.
+// Delegates to the window subpackage.
 func sortRowIndices(rows *Rows, indices []int, orderExprs []QP.WindowOrderBy) []int {
-	if len(orderExprs) == 0 {
-		return indices
-	}
-	sorted := make([]int, len(indices))
-	copy(sorted, indices)
-	sort.SliceStable(sorted, func(a, b int) bool {
-		ra := makeRowMap(rows.Columns, rows.Data[sorted[a]])
-		rb := makeRowMap(rows.Columns, rows.Data[sorted[b]])
-		for _, ob := range orderExprs {
-			va := evalWindowExprOnRow(ra, rows.Columns, ob.Expr)
-			vb := evalWindowExprOnRow(rb, rows.Columns, ob.Expr)
-			cmp := compareWindowVals(va, vb)
-			if cmp != 0 {
-				if ob.Desc {
-					return cmp > 0
-				}
-				return cmp < 0
-			}
-		}
-		return false
-	})
-	return sorted
+	rs := &svwin.RowSet{Columns: rows.Columns, Data: rows.Data}
+	return svwin.SortRowIndices(rs, indices, orderExprs)
 }
 
 // sameOrderKey returns true if two rows have the same ORDER BY key values.
+// Delegates to the window subpackage.
 func sameOrderKey(rows *Rows, ri, rj int, orderExprs []QP.WindowOrderBy) bool {
-	ra := makeRowMap(rows.Columns, rows.Data[ri])
-	rb := makeRowMap(rows.Columns, rows.Data[rj])
-	for _, ob := range orderExprs {
-		va := evalWindowExprOnRow(ra, rows.Columns, ob.Expr)
-		vb := evalWindowExprOnRow(rb, rows.Columns, ob.Expr)
-		if compareWindowVals(va, vb) != 0 {
-			return false
-		}
-	}
-	return true
+	rs := &svwin.RowSet{Columns: rows.Columns, Data: rows.Data}
+	return svwin.SameOrderKey(rs, ri, rj, orderExprs)
 }
 
-// getRowColumnValue evaluates the first arg expression against a row, returning its value.
+// getRowColumnValue evaluates the first arg expression against a row.
+// Delegates to the window subpackage.
 func getRowColumnValue(rows *Rows, rowIdx int, args []QP.Expr) interface{} {
-	if len(args) == 0 || rowIdx < 0 || rowIdx >= len(rows.Data) {
-		return nil
-	}
-	rowData := rows.Data[rowIdx]
-	row := makeRowMap(rows.Columns, rowData)
-	return evalWindowExprOnRow(row, rows.Columns, args[0])
+	rs := &svwin.RowSet{Columns: rows.Columns, Data: rows.Data}
+	return svwin.GetArgVal(rs, rowIdx, args)
 }
 
 // computeWindowKey computes a string key from partition expressions for a row.
 func computeWindowKey(row map[string]interface{}, columns []string, exprs []QP.Expr) string {
-	parts := make([]string, len(exprs))
-	for i, expr := range exprs {
-		v := evalWindowExprOnRow(row, columns, expr)
-		parts[i] = fmt.Sprintf("%v", v)
-	}
-	return strings.Join(parts, "|")
+	return svwin.ComputeKey(row, columns, exprs)
 }
 
-// evalWindowExprOnRow evaluates a simple expression (ColumnRef or Literal) against a row.
+// evalWindowExprOnRow evaluates a simple expression against a row map.
+// Delegates to the window subpackage.
 func evalWindowExprOnRow(row map[string]interface{}, columns []string, expr QP.Expr) interface{} {
-	switch e := expr.(type) {
-	case *QP.ColumnRef:
-		// Try qualified name first
-		if e.Table != "" {
-			if v, ok := row[e.Table+"."+e.Name]; ok {
-				return v
-			}
-		}
-		if v, ok := row[e.Name]; ok {
-			return v
-		}
-		// Try case-insensitive
-		lower := strings.ToLower(e.Name)
-		for k, v := range row {
-			if strings.ToLower(k) == lower {
-				return v
-			}
-		}
-		// Try by index in columns
-		for i, col := range columns {
-			if strings.ToLower(col) == lower {
-				if rowData, ok := row["__data__"]; ok {
-					if rd, ok2 := rowData.([]interface{}); ok2 && i < len(rd) {
-						return rd[i]
-					}
-				}
-				return row[col]
-			}
-		}
-		return nil
-	case *QP.Literal:
-		return e.Value
-	case *QP.AliasExpr:
-		return evalWindowExprOnRow(row, columns, e.Expr)
-	default:
-		return nil
-	}
+	return svwin.EvalExprOnRow(row, columns, expr)
 }
 
 // makeRowMap creates a map from column names to values for a row.
+// Delegates to the window subpackage.
 func makeRowMap(columns []string, rowData []interface{}) map[string]interface{} {
-	row := make(map[string]interface{}, len(columns))
-	for i, col := range columns {
-		if i < len(rowData) {
-			row[col] = rowData[i]
-		}
-	}
-	return row
-}
-
-// getLagLeadOffset extracts the offset argument from LAG/LEAD (default 1).
-func getLagLeadOffset(wf *QP.WindowFuncExpr) int {
-	if len(wf.Args) >= 2 {
-		if lit, ok := wf.Args[1].(*QP.Literal); ok {
-			if n, ok := lit.Value.(int64); ok {
-				return int(n)
-			}
-		}
-	}
-	return 1
-}
-
-// evalConstWindowArg evaluates a constant expression for window function default.
-func evalConstWindowArg(expr QP.Expr) interface{} {
-	if lit, ok := expr.(*QP.Literal); ok {
-		return lit.Value
-	}
-	return nil
-}
-
-// toFloat64Window converts a value to float64 for window aggregation.
-func toFloat64Window(v interface{}) float64 {
-	switch n := v.(type) {
-	case int64:
-		return float64(n)
-	case float64:
-		return n
-	case string:
-		var f float64
-		fmt.Sscanf(n, "%f", &f)
-		return f
-	}
-	return 0
+	return svwin.MakeRowMap(columns, rowData)
 }
 
 // compareWindowVals compares two window values for ordering.
+// Delegates to the window subpackage.
 func compareWindowVals(a, b interface{}) int {
-	if a == nil && b == nil {
-		return 0
-	}
-	if a == nil {
-		return -1
-	}
-	if b == nil {
-		return 1
-	}
-	// Try numeric comparison
-	fa, aOk := toFloat64WindowOk(a)
-	fb, bOk := toFloat64WindowOk(b)
-	if aOk && bOk {
-		if fa < fb {
-			return -1
-		}
-		if fa > fb {
-			return 1
-		}
-		return 0
-	}
-	// String comparison
-	sa := fmt.Sprintf("%v", a)
-	sb := fmt.Sprintf("%v", b)
-	if sa < sb {
-		return -1
-	}
-	if sa > sb {
-		return 1
-	}
-	return 0
+	return svwin.CompareVals(a, b)
 }
 
-func toFloat64WindowOk(v interface{}) (float64, bool) {
-	switch n := v.(type) {
-	case int64:
-		return float64(n), true
-	case float64:
-		return n, true
-	}
-	return 0, false
+// toFloat64Window converts a value to float64 for window aggregation.
+// Delegates to the window subpackage.
+func toFloat64Window(v interface{}) float64 {
+	return svwin.ToFloat64(v)
 }
+
+
+

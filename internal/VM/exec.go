@@ -2952,6 +2952,11 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 				GroupConcats:     make([][]string, len(aggInfo.Aggregates)),
 				JsonGroupArrays:  make([][]interface{}, len(aggInfo.Aggregates)),
 				JsonGroupObjects: make([][][]interface{}, len(aggInfo.Aggregates)),
+				AnyValues:        make([]interface{}, len(aggInfo.Aggregates)),
+				AnyValsSeen:      make([]bool, len(aggInfo.Aggregates)),
+				ModeFreqs:        make([]map[string]int, len(aggInfo.Aggregates)),
+				ModeVals:         make([]map[string]interface{}, len(aggInfo.Aggregates)),
+				ModeOrder:        make([][]string, len(aggInfo.Aggregates)),
 			}
 			groups[groupKey] = state
 		}
@@ -3038,6 +3043,24 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 					if keyVal != nil {
 						state.JsonGroupObjects[aggIdx] = append(state.JsonGroupObjects[aggIdx], []interface{}{keyVal, valVal})
 					}
+				}
+			case "ANY_VALUE":
+				if value != nil && !state.AnyValsSeen[aggIdx] {
+					state.AnyValues[aggIdx] = value
+					state.AnyValsSeen[aggIdx] = true
+				}
+			case "MODE":
+				if value != nil {
+					if state.ModeFreqs[aggIdx] == nil {
+						state.ModeFreqs[aggIdx] = make(map[string]int)
+						state.ModeVals[aggIdx] = make(map[string]interface{})
+					}
+					key := fmt.Sprintf("%v", value)
+					if _, exists2 := state.ModeFreqs[aggIdx][key]; !exists2 {
+						state.ModeOrder[aggIdx] = append(state.ModeOrder[aggIdx], key)
+						state.ModeVals[aggIdx][key] = value
+					}
+					state.ModeFreqs[aggIdx][key]++
 				}
 			}
 		}
@@ -3165,6 +3188,22 @@ func (vm *VM) executeAggregation(cursor *Cursor, aggInfo *AggregateInfo) {
 				}
 				b, _ := json.Marshal(obj)
 				aggValue = string(b)
+			case "ANY_VALUE":
+				if state.AnyValsSeen[aggIdx] {
+					aggValue = state.AnyValues[aggIdx]
+				}
+			case "MODE":
+				if len(state.ModeOrder[aggIdx]) > 0 {
+					bestKey := state.ModeOrder[aggIdx][0]
+					bestCount := state.ModeFreqs[aggIdx][bestKey]
+					for _, k := range state.ModeOrder[aggIdx][1:] {
+						if state.ModeFreqs[aggIdx][k] > bestCount {
+							bestCount = state.ModeFreqs[aggIdx][k]
+							bestKey = k
+						}
+					}
+					aggValue = state.ModeVals[aggIdx][bestKey]
+				}
 			}
 
 			resultRow = append(resultRow, aggValue)
@@ -3217,6 +3256,11 @@ type AggregateState struct {
 	GroupConcats [][]string        // per-aggregate accumulated strings for GROUP_CONCAT
 	JsonGroupArrays  [][]interface{}   // per-aggregate accumulated values for JSON_GROUP_ARRAY
 	JsonGroupObjects [][][]interface{} // per-aggregate accumulated key-value pairs for JSON_GROUP_OBJECT
+	AnyValues    []interface{}            // per-aggregate first non-NULL value for ANY_VALUE
+	AnyValsSeen  []bool                   // per-aggregate whether a non-NULL value was seen for ANY_VALUE
+	ModeFreqs    []map[string]int         // per-aggregate frequency map for MODE
+	ModeVals     []map[string]interface{} // per-aggregate value map for MODE (key → original value)
+	ModeOrder    [][]string               // per-aggregate insertion order for MODE (for tie-breaking)
 }
 
 // compareForAnyAllVM compares two values for ANY/ALL predicates (returns -1, 0, or 1).
@@ -4731,6 +4775,24 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				}
 				b, _ := json.Marshal(obj)
 				return string(b)
+			case "ANY_VALUE":
+				if state.AnyValsSeen[i] {
+					return state.AnyValues[i]
+				}
+				return nil
+			case "MODE":
+				if len(state.ModeOrder[i]) > 0 {
+					bestKey := state.ModeOrder[i][0]
+					bestCount := state.ModeFreqs[i][bestKey]
+					for _, k := range state.ModeOrder[i][1:] {
+						if state.ModeFreqs[i][k] > bestCount {
+							bestCount = state.ModeFreqs[i][k]
+							bestKey = k
+						}
+					}
+					return state.ModeVals[i][bestKey]
+				}
+				return nil
 			}
 		}
 		// Fallback: if no arg-matching entry found, try first matching function name
@@ -4775,6 +4837,24 @@ func (vm *VM) resolveHavingOperand(expr QP.Expr, state *AggregateState, aggInfo 
 				}
 				b, _ := json.Marshal(obj)
 				return string(b)
+			case "ANY_VALUE":
+				if state.AnyValsSeen[i] {
+					return state.AnyValues[i]
+				}
+				return nil
+			case "MODE":
+				if len(state.ModeOrder[i]) > 0 {
+					bestKey := state.ModeOrder[i][0]
+					bestCount := state.ModeFreqs[i][bestKey]
+					for _, k := range state.ModeOrder[i][1:] {
+						if state.ModeFreqs[i][k] > bestCount {
+							bestCount = state.ModeFreqs[i][k]
+							bestKey = k
+						}
+					}
+					return state.ModeVals[i][bestKey]
+				}
+				return nil
 			}
 		}
 		return nil

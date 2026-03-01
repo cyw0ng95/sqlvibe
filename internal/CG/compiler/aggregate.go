@@ -14,6 +14,7 @@ var aggregateFuncs = map[string]bool{
 	"TOTAL": true, "GROUP_CONCAT": true,
 	"JSON_GROUP_ARRAY": true, "JSONB_GROUP_ARRAY": true,
 	"JSON_GROUP_OBJECT": true, "JSONB_GROUP_OBJECT": true,
+	"ANY_VALUE": true, "MODE": true,
 }
 
 // IsAggregateFunction reports whether name is a known aggregate function.

@@ -6,17 +6,14 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v0.10.8** | 2026-03-01 | SQL:1999: Window functions, Recursive CTEs; CLI: history, auto-complete |
-| **v0.10.7** | 2026-03-01 | Query Optimizer: index-only scan, cost-based planning, query cache size |
-| **v0.10.6** | 2026-03-01 | CLI: output modes, timer, import/export; Generated columns (parser) |
-| **v0.10.2** | 2026-03-01 | FTS5 Full-Text Search Extension: inverted index, BM25 ranking, MATCH queries, tokenizers (ASCII/Porter/Unicode61) |
+| **v0.10.15** | 2026-03-01 | CLI: .dump enhancements, .export fix; context/ window/ subpackages; ANY_VALUE, MODE aggregates |
 | **v0.9.17** | 2026-02-26 | JSON Extension Enhancement: Table-valued functions (json_each, json_tree), Aggregates (json_group_array, json_group_object), JSONB format |
 
 ## Features
 
 - **SQL:1999 compatibility** — 84+ test suites passing (added F870/F871/F872)
 - **In-memory databases** — `:memory:` URI for fast, ephemeral storage
-- **Comprehensive SQL**: DDL, DML, JOINs, Subqueries, Aggregates, Window functions (ROW_NUMBER/RANK/LAG/LEAD/NTILE/PERCENT_RANK/CUME_DIST), CTEs (recursive), VALUES derived tables, ANY/ALL subqueries, GROUP_CONCAT, etc.
+- **Comprehensive SQL**: DDL, DML, JOINs, Subqueries, Aggregates, Window functions (ROW_NUMBER/RANK/LAG/LEAD/NTILE/PERCENT_RANK/CUME_DIST), CTEs (recursive), VALUES derived tables, ANY/ALL subqueries, GROUP_CONCAT, ANY_VALUE, MODE, etc.
 - **Extension Framework** — Pluggable extensions via build tags (`SVDB_EXT_JSON`, `SVDB_EXT_MATH`); query via `sqlvibe_extensions` virtual table
 - **JSON Extension** — Full SQLite JSON1-compatible functions: `json()`, `json_array()`, `json_extract()`, `json_object()`, `json_set()`, `json_type()`, `json_length()`, and more (requires `-tags SVDB_EXT_JSON`)
 - **Math Extension** — Advanced math functions: `POWER()`, `SQRT()`, `MOD()`, trigonometric, exponential (requires `-tags SVDB_EXT_MATH`)
@@ -106,7 +103,7 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.10.7)
+## Performance (v0.10.15)
 
 Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=2s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
@@ -115,6 +112,13 @@ SQLite's `database/sql` driver reuses prepared statements across iterations.
 Both sides iterate all result rows end-to-end.
 (`go test ./internal/TS/Benchmark/... -bench=BenchmarkCompare_ -benchtime=2s`).
 Results may vary on different hardware.
+
+### v0.10.15 CLI + Refactoring Enhancements
+
+sqlvibe v0.10.15 introduces `context/` and `window/` helper subpackages for
+improved testability, adds `ANY_VALUE()` and `MODE()` aggregate functions,
+enhances the `.dump` CLI command (--data-only, --schema-only, --inserts),
+and fixes the `.export` command to correctly write CSV/JSON output.
 
 ### v0.10.7 Query Optimizer + Performance Enhancements
 
