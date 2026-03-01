@@ -1,10 +1,29 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.8 (2026-03-01)
+## Current Version: v0.10.9 (2026-03-01)
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
 **Test Status**: All 84+ SQL:1999 test suites passing.
+
+---
+
+## **v0.10.9** (2026-03-01)
+
+### Refactoring: pragma/ subpackage + IS SchemaSource
+
+#### pragma/ Subpackage
+- Extracted all pragma handlers from `pragma.go` (1017 lines) into `pkg/sqlvibe/pragma/` subpackage
+- New files: `ctx.go`, `helpers.go`, `cache.go`, `storage.go`, `wal.go`, `vacuum.go`, `transaction.go`, `compat.go`
+- `pragma.go` rewritten as thin dispatch table (~250 lines)
+- `pragma_ctx.go` implements `pragma.Ctx` interface on `*Database`
+
+#### IS SchemaSource Interface
+- Added `FKInfo` type to `internal/IS`
+- Added `SchemaSource` interface to `internal/IS`
+- Updated `SchemaExtractor` with `NewSchemaExtractorWithSource` constructor
+- Added `NewMetadataProviderWithSource` to `MetadataProvider`
+- `SchemaExtractor` methods now use `SchemaSource` when available
 
 ---
 

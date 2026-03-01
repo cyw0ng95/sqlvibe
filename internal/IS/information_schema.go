@@ -65,10 +65,33 @@ type ReferentialConstraint struct {
 	UniqueConstraintName   string
 }
 
+// FKInfo holds foreign key constraint information.
+type FKInfo struct {
+	ChildColumns  []string
+	ParentTable   string
+	ParentColumns []string
+}
+
+// SchemaSource is implemented by the database to provide schema metadata to IS.
+type SchemaSource interface {
+	GetTableNames() []string
+	GetTableType(name string) string
+	GetColumnNames(tableName string) []string
+	GetColumnType(tableName, colName string) string
+	IsColumnNullable(tableName, colName string) bool
+	GetColumnDefault(tableName, colName string) interface{}
+	GetPrimaryKeyColumns(tableName string) []string
+	GetUniqueIndexes(tableName string) map[string][]string
+	GetForeignKeys(tableName string) []FKInfo
+	GetViewDefinition(name string) string
+	GetViewNames() []string
+}
+
 // MetadataProvider extracts metadata from the database
 type MetadataProvider struct {
 	btree     *DS.BTree
 	extractor *SchemaExtractor
+	source    SchemaSource
 }
 
 // NewMetadataProvider creates a new metadata provider
@@ -76,6 +99,15 @@ func NewMetadataProvider(btree *DS.BTree) *MetadataProvider {
 	return &MetadataProvider{
 		btree:     btree,
 		extractor: NewSchemaExtractor(btree),
+	}
+}
+
+// NewMetadataProviderWithSource creates a metadata provider backed by a SchemaSource.
+func NewMetadataProviderWithSource(btree *DS.BTree, source SchemaSource) *MetadataProvider {
+	return &MetadataProvider{
+		btree:     btree,
+		extractor: NewSchemaExtractorWithSource(btree, source),
+		source:    source,
 	}
 }
 

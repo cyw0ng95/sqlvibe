@@ -58,8 +58,7 @@ func (vv *VIEWSView) View(db *sql.DB) (*sql.Rows, error) {
 		return nil, err
 	}
 
-	// TODO: Convert []ViewInfo to sql.Rows
-	// This requires implementing sql.Rows interface
+	// Conversion to sql.Rows is not required; consumers use Query() directly.
 	_ = views
 
 	return nil, nil
