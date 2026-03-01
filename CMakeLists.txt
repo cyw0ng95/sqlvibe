@@ -49,6 +49,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/internal/QP/cgo/CMakeLists.txt)
     add_subdirectory(internal/QP/cgo)
 endif()
 
+# Add CG CGO library (Phase 3)
+if(EXISTS ${CMAKE_SOURCE_DIR}/internal/CG/cgo/CMakeLists.txt)
+    add_subdirectory(internal/CG/cgo)
+endif()
+
 # Add pkg/sqlvibe CGO library (Phase 2)
 if(EXISTS ${CMAKE_SOURCE_DIR}/pkg/sqlvibe/cgo/CMakeLists.txt)
     add_subdirectory(pkg/sqlvibe/cgo)
