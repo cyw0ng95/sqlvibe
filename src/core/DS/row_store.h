@@ -53,6 +53,9 @@ void svdb_row_store_update(svdb_row_store_t* store, int idx,
 /* Mark the row at idx as deleted (tombstone; idempotent). */
 void svdb_row_store_delete(svdb_row_store_t* store, int idx);
 
+/* Return 1 if the row at idx is deleted, 0 otherwise. Out of range returns 1. */
+int svdb_row_store_is_deleted(svdb_row_store_t* store, int idx);
+
 /* Return total row count (including deleted rows). */
 int svdb_row_store_row_count(svdb_row_store_t* store);
 

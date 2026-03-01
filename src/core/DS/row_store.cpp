@@ -118,6 +118,11 @@ void svdb_row_store_delete(svdb_row_store_t* store, int idx) {
     --store->live;
 }
 
+int svdb_row_store_is_deleted(svdb_row_store_t* store, int idx) {
+    if (!store || idx < 0 || idx >= (int)store->deleted.size()) return 1;
+    return store->deleted[(size_t)idx] ? 1 : 0;
+}
+
 int svdb_row_store_row_count(svdb_row_store_t* store) {
     if (!store) return 0;
     return (int)store->rows.size();

@@ -112,6 +112,38 @@ void svdb_column_store_delete_row(svdb_column_store_t* store, int idx) {
     --store->live;
 }
 
+int svdb_column_store_is_deleted(svdb_column_store_t* store, int idx) {
+    if (!store || idx < 0 || idx >= (int)store->deleted.size()) return 1;
+    return store->deleted[(size_t)idx] ? 1 : 0;
+}
+
+void svdb_column_store_update_row(svdb_column_store_t* store, int idx,
+                                   const svdb_value_t* values, int num_values) {
+    if (!store || idx < 0 || idx >= (int)store->deleted.size()) return;
+    for (int i = 0; i < store->num_cols; ++i) {
+        const svdb_value_t* v = (values && i < num_values) ? &values[i] : nullptr;
+        ColumnData& col = store->cols[(size_t)i];
+        if (idx >= (int)col.values.size()) continue;
+        if (!v) {
+            svdb_value_t null_val{}; null_val.val_type = SVDB_TYPE_NULL;
+            col.values[(size_t)idx] = null_val;
+            col.strings[(size_t)idx] = "";
+        } else {
+            svdb_value_t entry = *v;
+            if (v->val_type == SVDB_TYPE_TEXT && v->str_data) {
+                col.strings[(size_t)idx] = std::string(v->str_data, v->str_len);
+                entry.str_data = nullptr;
+            } else if (v->val_type == SVDB_TYPE_BLOB && v->bytes_data) {
+                col.strings[(size_t)idx] = std::string(v->bytes_data, v->bytes_len);
+                entry.bytes_data = nullptr;
+            } else {
+                col.strings[(size_t)idx] = "";
+            }
+            col.values[(size_t)idx] = entry;
+        }
+    }
+}
+
 int svdb_column_store_row_count(svdb_column_store_t* store) {
     if (!store) return 0;
     return (int)store->deleted.size();

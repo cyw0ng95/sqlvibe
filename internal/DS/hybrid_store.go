@@ -74,11 +74,9 @@ func (hs *HybridStore) Update(rowIdx int, vals []Value) {
 	hs.rowStore.Update(rowIdx, newRow)
 
 	// Update column store by overwriting each column vector value
-	for ci, vec := range hs.colStore.vectors {
+	for ci := 0; ci < len(hs.colStore.Columns()); ci++ {
 		if ci < len(vals) {
-			if rowIdx >= 0 && rowIdx < vec.Len() {
-				vec.Set(rowIdx, vals[ci])
-			}
+			hs.colStore.SetValue(rowIdx, ci, vals[ci])
 		}
 	}
 

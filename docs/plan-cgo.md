@@ -41,8 +41,8 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | `internal/DS/roaring_bitmap.go` | `src/core/DS/roaring.cpp` | ✅ CGO | |
 | `internal/DS/encoding.go` | `src/core/DS/varint.cpp` | ✅ CGO | varint encode/decode |
 | `internal/DS/cell.go` | `src/core/DS/cell.cpp` | ✅ CGO | Cell encode/decode |
-| `internal/DS/overflow.go` | `src/core/DS/overflow.cpp` | ✅ CGO | Registry for callbacks (C++ → Go page ops) |
-| `internal/DS/cache_cgo.go` | `src/core/DS/cache.cpp` | ✅ CGO | **Direct C pointer** (no registry, self-contained) |
+| `internal/DS/overflow.go` | `src/core/DS/overflow.cpp` | ✅ CGO | Pure Go fallback (`overflow_pure.go`) for non-CGO builds |
+| `internal/DS/cache_cgo.go` | `src/core/DS/cache.cpp` | ✅ CGO | **Direct C pointer** (no registry, self-contained); pure Go fallback in `cache.go` |
 
 **Architecture Note**: `cache_cgo.go` uses direct C pointer (no registry overhead) since C++ cache is self-contained. `overflow.go` requires registry for Go PageManager callbacks. See `docs/plan-cgo-architecture-fix.md`.
 
@@ -51,8 +51,8 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | Go File | C++ File | Status | Notes |
 |---------|----------|--------|-------|
 | `internal/DS/btree.go` | `src/core/DS/btree.cpp` | ⚠️ PARTIAL | C++ has insert/delete/search, Go wrapper NOT using CGO (needs cursor support) |
-| `internal/DS/column_store.go` | `src/core/DS/columnar.cpp` | ⚠️ PARTIAL | C++ complete, Go wrapper needs CGO |
-| `internal/DS/row_store.go` | `src/core/DS/row_store.cpp` | ⚠️ PARTIAL | C++ complete, Go wrapper needs CGO |
+| `internal/DS/column_store.go` | `src/core/DS/columnar.cpp` | ✅ CGO | CGO: Direct C pointer; pure Go fallback (`!SVDB_ENABLE_CGO_DS`) |
+| `internal/DS/row_store.go` | `src/core/DS/row_store.cpp` | ✅ CGO | CGO: Direct C pointer; pure Go fallback (`!SVDB_ENABLE_CGO_DS`) |
 
 ### 📋 Go-Only (No C++ Migration Planned)
 
@@ -425,17 +425,19 @@ func goBtreePageRead(userData unsafe.Pointer, ...) C.int {
 
 #### 2.1 Migrate `column_store.go` → `columnar.cpp`
 - [x] C++ columnar store implemented
-- [ ] Go wrapper using CGO (registry for callbacks)
-- [ ] Tests: `internal/DS/exec_columnar_test.go`
+- [x] Go CGO wrapper in `column_store_cgo.go` (Direct C Pointer pattern)
+- [x] Pure Go fallback in `column_store.go` (`!SVDB_ENABLE_CGO_DS`)
+- [x] `svdb_column_store_update_row` and `svdb_column_store_is_deleted` added to API
+- [x] Tests: `internal/DS/exec_columnar_test.go` passing
 
 **Complexity**: High | **Effort**: 2-3 days
 
 #### 2.2 Migrate `row_store.go` → `row_store.cpp`
 - [x] C++ row store implemented
-- [ ] Go wrapper using CGO (registry for callbacks)
-- [ ] Tests: `internal/DS/storage_test.go`
-
-**Complexity**: High | **Effort**: 2-3 days
+- [x] Go CGO wrapper in `row_store_cgo.go` (Direct C Pointer pattern)
+- [x] Pure Go fallback in `row_store.go` (`!SVDB_ENABLE_CGO_DS`)
+- [x] `svdb_row_store_is_deleted` added to API
+- [x] Tests: `internal/DS/storage_test.go` passing
 
 ### Phase 3: VM Layer - Execution Engine (Medium Priority)
 
@@ -525,7 +527,7 @@ sqlvibe/
 | Phase 1.1 | btree.cpp insert/delete | 🔄 In Progress | 2-3 days | Phase 0 |
 | Phase 1.2 | overflow.cpp | ✅ Complete | 1 day | Phase 0 |
 | Phase 1.3 | cache.cpp | ✅ Complete | 1 day | Phase 0 |
-| Phase 2 | DS layer (columnar, row_store) | Pending | 4-6 days | Phase 1 |
+| Phase 2 | DS layer (columnar, row_store) | ✅ Complete | 4-6 days | Phase 1 |
 | Phase 3.1 | Extend opcodes.cpp | Pending | 5-7 days | Phase 2 |
 | Phase 4 | QP parser stubs | 🔄 In Progress | 5-10 days | Phase 3 |
 | Phase 5 | Legacy code removal | Pending | 3-5 days | Phases 1-4 |

@@ -1,3 +1,5 @@
+//go:build !SVDB_ENABLE_CGO_DS
+
 package DS
 
 // RowStore is a row-oriented in-memory store with tombstone-based deletion.

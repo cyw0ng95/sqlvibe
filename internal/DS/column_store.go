@@ -1,3 +1,5 @@
+//go:build !SVDB_ENABLE_CGO_DS
+
 package DS
 
 // ColumnStore stores data column-by-column for analytical workloads.
@@ -69,6 +71,17 @@ func (cs *ColumnStore) DeleteRow(idx int) {
 	}
 	cs.deleted[idx] = true
 	cs.live--
+}
+
+// SetValue sets a specific cell value at (rowIdx, colIdx) in place.
+func (cs *ColumnStore) SetValue(rowIdx, colIdx int, val Value) {
+	if colIdx < 0 || colIdx >= len(cs.vectors) {
+		return
+	}
+	vec := cs.vectors[colIdx]
+	if rowIdx >= 0 && rowIdx < vec.Len() {
+		vec.Set(rowIdx, val)
+	}
 }
 
 // RowCount returns the total number of rows including deleted.
