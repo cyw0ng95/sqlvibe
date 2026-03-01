@@ -86,6 +86,15 @@ func (m *mockCtx) GetMaxMemoryBytes() int64             { return m.maxMemoryByte
 func (m *mockCtx) SetMaxMemoryBytes(b int64)            { m.maxMemoryBytes = b }
 func (m *mockCtx) GetQueryCacheMax() int                { return m.queryCacheMax }
 func (m *mockCtx) SetQueryCacheMax(n int)               { m.queryCacheMax = n }
+func (m *mockCtx) GetPlanCacheEnabled() bool            { return m.pragmaInts["cache_plan"] != 0 }
+func (m *mockCtx) SetPlanCacheEnabled(enabled bool)     {
+	if enabled {
+		m.pragmaInts["cache_plan"] = 1
+	} else {
+		m.pragmaInts["cache_plan"] = 0
+	}
+}
+func (m *mockCtx) GetStmtCacheLen() int                 { return 0 }
 
 func TestHandleCacheSize_Read(t *testing.T) {
 	ctx := newMock()
@@ -170,4 +179,49 @@ func TestHandleCacheGrind(t *testing.T) {
 		t.Errorf("expected 4 cols, got %d", len(cols))
 	}
 	_ = rows
+}
+
+func TestHandleCachePlan_Read(t *testing.T) {
+ctx := newMock()
+ctx.pragmaInts["cache_plan"] = 1 // start enabled
+stmt := &QP.PragmaStmt{Name: "cache_plan"}
+cols, rows, err := pragma.HandleCachePlan(ctx, stmt)
+if err != nil {
+t.Fatal(err)
+}
+if len(cols) != 1 || cols[0] != "cache_plan" {
+t.Errorf("unexpected cols: %v", cols)
+}
+if rows[0][0] != int64(1) {
+t.Errorf("expected 1 (enabled), got %v", rows[0][0])
+}
+}
+
+func TestHandleCachePlan_Disable(t *testing.T) {
+ctx := newMock()
+ctx.pragmaInts["cache_plan"] = 1
+lit := &QP.Literal{Value: int64(0)}
+stmt := &QP.PragmaStmt{Name: "cache_plan", Value: lit}
+_, _, err := pragma.HandleCachePlan(ctx, stmt)
+if err != nil {
+t.Fatal(err)
+}
+if ctx.pragmaInts["cache_plan"] != 0 {
+t.Errorf("expected cache_plan=0 after disabling")
+}
+}
+
+func TestHandleCachePlan_Enable(t *testing.T) {
+ctx := newMock()
+ctx.pragmaInts["cache_plan"] = 0
+lit := &QP.Literal{Value: int64(1)}
+stmt := &QP.PragmaStmt{Name: "cache_plan", Value: lit}
+cols, rows, err := pragma.HandleCachePlan(ctx, stmt)
+if err != nil {
+t.Fatal(err)
+}
+_ = cols
+if rows[0][0] != int64(1) {
+t.Errorf("expected 1 after enabling, got %v", rows[0][0])
+}
 }

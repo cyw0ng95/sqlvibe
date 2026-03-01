@@ -196,6 +196,9 @@ func (db *Database) ClearCaches() {
 	if db.planCache != nil {
 		db.planCache.Invalidate()
 	}
+	if db.stmtCache != nil {
+		db.stmtCache.Invalidate()
+	}
 	runtime.GC()
 }
 
@@ -245,4 +248,22 @@ func (db *Database) GetQueryCacheMax() int {
 func (db *Database) SetQueryCacheMax(n int) {
 	db.queryCacheMax = n
 	db.queryCache = newQueryResultCache(n)
+}
+
+func (db *Database) GetPlanCacheEnabled() bool {
+return db.planCacheEnabled
+}
+
+func (db *Database) SetPlanCacheEnabled(enabled bool) {
+db.planCacheEnabled = enabled
+if !enabled && db.planCache != nil {
+db.planCache.Invalidate()
+}
+}
+
+func (db *Database) GetStmtCacheLen() int {
+if db.stmtCache == nil {
+return 0
+}
+return db.stmtCache.Len()
 }

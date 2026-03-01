@@ -49,7 +49,7 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 
 	// Check plan cache before compiling.
 	var compiledProgram *VM.Program
-	if db.planCache != nil {
+	if db.planCacheEnabled && db.planCache != nil {
 		if cached, ok := db.planCache.Get(sql); ok {
 			compiledProgram = cached
 		}
@@ -60,7 +60,7 @@ func (db *Database) ExecVM(sql string) (*Rows, error) {
 			return nil, fmt.Errorf("VM compile error: %v", err)
 		}
 		// Cache compiled plan for future reuse.
-		if db.planCache != nil {
+		if db.planCacheEnabled && db.planCache != nil {
 			db.planCache.Put(sql, compiledProgram)
 		}
 	}

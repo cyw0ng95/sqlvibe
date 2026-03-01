@@ -92,6 +92,8 @@ type Database struct {
 	pkHashSet         map[string]map[interface{}]struct{} // table name -> PK value -> exists (single-col PK only)
 	indexData         map[string]map[interface{}][]int    // index name -> col value -> []row indices
 	planCache         *CG.PlanCache                       // compiled query plan cache
+	stmtCache         *CG.StmtCache                       // parsed statement cache
+	planCacheEnabled  bool                                // whether plan cache is active
 	queryCache        *queryResultCache                   // full query result cache (columns + rows)
 	queryCacheMax     int                                 // maximum query cache entries
 	schemaCache       *IS.SchemaCache                     // information_schema result cache (DDL-invalidated)
@@ -383,6 +385,8 @@ func Open(path string) (*Database, error) {
 		pkHashSet:          make(map[string]map[interface{}]struct{}),
 		indexData:          make(map[string]map[interface{}][]int),
 		planCache:          CG.NewPlanCache(256),
+		stmtCache:          CG.NewStmtCache(512),
+		planCacheEnabled:   true,
 		queryCacheMax:      512,
 		queryCache:         newQueryResultCache(512),
 		schemaCache:        IS.NewSchemaCache(),

@@ -1,10 +1,49 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.12 (2026-03-01)
+## Current Version: v0.10.13 (2026-03-01)
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
 **Test Status**: All 84+ SQL:1999 test suites passing.
+
+---
+
+## **v0.10.13** (2026-03-01)
+
+### Features
+
+#### Query Cache Enhancements
+- `PRAGMA cache_plan` — read or set plan-cache enable flag (1=enabled, 0=disabled)
+- `PRAGMA cache_plan = 0` — disable the compiled query plan cache at runtime
+- `PRAGMA cache_plan = 1` — re-enable the compiled query plan cache
+- `StmtCache` — new parsed-statement cache (`internal/CG/stmt_cache.go`) with LRU eviction
+  - `NewStmtCache(limit int)` — create a cache with configurable capacity
+  - `Put(sql, stmt)` / `Get(sql)` / `Invalidate()` / `Len()` public API
+  - Integrated into `Database` struct (`stmtCache` field, capacity 512)
+  - Cleared by `PRAGMA shrink_memory` and `ClearCaches()`
+- `planCacheEnabled` flag on `Database` — controls whether bytecode plans are cached
+  - Defaults to `true`; toggled via `PRAGMA cache_plan`
+
+#### compiler/ Subpackage (`internal/CG/compiler/`)
+New pure-helper subpackage extracted from `internal/CG/compiler.go`:
+- **select.go** — SELECT helpers: `HasAggregates`, `HasWindowFunctions`, `ShouldUseColumnar`,
+  `IsStarSelect`, `HasJoin`, `GetSelectColumnNames`, `ExprOutputName`
+- **aggregate.go** — Aggregate helpers: `IsAggregateFunction`, `ExprHasAggregate`,
+  `ExtractAggregates`, `CountAggregateFunctions`
+- **window.go** — Window helpers: `IsWindowFunction`, `ExtractWindowFunctions`,
+  `HasNamedWindows`, `FrameSpecString`
+- **subquery.go** — Subquery helpers: `HasSubquery`, `HasWhereSubquery`,
+  `HasColumnSubquery`, `ExtractSubqueries`
+- **dml.go** — DML helpers: `InsertColumnNames`, `InsertValueRowCount`,
+  `UpdateColumnList`, `HasReturning`, `IsInsertWithSelect`,
+  `DeleteHasWhere`, `UpdateHasWhere`
+- **cte.go** — CTE helpers: `HasCTEs`, `IsRecursiveCTE`, `HasRecursiveCTE`,
+  `CTENames`, `FindCTE`, `CTEReferences`
+- **64 tests** across 5 test files in `internal/CG/compiler/`
+
+#### Cache Tests
+- 7 new tests in `internal/CG/cache_test.go` for `StmtCache` + `PlanCache`
+- 3 new tests in `pkg/sqlvibe/pragma/cache_test.go` for `PRAGMA cache_plan`
 
 ---
 

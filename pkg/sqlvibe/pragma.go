@@ -58,6 +58,8 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		return wrapPragmaResult(pragma.HandleCacheSpill(db, stmt))
 	case "cache_grind":
 		return wrapPragmaResult(pragma.HandleCacheGrind(db))
+	case "cache_plan":
+		return wrapPragmaResult(pragma.HandleCachePlan(db, stmt))
 
 	// --- Storage pragmas ---
 	case "page_size":
