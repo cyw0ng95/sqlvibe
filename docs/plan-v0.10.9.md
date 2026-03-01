@@ -96,8 +96,14 @@ Current: 23.6% → Target: 50%
 
 ## 5. Success Criteria
 
-- [ ] All 18 TODOs resolved
-- [ ] pragma/ subpackage created and working
+- [x] pragma/ subpackage created and working
+- [x] SchemaSource interface added to IS package
+- [x] SchemaExtractor updated with SchemaSource support
+- [x] NewMetadataProviderWithSource added
+- [x] FKInfo type added to IS package
+- [x] pragma_ctx.go implements pragma.Ctx interface on *Database
+- [x] pragma.go rewritten as thin dispatch table (~250 lines)
+- [x] All tests pass
+- [ ] All 18 TODOs resolved (IS views still return empty data pending DB integration)
 - [ ] pragma/*_test.go added (~30 tests)
-- [ ] All tests pass
 - [ ] Coverage: pkg/sqlvibe → 50%
