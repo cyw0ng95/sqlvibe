@@ -87,3 +87,33 @@ func TestHandleMaxRows(t *testing.T) {
 		t.Errorf("expected 1000, got %v", rows[0][0])
 	}
 }
+
+func TestHandleFreelistCount(t *testing.T) {
+	ctx := newMock()
+	ctx.storageMetrics = pragma.StorageMetrics{FreePages: 7}
+	cols, rows, err := pragma.HandleFreelistCount(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cols) != 1 || cols[0] != "freelist_count" {
+		t.Errorf("unexpected cols: %v", cols)
+	}
+	if rows[0][0] != int64(7) {
+		t.Errorf("expected freelist_count=7, got %v", rows[0][0])
+	}
+}
+
+func TestHandlePageCount(t *testing.T) {
+	ctx := newMock()
+	ctx.storageMetrics = pragma.StorageMetrics{PageCount: 42}
+	cols, rows, err := pragma.HandlePageCount(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cols) != 1 || cols[0] != "page_count" {
+		t.Errorf("unexpected cols: %v", cols)
+	}
+	if rows[0][0] != int64(42) {
+		t.Errorf("expected page_count=42, got %v", rows[0][0])
+	}
+}

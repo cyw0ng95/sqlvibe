@@ -87,3 +87,44 @@ func TestHandleJournalSizeLimit(t *testing.T) {
 		t.Errorf("expected 1048576, got %v", rows[0][0])
 	}
 }
+
+func TestHandleIncrementalVacuum_NoArg(t *testing.T) {
+	ctx := newMock()
+	ctx.storageMetrics = pragma.StorageMetrics{FreePages: 5}
+	stmt := &QP.PragmaStmt{Name: "incremental_vacuum"}
+	_, rows, err := pragma.HandleIncrementalVacuum(ctx, stmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// All 5 free pages should be reported as freed.
+	if rows[0][0] != int64(5) {
+		t.Errorf("expected 5 freed pages, got %v", rows[0][0])
+	}
+}
+
+func TestHandleIncrementalVacuum_WithN(t *testing.T) {
+	ctx := newMock()
+	ctx.storageMetrics = pragma.StorageMetrics{FreePages: 10}
+	stmt := &QP.PragmaStmt{Name: "incremental_vacuum", Value: &QP.Literal{Value: int64(3)}}
+	_, rows, err := pragma.HandleIncrementalVacuum(ctx, stmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0][0] != int64(3) {
+		t.Errorf("expected 3 freed pages, got %v", rows[0][0])
+	}
+}
+
+func TestHandleIncrementalVacuum_NGreaterThanFree(t *testing.T) {
+	ctx := newMock()
+	ctx.storageMetrics = pragma.StorageMetrics{FreePages: 2}
+	stmt := &QP.PragmaStmt{Name: "incremental_vacuum", Value: &QP.Literal{Value: int64(100)}}
+	_, rows, err := pragma.HandleIncrementalVacuum(ctx, stmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only 2 free pages available.
+	if rows[0][0] != int64(2) {
+		t.Errorf("expected 2 freed pages (all available), got %v", rows[0][0])
+	}
+}

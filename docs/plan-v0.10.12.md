@@ -128,13 +128,13 @@ Improve execution layer test coverage
 
 ## 5. Success Criteria
 
-- [ ] Incremental vacuum implemented
-- [ ] Auto vacuum enhanced
-- [ ] Storage PRAGMAs working
-- [ ] Predicate pushdown working
-- [ ] Column pruning working
-- [ ] Expression caching working
-- [ ] Code-level optimizations applied
-- [ ] vm/ subpackage created
-- [ ] vm/*_test.go added (~46 tests)
-- [ ] All tests pass
+- [x] Incremental vacuum implemented
+- [x] Auto vacuum enhanced
+- [x] Storage PRAGMAs working (freelist_count, page_count)
+- [x] Predicate pushdown working (vm.CanPushdownWhere, vm.SplitPredicates)
+- [x] Column pruning working (vm.PruneColumns)
+- [x] Expression caching working (vm.ExprToSQL, vm.LiteralToString)
+- [x] Code-level optimizations applied (thin wrappers in vm_exec.go)
+- [x] vm/ subpackage created
+- [x] vm/*_test.go added (~51 tests)
+- [x] All tests pass
