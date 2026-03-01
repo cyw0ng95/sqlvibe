@@ -450,21 +450,11 @@ func GetTokenizer(name string) Tokenizer {
 		cgoTyp = TokenizerASCII
 	}
 
-	// Use CGO implementation if available
+	// Use CGO tokenizer
 	cgoTok := newCGOTokenizer(cgoTyp)
 	if cgoTok != nil && cgoTok.handle != nil {
 		return cgoTok
 	}
 
-	// Fallback to pure Go
-	switch name {
-	case "porter":
-		return NewPorterTokenizer()
-	case "unicode61":
-		return NewUnicode61Tokenizer()
-	case "ascii", "simple", "":
-		return NewASCIITokenizer()
-	default:
-		return NewASCIITokenizer()
-	}
+	return nil
 }

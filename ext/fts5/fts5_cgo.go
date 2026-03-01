@@ -1,6 +1,3 @@
-//go:build SVDB_ENABLE_CGO
-// +build SVDB_ENABLE_CGO
-
 package fts5
 
 /*

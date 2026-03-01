@@ -201,14 +201,6 @@ func (db *Database) execHashJoin(stmt *QP.SelectStmt) ([][]interface{}, []string
 		return nil, nil, false
 	}
 
-	// Try CGO hash join first (Phase 20 optimization)
-	if cgoRows, cgoCols, cgoUsed := execHashJoinCGO(
-		leftData, rightData, leftCols, rightCols,
-		info.leftJoinKey, info.rightJoinKey,
-	); cgoUsed {
-		return cgoRows, cgoCols, true
-	}
-
 	leftAlias := info.leftAlias
 	if leftAlias == "" {
 		leftAlias = leftTable

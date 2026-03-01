@@ -9,7 +9,7 @@ package json
 import "github.com/cyw0ng95/sqlvibe/ext"
 
 // JSONExtension implements the JSON1-compatible extension.
-// The actual implementation is in json_pure.go (pure Go) or json_cgo.go (CGO).
+// The actual implementation is in json_impl.go (CGO).
 type JSONExtension struct{}
 
 func (e *JSONExtension) Name() string        { return "json" }
