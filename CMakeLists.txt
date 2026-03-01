@@ -26,9 +26,13 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/ext/math/CMakeLists.txt)
     add_subdirectory(ext/math)
 endif()
 
+if(EXISTS ${CMAKE_SOURCE_DIR}/ext/json/CMakeLists.txt)
+    add_subdirectory(ext/json)
+endif()
+
 # Add more C++ extensions as needed
-# if(EXISTS ${CMAKE_SOURCE_DIR}/ext/json/CMakeLists.txt)
-#     add_subdirectory(ext/json)
+# if(EXISTS ${CMAKE_SOURCE_DIR}/ext/fts5/CMakeLists.txt)
+#     add_subdirectory(ext/fts5)
 # endif()
 
 # Build all C++ targets

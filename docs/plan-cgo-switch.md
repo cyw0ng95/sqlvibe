@@ -11,7 +11,7 @@ This plan covers converting key extensions to use C++ while maintaining pure Go 
 | Phase | Module | Library | Status |
 |-------|--------|---------|--------|
 | Phase 1 | ext/math | libsvdb_ext_math | ✅ Implemented |
-| Phase 2 | ext/json | libsvdb_ext_json | Pending |
+| Phase 2 | ext/json | libsvdb_ext_json | ✅ Implemented |
 | Phase 3 | ext/fts5 | libsvdb_ext_fts5 | Pending |
 | Phase 4 | Engineering Tools | Containerfile | Pending |
 
@@ -269,13 +269,13 @@ CMD ["./build.sh", "-t", "-n"]
 ## 8. Success Criteria
 
 - [x] Phase 1: ext/math CGO implementation
-- [ ] Phase 2: ext/json CGO implementation
+- [x] Phase 2: ext/json CGO implementation
 - [ ] Phase 3: ext/fts5 CGO implementation
 - [ ] Phase 4: Engineering tools
-- [ ] All extensions work with `-t` (pure Go)
-- [ ] All extensions work with `-t -n` (CGO)
-- [ ] C++ builds output to `.build/cmake/lib/`
-- [ ] LD_LIBRARY_PATH set correctly for CGO
+- [x] All extensions work with `-t` (pure Go)
+- [x] All extensions work with `-t -n` (CGO)
+- [x] C++ builds output to `.build/cmake/lib/`
+- [x] LD_LIBRARY_PATH set correctly for CGO
 
 ---
 
