@@ -1,10 +1,18 @@
-# Plan v0.10.10 - Schema Parser + SQLSTATE
+# Plan v0.10.10 - Schema Parser + SQLSTATE + Remaining TODOs
 
 ## Summary
 
-Implement Schema Parser and SQLSTATE error codes, refactor parser into subpackage.
+Implement Schema Parser and SQLSTATE error codes, refactor parser into subpackage, resolve remaining TODOs.
 
 ## Background
+
+### Remaining TODOs to Resolve
+| File | TODO | Status |
+|------|------|--------|
+| setops.go | Complete full VM bytecode compilation | v0.10.11 |
+| transaction.go | Implement actual rollback logic | v0.10.11 |
+| internal/TS/SQL1999/E171/01_test.go | Check SQLSTATE error code | v0.10.10 |
+| internal/IS/registry_test.go | Use proper BTree initialization | v0.10.10 |
 
 ### Existing TODOs
 - Schema Parser: 2 items (CREATE TABLE/VIEW parsing)
@@ -45,6 +53,13 @@ Implement Schema Parser and SQLSTATE error codes, refactor parser into subpackag
 | 23505 | Unique violation |
 | 23503 | Foreign key violation |
 | 23000 | Integrity constraint violation |
+
+### 1.4 Resolve Remaining TODOs
+
+| Task | Description |
+|------|-------------|
+| SQLSTATE Test | Update SQL1999/E171 test to check SQLSTATE codes |
+| BTree Init | Fix registry_test.go to use proper BTree initialization |
 
 ---
 
@@ -107,6 +122,8 @@ Current: 31.9% → Target: 50%
 - [ ] Schema Parser implemented
 - [ ] .schema command working
 - [ ] SQLSTATE error codes implemented
+- [ ] SQL1999/E171 test updated to check SQLSTATE codes
+- [ ] registry_test.go BTree initialization fixed
 - [ ] parser/ subpackage created
 - [ ] parser/*_test.go added (~40 tests)
 - [ ] All tests pass
