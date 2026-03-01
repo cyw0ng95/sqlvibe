@@ -22,9 +22,9 @@ func TestEvalAbs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalAbs([]interface{}{tt.input})
+			result := callAbs([]interface{}{tt.input})
 			if result != tt.expected {
-				t.Errorf("evalAbs(%v) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("callAbs(%v) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -46,9 +46,9 @@ func TestEvalCeil(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalCeil([]interface{}{tt.input})
+			result := callCeil([]interface{}{tt.input})
 			if result != tt.expected {
-				t.Errorf("evalCeil(%v) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("callCeil(%v) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -70,9 +70,9 @@ func TestEvalFloor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalFloor([]interface{}{tt.input})
+			result := callFloor([]interface{}{tt.input})
 			if result != tt.expected {
-				t.Errorf("evalFloor(%v) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("callFloor(%v) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -94,9 +94,9 @@ func TestEvalRound(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalRound(tt.args)
+			result := callRound(tt.args)
 			if result != tt.expected {
-				t.Errorf("evalRound(%v) = %v, want %v", tt.args, result, tt.expected)
+				t.Errorf("callRound(%v) = %v, want %v", tt.args, result, tt.expected)
 			}
 		})
 	}
@@ -119,9 +119,9 @@ func TestEvalPower(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalPower(tt.args)
+			result := callPower(tt.args)
 			if result != tt.expected {
-				t.Errorf("evalPower(%v) = %v, want %v", tt.args, result, tt.expected)
+				t.Errorf("callPower(%v) = %v, want %v", tt.args, result, tt.expected)
 			}
 		})
 	}
@@ -142,9 +142,9 @@ func TestEvalSqrt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalSqrt([]interface{}{tt.input})
+			result := callSqrt([]interface{}{tt.input})
 			if result != tt.expected {
-				t.Errorf("evalSqrt(%v) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("callSqrt(%v) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -166,9 +166,9 @@ func TestEvalMod(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalMod(tt.args)
+			result := callMod(tt.args)
 			if result != tt.expected {
-				t.Errorf("evalMod(%v) = %v, want %v", tt.args, result, tt.expected)
+				t.Errorf("callMod(%v) = %v, want %v", tt.args, result, tt.expected)
 			}
 		})
 	}
@@ -188,9 +188,9 @@ func TestEvalExp(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalExp([]interface{}{tt.input})
+			result := callExp([]interface{}{tt.input})
 			if result != tt.expected {
-				t.Errorf("evalExp(%v) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("callExp(%v) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -212,9 +212,9 @@ func TestEvalLn(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalLn([]interface{}{tt.input})
+			result := callLn([]interface{}{tt.input})
 			if result != tt.expected {
-				t.Errorf("evalLn(%v) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("callLn(%v) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -237,9 +237,9 @@ func TestEvalLog(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalLog(tt.args)
+			result := callLog(tt.args)
 			if result != tt.expected {
-				t.Errorf("evalLog(%v) = %v, want %v", tt.args, result, tt.expected)
+				t.Errorf("callLog(%v) = %v, want %v", tt.args, result, tt.expected)
 			}
 		})
 	}
@@ -261,9 +261,9 @@ func TestEvalLog2(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalLog2([]interface{}{tt.input})
+			result := callLog2([]interface{}{tt.input})
 			if result != tt.expected {
-				t.Errorf("evalLog2(%v) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("callLog2(%v) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -286,9 +286,9 @@ func TestEvalLog10(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalLog10([]interface{}{tt.input})
+			result := callLog10([]interface{}{tt.input})
 			if result != tt.expected {
-				t.Errorf("evalLog10(%v) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("callLog10(%v) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -312,21 +312,21 @@ func TestEvalSign(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalSign([]interface{}{tt.input})
+			result := callSign([]interface{}{tt.input})
 			if result != tt.expected {
-				t.Errorf("evalSign(%v) = %v, want %v", tt.input, result, tt.expected)
+				t.Errorf("callSign(%v) = %v, want %v", tt.input, result, tt.expected)
 			}
 		})
 	}
 }
 
 func TestEvalRandom(t *testing.T) {
-	result := evalRandom([]interface{}{})
+	result := callRandom([]interface{}{})
 	if result == nil {
-		t.Error("evalRandom should return a value")
+		t.Error("callRandom should return a value")
 	}
 	if _, ok := result.(int64); !ok {
-		t.Errorf("evalRandom should return int64, got %T", result)
+		t.Errorf("callRandom should return int64, got %T", result)
 	}
 }
 
@@ -345,14 +345,14 @@ func TestEvalRandombLOB(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := evalRandombLOB([]interface{}{tt.input})
+			result := callRandombLOB([]interface{}{tt.input})
 			if result == nil {
-				t.Fatalf("evalRandombLOB(%v) returned nil", tt.input)
+				t.Fatalf("callRandombLOB(%v) returned nil", tt.input)
 			}
 			if b, ok := result.([]byte); !ok {
-				t.Errorf("evalRandombLOB should return []byte, got %T", result)
+				t.Errorf("callRandombLOB should return []byte, got %T", result)
 			} else if len(b) != tt.expected {
-				t.Errorf("evalRandombLOB(%v) = %d bytes, want %d", tt.input, len(b), tt.expected)
+				t.Errorf("callRandombLOB(%v) = %d bytes, want %d", tt.input, len(b), tt.expected)
 			}
 		})
 	}
