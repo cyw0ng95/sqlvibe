@@ -18,8 +18,8 @@ import (
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
 	"github.com/cyw0ng95/sqlvibe/internal/SF/errors"
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
-	"github.com/cyw0ng95/sqlvibe/internal/TM"
 	"github.com/cyw0ng95/sqlvibe/internal/VM"
+	"github.com/cyw0ng95/sqlvibe/src/core/TM"
 )
 
 // queryResultCache is a thread-safe in-process cache for full SELECT query results.
@@ -239,9 +239,9 @@ type IndexInfo struct {
 	Unique    bool
 	WhereExpr QP.Expr // non-nil for partial index
 	// v0.10.7: Index statistics for cost-based optimization
-	Cardinality int64   // estimated number of distinct values
-	RowCount    int64   // total rows indexed
-	IsCovering  bool    // true if index covers all query columns (for index-only scan)
+	Cardinality int64 // estimated number of distinct values
+	RowCount    int64 // total rows indexed
+	IsCovering  bool  // true if index covers all query columns (for index-only scan)
 }
 
 type Conn interface {
