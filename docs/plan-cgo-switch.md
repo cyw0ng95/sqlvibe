@@ -243,9 +243,15 @@ type Value struct {
 - [x] Phase 4: CG C++ backends — `compiler`, `expr_compiler`, `optimizer`, `plan_cache`
 - [x] Wrapper: Invoke chain wrapper (`pipeline_hash_filter`, `batch_eval_compare`, etc.)
 - [x] All tests passing with CGO enabled
+- [x] **Phase 1.1**: DS/value.go — Value type with comparison (C++ with CGO wrapper)
+- [x] **Phase 1.2**: DS/encoding.go — Varint encoding/decoding (uses existing C++ `svdb_put_varint`, `svdb_get_varint`)
+- [x] **Phase 1.3**: DS/compression.go — LZ4 and ZSTD compression (uses existing C++ `svdb_lz4_compress/decompress`, `svdb_zstd_compress/decompress`)
+- [x] **Phase 1.4**: DS/roaring_bitmap.go — Roaring bitmap (uses existing C++ `svdb_roaring_*` API, removed ~300 lines of pure Go)
+- [x] **Phase 2.1**: VM/string_pool.go — String interning pool (new C++ `StringPool` class with `std::unordered_set`)
+- [x] **Phase 2.2**: VM/registers.go — Register allocator (new C++ `RegisterAllocator` with bitmap + hash set)
 
 ### Pending
-- [ ] Phase 1 remainder: `page`, `freelist`, `value`, `column_store`, `row_store`, `wal`
+- [ ] Phase 1 remainder: `page`, `freelist`, `column_store`, `row_store`, `wal`
 - [ ] Phase 2 remainder: `bytecode_vm`, `bytecode_handlers`, `exec`, `cursor`
 - [ ] Phase 3 remainder: `parser`, `binder`, `analyzer`, `optimizer`
 - [ ] Phase 5: Clean up thin Go wrappers

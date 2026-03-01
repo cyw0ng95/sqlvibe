@@ -39,6 +39,7 @@ set(SVDB_CORE_SOURCES
     core/DS/simd.cpp
     core/DS/roaring.cpp
     core/DS/compression.cpp
+    core/DS/value.cpp
 
     # VM - Virtual Machine
     core/VM/hash.cpp
@@ -51,6 +52,8 @@ set(SVDB_CORE_SOURCES
     core/VM/datetime.cpp
     core/VM/aggregate.cpp
     core/VM/hash_join.cpp
+    core/VM/string_pool.cpp
+    core/VM/registers.cpp
 
     # QP - Query Processing
     core/QP/tokenizer.cpp

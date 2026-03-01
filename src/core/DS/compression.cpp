@@ -47,23 +47,28 @@ int svdb_lz4_compress(
     uint8_t* output,
     size_t output_size
 ) {
-    if (input_size == 0 || output_size == 0) {
+    if (input_size == 0 || output_size < 4) {
         return 0;
     }
+
+    // Write original length as 4-byte little-endian header
+    output[0] = static_cast<uint8_t>(input_size & 0xFF);
+    output[1] = static_cast<uint8_t>((input_size >> 8) & 0xFF);
+    output[2] = static_cast<uint8_t>((input_size >> 16) & 0xFF);
+    output[3] = static_cast<uint8_t>((input_size >> 24) & 0xFF);
     
-    // Simple LZ4-style compression
-    size_t out_pos = 0;
+    size_t out_pos = 4;
     size_t in_pos = 0;
-    
+
     while (in_pos < input_size) {
         // Check if we have enough output space
         if (out_pos + 16 >= output_size) {
             return 0;
         }
-        
+
         size_t match_pos = 0;
         size_t match_len = find_match(input, in_pos, input_size, &match_pos);
-        
+
         if (match_len >= 4) {
             // Encode match: [offset:2 bytes][length:1 byte]
             size_t offset = in_pos - match_pos;
@@ -80,7 +85,7 @@ int svdb_lz4_compress(
             in_pos += literal_len;
         }
     }
-    
+
     return static_cast<int>(out_pos);
 }
 
@@ -90,20 +95,26 @@ int svdb_lz4_decompress(
     uint8_t* output,
     size_t output_size
 ) {
-    if (input_size == 0 || output_size == 0) {
+    if (input_size < 4 || output_size == 0) {
+        return 0;
+    }
+
+    // Read original length from 4-byte little-endian header
+    uint32_t orig_len = input[0] | (input[1] << 8) | (input[2] << 16) | (input[3] << 24);
+    if (orig_len > output_size) {
         return 0;
     }
     
-    size_t in_pos = 0;
+    size_t in_pos = 4;  // Skip header
     size_t out_pos = 0;
-    
-    while (in_pos < input_size && out_pos < output_size) {
+
+    while (in_pos < input_size && out_pos < orig_len) {
         uint8_t token = input[in_pos++];
-        
+
         if (token & 0x80) {
             // Literal
             size_t literal_len = token & 0x7F;
-            if (in_pos + literal_len > input_size || out_pos + literal_len > output_size) {
+            if (in_pos + literal_len > input_size || out_pos + literal_len > orig_len) {
                 return 0;
             }
             fast_copy(input + in_pos, output + out_pos, literal_len);
@@ -117,11 +128,11 @@ int svdb_lz4_decompress(
             size_t match_len = token;
             size_t offset = input[in_pos] | (input[in_pos + 1] << 8);
             in_pos += 2;
-            
-            if (out_pos < offset || out_pos + match_len > output_size) {
+
+            if (out_pos < offset || out_pos + match_len > orig_len) {
                 return 0;
             }
-            
+
             // Copy from match position
             for (size_t i = 0; i < match_len; i++) {
                 output[out_pos + i] = output[out_pos + i - offset];
@@ -129,7 +140,7 @@ int svdb_lz4_decompress(
             out_pos += match_len;
         }
     }
-    
+
     return static_cast<int>(out_pos);
 }
 

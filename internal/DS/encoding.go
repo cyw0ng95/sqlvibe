@@ -1,12 +1,21 @@
 package DS
 
+/*
+#cgo LDFLAGS: -L${SRCDIR}/../../.build/cmake/lib -lsvdb -lstdc++
+#cgo CFLAGS: -I${SRCDIR}/../../src/core/DS
+#include "varint.h"
+#include <stdlib.h>
+#include <string.h>
+*/
+import "C"
+
 import (
 	"bytes"
 	"encoding/binary"
 	"errors"
 	"math"
-	"math/bits"
 	"sync"
+	"unsafe"
 
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
@@ -14,6 +23,7 @@ import (
 // Varint encoding/decoding following SQLite format
 // SQLite varints are 1-9 bytes for 64-bit values
 // First 7 bits of each byte are data, MSB indicates if more bytes follow
+// Implementation uses C++ for performance
 
 var (
 	ErrVarintOverflow = errors.New("varint overflow")
@@ -27,25 +37,9 @@ func PutVarint(buf []byte, v int64) int {
 	requiredLen := VarintLen(v)
 	util.Assert(len(buf) >= requiredLen, "buf too small for varint: %d bytes, need at least %d", len(buf), requiredLen)
 
-	uv := uint64(v)
-
-	// Handle single byte case (0-127)
-	if uv < 0x80 {
-		buf[0] = byte(uv)
-		return 1
-	}
-
-	// Multi-byte encoding
-	n := 0
-	for n < 8 && uv >= 0x80 {
-		buf[n] = byte(uv) | 0x80
-		uv >>= 7
-		n++
-	}
-
-	// Last byte doesn't have continuation bit
-	buf[n] = byte(uv)
-	return n + 1
+	// Use C++ implementation
+	n := C.svdb_put_varint((*C.uint8_t)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)), C.int64_t(v))
+	return int(n)
 }
 
 // GetVarint decodes a varint from buf and returns (value, bytes_read)
@@ -56,49 +50,18 @@ func GetVarint(buf []byte) (int64, int) {
 		return 0, 0
 	}
 
-	// Fast path for single byte
-	if buf[0] < 0x80 {
-		return int64(buf[0]), 1
+	// Use C++ implementation
+	var value C.int64_t
+	var bytesRead C.int
+	if C.svdb_get_varint((*C.uint8_t)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)), &value, &bytesRead) == 0 {
+		return 0, 0
 	}
-
-	// Multi-byte decode
-	var v uint64
-	var shift uint
-	n := 0
-
-	for n < 8 && n < len(buf) {
-		b := buf[n]
-		v |= uint64(b&0x7F) << shift
-		n++
-
-		if b < 0x80 {
-			return int64(v), n
-		}
-		shift += 7
-	}
-
-	// 9th byte uses all 8 bits
-	if n < len(buf) {
-		v |= uint64(buf[n]) << shift
-		n++
-	}
-
-	return int64(v), n
+	return int64(value), int(bytesRead)
 }
 
 // VarintLen returns the number of bytes required to encode v as a varint.
 func VarintLen(v int64) int {
-	uv := uint64(v)
-	if uv < 0x80 {
-		return 1
-	}
-	// bits.Len64 returns the position of the highest set bit + 1.
-	// Each varint byte encodes 7 bits, so bytes = ceil(bitsNeeded / 7).
-	n := (bits.Len64(uv) + 6) / 7
-	if n > 9 {
-		return 9
-	}
-	return n
+	return int(C.svdb_varint_len(C.int64_t(v)))
 }
 
 // recordBufferPool provides reusable bytes.Buffer instances for record encoding
