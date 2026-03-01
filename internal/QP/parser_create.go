@@ -672,4 +672,3 @@ func (p *Parser) parseCreateIndex(unique bool) (ASTNode, error) {
 
 	return stmt, nil
 }
-

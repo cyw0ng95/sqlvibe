@@ -482,26 +482,26 @@ func (p *Parser) parseSelect() (*SelectStmt, error) {
 			}
 			name := p.current().Literal
 			p.advance()
-			
+
 			// Expect AS
 			if strings.ToUpper(p.current().Literal) != "AS" {
 				break
 			}
 			p.advance() // consume AS
-			
+
 			// Parse window specification
 			partition, orderBy, frame, err := p.parseWindowSpec()
 			if err != nil {
 				return nil, err
 			}
-			
+
 			stmt.Windows = append(stmt.Windows, WindowDef{
 				Name:      name,
 				Partition: partition,
 				OrderBy:   orderBy,
 				Frame:     frame,
 			})
-			
+
 			// Check for comma (multiple windows)
 			if p.current().Type != TokenComma {
 				break

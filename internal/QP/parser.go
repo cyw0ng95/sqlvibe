@@ -21,9 +21,9 @@ type SelectStmt struct {
 	SetOp      string
 	SetOpAll   bool
 	SetOpRight *SelectStmt
-	CTEs       []CTEClause     // WITH ... AS (...) clauses
-	IntoTable  string          // non-empty for SELECT ... INTO tablename
-	Windows    []WindowDef     // WINDOW clause: name AS (window_spec)
+	CTEs       []CTEClause // WITH ... AS (...) clauses
+	IntoTable  string      // non-empty for SELECT ... INTO tablename
+	Windows    []WindowDef // WINDOW clause: name AS (window_spec)
 }
 
 // WindowDef represents a named window definition: name AS (window_spec)
@@ -172,8 +172,8 @@ type ColumnDef struct {
 	ForeignKey      *ForeignKeyConstraint // inline REFERENCES clause
 	Collation       string                // COLLATE name (e.g., NOCASE, RTRIM, BINARY)
 	// Generated columns (v0.10.6)
-	GeneratedExpr   Expr   // Expression for GENERATED ALWAYS AS
-	GeneratedStored bool   // true for STORED, false for VIRTUAL
+	GeneratedExpr   Expr // Expression for GENERATED ALWAYS AS
+	GeneratedStored bool // true for STORED, false for VIRTUAL
 }
 
 // CreateTriggerStmt represents CREATE TRIGGER
@@ -263,7 +263,7 @@ func (p *PragmaStmt) NodeType() string { return "PragmaStmt" }
 
 type ExplainStmt struct {
 	QueryPlan bool
-	Analyze   bool    // EXPLAIN ANALYZE - runtime statistics
+	Analyze   bool // EXPLAIN ANALYZE - runtime statistics
 	Query     ASTNode
 }
 
@@ -581,4 +581,3 @@ func (p *Parser) expect(typ TokenType) (Token, error) {
 func (p *Parser) isEOF() bool {
 	return p.pos >= len(p.tokens) || p.current().Type == TokenEOF
 }
-

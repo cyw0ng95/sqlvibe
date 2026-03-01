@@ -308,4 +308,3 @@ func (p *Parser) parseDelete() (*DeleteStmt, error) {
 
 	return stmt, nil
 }
-

@@ -830,4 +830,3 @@ func (p *Parser) parseCaseExpr() (Expr, error) {
 
 	return ce, nil
 }
-

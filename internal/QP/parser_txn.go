@@ -80,9 +80,9 @@ func (p *Parser) parseExplain() (ASTNode, error) {
 
 	isQueryPlan := false
 	isAnalyze := false
-	
+
 	// Check for QUERY PLAN or ANALYZE keywords
-	if (p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier) {
+	if p.current().Type == TokenKeyword || p.current().Type == TokenIdentifier {
 		lit := strings.ToUpper(p.current().Literal)
 		if lit == "QUERY" {
 			p.advance()
