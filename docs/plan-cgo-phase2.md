@@ -27,26 +27,29 @@ Phase 2 focuses on the query execution layer in `pkg/sqlvibe/` to address remain
 
 | Tag | Description | Default |
 |-----|-------------|---------|
-| `SVDB_ENABLE_CGO` | Enable **all** C++ implementations | **No** (use `-n` flag) |
+| `SVDB_ENABLE_CGO` | Enable **all** C++ implementations | **Always enabled** |
 | `SVDB_EXT_MATH` | Enable math extension | No |
 | `SVDB_EXT_JSON` | Enable JSON extension | No |
 | `SVDB_EXT_FTS5` | Enable FTS5 extension | No |
-| `SVDB_ENABLE_CGO_DS` | Enable CGO data storage | Auto-enabled by `SVDB_ENABLE_CGO` |
-| `SVDB_ENABLE_CGO_VM` | Enable CGO VM execution | Auto-enabled by `SVDB_ENABLE_CGO` |
+| `SVDB_ENABLE_CGO_DS` | Enable CGO data storage | Always enabled |
+| `SVDB_ENABLE_CGO_VM` | Enable CGO VM execution | Always enabled |
 
-> **Note:** When using `./build.sh -n`, all CGO components are automatically enabled.
+> **Note:** CGO is always enabled. C++ libraries are built automatically by `./build.sh`.
 
 ### 1.2 Build Commands
 
 ```bash
-# Default: No extensions (pure Go)
-go build ./...
+# Default: CGO always enabled
+./build.sh
 
-# With Go extensions only
-go build -tags "SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_EXT_FTS5" ./...
+# Run tests
+./build.sh -t
 
-# With ALL C++ extensions (recommended)
-./build.sh -n
+# Run benchmarks
+./build.sh -b
+
+# Run tests with coverage
+./build.sh -t -c
 
 # With specific CGO components (fine-grained control)
 go build -tags "SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_EXT_FTS5,SVDB_ENABLE_CGO_DS" ./...
