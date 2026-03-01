@@ -119,12 +119,12 @@ Current: 31.9% → Target: 50%
 
 ## 5. Success Criteria
 
-- [ ] Schema Parser implemented
-- [ ] .schema command working
-- [ ] SQLSTATE error codes implemented
-- [ ] SQL1999/E171 test updated to check SQLSTATE codes
-- [ ] registry_test.go BTree initialization fixed
-- [ ] parser/ subpackage created
-- [ ] parser/*_test.go added (~40 tests)
-- [ ] All tests pass
+- [x] Schema Parser implemented
+- [x] .schema command working
+- [x] SQLSTATE error codes implemented
+- [x] SQL1999/E171 test updated to check SQLSTATE codes
+- [x] registry_test.go BTree initialization fixed
+- [x] parser/ subpackage created
+- [x] parser/*_test.go added (~40 tests)
+- [x] All tests pass
 - [ ] Coverage: internal/QP → 50%

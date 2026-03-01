@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/cyw0ng95/sqlvibe/internal/SF/errors"
 	"github.com/cyw0ng95/sqlvibe/internal/TS/SQL1999"
 	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
@@ -29,5 +30,10 @@ func TestSQL1999_E171_01_L1(t *testing.T) {
 		t.Error("Expected error for duplicate primary key, got nil")
 	}
 	_ = err1
-	// TODO: Check SQLSTATE error code when implemented
+
+	// Check SQLSTATE error code
+	sqlState := errors.SQLStateOf(err2)
+	if sqlState != errors.SQLState_UniqueViolation && sqlState != errors.SQLState_IntegrityConstraintViolation {
+		t.Errorf("Expected SQLSTATE 23505 or 23000 for duplicate key, got %s", sqlState)
+	}
 }

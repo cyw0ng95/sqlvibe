@@ -8,13 +8,17 @@ import (
 // Error is a structured sqlvibe error carrying an error code, a human-readable
 // message, and an optional wrapped underlying error.
 type Error struct {
-	Code    ErrorCode
-	Message string
-	Err     error // wrapped underlying error (may be nil)
+	Code     ErrorCode
+	Message  string
+	Err      error  // wrapped underlying error (may be nil)
+	SQLState string // 5-char SQLSTATE code, e.g. "23505"
 }
 
 // Error implements the error interface.
 func (e *Error) Error() string {
+	if e.SQLState != "" {
+		return fmt.Sprintf("[%s][%s] %s", e.Code.String(), e.SQLState, e.Message)
+	}
 	return fmt.Sprintf("[%s] %s", e.Code.String(), e.Message)
 }
 
