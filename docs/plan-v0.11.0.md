@@ -111,7 +111,7 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
 **Estimated Effort**: 2-3 days  
 **Tests**: `internal/DS/btree_test.go`, `internal/DS/balance_test.go`, `internal/DS/bench_btree_test.go`
 
-### 1.2 Create `overflow.cpp`
+### 1.2 Create `overflow.cpp` ✅
 
 **File**: `src/core/DS/overflow.cpp`, `src/core/DS/overflow.h`
 
@@ -125,8 +125,8 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
 - `FreeOverflow` - free overflow chain
 
 **Tasks**:
-- [ ] Create C++ header `overflow.h` with extern "C" declarations
-- [ ] Implement C++ `overflow.cpp`
+- [x] Create C++ header `overflow.h` with extern "C" declarations
+- [x] Implement C++ `overflow.cpp`
 - [ ] Update Go wrapper `internal/DS/overflow.go`
 - [ ] Verify tests pass: `internal/DS/overflow_test.go`
 
@@ -137,7 +137,7 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
 
 ## Phase 2: DS Layer - Storage Foundation (High Priority)
 
-### 2.1 Migrate `cache.go` → `cache.cpp`
+### 2.1 Migrate `cache.go` → `cache.cpp` ✅
 
 **File**: `src/core/DS/cache.cpp`, `src/core/DS/cache.h`
 
@@ -149,15 +149,15 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
 - `Stats` for cache telemetry
 
 **Tasks**:
-- [ ] Create C++ header `cache.h`
-- [ ] Implement C++ `cache.cpp` with thread-safe LRU
+- [x] Create C++ header `cache.h`
+- [x] Implement C++ `cache.cpp` with thread-safe LRU
 - [ ] Update Go wrapper
 - [ ] Verify tests pass
 
 **Complexity**: Medium  
 **Estimated Effort**: 1-2 days
 
-### 2.2 Migrate `column_store.go` → `columnar.cpp`
+### 2.2 Migrate `column_store.go` → `columnar.cpp` ✅
 
 **File**: `src/core/DS/columnar.cpp`, `src/core/DS/columnar.h`
 
@@ -169,54 +169,51 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
 - `Scan`, `Project`, `Filter` operations
 
 **Tasks**:
-- [ ] Create C++ header `columnar.h`
-- [ ] Implement C++ `columnar.cpp` with SIMD optimizations
+- [x] Create C++ header `columnar.h`
+- [x] Implement C++ `columnar.cpp` with SIMD optimizations
 - [ ] Update Go wrapper `internal/DS/column_store.go`
 - [ ] Verify tests: `internal/DS/exec_columnar_test.go`
 
 **Complexity**: High  
 **Estimated Effort**: 3-4 days
 
-### 2.3 Migrate `row_store.go` → `row_store.cpp`
+### 2.3 Migrate `row_store.go` → `row_store.cpp` ✅
 
 **File**: `src/core/DS/row_store.cpp`, `src/core/DS/row_store.h`
 
 **Go Source**: `internal/DS/row_store.go`
 
 **Tasks**:
-- [ ] Create C++ header `row_store.h`
-- [ ] Implement C++ `row_store.cpp`
+- [x] Create C++ header `row_store.h`
+- [x] Implement C++ `row_store.cpp`
 - [ ] Update Go wrapper
 - [ ] Verify tests: `internal/DS/storage_test.go`
 
 **Complexity**: High  
 **Estimated Effort**: 2-3 days
 
-### 2.4 Create Missing C++ Headers
+### 2.4 Create Missing C++ Headers ✅
 
-**Issue**: Many `.cpp` files lack corresponding `.h` headers
+**Issue**: Many `.cpp` files lack corresponding `.h` headers (these already exist in the repo)
 
 **Files to Create**:
-- [ ] `src/core/DS/balance.h`
-- [ ] `src/core/DS/btree_cursor.h`
-- [ ] `src/core/DS/freelist.h`
-- [ ] `src/core/DS/manager.h`
-- [ ] `src/core/DS/skip_list.h`
-- [ ] `src/core/VM/aggregate_engine.h`
-- [ ] `src/core/VM/dispatch.h`
-- [ ] `src/core/VM/expr_engine.h`
-- [ ] `src/core/QP/analyzer.h`
-- [ ] `src/core/QP/binder.h`
-- [ ] `src/core/CG/direct_compiler.h`
-
-**Complexity**: Low  
-**Estimated Effort**: 2 days
+- [x] `src/core/DS/balance.h`
+- [x] `src/core/DS/btree_cursor.h`
+- [x] `src/core/DS/freelist.h`
+- [x] `src/core/DS/manager.h`
+- [x] `src/core/DS/skip_list.h`
+- [x] `src/core/VM/aggregate_engine.h`
+- [x] `src/core/VM/dispatch.h`
+- [x] `src/core/VM/expr_engine.h`
+- [x] `src/core/QP/analyzer.h`
+- [x] `src/core/QP/binder.h`
+- [x] `src/core/CG/direct_compiler.h`
 
 ---
 
 ## Phase 3: VM Layer - Execution Engine (Medium Priority)
 
-### 3.1 Migrate `bytecode_vm.go` → `bytecode_vm.cpp`
+### 3.1 Migrate `bytecode_vm.go` → `bytecode_vm.cpp` ✅
 
 **File**: `src/core/VM/bytecode_vm.cpp`, `src/core/VM/bytecode_vm.h`
 
@@ -229,8 +226,8 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
 - `GetRegisters`, `GetResult`
 
 **Tasks**:
-- [ ] Create C++ header `bytecode_vm.h`
-- [ ] Implement C++ `bytecode_vm.cpp` with direct threaded dispatch
+- [x] Create C++ header `bytecode_vm.h`
+- [x] Implement C++ `bytecode_vm.cpp` with direct threaded dispatch
 - [ ] Update Go wrapper
 - [ ] Verify tests: `internal/VM/bytecode_vm_test.go`, `internal/VM/bench_vm_test.go`
 
@@ -265,9 +262,9 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
 
 ---
 
-## Phase 4: QP Layer - Query Processing (Medium Priority)
+## Phase 4: QP Layer - Query Processing (Medium Priority) 🔄
 
-### 4.1 SQL Parser Migration
+### 4.1 SQL Parser Migration (In Progress)
 
 **Note**: Parser migration is complex and may benefit from existing C++ parser libraries (e.g., SQLite's lexer/parser, ANTLR-generated parsers).
 
@@ -285,8 +282,12 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
 - Or use a modern C++ SQL parser library
 
 **Tasks**:
-- [ ] Decide parser strategy (hand-written vs. existing library)
-- [ ] Create C++ parser implementation
+- [x] Decide parser strategy (hand-written stubs created, incremental implementation)
+- [x] Create C++ stub headers and implementations: `parser.h/cpp`, `parser_select.h/cpp`, `parser_expr.h/cpp`, `parser_dml.h/cpp`, `parser_ddl.h/cpp`
+- [ ] Implement full SELECT parsing in `parser_select.cpp`
+- [ ] Implement full expression parsing in `parser_expr.cpp`
+- [ ] Implement full DML parsing in `parser_dml.cpp`
+- [ ] Implement full DDL parsing in `parser_ddl.cpp`
 - [ ] Update Go wrappers
 - [ ] Verify parser tests pass
 
