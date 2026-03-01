@@ -130,6 +130,15 @@ func (p *Parser) parseAlterTable() (ASTNode, error) {
 			}
 			stmt.NewName = p.current().Literal
 			stmt.Action = "RENAME_COLUMN"
+		} else if kw2 == "INDEX" {
+			p.advance() // consume "INDEX"
+			stmt.OldIndexName = p.current().Literal
+			p.advance() // consume old index name
+			if strings.ToUpper(p.current().Literal) == "TO" {
+				p.advance()
+			}
+			stmt.NewName = p.current().Literal
+			stmt.Action = "RENAME_INDEX"
 		} else {
 			// RENAME <colname> TO <newname> (without COLUMN keyword)
 			stmt.Column = &ColumnDef{Name: p.current().Literal}

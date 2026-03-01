@@ -1,10 +1,70 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.10 (2026-03-01)
+## Current Version: v0.10.11 (2026-03-01)
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
 **Test Status**: All 84+ SQL:1999 test suites passing.
+
+---
+
+## **v0.10.11** (2026-03-01)
+
+### Features
+
+#### Transaction Rollback & Savepoints
+- Transaction rollback with `txSnapshot` fully functional
+- Savepoints: `SAVEPOINT`, `RELEASE SAVEPOINT`, `ROLLBACK TO SAVEPOINT`
+- Nested savepoint stacks working correctly
+
+#### Set Operations (UNION/INTERSECT/EXCEPT)
+- `UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT` fully implemented in `setops.go`
+- All four operations tested in `database/query_test.go`
+
+#### ALTER TABLE Enhancements
+- `ALTER TABLE t RENAME COLUMN old TO new` (with or without COLUMN keyword)
+- `ALTER TABLE t DROP COLUMN col`
+- `ALTER TABLE t ADD CONSTRAINT name CHECK/UNIQUE`
+- `ALTER TABLE t RENAME INDEX old TO new` (new in v0.10.11)
+- New `OldIndexName` field in `AlterTableStmt` for index renaming
+
+#### PRAGMA Enhancements
+- `PRAGMA table_list` — lists all tables and views with schema/name/type/ncol/wr/strict
+- `PRAGMA index_xinfo(idx)` — extended index info (seqno, cid, name, desc, coll, key)
+- `PRAGMA foreign_key_check` / `PRAGMA foreign_key_check(table)` — report FK violations
+
+#### Index Management
+- `DROP INDEX IF EXISTS` — safe index deletion
+- Index rename via `ALTER TABLE t RENAME INDEX old TO new`
+
+#### Constraint Validation
+- `ON CONFLICT DO NOTHING` / `ON CONFLICT DO UPDATE SET` fully working
+- UNIQUE, NOT NULL, CHECK constraint enforcement on INSERT
+- `PRAGMA foreign_key_check` for runtime FK validation
+
+#### database/ Subpackage
+- New `pkg/sqlvibe/database/` subpackage with operation-specific helpers:
+  - `database.go` — `DB` wrapper + `Open`/`New`
+  - `ddl.go` — `DDL` helper (CreateTable, DropTable, AlterTable, CreateIndex, DropIndex, CreateView, DropView)
+  - `dml.go` — `DML` helper (Insert, Update, Delete with/without params)
+  - `query.go` — `Query` helper (Select, SelectWithParams, SelectNamed, Pragma)
+  - `transaction.go` — `Txn` helper (Begin, Exec, Savepoint, ReleaseSavepoint, RollbackToSavepoint)
+  - `prepare.go` — `Prepare` helper (Statement)
+  - `meta.go` — `Meta` helper (TableInfo, TableList, IndexList, IndexInfo, IndexXInfo, ForeignKeyList, Schema)
+  - `constraint.go` — `Constraint` helper (ForeignKeyCheck, ForeignKeyCheckTable, QuickCheck, IntegrityCheck)
+
+### Tests
+- 73 new tests in `pkg/sqlvibe/database/`:
+  - `ddl_test.go` (~10 tests)
+  - `dml_test.go` (~10 tests)
+  - `query_test.go` (~9 tests)
+  - `transaction_test.go` (~6 tests)
+  - `constraint_test.go` (~8 tests)
+  - `meta_test.go` (~7 tests)
+  - `alter_test.go` (~8 tests)
+  - `pragma_test.go` (~8 tests)
+  - `index_test.go` (~6 tests)
+  - `prepare_test.go` (~3 tests)
 
 ---
 
