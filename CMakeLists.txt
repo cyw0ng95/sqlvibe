@@ -55,8 +55,8 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/internal/CG/cgo/CMakeLists.txt)
 endif()
 
 # Add Phase 4 invoke chain wrapper library
-if(EXISTS ${CMAKE_SOURCE_DIR}/internal/wrapper/cgo/CMakeLists.txt)
-    add_subdirectory(internal/wrapper/cgo)
+if(EXISTS ${CMAKE_SOURCE_DIR}/internal/VM/wrapper/cgo/CMakeLists.txt)
+    add_subdirectory(internal/VM/wrapper/cgo)
 endif()
 
 # Build all C++ targets

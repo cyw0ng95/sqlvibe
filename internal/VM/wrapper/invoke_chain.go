@@ -1,13 +1,10 @@
-//go:build SVDB_ENABLE_CGO_VM
-// +build SVDB_ENABLE_CGO_VM
-
 // Package wrapper provides Phase 4 invoke chain CGO bindings.
 // Each exported function sequences multiple C-level subsystem calls
 // inside a single CGO boundary crossing, reducing Go↔CGO overhead.
 package wrapper
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/cgo/../../../.build/cmake/lib -lsvdb_wrapper
+#cgo LDFLAGS: -L${SRCDIR}/cgo/../../../../.build/cmake/lib -lsvdb_wrapper
 #cgo CFLAGS: -I${SRCDIR}/cgo
 #include "invoke_chain_wrapper.h"
 #include <stdlib.h>
@@ -64,27 +61,6 @@ func PipelineHashFilter(keys [][]byte, seed, bucketCount, targetBucket uint64) [
 }
 
 // ─── Phase 4.3: Expression batch wrapper ─────────────────────────────────────
-
-// CompareOp represents a SQL comparison operator.
-type CompareOp int
-
-const (
-	CmpEQ CompareOp = iota // =
-	CmpNE                  // !=
-	CmpLT                  // <
-	CmpLE                  // <=
-	CmpGT                  // >
-	CmpGE                  // >=
-)
-
-// ArithOp represents an arithmetic operator for batch evaluation.
-type ArithOp int
-
-const (
-	ArithAdd ArithOp = iota // a + b
-	ArithSub                // a - b
-	ArithMul                // a * b
-)
 
 // BatchEvalCompareInt64 compares pairs (a[i], b[i]) with the given operator
 // and returns a bitmask (1=pass, 0=fail) plus the count of passing rows.
@@ -144,16 +120,6 @@ func BatchArithAndCompareInt64(a, b []int64, arith ArithOp, threshold int64, cmp
 }
 
 // ─── Phase 4.4: Storage access wrapper ───────────────────────────────────────
-
-// AggOp represents an aggregation operation.
-type AggOp int
-
-const (
-	AggSum   AggOp = iota // SUM
-	AggMin                // MIN
-	AggMax                // MAX
-	AggCount              // COUNT
-)
 
 // ScanFilterInt64 scans a column, applies a comparison filter, and returns
 // the indices of matching rows — all in a single CGO call.

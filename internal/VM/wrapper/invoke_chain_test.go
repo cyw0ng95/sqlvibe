@@ -1,5 +1,4 @@
-// Package wrapper tests: verify invoke chain functions work correctly
-// in both CGO (SVDB_ENABLE_CGO_VM) and pure-Go fallback modes.
+// Package wrapper tests: verify invoke chain CGO functions work correctly.
 package wrapper
 
 import (
