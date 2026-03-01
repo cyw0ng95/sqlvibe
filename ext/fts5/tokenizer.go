@@ -254,18 +254,32 @@ func step1b2(word string) string {
 	if strings.HasSuffix(word, "iz") {
 		return word + "e"
 	}
-	if len(word) >= 2 {
-		last := word[len(word)-1]
-		if last == 'l' || last == 's' || last == 'z' {
-			return word
-		}
-		if len(word) >= 2 {
-			lastTwo := word[len(word)-2:]
-			if isConsonant(lastTwo[0]) && !isConsonant(lastTwo[1]) && isConsonant(last) {
-				if last != 'l' && last != 's' && last != 'z' {
-					return word + string(last)
-				}
-			}
+	if len(word) < 2 {
+		return word
+	}
+	last := word[len(word)-1]
+	penultimate := word[len(word)-2]
+
+	// Double consonant: remove one (e.g. "runn" → "run", "matt" → "mat")
+	// Exceptions: do not reduce if ending in l, s, or z (Porter spec §1b)
+	if isConsonant(last) && penultimate == last &&
+		last != 'l' && last != 's' && last != 'z' {
+		return word[:len(word)-1]
+	}
+
+	// Words ending in l, s, or z: no change
+	if last == 'l' || last == 's' || last == 'z' {
+		return word
+	}
+
+	// CVC rule: consonant-vowel-consonant → double the final consonant
+	if isConsonant(penultimate) && !isConsonant(last) {
+		// This handles the single-letter CVC case; broader check below
+		return word
+	}
+	if isConsonant(penultimate) && !isConsonant(penultimate) && isConsonant(last) {
+		if last != 'l' && last != 's' && last != 'z' {
+			return word + string(last)
 		}
 	}
 	return word

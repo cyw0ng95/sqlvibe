@@ -1,10 +1,59 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.15 (2026-03-01)
+## Current Version: v0.10.16 (2026-03-01)
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
 **Test Status**: All 84+ SQL:1999 test suites passing.
+
+---
+
+## **v0.10.16** (2026-03-01)
+
+### Features
+
+#### CGO Phase 12 - VM Expression Evaluation (`internal/VM/cgo/expr_eval.*`)
+- Batch compare, add, subtract, multiply for int64 and float64 arrays (SIMD via AVX2)
+- `CompareInt64Batch`, `CompareFloat64Batch`, `AddInt64Batch`, `AddFloat64Batch`
+- `SubInt64Batch`, `SubFloat64Batch`, `MulInt64Batch`, `MulFloat64Batch`
+- `FilterMask` — compact row indices based on boolean mask
+
+#### CGO Phase 13 - VM Bytecode Dispatcher (`internal/VM/cgo/vm_dispatch.*`)
+- `DispatchSIMDLevel()` — query CPU SIMD capability (0=plain, 1=SSE4.1, 2=AVX, 3=AVX2)
+- `DispatchIsDirectThreaded()` — returns true for C++ dispatch
+- `ArithInt64Batch` / `ArithFloat64Batch` — batch dispatch for arithmetic opcodes
+
+#### CGO Phase 14 - VM Type Conversion (`internal/VM/cgo/type_conv.*`)
+- `ParseInt64Batch` / `ParseFloat64Batch` — batch string-to-number parsing
+- `FormatInt64Batch` / `FormatFloat64Batch` — batch number-to-string formatting
+
+#### CGO Phase 15 - VM String Functions (`internal/VM/cgo/string_funcs.*`)
+- `StrUpperBatch` / `StrLowerBatch` — batch ASCII case conversion
+- `StrTrimBatch` — batch whitespace trim
+- `StrSubstrBatch` — batch substring extraction (1-based, SQLite-compatible negative start)
+
+#### CGO Phase 16 - VM DateTime Functions (`internal/VM/cgo/datetime.*`)
+- `JuliandayFromString` / `UnixepochFromString` — single date parse
+- `JuliandayBatch` / `UnixepochBatch` — batch date conversion
+
+#### CGO Phase 17 - VM Aggregate Functions (`internal/VM/cgo/aggregate.*`)
+- `AggSumInt64` / `AggSumFloat64` — batch SUM with null masking
+- `AggMinInt64` / `AggMaxInt64` / `AggMinFloat64` / `AggMaxFloat64` — batch MIN/MAX
+- `AggCountNotNull` — count non-null entries
+
+#### CGO Phase 18 - QP Parser & Tokenizer (`internal/QP/cgo/tokenizer.*`)
+- New `libsvdb_qp` shared library with fast C++ SQL tokenizer
+- `FastTokenCount(sql)` — exact token pre-count (CGO) or size estimate (pure Go)
+- Used for pre-allocating the token slice in the Go tokenizer
+
+#### Build System Updates
+- `build.sh -n` now also adds `SVDB_ENABLE_CGO_QP` tag
+- Root `CMakeLists.txt` adds `internal/QP/cgo` subdirectory
+- All new CGO modules have pure Go fallbacks: build without `-n` works unchanged
+
+### Bug Fixes
+- **FTS5 Porter Stemmer**: Fixed double-consonant removal in `step1b2` — "running" now
+  correctly stems to "run" instead of "runn" in the pure Go implementation
 
 ---
 
