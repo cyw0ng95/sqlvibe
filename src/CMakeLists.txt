@@ -62,6 +62,7 @@ set(SVDB_CORE_SOURCES
     core/CG/expr_compiler.cpp
     core/CG/optimizer.cpp
     core/CG/plan_cache.cpp
+    core/CG/register.cpp
 
     # TM - Transaction Management
     core/TM/transaction.cpp
