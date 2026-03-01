@@ -70,6 +70,10 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		return wrapPragmaResult(pragma.HandleStorageInfo(db))
 	case "memory_stats":
 		return wrapPragmaResult(pragma.HandleMemoryStats(db))
+	case "memory_status":
+		return wrapPragmaResult(pragma.HandleMemoryStatus())
+	case "heap_limit":
+		return wrapPragmaResult(pragma.HandleHeapLimit(db, stmt))
 	case "compression":
 		return wrapPragmaResult(pragma.HandleCompression(db, stmt))
 

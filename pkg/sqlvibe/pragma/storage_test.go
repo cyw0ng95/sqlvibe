@@ -117,3 +117,46 @@ func TestHandlePageCount(t *testing.T) {
 		t.Errorf("expected page_count=42, got %v", rows[0][0])
 	}
 }
+
+func TestHandleMemoryStatus(t *testing.T) {
+	cols, rows, err := pragma.HandleMemoryStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cols) != 7 {
+		t.Errorf("expected 7 cols, got %d: %v", len(cols), cols)
+	}
+	if len(rows) != 1 || len(rows[0]) != 7 {
+		t.Fatalf("unexpected rows shape: %v", rows)
+	}
+	// heap_alloc should be a non-negative int64.
+	heapAlloc, ok := rows[0][0].(int64)
+	if !ok || heapAlloc < 0 {
+		t.Errorf("expected non-negative heap_alloc int64, got %v", rows[0][0])
+	}
+}
+
+func TestHandleHeapLimit_Set(t *testing.T) {
+	ctx := newMock()
+	stmt := &QP.PragmaStmt{Name: "heap_limit", Value: &QP.Literal{Value: int64(1 << 30)}}
+	_, rows, err := pragma.HandleHeapLimit(ctx, stmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0][0] != int64(1<<30) {
+		t.Errorf("expected 1<<30, got %v", rows[0][0])
+	}
+}
+
+func TestHandleHeapLimit_Read(t *testing.T) {
+	ctx := newMock()
+	ctx.maxMemoryBytes = int64(512 * 1024 * 1024)
+	stmt := &QP.PragmaStmt{Name: "heap_limit"}
+	_, rows, err := pragma.HandleHeapLimit(ctx, stmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0][0] != int64(512*1024*1024) {
+		t.Errorf("expected %d, got %v", int64(512*1024*1024), rows[0][0])
+	}
+}
