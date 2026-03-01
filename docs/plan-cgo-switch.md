@@ -4,9 +4,9 @@
 
 Implement hybrid Go+C++ architecture by converting extensions and core data storage subsystems to use C++ for performance-critical operations, controlled by build tags.
 
-## Overview
+## Overview - Phase 1 Complete ✅
 
-This plan covers converting key extensions and the DS (Data Storage) subsystem to use C++ while maintaining pure Go fallbacks:
+Phase 1 (Phases 1-18) is **complete**. All extension and VM core optimizations are implemented and tested.
 
 | Phase | Module | Library | Status |
 |-------|--------|---------|--------|
@@ -28,6 +28,26 @@ This plan covers converting key extensions and the DS (Data Storage) subsystem t
 | Phase 16 | VM: DateTime Functions | libsvdb_vm | ✅ Implemented |
 | Phase 17 | VM: Aggregate Functions | libsvdb_vm | ✅ Implemented |
 | Phase 18 | QP: Parser & Tokenizer | libsvdb_qp | ✅ Implemented |
+
+## Phase 2 - Query Execution Layer (New)
+
+Phase 2 focuses on the query execution layer in `pkg/sqlvibe/` to address remaining performance bottlenecks.
+
+See [`docs/plan-cgo-phase2.md`](docs/plan-cgo-phase2.md) for detailed Phase 2 plan.
+
+| Phase | Module | Library | Status |
+|-------|--------|---------|--------|
+| Phase 19 | pkg/sqlvibe/vm: Query Optimization | libsvdb_vm | Pending |
+| Phase 20 | pkg/sqlvibe: Hash JOIN | libsvdb_vm | Pending |
+| Phase 21 | pkg/sqlvibe: Batch DML / CTE | libsvdb_vm | Pending |
+| Phase 22 | pkg/sqlvibe: VM Context | libsvdb_vm | Pending |
+| Phase 23 | pkg/sqlvibe: Window Functions | libsvdb_vm | Pending |
+| Phase 24 | pkg/sqlvibe: Set Operations | libsvdb_vm | Pending |
+
+**Phase 2 Summary:**
+- **Total Estimated Effort:** 18-24 days
+- **Expected Speedup:** 1.5-3× for remaining bottlenecks
+- **Priority:** Phase 20 (Hash JOIN) and Phase 21 (Batch DML) are critical
 
 ---
 
