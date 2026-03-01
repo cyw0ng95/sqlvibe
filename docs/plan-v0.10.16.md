@@ -15,23 +15,24 @@ Refactor ext/math to use C++ for core math operations, demonstrating hybrid Go+C
 
 | Tag | Description | Default |
 |-----|-------------|---------|
-| `SVDB_ENABLE_CGO` | Enable C++ math functions | No |
+| `SVDB_ENABLE_CGO` | Enable C++ math functions | **No** (must use -n flag) |
 | `SVDB_EXT_MATH` | Enable math extension | No |
 
 ### Build Examples
 
 ```bash
-# Default: Pure Go
+# Default: No math extension
 go build ./...
 
-# With Go math extension
+# With Go math extension only
 go build -tags SVDB_EXT_MATH ./...
 
 # With C++ math extension (requires CGO)
-go build -tags "SVDB_EXT_MATH SVDB_ENABLE_CGO" ./...
+# Use build.sh -n flag (enables SVDB_ENABLE_CGO)
+./build.sh -t -n
 
-# Pure Go, no extensions
-go build ./...
+# Manual CGO build
+go build -tags "SVDB_EXT_MATH SVDB_ENABLE_CGO" ./...
 ```
 
 ---
@@ -285,22 +286,42 @@ func init() {
 
 ## 4. Build System
 
-### Build Tags Usage
+### 4.1 build.sh Update
 
-| Build Command | math Implementation |
-|--------------|---------------------|
-| `go build ./...` | No math extension |
-| `-tags SVDB_EXT_MATH` | Pure Go math |
-| `-tags "SVDB_EXT_MATH SVDB_ENABLE_CGO"` | C++ math (requires CGO) |
+Add `-n` flag to enable CGO:
 
-### CMakeLists.txt
+```bash
+# Add to build.sh options
+-n)           ENABLE_CGO=1 ;;
+```
+
+Updated EXT_TAGS logic:
+
+```bash
+# Default tags
+EXT_TAGS="SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_EXT_FTS5,SVDB_EXT_PROFILING"
+
+# If -n flag is used, add CGO support
+if [[ $ENABLE_CGO -eq 1 ]]; then
+    EXT_TAGS="$EXT_TAGS,SVDB_ENABLE_CGO"
+    echo "====> CGO enabled (SVDB_ENABLE_CGO)"
+fi
+```
+
+### 4.2 CMakeLists.txt (Project Root)
+
+Create at project root for C++ builds:
 
 ```cmake
 cmake_minimum_required(VERSION 3.16)
-project(svdb_math)
+project(sqlvibe CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Output directory: .build/cmake/
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/.build/cmake/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/.build/cmake/lib)
 
 # Enable SIMD
 include(CheckCXXCompilerFlag)
@@ -309,32 +330,75 @@ if(HAVE_SSE41)
     add_compile_options(-msse4.1)
 endif()
 
-add_library(svdb_math SHARED
+# Add subdirectories
+add_subdirectory(ext/math)
+
+# Build all C++ targets
+add_custom_target(cpp-build
+    COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}
+    COMMENT "Building C++ targets in .build/cmake/"
+)
+```
+
+### 4.3 ext/math/CMakeLists.txt
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+project(svdb_ext_math)
+
+set(CMAKE_CXX_STANDARD 17)
+
+add_library(svdb_ext_math SHARED
     math.cpp
 )
 
-# Install
-install(TARGETS svdb_math
-    LIBRARY DESTINATION lib
+target_include_directories(svdb_ext_math PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# Install to .build/cmake/lib
+install(TARGETS svdb_ext_math
+    LIBRARY DESTINATION ${CMAKE_SOURCE_DIR}/.build/cmake/lib
 )
 ```
 
-### Go build integration
+### 4.4 Build Workflow
 
-```go
-// math_cgo.go
-// +build SVDB_ENABLE_CGO
+```bash
+# 1. Build Go with CGO (outputs to .build/)
+./build.sh -t -n
 
-package math
+# 2. This automatically:
+#    - Adds SVDB_ENABLE_CGO to build tags
+#    - Compiles C++ math library to .build/cmake/lib/
+#    - Links via CGO
 
-/*
-#cgo LDFLAGS: -L${SRCDIR}/lib -lsvdb_math
-#cgo CFLAGS: -I${SRCDIR}/include
-#include "math.h"
-#include <stdlib.h>
-*/
-import "C"
+# Manual steps (if needed):
+#    cd .build/cmake && cmake .. && make
 ```
+
+### 4.5 Output Structure
+
+```
+.build/
+├── test.log
+├── bench.log
+├── coverage.html
+├── coverage.out
+├── cmake/
+│   ├── bin/           # Executables
+│   └── lib/           # .so/.dll libraries
+│       └── libsvdb_ext_math.so
+└── ...
+```
+
+### Build Tag Switching
+
+| Build Command | math Implementation | Output |
+|--------------|---------------------|--------|
+| `go build ./...` | No math extension | - |
+| `-tags SVDB_EXT_MATH` | Pure Go math | - |
+| `./build.sh -t -n` | C++ math (CGO) | .build/cmake/lib/ |
 
 ---
 
