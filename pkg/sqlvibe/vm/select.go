@@ -113,8 +113,11 @@ func DeduplicateRowsN(rows [][]interface{}, n int) [][]interface{} {
 }
 
 // writeRowKey appends a canonical string representation of the first limit
-// values of row into b.
+// values of row into b. limit must be <= len(row).
 func writeRowKey(b *strings.Builder, row []interface{}, limit int) {
+	if limit > len(row) {
+		limit = len(row)
+	}
 	for i, v := range row[:limit] {
 		if i > 0 {
 			b.WriteByte(',')

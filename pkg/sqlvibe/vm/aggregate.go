@@ -112,8 +112,10 @@ func IsVectorizedFilterEligible(stmt *QP.SelectStmt) bool {
 }
 
 // ExtractFilterInfo extracts column name, operator, and value from a simple
-// WHERE clause. Panics if the WHERE is not a valid simple BinaryExpr — callers
-// must check IsVectorizedFilterEligible first.
+// WHERE clause. Callers MUST verify the statement is eligible by calling
+// IsVectorizedFilterEligible first. This function performs unchecked type
+// assertions on the WHERE expression and will panic if the precondition is
+// not met.
 func ExtractFilterInfo(stmt *QP.SelectStmt) *FilterInfo {
 	bin := stmt.Where.(*QP.BinaryExpr)
 	col := bin.Left.(*QP.ColumnRef)

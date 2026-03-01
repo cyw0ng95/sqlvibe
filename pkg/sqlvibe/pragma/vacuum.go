@@ -22,8 +22,8 @@ func HandleAutoVacuum(ctx Ctx, stmt *QP.PragmaStmt) ([]string, [][]interface{}, 
 
 // HandleIncrementalVacuum handles PRAGMA incremental_vacuum [(N)].
 // It reclaims up to N free pages (or all free pages when N is 0 or omitted).
-// In the in-memory engine there are no physical free pages, so this is a
-// semantic no-op that returns the number of pages reclaimed (always 0).
+// In the in-memory engine there are no physical free pages, so the operation
+// returns the count of logically free pages reported by the storage layer.
 func HandleIncrementalVacuum(ctx Ctx, stmt *QP.PragmaStmt) ([]string, [][]interface{}, error) {
 	// Determine how many pages were requested (0 = all).
 	n := int64(0)
