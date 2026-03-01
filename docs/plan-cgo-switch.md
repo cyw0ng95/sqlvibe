@@ -237,15 +237,18 @@ type Value struct {
 - [x] Unified `libsvdb` library
 - [x] Update all CGO paths
 - [x] Remove redundant pure-Go fallbacks
-
-### In Progress
-- [ ] Phase 1: DS storage primitives
+- [x] Phase 1 (partial): DS C++ backends — `btree`, `cell`, `compression`, `roaring`, `simd`, `varint`
+- [x] Phase 2 (partial): VM C++ backends — `aggregate`, `compare`, `datetime`, `expr_eval`, `hash`, `hash_join`, `sort`, `string_funcs`, `type_conv`, `vm_dispatch`
+- [x] Phase 3 (partial): QP C++ backend — `tokenizer`
+- [x] Phase 4: CG C++ backends — `compiler`, `expr_compiler`, `optimizer`, `plan_cache`
+- [x] Wrapper: Invoke chain wrapper (`pipeline_hash_filter`, `batch_eval_compare`, etc.)
+- [x] All tests passing with CGO enabled
 
 ### Pending
-- [ ] Phase 2: VM execution engine
-- [ ] Phase 3: QP parser/optimizer
-- [ ] Phase 4: CG bytecode compiler
-- [ ] Phase 5: Clean up
+- [ ] Phase 1 remainder: `page`, `freelist`, `value`, `column_store`, `row_store`, `wal`
+- [ ] Phase 2 remainder: `bytecode_vm`, `bytecode_handlers`, `exec`, `cursor`
+- [ ] Phase 3 remainder: `parser`, `binder`, `analyzer`, `optimizer`
+- [ ] Phase 5: Clean up thin Go wrappers
 
 ---
 

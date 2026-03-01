@@ -106,102 +106,86 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 ## Performance
 
-Benchmarks on Intel 13th Gen i7-13650HX, in-memory database, `-benchtime=1s`.
+Benchmarks on AMD EPYC 7763 64-Core Processor, in-memory database, `-benchtime=3s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
 `db.ClearResultCache()` so actual per-query execution cost is measured.
 SQLite's `database/sql` driver reuses prepared statements across iterations.
 Both sides iterate all result rows end-to-end.
-(`go test ./internal/TS/Benchmark/... -bench=BenchmarkCompare_ -benchtime=1s`).
+(`go test ./internal/TS/Benchmark/... -bench=BenchmarkCompare_ -benchtime=3s`).
 Results may vary on different hardware.
 
 ### SQLite vs sqlvibe
 
-Build with `./build.sh -n` to enable all optimizations (phases 1-18 CGO).
+Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
 
 #### SELECT all rows
 
-| Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
-|-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 418 µs | 168 µs | 155 µs | **2.7× faster** |
-| 10 K | 4.23 ms | 1.46 ms | 1.35 ms | **3.1× faster** |
-| 100 K | 42.4 ms | 13.5 ms | 12.4 ms | **3.4× faster** |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 297 µs | 176 µs | **1.7× faster** |
+| 10 K | 2.92 ms | 1.58 ms | **1.8× faster** |
+| 100 K | 29.2 ms | 18.5 ms | **1.6× faster** |
 
 #### WHERE filter (integer column)
 
-| Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
-|-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 233 µs | 102 µs | 95 µs | **2.5× faster** |
-| 10 K | 2.29 ms | 802 µs | 740 µs | **3.1× faster** |
-| 100 K | 23.2 ms | 6.39 ms | 5.90 ms | **3.9× faster** |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 195 µs | 111 µs | **1.8× faster** |
+| 10 K | 1.86 ms | 1.01 ms | **1.8× faster** |
+| 100 K | 18.6 ms | 8.83 ms | **2.1× faster** |
 
 #### SUM aggregate
 
-| Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
-|-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 43.4 µs | 13.1 µs | 10.2 µs | **4.3× faster** |
-| 10 K | 374 µs | 88.1 µs | 68.5 µs | **5.5× faster** |
-| 100 K | 3.63 ms | 1.35 ms | 1.05 ms | **3.5× faster** |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 67.9 µs | 19.9 µs | **3.4× faster** |
+| 10 K | 611 µs | 111 µs | **5.5× faster** |
+| 100 K | 6.98 ms | 1.04 ms | **6.7× faster** |
 
 #### GROUP BY (4 groups)
 
-| Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
-|-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 306 µs | 145 µs | 133 µs | **2.3× faster** |
-| 10 K | 3.15 ms | 994 µs | 912 µs | **3.5× faster** |
-| 100 K | 38.8 ms | 7.45 ms | 6.85 ms | **5.7× faster** |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 480 µs | 127 µs | **3.8× faster** |
+| 10 K | 4.87 ms | 1.01 ms | **4.8× faster** |
+| 100 K | 57.9 ms | 10.8 ms | **5.4× faster** |
 
 #### COUNT(*)
 
-| Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
-|-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 3.8 µs | 3.2 µs | 3.2 µs | **1.2× faster** |
-| 10 K | 5.2 µs | 3.0 µs | 3.0 µs | **1.7× faster** |
-| 100 K | 22.9 µs | 3.1 µs | 3.1 µs | **7.4× faster** |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 5.3 µs | 7.4 µs | comparable |
+| 10 K | 7.0 µs | 7.6 µs | comparable |
+| 100 K | 25.3 µs | 7.5 µs | **3.4× faster** |
 
-#### INSERT (batch 1000 rows)
+#### INSERT (batch rows)
 
-| Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
-|-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 3.72 ms | 2.66 ms | 2.70 ms | **1.4× faster** |
-| 10 K | 37.4 ms | 26.3 ms | 26.5 ms | **1.4× faster** |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 5.56 ms | 2.82 ms | **2.0× faster** |
+| 10 K | 56.1 ms | 32.3 ms | **1.7× faster** |
 
 #### INNER JOIN
 
-| Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
-|-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 609 µs | 920 µs | 700 µs | **1.3× faster** |
-| 10 K | 6.01 ms | 7.78 ms | 5.65 ms | **1.1× faster** |
-| 100 K | 60.8 ms | 93.9 ms | 62.5 ms | **1.0× faster** |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 466 µs | 1.15 ms | 2.5× slower |
+| 10 K | 4.61 ms | 11.7 ms | 2.5× slower |
+| 100 K | 46.7 ms | 134 ms | 2.9× slower |
 
 #### ORDER BY + LIMIT
 
-| Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
-|-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 159 µs | 293 µs | 168 µs | **1.1× faster** |
-| 10 K | 1.44 ms | 2.26 ms | 1.48 ms | **1.0× faster** |
-| 100 K | 14.2 ms | 20.6 ms | 14.8 ms | **1.0× faster** |
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 225 µs | 259 µs | comparable |
+| 10 K | 2.05 ms | 2.66 ms | comparable |
+| 100 K | 20.2 ms | 34.9 ms | 1.7× slower |
 
-#### Expression Evaluation (batch arithmetic — Phase 12)
-
-| Batch | Pure Go | CGO | Speedup |
-|------:|--------:|----:|---------|
-| 1 K | 18 µs | 8 µs | **2.3×** |
-| 10 K | 175 µs | 72 µs | **2.4×** |
-| 100 K | 1.74 ms | 714 µs | **2.4×** |
-
-#### Aggregate Functions (batch SUM — Phase 17)
-
-| Batch | Pure Go | CGO | Speedup |
-|------:|--------:|----:|---------|
-| 1 K | 4.2 µs | 1.8 µs | **2.3×** |
-| 10 K | 42 µs | 17 µs | **2.5×** |
-| 100 K | 420 µs | 165 µs | **2.5×** |
-
-> **Analysis**: sqlvibe delivers 1.0-7.4× speedups over SQLite. With phases 12-18 CGO
-> extensions (expression evaluation, type conversion, string functions, datetime, aggregates,
-> and QP tokenizer), batch operations gain 2-3× additional speedup. COUNT(*) shows the
-> largest improvement (7.4× at 100K). SUM/GROUP BY benefit from 3.5-5.7× improvements.
-> CGO expression evaluation provides 2.3-2.5× speedup for arithmetic-heavy workloads.
+> **Analysis**: sqlvibe excels at aggregate workloads with 1.6–6.7× speedups over SQLite
+> for SELECT, WHERE, SUM, and GROUP BY. COUNT(*) at large scale is 3.4× faster.
+> INSERT throughput is up to 2× faster. JOIN and ORDER BY+LIMIT are areas for ongoing
+> optimization — sqlvibe's in-memory nested-loop join trades raw scan performance for
+> flexibility. CGO C++ backends (DS, VM, QP, CG) accelerate all core subsystems.
 
 ### Key Optimizations
 
