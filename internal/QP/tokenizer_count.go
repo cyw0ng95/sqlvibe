@@ -1,8 +1,8 @@
 package QP
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/cgo/../../../.build/cmake/lib -lsvdb_qp
-#cgo CFLAGS: -I${SRCDIR}/cgo
+#cgo LDFLAGS: -L${SRCDIR}/cgo/../../../.build/cmake/lib -lsvdb
+#cgo CFLAGS: -I${SRCDIR}/cgo/../../../src/core/QP
 #include "tokenizer.h"
 #include <stdlib.h>
 */

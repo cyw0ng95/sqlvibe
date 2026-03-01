@@ -1,0 +1,94 @@
+# libsvdb - Unified database library
+# Compiles all core subsystems into a single shared library
+
+cmake_minimum_required(VERSION 3.16)
+
+# Enable SIMD
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-mavx2" HAVE_AVX2)
+check_cxx_compiler_flag("-mavx" HAVE_AVX)
+check_cxx_compiler_flag("-msse4.1" HAVE_SSE41)
+
+# Base compile options
+set(SVDB_COMPILE_OPTS "")
+set(SVDB_STATUS_MSG "")
+
+if(HAVE_AVX2)
+    list(APPEND SVDB_COMPILE_OPTS -mavx2)
+    set(SVDB_STATUS_MSG "AVX2")
+elseif(HAVE_AVX)
+    list(APPEND SVDB_COMPILE_OPTS -mavx)
+    set(SVDB_STATUS_MSG "AVX")
+elseif(HAVE_SSE41)
+    list(APPEND SVDB_COMPILE_OPTS -msse4.1)
+    set(SVDB_STATUS_MSG "SSE4.1")
+endif()
+
+if(SVDB_STATUS_MSG)
+    message(STATUS "${SVDB_STATUS_MSG} enabled for libsvdb")
+else()
+    message(STATUS "No SIMD extensions available for libsvdb")
+endif()
+
+# Collect all source files from core subsystems
+set(SVDB_CORE_SOURCES
+    # DS - Data Storage
+    core/DS/varint.cpp
+    core/DS/cell.cpp
+    core/DS/btree.cpp
+    core/DS/simd.cpp
+    core/DS/roaring.cpp
+    core/DS/compression.cpp
+
+    # VM - Virtual Machine
+    core/VM/hash.cpp
+    core/VM/compare.cpp
+    core/VM/sort.cpp
+    core/VM/expr_eval.cpp
+    core/VM/vm_dispatch.cpp
+    core/VM/type_conv.cpp
+    core/VM/string_funcs.cpp
+    core/VM/datetime.cpp
+    core/VM/aggregate.cpp
+    core/VM/hash_join.cpp
+
+    # QP - Query Processing
+    core/QP/tokenizer.cpp
+
+    # CG - Code Generation
+    core/CG/compiler.cpp
+    core/CG/expr_compiler.cpp
+    core/CG/optimizer.cpp
+    core/CG/plan_cache.cpp
+
+    # Wrapper - Invoke chain
+    core/wrapper/invoke_chain_wrapper.cpp
+)
+
+# Build libsvdb
+add_library(svdb SHARED ${SVDB_CORE_SOURCES})
+
+target_include_directories(svdb PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/DS
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/VM
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/QP
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/CG
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/wrapper
+)
+
+if(SVDB_COMPILE_OPTS)
+    target_compile_options(svdb PRIVATE ${SVDB_COMPILE_OPTS})
+endif()
+
+set_target_properties(svdb PROPERTIES
+    OUTPUT_NAME "svdb"
+    VERSION 1.0.0
+    SOVERSION 1
+)
+
+# Install to .build/cmake/lib
+install(TARGETS svdb
+    LIBRARY DESTINATION ${CMAKE_SOURCE_DIR}/.build/cmake/lib
+    COMPONENT Runtime
+)

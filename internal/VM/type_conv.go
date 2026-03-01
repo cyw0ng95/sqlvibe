@@ -2,8 +2,8 @@
 package VM
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/cgo/../../../.build/cmake/lib -lsvdb_vm
-#cgo CFLAGS: -I${SRCDIR}/cgo
+#cgo LDFLAGS: -L${SRCDIR}/../../.build/cmake/lib -lsvdb
+#cgo CFLAGS: -I${SRCDIR}/../../src/core/VM
 #include "type_conv.h"
 #include <stdlib.h>
 */

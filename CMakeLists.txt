@@ -21,42 +21,22 @@ elseif(HAVE_SSE41)
     message(STATUS "SSE4.1 enabled")
 endif()
 
-# Add subdirectories for C++ extensions
-if(EXISTS ${CMAKE_SOURCE_DIR}/ext/math/CMakeLists.txt)
-    add_subdirectory(ext/math)
+# Add libsvdb - unified core library
+if(EXISTS ${CMAKE_SOURCE_DIR}/src/CMakeLists.txt)
+    add_subdirectory(src)
 endif()
 
-if(EXISTS ${CMAKE_SOURCE_DIR}/ext/json/CMakeLists.txt)
-    add_subdirectory(ext/json)
+# Add extensions
+if(EXISTS ${CMAKE_SOURCE_DIR}/src/ext/math/CMakeLists.txt)
+    add_subdirectory(src/ext/math)
 endif()
 
-if(EXISTS ${CMAKE_SOURCE_DIR}/ext/fts5/CMakeLists.txt)
-    add_subdirectory(ext/fts5)
+if(EXISTS ${CMAKE_SOURCE_DIR}/src/ext/json/CMakeLists.txt)
+    add_subdirectory(src/ext/json)
 endif()
 
-# Add DS CGO library
-if(EXISTS ${CMAKE_SOURCE_DIR}/internal/DS/cgo/CMakeLists.txt)
-    add_subdirectory(internal/DS/cgo)
-endif()
-
-# Add VM CGO library (includes Phase 1 + Phase 2 merged)
-if(EXISTS ${CMAKE_SOURCE_DIR}/internal/VM/cgo/CMakeLists.txt)
-    add_subdirectory(internal/VM/cgo)
-endif()
-
-# Add QP CGO library
-if(EXISTS ${CMAKE_SOURCE_DIR}/internal/QP/cgo/CMakeLists.txt)
-    add_subdirectory(internal/QP/cgo)
-endif()
-
-# Add CG CGO library (Phase 3)
-if(EXISTS ${CMAKE_SOURCE_DIR}/internal/CG/cgo/CMakeLists.txt)
-    add_subdirectory(internal/CG/cgo)
-endif()
-
-# Add Phase 4 invoke chain wrapper library
-if(EXISTS ${CMAKE_SOURCE_DIR}/internal/VM/wrapper/cgo/CMakeLists.txt)
-    add_subdirectory(internal/VM/wrapper/cgo)
+if(EXISTS ${CMAKE_SOURCE_DIR}/src/ext/fts5/CMakeLists.txt)
+    add_subdirectory(src/ext/fts5)
 endif()
 
 # Build all C++ targets

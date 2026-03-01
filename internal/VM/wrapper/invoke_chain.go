@@ -4,8 +4,8 @@
 package wrapper
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/cgo/../../../../.build/cmake/lib -lsvdb_wrapper
-#cgo CFLAGS: -I${SRCDIR}/cgo
+#cgo LDFLAGS: -L${SRCDIR}/cgo/../../../../.build/cmake/lib -lsvdb
+#cgo CFLAGS: -I${SRCDIR}/cgo/../../../../src/core/wrapper
 #include "invoke_chain_wrapper.h"
 #include <stdlib.h>
 */
