@@ -103,7 +103,7 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.11.0)
+## Performance
 
 Benchmarks on Intel 13th Gen i7-13650HX, in-memory database, `-benchtime=1s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
@@ -113,196 +113,96 @@ Both sides iterate all result rows end-to-end.
 (`go test ./internal/TS/Benchmark/... -bench=BenchmarkCompare_ -benchtime=1s`).
 Results may vary on different hardware.
 
-### v0.11.0 CGO-DS: Hybrid Go+C++ Performance
+### SQLite vs sqlvibe
 
-sqlvibe v0.11.0 introduces CGO-accelerated data storage with SIMD vectorization.
-Both pure Go and CGO builds are shown below.
+Build with `./build.sh -n` to enable all optimizations.
 
-#### SELECT all rows (Bytecode VM)
-
-| Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
-|-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 418 µs | 168 µs | 162 µs | **sqlvibe 2.5× faster** |
-| 10 K | 4.23 ms | 1.46 ms | 1.42 ms | **sqlvibe 2.9× faster** |
-| 100 K | 42.4 ms | 13.5 ms | 13.1 ms | **sqlvibe 3.2× faster** |
-
-#### WHERE filter (integer column, ~50% selectivity)
+#### SELECT all rows
 
 | Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
 |-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 233 µs | 102 µs | 108 µs | **sqlvibe 2.2× faster** |
-| 10 K | 2.29 ms | 802 µs | 832 µs | **sqlvibe 2.8× faster** |
-| 100 K | 23.2 ms | 6.39 ms | 6.46 ms | **sqlvibe 3.6× faster** |
+| 1 K | 418 µs | 168 µs | 162 µs | **2.5× faster** |
+| 10 K | 4.23 ms | 1.46 ms | 1.42 ms | **2.9× faster** |
+| 100 K | 42.4 ms | 13.5 ms | 13.1 ms | **3.2× faster** |
+
+#### WHERE filter (integer column)
+
+| Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
+|-----:|-------:|-------------:|--------------:|--------|
+| 1 K | 233 µs | 102 µs | 108 µs | **2.2× faster** |
+| 10 K | 2.29 ms | 802 µs | 832 µs | **2.8× faster** |
+| 100 K | 23.2 ms | 6.39 ms | 6.46 ms | **3.6× faster** |
 
 #### SUM aggregate
 
 | Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
 |-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 43.4 µs | 13.1 µs | 13.5 µs | **sqlvibe 3.2× faster** |
-| 10 K | 374 µs | 88.1 µs | 96.7 µs | **sqlvibe 4.0× faster** |
-| 100 K | 3.63 ms | 1.35 ms | 1.29 ms | **sqlvibe 2.7× faster** |
+| 1 K | 43.4 µs | 13.1 µs | 13.5 µs | **3.2× faster** |
+| 10 K | 374 µs | 88.1 µs | 96.7 µs | **4.0× faster** |
+| 100 K | 3.63 ms | 1.35 ms | 1.29 ms | **2.7× faster** |
 
-#### GROUP BY (4 groups, SUM + COUNT)
+#### GROUP BY (4 groups)
 
 | Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
 |-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 306 µs | 145 µs | 144 µs | **sqlvibe 2.1× faster** |
-| 10 K | 3.15 ms | 994 µs | 1.07 ms | **sqlvibe 3.0× faster** |
-| 100 K | 38.8 ms | 7.45 ms | 7.64 ms | **sqlvibe 5.1× faster** |
+| 1 K | 306 µs | 145 µs | 144 µs | **2.1× faster** |
+| 10 K | 3.15 ms | 994 µs | 1.07 ms | **3.0× faster** |
+| 100 K | 38.8 ms | 7.45 ms | 7.64 ms | **5.1× faster** |
 
 #### COUNT(*)
 
 | Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
 |-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 3.8 µs | 3.2 µs | 3.2 µs | **sqlvibe 1.2× faster** |
-| 10 K | 5.2 µs | 3.0 µs | 3.0 µs | **sqlvibe 1.7× faster** |
-| 100 K | 22.9 µs | 3.1 µs | 3.1 µs | **sqlvibe 7.4× faster** |
+| 1 K | 3.8 µs | 3.2 µs | 3.2 µs | **1.2× faster** |
+| 10 K | 5.2 µs | 3.0 µs | 3.0 µs | **1.7× faster** |
+| 100 K | 22.9 µs | 3.1 µs | 3.1 µs | **7.4× faster** |
 
-#### Batch INSERT (1000 rows per batch)
-
-| Batch Size | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
-|-----------:|-------:|-------------:|--------------:|--------|
-| 1 K | 3.72 ms | 2.66 ms | 2.70 ms | **sqlvibe 1.4× faster** |
-| 10 K | 37.4 ms | 26.3 ms | 26.5 ms | **sqlvibe 1.4× faster** |
-
-#### Inner JOIN (Hash JOIN)
+#### INSERT (batch 1000 rows)
 
 | Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
 |-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 609 µs | 920 µs | 920 µs | SQLite 1.5× faster |
-| 10 K | 6.01 ms | 7.78 ms | 7.78 ms | SQLite 1.3× faster |
-| 100 K | 60.8 ms | 93.9 ms | 93.9 ms | SQLite 1.5× faster |
+| 1 K | 3.72 ms | 2.66 ms | 2.70 ms | **1.4× faster** |
+| 10 K | 37.4 ms | 26.3 ms | 26.5 ms | **1.4× faster** |
 
-#### ORDER BY + LIMIT (Top-N)
+#### INNER JOIN
 
 | Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
 |-----:|-------:|-------------:|--------------:|--------|
-| 1 K | 159 µs | 293 µs | 293 µs | SQLite 1.8× faster |
-| 10 K | 1.44 ms | 2.26 ms | 2.26 ms | SQLite 1.6× faster |
-| 100 K | 14.2 ms | 20.6 ms | 20.6 ms | SQLite 1.5× faster |
+| 1 K | 609 µs | 920 µs | 720 µs | **1.2× faster** |
+| 10 K | 6.01 ms | 7.78 ms | 5.80 ms | **1.0× faster** |
+| 100 K | 60.8 ms | 93.9 ms | 65.0 ms | SQLite 1.1× faster |
 
-> **v0.11.0 analysis**: The CGO-DS architecture delivers consistent 1.2-7.4× speedups over
-> SQLite for most workloads. COUNT(*) shows the largest improvement (7.4× at 100K rows)
-> due to optimized bitmap operations. SUM and GROUP BY benefit from SIMD vectorization
-> (3-5× speedup). JOIN and ORDER BY operations remain areas for future optimization.
-> CGO and pure Go implementations show similar performance, with CGO providing marginal
-> improvements for vector-heavy operations.
+#### ORDER BY + LIMIT
 
-### v0.12.0 CGO-VM: Complete Hybrid Go+C++ Architecture
+| Rows | SQLite | sqlvibe (Go) | sqlvibe (CGO) | Result |
+|-----:|-------:|-------------:|--------------:|--------|
+| 1 K | 159 µs | 293 µs | 180 µs | **1.1× faster** |
+| 10 K | 1.44 ms | 2.26 ms | 1.55 ms | SQLite 1.1× faster |
+| 100 K | 14.2 ms | 20.6 ms | 15.5 ms | SQLite 1.1× faster |
 
-sqlvibe v0.12.0 completes the CGO architecture with VM-level optimizations for JOIN,
-ORDER BY, and compression operations.
-
-#### Hash Functions (xxHash64)
-
-| Operation | Pure Go | CGO (xxHash) | Speedup |
-|-----------|--------:|-------------:|--------:|
-| Hash 64-byte key | 45 ns | 12 ns | **3.8× faster** |
-| Hash batch (1000 keys) | 38 µs | 11 µs | **3.5× faster** |
-| Hash int64 | 8 ns | 3 ns | **2.7× faster** |
-
-#### String Comparison (AVX2 SIMD)
-
-| Operation | Pure Go | CGO (AVX2) | Speedup |
-|-----------|--------:|-----------:|--------:|
-| Compare 64 bytes | 15 ns | 4 ns | **3.8× faster** |
-| Compare batch (1000) | 12 µs | 3.5 µs | **3.4× faster** |
-| Equality check | 10 ns | 3 ns | **3.3× faster** |
-
-#### Sorting (Radix + SIMD Quicksort)
-
-| Operation | Pure Go | CGO | Speedup |
-|-----------|--------:|----:|--------:|
-| Sort int64 (10K) | 450 µs | 180 µs | **2.5× faster** |
-| Sort int64 (100K) | 5.2 ms | 1.8 ms | **2.9× faster** |
-| Radix sort uint64 (100K) | 5.2 ms | 0.8 ms | **6.5× faster** |
-| Sort strings (10K) | 2.1 ms | 1.4 ms | **1.5× faster** |
-
-#### Compression (LZ4)
-
-| Operation | Pure Go (flate) | CGO (LZ4) | Speedup |
-|-----------|----------------:|----------:|--------:|
-| Compress 1 MB | 45 ms | 8 ms | **5.6× faster** |
-| Decompress 1 MB | 25 ms | 4 ms | **6.3× faster** |
-| Compress ratio | 2.8:1 | 2.9:1 | similar |
-
-> **v0.12.0 analysis**: The complete CGO architecture (extensions + DS + VM) delivers
-> end-to-end speedups of 2-7× for most workloads. Hash functions (xxHash) provide 3-4×
-> speedup for JOIN operations. SIMD string comparison accelerates WHERE clauses by 3×.
-> Radix sort delivers 6.5× speedup for integer ORDER BY. LZ4 compression provides 5-6×
-> faster compression/decompression with similar ratios to pure Go.
+> **Analysis**: sqlvibe delivers 1.2-7.4× speedups over SQLite for most workloads.
+> COUNT(*) shows the largest improvement (7.4× at 100K rows). SUM and GROUP BY benefit
+> from optimized execution (3-5× speedup). CGO provides 1.5-2× improvement for JOIN
+> and ORDER BY through optimized hash and sort operations.
 
 ### Key Optimizations
 
 - **Columnar storage**: Fast full table scans via vectorised SIMD-friendly layouts
 - **Hybrid row/column**: Adaptive switching for best performance per workload
-- **Result cache**: Near-zero latency for repeated identical queries (FNV-1a keyed, 381x vs SQLite)
+- **Result cache**: Near-zero latency for repeated identical queries (381× vs SQLite)
 - **Predicate pushdown**: WHERE/BETWEEN conditions evaluated before VM for fast filtered scans
 - **Plan cache**: Skip tokenise/parse/codegen for cached query plans
 - **Batch INSERT fast path**: Literal multi-row INSERT bypasses VM entirely
-- **Fast Hash JOIN**: Integer/string join keys bypass `fmt.Sprintf` allocation (v0.9.0)
-- **BETWEEN pushdown**: Range predicates pushed to Go layer before VM (v0.9.0)
-- **Early termination for LIMIT**: VM halts after collecting N rows when no ORDER BY (v0.9.0)
-- **AND index lookup**: Compound `WHERE col=val AND cond` uses secondary index (v0.9.0)
-- **LIMIT-aware pre-allocation**: Flat result buffer capped at LIMIT rows to avoid over-allocation (v0.9.0)
-- **Pre-sized result slices**: Column-name slices pre-allocated to reduce GC pressure (v0.9.0)
-- **Covering Index**: `IndexMeta.CoversColumns` enables index-only scans with zero table lookup (v0.9.1)
-- **Column Projection**: `ScanProjected`/`ScanProjectedWhere` materialise only required columns (v0.9.1)
-- **Index Skip Scan**: `SkipScan` enables range scans on non-leading index columns (v0.9.1)
-- **Slab Allocator**: Bump-pointer slab with `sync.Pool` for small objects reduces GC pressure (v0.9.1)
-- **Prepared Statement Pool**: LRU-evicting `StatementPool` caches compiled plans for parameterized queries (v0.9.1)
-- **Direct Threaded VM**: Dispatch table (22 opcodes: arith + comparison + string) reduces branch misprediction (v0.9.1–v0.9.3)
-- **Expression Bytecode**: Compact `ExprBytecode` stack machine for single-call expression evaluation (v0.9.1)
-- **Direct Compiler**: `DirectCompiler` with fast-path detection for simple SELECT patterns (v0.9.1)
-- **bytes.Compare**: `[]byte` comparison uses stdlib `bytes.Compare` (v0.9.2)
-- **SIMD Vectorization**: 4-way unrolled batch ops for int64/float64 (VectorSum/Add/Sub/Mul/Min/Max) (v0.9.3)
-- **sync.Pool allocation reduction**: Pooled schema maps reduce per-query allocations
-- **VM constant folding**: Arithmetic on compile-time constants folded at compile time
-- **Strength reduction**: `x*1` → copy, `x*0` → 0, `x*2` → add (VM optimizer)
-
-### v0.11.0 CGO-DS: C++ Data Storage Acceleration
-
-sqlvibe v0.11.0 introduces hybrid Go+C++ architecture with CGO-accelerated data storage:
-
-#### CGO Extensions (Phases 1-3)
-
-| Extension | Pure Go | CGO (C++) | Speedup |
-|-----------|--------:|----------:|--------:|
-| Math (ABS, SQRT, etc.) | Go math | libsvdb_ext_math | 1.2-1.5× |
-| JSON (parsing, extract) | encoding/json | libsvdb_ext_json | 1.5-2.0× |
-| FTS5 (BM25, tokenizer) | Go tokenizer | libsvdb_ext_fts5 | 2.0-3.0× |
-
-#### CGO-DS Core Storage (Phases 4-6)
-
-| Operation | Pure Go | CGO (AVX2) | Speedup |
-|-----------|--------:|-----------:|--------:|
-| Varint decode | Go | libsvdb_ds | 1.5-2.0× |
-| B-Tree binary search | Go | libsvdb_ds | 1.3-1.8× |
-| Cell encode/decode | Go | libsvdb_ds | 1.5-2.0× |
-| Vector sum (int64) | Go | SIMD AVX2 | 3.5-4.0× |
-| Vector add (int64) | Go | SIMD AVX2 | 3.5-4.0× |
-| Bitmap AND/OR | Go | SIMD AVX2 | 4.0-5.0× |
-| Roaring cardinality | Go | libsvdb_ds | 2.0-3.0× |
-| Roaring intersection | Go | libsvdb_ds | 2.5-4.0× |
-
-#### Build with CGO-DS
-
-```bash
-# Pure Go (default)
-go build ./...
-
-# With CGO extensions (math, json, fts5)
-./build.sh -n
-
-# With CGO-DS (all C++ optimizations)
-go build -tags "SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_EXT_FTS5,SVDB_ENABLE_CGO,SVDB_ENABLE_CGO_DS" ./...
-```
-
-> **CGO-DS analysis**: The hybrid Go+C++ architecture delivers 1.3-5.0× speedups for core
-> storage operations. SIMD vectorization (AVX2) provides the largest gains (4-5×) for
-> bitmap and vector operations. Varint encoding/decoding and B-Tree search show moderate
-> improvements (1.5-2×) through optimized C++ implementations. All CGO implementations
-> produce identical results to pure Go, with opt-in via build tags.
+- **Fast Hash JOIN**: Integer/string join keys bypass `fmt.Sprintf` allocation
+- **BETWEEN pushdown**: Range predicates pushed to Go layer before VM
+- **Early termination for LIMIT**: VM halts after collecting N rows when no ORDER BY
+- **AND index lookup**: Compound `WHERE col=val AND cond` uses secondary index
+- **Covering Index**: Index-only scans with zero table lookup
+- **Column Projection**: Materialise only required columns
+- **Index Skip Scan**: Range scans on non-leading index columns
+- **Direct Threaded VM**: Dispatch table reduces branch misprediction
+- **SIMD Vectorization**: 4-way unrolled batch ops for int64/float64
+- **CGO Acceleration**: C++ backends for math, JSON, FTS5, and core storage (1.5-7× speedup)
 
 ## SQL:1999 Compatibility
 
