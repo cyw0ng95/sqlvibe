@@ -36,6 +36,7 @@ set(SVDB_CORE_SOURCES
     core/DS/varint.cpp
     core/DS/cell.cpp
     core/DS/btree.cpp
+    core/DS/btree_cursor.cpp
     core/DS/simd.cpp
     core/DS/roaring.cpp
     core/DS/compression.cpp
