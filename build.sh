@@ -5,7 +5,7 @@
 #   ./build.sh [options]
 #
 # Options:
-#   -t              Run unit tests  (default when no option is given)
+#   -t              Run unit tests
 #   -b              Run benchmarks
 #   -f              Run fuzz testing (seed-corpus run, not continuous fuzzing)
 #   -c              Collect coverage — works with -t and/or -b; generates
@@ -23,13 +23,15 @@
 #   .build/coverage.html     — HTML coverage report (when -c is used)
 #
 # Examples:
-#   ./build.sh -t               # run all unit tests
-#   ./build.sh -t -c            # run tests and generate coverage report
-#   ./build.sh -b               # run all benchmarks
-#   ./build.sh -t -b -c         # tests + benchmarks + merged coverage
-#   ./build.sh -f               # run fuzz seed corpus (30s per target)
+#   ./build.sh                # build the package (default)
+#   ./build.sh -n             # build with CGO extensions
+#   ./build.sh -t             # run all unit tests
+#   ./build.sh -t -c          # run tests and generate coverage report
+#   ./build.sh -b             # run all benchmarks
+#   ./build.sh -t -b -c       # tests + benchmarks + merged coverage
+#   ./build.sh -f             # run fuzz seed corpus (30s per target)
 #   ./build.sh -f --fuzz-time 5m  # fuzz each target for 5 minutes
-#   ./build.sh -t -b -f -c      # everything
+#   ./build.sh -t -b -f -c    # everything
 
 set -euo pipefail
 
@@ -67,18 +69,13 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-# Default: run tests if nothing was explicitly requested
-if [[ $RUN_TESTS -eq 0 && $RUN_BENCH -eq 0 && $RUN_FUZZ -eq 0 ]]; then
-    RUN_TESTS=1
-fi
-
 mkdir -p "$BUILD_DIR"
 
 # If -n flag is used, add CGO support
 if [[ $ENABLE_CGO -eq 1 ]]; then
     EXT_TAGS="$EXT_TAGS,SVDB_ENABLE_CGO"
     echo "====> CGO enabled (SVDB_ENABLE_CGO)"
-    
+
     # Build C++ extensions
     if [[ -f "CMakeLists.txt" ]]; then
         echo "====> Building C++ extensions..."
@@ -88,14 +85,44 @@ if [[ $ENABLE_CGO -eq 1 ]]; then
         cmake --build . -- -j$(nproc)
         cd "$SCRIPT_DIR"
     fi
-    
+
     # Set LD_LIBRARY_PATH for CGO
     export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
     echo "====> LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 fi
 
+# If no test/bench/fuzz requested, just build the package
+if [[ $RUN_TESTS -eq 0 && $RUN_BENCH -eq 0 && $RUN_FUZZ -eq 0 ]]; then
+    echo "====> Building package..."
+    echo "  CMD: go build -tags $EXT_TAGS ./..."
+    go build -tags "$EXT_TAGS" ./...
+    echo "====> Build complete."
+    exit 0
+fi
+
 VERBOSE_FLAG=""
 [[ $VERBOSE -eq 1 ]] && VERBOSE_FLAG="-v"
+
+# If tests were not requested, perform a build now (respect CGO) and skip tests.
+if [[ $RUN_TESTS -eq 0 ]]; then
+    echo ""
+    echo "====> '-t' not specified: building project (no tests)..."
+    if [[ $ENABLE_CGO -eq 1 ]]; then
+        CGO_ENVAR=1
+    else
+        CGO_ENVAR=0
+    fi
+    mkdir -p "$BUILD_DIR"
+    # Use CGO_ENABLED to control cgo during build and include extension tags
+    env CGO_ENABLED=$CGO_ENVAR go build -tags "$EXT_TAGS" ./... 2>&1 | tee "$BUILD_DIR/build.log"
+    echo "====> Build complete. Log: $BUILD_DIR/build.log"
+
+    # If no other actions requested, exit after build
+    if [[ $RUN_BENCH -eq 0 && $RUN_FUZZ -eq 0 ]]; then
+        echo "====> No benchmarks or fuzz requested; exiting after build."
+        exit 0
+    fi
+fi
 
 # Coverage profile files collected in this run (for later merge)
 COVER_PROFILES=()
