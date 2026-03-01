@@ -345,9 +345,96 @@ func (v *FTS5VTab) Filter(query string) ([]Row, error) {
 
 ---
 
-## 9. Notes
+## 9. Test Cases (Go with -t flag)
 
-- Uses same pattern as v0.10.16 (math) and v0.10.17 (json)
-- Snowball provides high-quality stemming
-- BM25 is industry-standard ranking algorithm
-- Memory-mapped I/O for large indices
+### 9.1 Test Files to Add
+
+| Test File | Description | Test Cases |
+|-----------|-------------|------------|
+| ext/fts5/fts5_test.go | Already exists | ~40 tests |
+| ext/fts5/fts5_cgo_test.go | [+build SVDB_ENABLE_CGO] CGO-specific | ~20 tests |
+| ext/fts5/fts5_bench_test.go | Benchmark CGO vs pure Go | ~5 benchmarks |
+
+### 9.2 CGO Test Example
+
+```go
+// ext/fts5/fts5_cgo_test.go
+// +build SVDB_ENABLE_CGO
+
+package fts5
+
+import (
+    "testing"
+)
+
+func TestTokenizeCGO(t *testing.T) {
+    tests := []struct {
+        input  string
+        expect []string
+    }{
+        {"hello world", []string{"hello", "world"}},
+        {"database engine", []string{"databas", "engin"}},
+        {"", []string{}},
+    }
+    
+    for _, tt := range tests {
+        result := callTokenizeCGO(tt.input)
+        if !sliceEqual(result, tt.expect) {
+            t.Errorf("Tokenize(%q) = %v, want %v", tt.input, result, tt.expect)
+        }
+    }
+}
+
+func TestBM25RankCGO(t *testing.T) {
+    // Setup index with documents
+    index := setupTestIndexCGO()
+    
+    tests := []struct {
+        query string
+        docID string
+        expectMin float64
+    }{
+        {"database", "doc1", 0.0},
+        {"search", "doc2", 0.0},
+    }
+    
+    for _, tt := range tests {
+        rank := callBM25RankCGO(index, tt.query, tt.docID)
+        if rank < tt.expectMin {
+            t.Errorf("BM25(%q, %q) = %v, want >= %v", tt.query, tt.docID, rank, tt.expectMin)
+        }
+    }
+}
+
+func BenchmarkTokenizeCGO(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        callTokenizeCGO("the quick brown fox jumps over the lazy dog")
+    }
+}
+```
+
+### 9.3 Run Tests
+
+```bash
+# Test pure Go (default)
+./build.sh -t
+
+# Test CGO version
+./build.sh -t -n
+
+# Compare results - both should return same tokens and rankings
+```
+
+---
+
+## 10. Success Criteria
+
+- [ ] C++ FTS5 library builds with Snowball
+- [ ] Tokenizer works via CGO
+- [ ] Index create/update/delete via CGO
+- [ ] BM25 ranking works via CGO
+- [ ] Pure Go fallback works without CGO
+- [ ] Performance improvement demonstrated (5x)
+- [ ] Build system works with -n flag
+- [ ] Go tests pass with -t flag
+- [ ] Go tests pass with -t -n flag (CGO)

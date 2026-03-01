@@ -453,6 +453,96 @@ install(TARGETS svdb_ext_math
 
 ---
 
+## 7. Test Cases (Go with -t flag)
+
+### 7.1 Test Files to Add
+
+The Go tests already exist. We need to add tests that verify CGO implementation:
+
+| Test File | Description | Test Cases |
+|-----------|-------------|------------|
+| ext/math/math_test.go | Already exists | ~20 tests |
+| ext/math/math_cgo_test.go | [+build SVDB_ENABLE_CGO] CGO-specific | ~10 tests |
+| ext/math/math_bench_test.go | Benchmark CGO vs pure Go | ~5 benchmarks |
+
+### 7.2 CGO Test Example
+
+```go
+// ext/math/math_cgo_test.go
+// +build SVDB_ENABLE_CGO
+
+package math
+
+import (
+    "testing"
+)
+
+func TestAbsCGO(t *testing.T) {
+    // Test that CGO implementation matches pure Go
+    tests := []struct {
+        input  int64
+        expect int64
+    }{
+        {-5, 5},
+        {0, 0},
+        {5, 5},
+    }
+    
+    for _, tt := range tests {
+        result := callAbsCGO(tt.input)
+        if result != tt.expect {
+            t.Errorf("Abs(%d) = %d, want %d", tt.input, result, tt.expect)
+        }
+    }
+}
+
+func TestPowerCGO(t *testing.T) {
+    tests := []struct {
+        base   float64
+        exp    float64
+        expect float64
+    }{
+        {2, 3, 8},
+        {4, 0.5, 2},
+        {10, 2, 100},
+    }
+    
+    for _, tt := range tests {
+        result := callPowerCGO(tt.base, tt.exp)
+        if !closeEnough(result, tt.expect) {
+            t.Errorf("Power(%v, %v) = %v, want %v", tt.base, tt.exp, result, tt.expect)
+        }
+    }
+}
+
+func BenchmarkAbsCGO(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        callAbsCGO(int64(i))
+    }
+}
+
+func BenchmarkAbsGo(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        evalAbs([]interface{}{int64(i)})
+    }
+}
+```
+
+### 7.3 Run Tests
+
+```bash
+# Test pure Go (default)
+./build.sh -t
+
+# Test CGO version
+./build.sh -t -n
+
+# Compare results
+# Both should produce identical results
+```
+
+---
+
 ## 8. Success Criteria
 
 - [ ] C++ math library builds
@@ -460,6 +550,8 @@ install(TARGETS svdb_ext_math
 - [ ] Test compatibility with Go implementation
 - [ ] Performance improvement demonstrated
 - [ ] Batch SIMD operations working
+- [ ] Go tests pass with -t flag
+- [ ] Go tests pass with -t -n flag (CGO)
 - [ ] Documentation for hybrid development
 
 ---

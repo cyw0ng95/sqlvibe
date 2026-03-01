@@ -279,8 +279,93 @@ func evalJSONExtractCGO(json, path string) string {
 
 ---
 
-## 9. Notes
+## 8. Test Cases (Go with -t flag)
 
-- Same pattern as v0.10.16 (math extension)
-- Can share CGO infrastructure
-- simdjson is well-tested and fast
+### 8.1 Test Files to Add
+
+| Test File | Description | Test Cases |
+|-----------|-------------|------------|
+| ext/json/json_test.go | Already exists | ~30 tests |
+| ext/json/json_cgo_test.go | [+build SVDB_ENABLE_CGO] CGO-specific | ~15 tests |
+| ext/json/json_bench_test.go | Benchmark CGO vs pure Go | ~5 benchmarks |
+
+### 8.2 CGO Test Example
+
+```go
+// ext/json/json_cgo_test.go
+// +build SVDB_ENABLE_CGO
+
+package json
+
+import (
+    "testing"
+)
+
+func TestJSONValidCGO(t *testing.T) {
+    tests := []struct {
+        input  string
+        expect bool
+    }{
+        {`{"a":1}`, true},
+        {`[1,2,3]`, true},
+        {`invalid`, false},
+        {``, false},
+    }
+    
+    for _, tt := range tests {
+        result := callJSONValidCGO(tt.input)
+        if result != tt.expect {
+            t.Errorf("JSONValid(%q) = %v, want %v", tt.input, result, tt.expect)
+        }
+    }
+}
+
+func TestJSONExtractCGO(t *testing.T) {
+    tests := []struct {
+        json  string
+        path  string
+        expect string
+    }{
+        {`{"a":{"b":1}}`, `$.a.b`, `1`},
+        {`[1,2,3]`, `$[0]`, `1`},
+        {`{"a":1}`, `$.missing`, ``},
+    }
+    
+    for _, tt := range tests {
+        result := callJSONExtractCGO(tt.json, tt.path)
+        if result != tt.expect {
+            t.Errorf("JSONExtract(%q, %q) = %q, want %q", tt.json, tt.path, result, tt.expect)
+        }
+    }
+}
+
+func BenchmarkJSONValidCGO(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        callJSONValidCGO(`{"test":123}`)
+    }
+}
+```
+
+### 8.3 Run Tests
+
+```bash
+# Test pure Go (default)
+./build.sh -t
+
+# Test CGO version
+./build.sh -t -n
+
+# Compare results
+```
+
+---
+
+## 9. Success Criteria
+
+- [ ] C++ JSON library builds with simdjson
+- [ ] All 20+ JSON functions work via CGO
+- [ ] Pure Go fallback works without CGO
+- [ ] Performance improvement demonstrated (10x)
+- [ ] Build system works with -n flag
+- [ ] Go tests pass with -t flag
+- [ ] Go tests pass with -t -n flag (CGO)
