@@ -51,7 +51,6 @@ set(SVDB_CORE_SOURCES
     core/VM/string_funcs.cpp
     core/VM/datetime.cpp
     core/VM/aggregate.cpp
-    core/VM/hash_join.cpp
     core/VM/string_pool.cpp
     core/VM/registers.cpp
 
@@ -66,6 +65,9 @@ set(SVDB_CORE_SOURCES
 
     # Wrapper - Invoke chain
     core/wrapper/invoke_chain_wrapper.cpp
+
+    # CGO - Hash Join
+    core/cgo/hash_join.cpp
 )
 
 # Build libsvdb
@@ -78,6 +80,7 @@ target_include_directories(svdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/QP
     ${CMAKE_CURRENT_SOURCE_DIR}/core/CG
     ${CMAKE_CURRENT_SOURCE_DIR}/core/wrapper
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/cgo
 )
 
 if(SVDB_COMPILE_OPTS)

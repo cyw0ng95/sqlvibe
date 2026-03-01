@@ -34,8 +34,6 @@ add_library(svdb_vm SHARED
     string_funcs.cpp
     datetime.cpp
     aggregate.cpp
-    # Phase 2: hash join (previously libsvdb_vm_phase2)
-    hash_join.cpp
 )
 
 target_include_directories(svdb_vm PUBLIC
