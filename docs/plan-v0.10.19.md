@@ -2,7 +2,7 @@
 
 ## Summary
 
-Add engineering infrastructure for C++ development: Containerfile, test framework, and coverage framework.
+Add engineering infrastructure for C++ development: Containerfile with build environment, test framework, and coverage framework.
 
 ## Background
 
@@ -15,17 +15,17 @@ Add engineering infrastructure for C++ development: Containerfile, test framewor
 - **Reproducibility**: Docker builds for consistent environments
 - **Testing**: C++ unit testing framework
 - **Coverage**: Code coverage for C++ code
-- **CI/CD**: Automated builds and tests
+- **Go 1.26**: Latest Go version
 
 ---
 
 ## 1. Containerfile
 
-### 1.1 Development Container
+### 1.1 Build Environment Container (Single)
 
 ```dockerfile
 # Containerfile
-FROM golang:1.22-bookworm
+FROM golang:1.26-bookworm
 
 # Install C++ build dependencies
 RUN apt-get update && apt-get install -y \
@@ -36,57 +36,20 @@ RUN apt-get update && apt-get install -y \
     clang-tidy \
     cppcheck \
     lcov \
+    llvm \
     ccache \
-    && rm -rf /var/lib/apt/lists/*
+    valgrind \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Install Go dependencies
+# Install Go tools
 RUN go install github.com/securego/gosec/cmd/gosec@latest
 
-# Set up Go workspace
+# Set up workspace
 WORKDIR /workspace
 
-# Copy project
-COPY . .
-
-# Default build command
+# Default build command (builds Go + C++)
 CMD ["./build.sh", "-t", "-n"]
-```
-
-### 1.2 Build Container (Minimal)
-
-```dockerfile
-# Containerfile.build (minimal for CI)
-FROM golang:1.22-bookworm-slim
-
-RUN apt-get update && apt-get install -y \
-    cmake \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /workspace
-COPY . .
-CMD ["go", "test", "-tags", "SVDB_EXT_MATH,SVDB_ENABLE_CGO", "./..."]
-```
-
-### 1.3 Test Container
-
-```dockerfile
-# Containerfile.test
-FROM golang:1.22-bookworm
-
-RUN apt-get update && apt-get install -y \
-    cmake \
-    g++ \
-    lcov \
-    llvm \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /workspace
-
-# Coverage output volume
-VOLUME /coverage
-
-CMD ["./build.sh", "-t", "-c"]
 ```
 
 ---
@@ -99,7 +62,6 @@ CMD ["./build.sh", "-t", "-c"]
 # cmake/GoogleTest.cmake
 include(GoogleTest)
 
-# Find or fetch GoogleTest
 include(FetchContent)
 
 FetchContent_Declare(
@@ -124,11 +86,9 @@ tests/
 │   ├── test_json.cpp
 │   └── test_fts5.cpp
 ├── integration/
-│   ├── test_extension_load.cpp
-│   └── test_sql_queries.cpp
+│   └── test_extension_load.cpp
 └── benchmark/
-    ├── bench_math.cpp
-    └── bench_json.cpp
+    └── bench_math.cpp
 ```
 
 ### 2.3 Test Example
@@ -181,15 +141,12 @@ int main(int argc, char** argv) {
 cmake_minimum_required(VERSION 3.16)
 project(sqlvibe_tests)
 
-# Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Enable testing
 include(CTest)
 include(GoogleTest)
 
-# Find or fetch GoogleTest
 include(FetchContent)
 FetchContent_Declare(
     googletest
@@ -199,7 +156,6 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# Add test executable
 add_executable(test_math
     unit/test_math.cpp
 )
@@ -210,8 +166,6 @@ target_link_libraries(test_math
 )
 
 gtest_discover_tests(test_math)
-
-# Add more tests...
 ```
 
 ---
@@ -223,11 +177,9 @@ gtest_discover_tests(test_math)
 ```cmake
 # cmake/Coverage.cmake
 
-# Enable coverage
 option(ENABLE_COVERAGE "Enable coverage reporting" OFF)
 
 if(ENABLE_COVERAGE)
-    # Find lcov
     find_program(LCOV_EXECUTABLE lcov)
     find_program(GENHTML_EXECUTABLE genhtml)
     
@@ -236,7 +188,6 @@ if(ENABLE_COVERAGE)
         return()
     endif()
     
-    # Coverage flags
     set(CMAKE_CXX_FLAGS_COVERAGE
         "-g -O0 --coverage -fprofile-arcs -ftest-coverage"
         CACHE STRING "Flags used by C++ compiler during coverage builds"
@@ -249,7 +200,6 @@ if(ENABLE_COVERAGE)
     
     mark_as_advanced(CMAKE_CXX_FLAGS_COVERAGE CMAKE_EXE_LINKER_FLAGS_COVERAGE)
     
-    # Coverage report target
     add_custom_target(coverage
         COMMAND ${LCOV_EXECUTABLE} --capture --directory . 
             --output-file coverage.info
@@ -282,110 +232,13 @@ make coverage
 open coverage_html/index.html
 ```
 
-### 3.3 Coverage Dashboard
-
-```yaml
-# .github/workflows/coverage.yml
-name: Coverage
-
-on:
-  push:
-    branches: [main, develop]
-  pull_request:
-
-jobs:
-  coverage:
-    runs-on: ubuntu-latest
-    container:
-      image: golang:1.22-bookworm
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install dependencies
-        run: |
-          apt-get update
-          apt-get install -y cmake g++ lcov llvm
-      
-      - name: Build with coverage
-        run: |
-          mkdir -p build
-          cd build
-          cmake -DENABLE_COVERAGE=ON ..
-          make -j4
-      
-      - name: Run tests
-        run: ctest --output-on-failure
-      
-      - name: Generate coverage
-        run: |
-          cd build
-          make coverage
-      
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./build/coverage.info
-          directory: ./build/coverage_html
-```
-
 ---
 
-## 4. CI/CD Integration
-
-### 4.1 GitHub Actions
-
-```yaml
-# .github/workflows/ci-cpp.yml
-name: C++ CI
-
-on:
-  push:
-    branches: [develop]
-    paths:
-      - 'ext/**/*.cpp'
-      - 'ext/**/*.h'
-      - 'ext/**/CMakeLists.txt'
-  pull_request:
-
-jobs:
-  build-cpp:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Build C++ extensions
-        run: |
-          mkdir -p build
-          cd build
-          cmake ..
-          make -j4
-      
-      - name: Run C++ tests
-        run: |
-          cd build
-          ctest --output-on-failure
-      
-      - name: Coverage
-        if: github.event_name == 'pull_request'
-        run: |
-          cmake -DENABLE_COVERAGE=ON ..
-          make
-          make coverage
-      
-      - name: Upload coverage
-        if: github.event_name == 'pull_request'
-        uses: codecov/codecov-action@v3
-```
-
----
-
-## 5. Directory Structure
+## 4. Directory Structure
 
 ```
 .
-├── Containerfile              # Development container
-├── Containerfile.build        # Minimal build container
-├── Containerfile.test        # Test container
+├── Containerfile              # Build environment (Go 1.26 + C++ tools)
 ├── cmake/
 │   ├── GoogleTest.cmake     # GTest integration
 │   ├── Coverage.cmake       # Coverage setup
@@ -400,16 +253,12 @@ jobs:
 │   │   └── test_extension_load.cpp
 │   └── benchmark/
 │       └── bench_math.cpp
-├── .github/
-│   └── workflows/
-│       ├── ci-cpp.yml
-│       └── coverage.yml
 └── build.sh                 # Updated with C++ test support
 ```
 
 ---
 
-## 6. build.sh Update
+## 5. build.sh Update
 
 ### Add C++ test support
 
@@ -445,26 +294,17 @@ fi
 
 ---
 
-## 7. Sanitizers
+## 6. Sanitizers
 
-### 7.1 Sanitizer CMake
+### 6.1 Sanitizer CMake
 
 ```cmake
 # cmake/Sanitizers.cmake
 option(ENABLE_SANITIZERS "Enable sanitizers" OFF)
 
 if(ENABLE_SANITIZERS)
-    # Address Sanitizer
     add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address)
-    
-    # Optional: Undefined Behavior
-    # add_compile_options(-fsanitize=undefined)
-    # add_link_options(-fsanitize=undefined)
-    
-    # Optional: Memory
-    # add_compile_options(-fsanitize=memory -fno-omit-frame-pointer)
-    # add_link_options(-fsanitize=memory)
 endif()
 ```
 
@@ -478,22 +318,20 @@ ctest
 
 ---
 
-## 8. Success Criteria
+## 7. Success Criteria
 
-- [ ] Containerfile for development
-- [ ] Containerfile.build for CI
-- [ ] Containerfile.test for testing
+- [ ] Containerfile with Go 1.26 + C++ build tools + coverage tools
 - [ ] Google Test integration
 - [ ] C++ unit tests for math/json/fts5
 - [ ] Coverage framework (lcov + genhtml)
-- [ ] CI/CD workflow for C++
-- [ ] Sanitizer support (ASAN/UBSAN)
-- [ ] build.sh updated with -n flag
+- [ ] build.sh updated with -n flag for CGO
+- [ ] Sanitizer support (ASAN)
+- [ ] Tests can run with ./build.sh -t -n
 
 ---
 
-## 9. Notes
+## 8. Notes
 
-- Mirrors Go testing patterns but for C++
-- Coverage output in .build/coverage/
-- Container builds stay in .build/docker/
+- Single Containerfile for simplicity
+- All builds stay in .build/ directory
+- Mirrors Go testing patterns for C++
