@@ -49,6 +49,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/internal/QP/cgo/CMakeLists.txt)
     add_subdirectory(internal/QP/cgo)
 endif()
 
+# Add pkg/sqlvibe CGO library (Phase 2)
+if(EXISTS ${CMAKE_SOURCE_DIR}/pkg/sqlvibe/cgo/CMakeLists.txt)
+    add_subdirectory(pkg/sqlvibe/cgo)
+endif()
+
 # Build all C++ targets
 add_custom_target(cpp-build
     COMMENT "Building C++ targets in .build/cmake/"
