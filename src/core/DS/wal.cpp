@@ -1,6 +1,7 @@
 #include "wal.h"
 #include <string.h>
 #include <stdio.h>
+#include <inttypes.h>
 
 /* -------------------------------------------------------------------------
  * Internal helpers
@@ -96,8 +97,8 @@ int svdb_wal_create_delete_record(uint8_t* out_buf, size_t buf_size, int64_t idx
     if (!out_buf) return 0;
     /* Body: {"op":2,"idx":<idx>} */
     char body[64];
-    int body_len = snprintf(body, sizeof(body), "{\"op\":2,\"idx\":%lld}",
-                            (long long)idx);
+    int body_len = snprintf(body, sizeof(body), "{\"op\":2,\"idx\":%" PRId64 "}",
+                            idx);
     if (body_len < 0 || (size_t)body_len >= sizeof(body)) return 0;
     size_t total = 4 + (size_t)body_len;
     if (buf_size < total) return 0;
@@ -113,8 +114,8 @@ int svdb_wal_create_update_record(uint8_t* out_buf, size_t buf_size,
     if (!out_buf || !json_vals) return 0;
     /* Body: {"op":3,"idx":<idx>,"vals":<json_vals>} */
     char header[64];
-    int hlen = snprintf(header, sizeof(header), "{\"op\":3,\"idx\":%lld,\"vals\":",
-                        (long long)idx);
+    int hlen = snprintf(header, sizeof(header), "{\"op\":3,\"idx\":%" PRId64 ",\"vals\":",
+                        idx);
     if (hlen < 0 || (size_t)hlen >= sizeof(header)) return 0;
 
     static const char suffix[] = "}";

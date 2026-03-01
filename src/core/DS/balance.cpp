@@ -29,12 +29,9 @@ static int ptr_base(const uint8_t* data) {
  * sorted_offsets must be an array of all cell offsets sorted in ascending order.
  * page_size is used as the sentinel end for the highest-offset cell. */
 static size_t cell_len_sorted(uint16_t cell_off, const uint16_t* sorted_offs, int n, size_t page_size) {
-    /* Find the smallest sorted offset that is strictly greater than cell_off. */
-    uint16_t end = (uint16_t)page_size;
-    for (int i = 0; i < n; i++) {
-        if (sorted_offs[i] > cell_off && sorted_offs[i] < end)
-            end = sorted_offs[i];
-    }
+    /* Binary search for the smallest sorted offset strictly greater than cell_off. */
+    const uint16_t* it = std::upper_bound(sorted_offs, sorted_offs + n, cell_off);
+    uint16_t end = (it != sorted_offs + n) ? *it : (uint16_t)page_size;
     return (size_t)(end - cell_off);
 }
 

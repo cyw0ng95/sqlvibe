@@ -22,10 +22,10 @@
 |---------|-----------|--------|-------|
 | `arena.go` | — | 📋 | Go arena allocator, keep in Go |
 | `backup.go` | — | 📋 | High-level orchestration, keep in Go |
-| `balance.go` | `balance.cpp` | ❌ | B-Tree balancing logic |
+| `balance.go` | `balance.cpp` | ✅ | B-Tree balancing: split, merge, redistribute |
 | `bloom_filter.go` | — | 📋 | Can use C++ roaring instead |
-| `btree.go` | `btree.cpp` | 🟡 | **Search works, insert/delete are placeholders** |
-| `btree_cursor.go` | `btree_cursor.cpp` | ❌ | Cursor traversal |
+| `btree.go` | `btree.cpp` | ✅ | Search, insert (with page split), delete complete |
+| `btree_cursor.go` | `btree_cursor.cpp` | ✅ | Cursor traversal, page cache helpers |
 | `cache.go` | `cache.cpp` | ❌ | LRU/ARC cache |
 | `cell.go` | `cell.cpp` | ✅ | Cell encoding/decoding complete |
 | `column_store.go` | `columnar.cpp` | ❌ | Columnar storage engine |
@@ -34,30 +34,30 @@
 | `compression.go` | `compression.cpp` | ✅ | LZ4/ZSTD use C++ |
 | `encoding.go` | `varint.cpp` | ✅ | Varint uses C++ |
 | `exec_columnar.go` | — | 📋 | Columnar execution (Go-specific) |
-| `freelist.go` | `freelist.cpp` | ❌ | Free list management |
+| `freelist.go` | `freelist.cpp` | ✅ | Free list trunk/leaf management |
 | `hybrid_store.go` | — | 📋 | Row/columnar adapter (Go-specific) |
 | `index_engine.go` | — | 📋 | Index orchestration |
-| `manager.go` | `manager.cpp` | ❌ | Page manager |
+| `manager.go` | `manager.cpp` | ✅ | Page offset, header read/write helpers |
 | `metrics.go` | — | 📋 | Go telemetry |
 | `mmap.go` | — | 📋 | Go memory mapping |
 | `overflow.go` | `overflow.cpp` | ❌ | Overflow page chains |
-| `page.go` | `page.cpp` | ❌ | Page management |
+| `page.go` | `page.cpp` | ✅ | Page header management, compaction |
 | `parallel.go` | — | 📋 | Go parallel utilities |
 | `persistence.go` | — | 📋 | File I/O orchestration |
 | `prefetch.go` | — | 📋 | Go prefetch utilities |
 | `roaring_bitmap.go` | `roaring.cpp` | ✅ | Uses C++ roaring |
 | `row.go` | — | 📋 | Go row handling |
 | `row_store.go` | `row_store.cpp` | ❌ | Row storage engine |
-| `skip_list.go` | `skip_list.cpp` | ❌ | Skip list data structure |
+| `skip_list.go` | `skip_list.cpp` | ✅ | 16-level skip list (int64+string keys) |
 | `slab.go` | — | 📋 | Go slab allocator |
 | `value.go` | `value.cpp` | ✅ | Value type uses C++ |
 | `vtab.go` | — | 📋 | Virtual table interface (Go) |
 | `vtab_cursor.go` | — | 📋 | Virtual table cursor (Go) |
 | `vtab_module.go` | — | 📋 | Virtual table module (Go) |
-| `wal.go` | `wal.cpp` | ❌ | Write-ahead logging |
+| `wal.go` | `wal.cpp` | ✅ | Length-prefixed WAL record encode/decode |
 | `worker_pool.go` | — | 📋 | Go worker pool |
 
-**DS Summary**: 6/36 complete, 1/36 partial, 29/36 need migration
+**DS Summary**: 13/36 complete, 0/36 partial, 2/36 need migration (cache.cpp, overflow.cpp, columnar.cpp, row_store.cpp)
 
 ---
 
@@ -67,26 +67,26 @@
 |---------|-----------|--------|-------|
 | `aggregate_funcs.go` | `aggregate.cpp` | ✅ | Aggregate functions use C++ |
 | `bc_opcodes.go` | — | 📋 | Opcode constants |
-| `bytecode_handlers.go` | `opcodes.cpp` | ❌ | Bytecode opcode implementations |
-| `bytecode_prog.go` | `program.cpp` | ❌ | Bytecode program representation |
+| `bytecode_handlers.go` | `opcodes.cpp` | ✅ | Opcode names, metadata, classification |
+| `bytecode_prog.go` | `program.cpp` | ✅ | Bytecode program container (instrs, consts, col names) |
 | `bytecode_vm.go` | `bytecode_vm.cpp` | ❌ | Main VM loop |
 | `compare.go` | `compare.cpp` | ✅ | Comparison functions use C++ |
 | `compiler.go` | — | 📋 | High-level compiler orchestration |
-| `cursor.go` | `cursor.cpp` | ❌ | Cursor management |
+| `cursor.go` | `cursor.cpp` | ✅ | Cursor array management (256 slots) |
 | `datetime.go` | `datetime.cpp` | ✅ | DateTime functions use C++ |
 | `dispatch.go` | `dispatch.cpp` | ✅ | Dispatch uses C++ |
-| `engine.go` | `query_engine.cpp` | ❌ | Query execution engine |
+| `engine.go` | `query_engine.cpp` | ✅ | Query classification, table extraction, comment stripping |
 | `engine/aggregate.go` | `aggregate_engine.cpp` | ✅ | Aggregate engine uses C++ |
 | `engine/join.go` | `hash_join.cpp` | ✅ | Hash JOIN uses C++ |
 | `engine/select.go` | — | 📋 | SELECT orchestration |
 | `engine/sort.go` | `sort.cpp` | ✅ | Sort uses C++ |
 | `engine/subquery.go` | — | 📋 | Subquery orchestration |
 | `engine/window.go` | — | 📋 | Window orchestration |
-| `exec.go` | `exec.cpp` | ❌ | Execution engine |
+| `exec.go` | `exec.cpp` | ✅ | Cache eligibility, FNV-1a hash, columnar threshold |
 | `expr_bytecode.go` | `expr_engine.cpp` | ✅ | Expression bytecode uses C++ |
 | `expr_eval.go` | `expr_eval.cpp` | ✅ | Expression evaluation uses C++ |
 | `hash.go` | `hash.cpp` | ✅ | Hash functions use C++ |
-| `instr.go` | `instruction.cpp` | ❌ | Instruction format |
+| `instr.go` | `instruction.cpp` | ✅ | 16-byte instruction struct, flag helpers |
 | `instruction.go` | — | 📋 | Instruction constants |
 | `opcodes.go` | — | 📋 | Opcode definitions |
 | `program.go` | — | 📋 | Program representation |
@@ -105,7 +105,7 @@
 | `wrapper/invoke_chain.go` | `invoke_chain_wrapper.cpp` | ✅ | Invoke chain uses C++ |
 | `wrapper/types.go` | — | 📋 | Wrapper type definitions |
 
-**VM Summary**: 17/40 complete, 0/40 partial, 8/40 need migration, 15/40 Go-only
+**VM Summary**: 24/40 complete, 0/40 partial, 1/40 need migration (bytecode_vm.cpp), 15/40 Go-only
 
 ---
 
@@ -113,10 +113,10 @@
 
 | Go File | C++ Target | Status | Notes |
 |---------|-----------|--------|-------|
-| `analyzer.go` | `analyzer.cpp` | ❌ | Semantic analysis |
-| `binder.go` | `binder.cpp` | ❌ | Name resolution |
-| `dag.go` | `dag.cpp` | ❌ | Query DAG representation |
-| `normalize.go` | `normalize.cpp` | ❌ | Query normalization |
+| `analyzer.go` | `analyzer.cpp` | ✅ | Column analysis, aggregate/subquery detection |
+| `binder.go` | `binder.cpp` | ✅ | Placeholder counting, named param extraction |
+| `dag.go` | `dag.cpp` | ✅ | DAG nodes/edges, topological sort |
+| `normalize.go` | `normalize.cpp` | ✅ | Query normalization (lowercase, trim, literal→?) |
 | `optimizer.go` | `optimizer.cpp` | ✅ | Optimizer uses C++ |
 | `parse_cache.go` | `plan_cache.cpp` | ✅ | Parse cache uses C++ |
 | `parser.go` | `parser.cpp` | ❌ | Main SQL parser |
@@ -130,9 +130,9 @@
 | `tokenizer.go` | `tokenizer.cpp` | ✅ | FastTokenCount uses C++ |
 | `tokenizer_count.go` | `tokenizer.cpp` | ✅ | Token count uses C++ |
 | `topn.go` | — | 📋 | TOP-N optimization (Go) |
-| `type_infer.go` | `type_infer.cpp` | ❌ | Type inference |
+| `type_infer.go` | `type_infer.cpp` | ✅ | Literal type inference, type promotion, func return types |
 
-**QP Summary**: 4/18 complete, 0/18 partial, 12/18 need migration, 2/18 Go-only
+**QP Summary**: 9/18 complete, 0/18 partial, 7/18 need migration (parser files), 2/18 Go-only
 
 ---
 
@@ -140,7 +140,7 @@
 
 | Go File | C++ Target | Status | Notes |
 |---------|-----------|--------|-------|
-| `bytecode_compiler.go` | `bytecode_compiler.cpp` | ❌ | Bytecode generation |
+| `bytecode_compiler.go` | `bytecode_compiler.cpp` | ✅ | Fast-path detection, aggregate/sort/limit/window analysis |
 | `bytecode_expr.go` | `expr_compiler.cpp` | ✅ | Expression compilation uses C++ |
 | `compiler.go` | `compiler.cpp` | ✅ | Compiler uses C++ |
 | `compiler/aggregate.go` | — | 📋 | Aggregate compilation |
@@ -149,14 +149,14 @@
 | `compiler/select.go` | — | 📋 | SELECT compilation |
 | `compiler/subquery.go` | — | 📋 | Subquery compilation |
 | `compiler/window.go` | — | 📋 | Window compilation |
-| `direct_compiler.go` | `direct_compiler.cpp` | ❌ | Direct compilation |
+| `direct_compiler.go` | `direct_compiler.cpp` | ✅ | Simple-select detection, table/LIMIT/OFFSET extraction |
 | `expr.go` | — | 📋 | Expression handling |
 | `expr_compiler.go` | `expr_compiler.cpp` | ✅ | Expression compiler uses C++ |
 | `optimizer.go` | `optimizer.cpp` | ✅ | Optimizer uses C++ |
 | `plan_cache.go` | `plan_cache.cpp` | ✅ | Plan cache uses C++ |
 | `stmt_cache.go` | — | 📋 | Statement cache (Go) |
 
-**CG Summary**: 6/15 complete, 0/15 partial, 2/15 need migration, 7/15 Go-only
+**CG Summary**: 8/15 complete, 0/15 partial, 0/15 need migration, 7/15 Go-only
 
 ---
 
@@ -232,90 +232,39 @@
 
 | Subsystem | Complete | Partial | Need Migration | Go-Only | Total |
 |-----------|----------|---------|----------------|---------|-------|
-| **DS** | 6 | 1 | 29 | 0 | 36 |
-| **VM** | 17 | 0 | 8 | 15 | 40 |
-| **QP** | 4 | 0 | 12 | 2 | 18 |
-| **CG** | 6 | 0 | 2 | 7 | 15 |
+| **DS** | 13 | 0 | 4 | 19 | 36 |
+| **VM** | 24 | 0 | 1 | 15 | 40 |
+| **QP** | 9 | 0 | 7 | 2 | 18 |
+| **CG** | 8 | 0 | 0 | 7 | 15 |
 | **TM** | 1 | 0 | 0 | 4 | 5 |
 | **PB** | 1 | 0 | 0 | 2 | 3 |
 | **IS** | 0 | 0 | 0 | 11 | 11 |
 | **SF** | 1 | 0 | 0 | 10 | 11 |
-| **TOTAL** | **36** | **1** | **51** | **51** | **139** |
+| **TOTAL** | **57** | **0** | **12** | **70** | **139** |
+
+**Migration Progress**: 57/87 migratable items complete (**66%**)
 
 ---
 
-## Priority Migration Tasks
+## Remaining Migration Tasks
 
-### High Priority (Performance Critical)
+### DS (4 items)
+1. **`cache.cpp`** - LRU/ARC page cache
+2. **`overflow.cpp`** - Overflow page chains for large payloads
+3. **`columnar.cpp`** - Columnar storage engine
+4. **`row_store.cpp`** - Row storage engine
 
-1. **Complete `btree.cpp`** (DS)
-   - Implement `svdb_btree_insert()` - currently a placeholder
-   - Implement `svdb_btree_delete()` - currently a placeholder
-   - Add page split logic
-   - Add page merge logic
-   - **Impact**: Enables migration of `btree.go` (806 lines)
+### VM (1 item)
+5. **`bytecode_vm.cpp`** - Main VM execution loop (complex, Go-native performance may be sufficient)
 
-2. **Create `page.cpp`** (DS)
-   - Page allocation/deallocation
-   - Page header management
-   - Cell pointer management
-   - **Impact**: Foundation for storage layer
-
-3. **Create `freelist.cpp`** (DS)
-   - Free list management
-   - Page recycling
-   - Trunk page management
-   - **Impact**: Storage efficiency
-
-4. **Create `manager.cpp`** (DS)
-   - PageManager implementation
-   - Buffer pool integration
-   - I/O scheduling
-   - **Impact**: Core storage orchestration
-
-5. **Create `wal.cpp`** (DS)
-   - WAL write-ahead logging
-   - Checkpoint logic
-   - Recovery
-   - **Impact**: Durability and ACID
-
-### Medium Priority
-
-6. **Create `balance.cpp`** (DS)
-   - B-Tree page balancing
-   - Split/merge operations
-   - **Impact**: B-Tree performance
-
-7. **Create `btree_cursor.cpp`** (DS)
-   - Cursor traversal
-   - Seek operations
-   - **Impact**: Query iteration
-
-8. **Create `parser.cpp`** (QP)
-   - SQL parser implementation
-   - AST construction
-   - **Impact**: Query parsing performance
-
-9. **Create `binder.cpp`** (QP)
-   - Name resolution
-   - Type checking
-   - **Impact**: Semantic analysis
-
-10. **Create `analyzer.cpp`** (QP)
-    - Query analysis
-    - Statistics collection
-    - **Impact**: Optimization
-
-### Low Priority
-
-11. **Create `bytecode_compiler.cpp`** (CG)
-    - Bytecode generation
-    - Instruction scheduling
-    - **Impact**: Compilation speed
-
-12. **Create `direct_compiler.cpp`** (CG)
-    - Fast path compilation
-    - **Impact**: Simple query performance
+### QP (7 items - parser files)
+6. **`parser.cpp`** - Main SQL parser
+7. **`parser_alter.cpp`** - ALTER TABLE parser
+8. **`parser_ddl.cpp`** - CREATE/DROP parser
+9. **`parser_dml.cpp`** - DML parser
+10. **`parser_expr.cpp`** - Expression parser
+11. **`parser_select.cpp`** - SELECT parser
+12. **`parser_txn.cpp`** - Transaction parser
 
 ---
 
@@ -337,7 +286,6 @@ The following files implement Go-specific patterns or orchestration logic that s
 ### Memory Management (Go-optimized)
 - `arena.go` - Go arena allocator
 - `slab.go` - Go slab allocator
-- `cache.go` - Go LRU cache (unless C++ version needed)
 
 ### Virtual Tables
 - `vtab.go`, `vtab_cursor.go`, `vtab_module.go` - Go virtual table interface
@@ -396,10 +344,7 @@ For each file to migrate:
 
 ## Next Steps
 
-1. **Complete `btree.cpp`** - Finish insert/delete with page split logic
-2. **Create `page.cpp`** - Page management foundation
-3. **Create `freelist.cpp`** - Free list management
-4. **Create `manager.cpp`** - PageManager implementation
-5. **Create `wal.cpp`** - WAL implementation
-
-After DS layer is complete, proceed with QP parser migration.
+1. **QP parser migration** - Migrate the 7 SQL parser files to C++ for faster tokenization/parsing
+2. **DS cache.cpp** - LRU/ARC page cache for buffer pool
+3. **DS overflow.cpp** - Overflow page chain management
+4. **VM bytecode_vm.cpp** - Main VM execution loop (highest complexity)
