@@ -21,6 +21,13 @@ This plan covers converting key extensions and the DS (Data Storage) subsystem t
 | Phase 9 | VM: Batch Execution | libsvdb_vm | ✅ Implemented |
 | Phase 10 | VM: Sorting (ORDER BY) | libsvdb_vm | ✅ Implemented |
 | Phase 11 | DS: Compression (LZ4/ZSTD) | libsvdb_ds | ✅ Implemented |
+| Phase 12 | VM: Expression Evaluation | libsvdb_vm | Pending |
+| Phase 13 | VM: Bytecode Dispatcher | libsvdb_vm | Pending |
+| Phase 14 | VM: Type Conversion | libsvdb_vm | Pending |
+| Phase 15 | VM: String Functions | libsvdb_vm | Pending |
+| Phase 16 | VM: DateTime Functions | libsvdb_vm | Pending |
+| Phase 17 | VM: Aggregate Functions | libsvdb_vm | Pending |
+| Phase 18 | QP: Parser & Tokenizer | libsvdb_qp | Pending |
 
 ---
 
@@ -670,7 +677,297 @@ func Compress(data []byte) []byte {
 
 ---
 
-## 15. Success Criteria
+## 15. Phase 12 - VM: Expression Evaluation (Pending)
+
+### Motivation
+- Expression evaluation is called for **every row, every column** in WHERE/SELECT/HAVING
+- Currently uses Go `interface{}` boxing/unboxing on hot path
+- Binary operations (`+`, `-`, `*`, `/`, `compare`) dominate CPU time
+
+### Target Components
+
+#### 15.1 Expression Evaluator (`internal/VM/expr_eval.go`)
+**Functions to CGO-ize:**
+- `ExprBytecode.Eval(row []interface{}) interface{}` - Main expression evaluation
+- `ExprEvaluator.BinaryOp(op OpCode, a, b interface{})` - Binary operations
+- `ExprEvaluator.add(a, b interface{})` - Addition
+- `ExprEvaluator.sub(a, b interface{})` - Subtraction
+- `ExprEvaluator.mul(a, b interface{})` - Multiplication
+- `ExprEvaluator.div(a, b interface{})` - Division
+- `compareVals(a, b interface{}) int` - **Critical hot path**
+
+### File Structure
+```
+internal/VM/cgo/
+├── expr_eval.h         # Expression evaluation header
+├── expr_eval.cpp       # SIMD batch expression evaluation
+├── CMakeLists.txt      # Build configuration (add to Phase 7)
+└── CMakeLists.txt     # Update existing
+```
+
+### CGO Integration Pattern
+```go
+// internal/VM/expr_eval_cgo.go
+// +build SVDB_ENABLE_CGO_VM
+
+package VM
+
+/*
+#cgo LDFLAGS: -L${SRCDIR}/cgo/../../../.build/cmake/lib -lsvdb_vm
+#include "expr_eval.h"
+*/
+import "C"
+
+// Batch evaluate expressions for multiple rows
+func EvalExprBatch(expr *ExprBytecode, rows [][]interface{}) []interface{} {
+    // Single CGO call for 1000+ rows
+    // Avoids per-row CGO overhead
+}
+```
+
+### Expected Performance Gains
+- 2-4× faster expression evaluation
+- 3-5× faster WHERE clause filtering
+- 2-3× faster SELECT projections
+- Reduced GC pressure from fewer allocations
+
+### Implementation Notes
+- **Highest ROI** - affects every query type
+- Batch evaluation to amortize CGO overhead
+- SIMD for numeric operations (add, sub, mul, compare)
+- Keep Go fallback for complex expressions
+
+---
+
+## 16. Phase 13 - VM: Bytecode Dispatcher (Pending)
+
+### Motivation
+- Dispatch overhead on **every bytecode instruction**
+- Go's indirect call overhead adds up (millions of calls per query)
+- Tight loop with branch prediction penalties
+
+### Target Components
+
+#### 16.1 Bytecode VM Loop (`internal/VM/bytecode_vm.go`)
+**Functions to CGO-ize:**
+- `BytecodeVM.Run()` - Main execution loop
+- `BytecodeVM.executeNext()` - Instruction dispatch
+- Handler dispatch table lookups
+
+### File Structure
+```
+internal/VM/cgo/
+├── vm_dispatch.h       # Direct threaded dispatch header
+├── vm_dispatch.cpp     # Optimized dispatch loop
+└── CMakeLists.txt     # Build configuration (add to Phase 7)
+```
+
+### Design
+```cpp
+// C++ direct threaded dispatch - eliminates indirect call overhead
+extern "C" int svdb_vm_execute_direct(
+    const svdb_instr_t* instrs,
+    svdb_value_t* registers,
+    size_t num_instrs,
+    int start_pc
+);
+```
+
+### Expected Performance Gains
+- 1.5-2× faster bytecode execution
+- Reduced branch misprediction
+- Better instruction cache utilization
+
+### Implementation Notes
+- Medium complexity - VM state management
+- Direct threaded code vs computed goto
+- Start with simple opcodes, add complex ones gradually
+
+---
+
+## 17. Phase 14 - VM: Type Conversion (Pending)
+
+### Motivation
+- `CAST()`, implicit conversions happen constantly
+- Go's type assertions are expensive
+- String ↔ number conversions are frequent
+
+### Target Components
+
+#### 17.1 Type Conversion (`internal/VM/query_engine.go`)
+**Functions to CGO-ize:**
+- `QueryEngine.evalCastExpr(row, expr)` - CAST evaluation
+- `ExprEvaluator.toFloat64(v interface{}) float64`
+- `ExprEvaluator.toInteger(v interface{}) (int64, bool)`
+- `ExprEvaluator.toString(v interface{}) string`
+
+### File Structure
+```
+internal/VM/cgo/
+├── type_conv.h         # Type conversion header
+├── type_conv.cpp       # Optimized conversions
+└── CMakeLists.txt     # Build configuration (add to Phase 7)
+```
+
+### Expected Performance Gains
+- 2-3× faster CAST operations
+- 1.5-2× faster implicit conversions
+- Reduced allocation from string conversions
+
+---
+
+## 18. Phase 15 - VM: String Functions (Pending)
+
+### Motivation
+- `SUBSTR()`, `UPPER()`, `LOWER()`, `TRIM()` allocate new strings
+- Go string operations create garbage
+- Called per-row in SELECT lists
+
+### Target Components
+
+#### 18.1 String Functions (`internal/VM/exec.go`)
+**Functions to CGO-ize:**
+- `sqlite_substr(str, start, length)` - Substring extraction
+- `sqlite_upper(str)` - Uppercase conversion
+- `sqlite_lower(str)` - Lowercase conversion
+- `sqlite_trim(str)` - Whitespace trimming
+- `sqlite_concat(args...)` - String concatenation
+
+### File Structure
+```
+internal/VM/cgo/
+├── string_funcs.h      # String function header
+├── string_funcs.cpp    # SIMD string operations
+└── CMakeLists.txt     # Build configuration (add to Phase 7)
+```
+
+### SIMD Optimizations
+**Target Operations:**
+- AVX2 string case conversion (32 bytes/cycle)
+- SIMD whitespace detection
+- Batch string operations
+
+### Expected Performance Gains
+- 1.5-2× faster string function evaluation
+- 2-3× faster UPPER/LOWER (SIMD)
+- Reduced GC pressure from pooled buffers
+
+### Implementation Notes
+- Reuse string arena buffer across rows
+- Batch processing for 1000+ rows
+
+---
+
+## 19. Phase 16 - VM: DateTime Functions (Pending)
+
+### Motivation
+- `strftime()`, `julianday()`, `unixepoch()` are complex
+- Go's `time.Time` parsing is slow
+- Format string parsing happens every call
+
+### Target Components
+
+#### 19.1 DateTime Functions (`internal/VM/exec.go`)
+**Functions to CGO-ize:**
+- `strftime(format, timestring, ...)` - Format datetime
+- `julianday(timestring, ...)` - Julian day calculation
+- `unixepoch(timestring, ...)` - Unix timestamp
+- `datetime(timestring, ...)` - DateTime formatting
+
+### Dependencies
+- **date.h**: Howard Hinnant's date library (header-only)
+
+### File Structure
+```
+internal/VM/cgo/
+├── datetime.h          # DateTime function header
+├── datetime.cpp        # Optimized date parsing/formatting
+└── CMakeLists.txt     # Build configuration (add to Phase 7)
+```
+
+### Expected Performance Gains
+- 2-3× faster datetime parsing
+- 3-4× faster strftime formatting
+- Reduced allocation from time.Time objects
+
+---
+
+## 20. Phase 17 - VM: Aggregate Functions (Pending)
+
+### Motivation
+- `SUM()`, `AVG()`, `MIN()`, `MAX()` accumulate per-row
+- Currently uses `interface{}` boxing
+- GROUP BY multiplies the calls
+
+### Target Components
+
+#### 19.1 Aggregate Functions (`internal/VM/exec.go`)
+**Functions to CGO-ize:**
+- `VM.executeAggregation(cursor, aggInfo)` - Main aggregation loop
+- `VM.evaluateAggregateArg(...)` - Argument evaluation
+- `SUM()`, `AVG()`, `MIN()`, `MAX()` accumulators
+
+### File Structure
+```
+internal/VM/cgo/
+├── aggregate.h         # Aggregate function header
+├── aggregate.cpp       # Batch aggregation
+└── CMakeLists.txt     # Build configuration (add to Phase 7)
+```
+
+### Design
+```cpp
+// Batch aggregation - process 1000 rows at once
+extern "C" void svdb_aggregate_sum_batch(
+    const svdb_value_t* values,
+    size_t count,
+    svdb_value_t* result
+);
+```
+
+### Expected Performance Gains
+- 2-3× faster GROUP BY queries
+- 3-4× faster SUM/AVG on large datasets
+- Reduced memory from streaming aggregation
+
+---
+
+## 21. Phase 18 - QP: Parser & Tokenizer (Pending)
+
+### Motivation
+- Affects query **compile time**, not execution
+- Still noticeable for high-QPS workloads
+- String scanning and regex are slow in Go
+
+### Target Components
+
+#### 20.1 Parser/Tokenizer (`internal/QP/tokenizer.go`, `internal/QP/parser.go`)
+**Functions to CGO-ize:**
+- `Tokenizer.Next()` - Token scanning
+- `Parser.Parse()` - SQL parsing
+- Regex operations in tokenizer
+
+### File Structure
+```
+internal/QP/cgo/
+├── parser.h            # Parser header
+├── parser.cpp          # Optimized parser
+├── tokenizer.cpp       # Fast tokenizer
+└── CMakeLists.txt     # Build configuration
+```
+
+### Expected Performance Gains
+- 2-3× faster query parsing
+- 3-4× faster tokenizer (SIMD whitespace detection)
+- Lower latency for high-QPS workloads
+
+### Implementation Notes
+- Lower priority - doesn't affect execution speed
+- Use re2 library for regex operations
+
+---
+
+## 22. Success Criteria
 
 ### Extension CGO (Phases 1-3)
 - [x] Phase 1: ext/math CGO implementation
@@ -717,6 +1014,51 @@ func Compress(data []byte) []byte {
   - [x] PRAGMA compression support
   - [x] 5-10× compression speedup
 
+### CGO-VM Core (Phases 7-11)
+- [x] Phase 7: VM Hash Functions (JOIN)
+  - [x] xxHash/CityHash integration
+  - [x] Batch hashing API
+  - [x] JOIN performance improvement (2-3×)
+- [x] Phase 8: VM String Comparison
+  - [x] SIMD comparison kernels
+  - [x] Batch comparison API
+  - [x] WHERE/JOIN improvement (1.5-2×)
+- [x] Phase 9: VM Batch Execution
+  - [x] Batch instruction execution
+  - [x] Vector operations
+  - [x] General query improvement (2-4×)
+- [x] Phase 10: VM Sorting
+  - [x] Radix sort for integers
+  - [x] SIMD quicksort for strings
+  - [x] ORDER BY improvement (2-3×)
+- [x] Phase 11: DS Compression
+  - [x] LZ4 integration
+  - [x] ZSTD integration
+
+### CGO-VM Expression Engine (Phases 12-18)
+- [ ] Phase 12: VM Expression Evaluation
+  - [ ] Batch expression evaluation
+  - [ ] SIMD arithmetic operations
+  - [ ] 2-4× expression speedup
+- [ ] Phase 13: VM Bytecode Dispatcher
+  - [ ] Direct threaded dispatch
+  - [ ] 1.5-2× bytecode execution
+- [ ] Phase 14: VM Type Conversion
+  - [ ] Batch type conversion
+  - [ ] 2-3× CAST operations
+- [ ] Phase 15: VM String Functions
+  - [ ] SIMD string operations
+  - [ ] 2-3× UPPER/LOWER/SUBSTR
+- [ ] Phase 16: VM DateTime Functions
+  - [ ] date.h integration
+  - [ ] 2-3× datetime parsing
+- [ ] Phase 17: VM Aggregate Functions
+  - [ ] Batch aggregation
+  - [ ] 2-3× GROUP BY
+- [ ] Phase 18: QP Parser & Tokenizer
+  - [ ] Fast tokenizer
+  - [ ] 2-3× query parsing
+
 ### General Requirements
 - [x] All extensions work with `-t` (pure Go)
 - [x] All extensions work with `-t -n` (CGO)
@@ -726,10 +1068,12 @@ func Compress(data []byte) []byte {
 - [x] All existing DS tests pass with CGO-DS enabled
 - [x] No breaking changes to existing DS API
 - [x] Benchmark improvements documented for each phase
-- [ ] CGO-VM builds with `-tags SVDB_ENABLE_CGO_VM`
-- [ ] All existing VM tests pass with CGO-VM enabled
+- [x] CGO-VM builds with `-tags SVDB_ENABLE_CGO_VM`
+- [x] All existing VM tests pass with CGO-VM enabled
 - [ ] JOIN performance matches or exceeds SQLite
 - [ ] ORDER BY performance matches or exceeds SQLite
+- [ ] Expression evaluation 2-4× faster
+- [ ] Overall query performance 2-3× faster
 
 ---
 
@@ -797,3 +1141,40 @@ func Compress(data []byte) []byte {
    - JOIN correctness tests (various join types)
    - ORDER BY correctness tests (multi-column, DESC)
    - Benchmark comparison against pure Go and SQLite
+
+### Implementation Effort Estimates
+
+| Phase | Component | Effort | Expected Speedup | Priority |
+|-------|-----------|--------|------------------|----------|
+| 12 | VM Expression Evaluation | 3-5 days | 2-4× | 🔥 Critical |
+| 13 | VM Bytecode Dispatcher | 2-3 days | 1.5-2× | 🔥 Critical |
+| 14 | VM Type Conversion | 1-2 days | 2-3× | ⭐ High |
+| 15 | VM String Functions | 2-3 days | 1.5-2× | ⭐ High |
+| 16 | VM DateTime Functions | 2-3 days | 2-3× | ⭐ High |
+| 17 | VM Aggregate Functions | 2-3 days | 2-3× | ⭐ High |
+| 18 | QP Parser & Tokenizer | 2-3 days | 2-3× | 📦 Low |
+
+**Total Estimated Effort:** 14-22 days
+**Overall Expected Speedup:** 2-4× for typical workloads
+
+### Recommended Implementation Order
+
+1. **Phase 12 (Expression Evaluation)** - Highest ROI, affects every query
+2. **Phase 13 (Bytecode Dispatcher)** - Additional 1.5-2× for complex queries
+3. **Phase 14 (Type Conversion)** - Quick win, 1-2 days effort
+4. **Phase 15 (String Functions)** - String-heavy workloads
+5. **Phase 16 (DateTime Functions)** - Date/time queries
+6. **Phase 17 (Aggregate Functions)** - GROUP BY optimization
+7. **Phase 18 (Parser/Tokenizer)** - Lowest priority (compile-time only)
+
+### Risk Assessment
+
+| Phase | Risk Level | Mitigation |
+|-------|-----------|------------|
+| 12 | Low | Well-defined API, batch operations |
+| 13 | Medium | VM state management complexity |
+| 14 | Low | Simple conversions, easy to test |
+| 15 | Low | String operations are straightforward |
+| 16 | Medium | date.h dependency, timezone handling |
+| 17 | Low | Accumulator pattern is simple |
+| 18 | Low | Parser is isolated, easy fallback |
