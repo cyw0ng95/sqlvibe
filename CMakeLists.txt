@@ -34,6 +34,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/ext/fts5/CMakeLists.txt)
     add_subdirectory(ext/fts5)
 endif()
 
+# Add DS CGO library
+if(EXISTS ${CMAKE_SOURCE_DIR}/internal/DS/cgo/CMakeLists.txt)
+    add_subdirectory(internal/DS/cgo)
+endif()
+
 # Build all C++ targets
 add_custom_target(cpp-build
     COMMENT "Building C++ targets in .build/cmake/"
