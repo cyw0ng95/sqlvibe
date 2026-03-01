@@ -1,0 +1,1 @@
+/tmp/codeql-scratch-89cd5982bd6654f4/dbs/cpp/working/autobuild/bin/c++ -fPIC -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/svdb_vm_phase2.dir/link.d -shared -Wl,-soname,libsvdb_vm_phase2.so.1 -o /home/runner/work/sqlvibe/sqlvibe/.build/cmake/lib/libsvdb_vm_phase2.so.1.0.0 CMakeFiles/svdb_vm_phase2.dir/hash_join.cpp.o

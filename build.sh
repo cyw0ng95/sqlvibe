@@ -75,6 +75,7 @@ echo "      - Extensions: math, json, fts5"
 echo "      - Data Storage: B-Tree, SIMD, Roaring bitmap"
 echo "      - VM: Hash functions, batch execution, expression eval, dispatch, type conv, strings, datetime, aggregates"
 echo "      - QP: Fast tokenizer"
+echo "      - CG: Bytecode optimizer, plan cache, expression compiler"
 
 # Build C++ extensions
 if [[ -f "CMakeLists.txt" ]]; then
