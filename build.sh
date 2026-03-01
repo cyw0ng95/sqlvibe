@@ -71,10 +71,14 @@ done
 
 mkdir -p "$BUILD_DIR"
 
-# If -n flag is used, add CGO support
+# If -n flag is used, add CGO support for all components
+# SVDB_ENABLE_CGO automatically enables CGO for extensions, DS, and VM
 if [[ $ENABLE_CGO -eq 1 ]]; then
-    EXT_TAGS="$EXT_TAGS,SVDB_ENABLE_CGO"
+    EXT_TAGS="$EXT_TAGS,SVDB_ENABLE_CGO,SVDB_ENABLE_CGO_DS,SVDB_ENABLE_CGO_VM"
     echo "====> CGO enabled (SVDB_ENABLE_CGO)"
+    echo "      - Extensions: math, json, fts5"
+    echo "      - Data Storage: B-Tree, SIMD, Roaring bitmap"
+    echo "      - VM: Hash functions, batch execution"
 
     # Build C++ extensions
     if [[ -f "CMakeLists.txt" ]]; then
