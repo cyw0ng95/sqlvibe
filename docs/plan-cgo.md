@@ -12,7 +12,7 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | Subsystem | Total | C++ Complete | CGO Wrapper | Go-Only | Progress |
 |-----------|-------|--------------|-------------|---------|----------|
 | **DS** (Data Storage) | 36 | 20 | 19 | 12 | 58% |
-| **VM** (Virtual Machine) | 30 | 21 | 12 | 15 | 72% |
+| **VM** (Virtual Machine) | 30 | 21 | 15 | 15 | 72% |
 | **QP** (Query Processing) | 15 | 12 | 7 | 4 | 80% |
 | **CG** (Code Generation) | 8 | 7 | 7 | 1 | 88% |
 | **TM** (Transaction Mgmt) | 1 | 1 | 1 | 0 | 100% |
@@ -108,11 +108,11 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | Go File | C++ File | Status | Notes |
 |---------|----------|--------|-------|
 | `internal/VM/bytecode_vm.go` | `src/core/VM/bytecode_vm.cpp` | ⚠️ PARTIAL | C++ complete, Go wrapper needs CGO |
-| `internal/VM/bytecode_handlers.go` | `src/core/VM/opcodes.cpp` | ❌ TODO | Only opcode metadata in C++, handlers in Go |
+| `internal/VM/bytecode_handlers.go` | `src/core/VM/opcodes.cpp` | ⚠️ PARTIAL | Opcode metadata migrated via `bc_opcode_meta_cgo.go`; handlers still in Go |
 | `internal/VM/cursor.go` | `src/core/VM/cursor.cpp` | ✅ CGO | Always-on; dual-layer: C++ metadata shadow + Go row-data; `cursors []*Cursor` kept for test compat |
-| `internal/VM/exec.go` | `src/core/VM/exec.cpp` | ⚠️ PARTIAL | C++ complete, Go wrapper needs CGO |
+| `internal/VM/exec.go` | `src/core/VM/exec.cpp` | ⚠️ PARTIAL | Utility functions migrated via `vm_utils_cgo.go` (classify, hash, cache, columnar); full exec still in Go |
 | `internal/VM/dispatch.go` | `src/core/VM/dispatch.cpp` | ⚠️ PARTIAL | C++ complete, Go wrapper needs CGO |
-| `internal/VM/engine.go` | `src/core/VM/query_engine.cpp` | ⚠️ PARTIAL | C++ complete, Go wrapper needs CGO |
+| `internal/VM/engine.go` | `src/core/VM/query_engine.cpp` | ⚠️ PARTIAL | Query classification + comment-stripping migrated via `vm_utils_cgo.go`; VM struct still in Go |
 
 ### 📋 Go-Only (Orchestration Layer)
 
