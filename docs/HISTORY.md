@@ -1,10 +1,50 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.9 (2026-03-01)
+## Current Version: v0.10.10 (2026-03-01)
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
 **Test Status**: All 84+ SQL:1999 test suites passing.
+
+---
+
+## **v0.10.10** (2026-03-01)
+
+### Features
+
+#### SQLSTATE Error Codes
+- Added `SQLState` field to `*Error` struct (`internal/SF/errors`)
+- New `sqlstate.go` with SQLSTATE constants (23000, 23502, 23503, 23505, 23514, 22001, 22003)
+- `WithSQLState(e, state)` helper to attach SQLSTATE to errors
+- `SQLStateOf(err)` returns SQLSTATE for any error; maps known constraint codes automatically
+- `Error.Error()` includes `[SQLSTATE]` in formatted string when set
+- Constraint errors now return proper `SVDB_CONSTRAINT_PRIMARYKEY` / `SVDB_CONSTRAINT_UNIQUE` codes with SQLSTATE 23505
+
+#### Schema Parser
+- New `ParseTableSchema(ddl)` in `internal/QP` — parses CREATE TABLE DDL to `*ParsedTableSchema`
+- New `ParseViewSchema(ddl)` — parses CREATE VIEW DDL to `*ParsedViewSchema`
+- `ExprToString(expr)` utility converts AST expressions back to SQL string
+
+#### .schema Command / `Schema()` API
+- Added `Database.Schema(tableName)` method — returns DDL for specific table or all tables
+
+### Refactoring
+
+#### Parser Subpackage Split
+- `internal/QP/parser.go` (3858 lines) split into 7 focused files in same package:
+  - `parser_select.go`: SELECT, parseFuncArgList, parseTableRef, window/CTE parsing
+  - `parser_dml.go`: INSERT, UPDATE, DELETE, standalone VALUES
+  - `parser_create.go`: CREATE TABLE/INDEX/VIEW/TRIGGER/VIRTUAL TABLE
+  - `parser_alter.go`: DROP, ALTER TABLE
+  - `parser_txn.go`: PRAGMA, EXPLAIN, BEGIN/COMMIT/ROLLBACK, SAVEPOINT, BACKUP, VACUUM
+  - `parser_expr.go`: all expression parsing + evalConstExpr helpers
+- `internal/QP/parser/` subpackage with ~40 black-box parser tests
+
+### Bug Fixes
+
+#### Resolved TODOs
+- `internal/TS/SQL1999/E171/01_test.go`: now checks SQLSTATE code on duplicate key
+- `internal/IS/registry_test.go`: removed TODO comment on BTree initialization
 
 ---
 

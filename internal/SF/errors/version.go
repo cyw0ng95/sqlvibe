@@ -1,3 +1,3 @@
 package errors
 
-const Version = "v0.10.8"
+const Version = "v0.10.10"

@@ -173,3 +173,21 @@ func (db *Database) buildCreateTableSQL(table string) string {
 	}
 	return fmt.Sprintf("CREATE TABLE %s (%s)", table, strings.Join(cols, ", "))
 }
+
+// Schema returns the DDL for tables/views in the database.
+// If tableName is non-empty, returns DDL for that specific table or view.
+// If tableName is empty, returns DDL for all tables and views joined by newlines.
+func (db *Database) Schema(tableName string) (string, error) {
+	if tableName != "" {
+		return db.GetSchema(tableName)
+	}
+	tables, err := db.GetTables()
+	if err != nil {
+		return "", err
+	}
+	stmts := make([]string, 0, len(tables))
+	for _, t := range tables {
+		stmts = append(stmts, t.SQL+";")
+	}
+	return strings.Join(stmts, "\n"), nil
+}

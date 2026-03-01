@@ -2013,7 +2013,10 @@ func (db *Database) checkUniqueIndexes(tableName string, row map[string]interfac
 			for i, c := range idx.Columns {
 				colRefs[i] = tableName + "." + c
 			}
-			return fmt.Errorf("UNIQUE constraint failed: %s", strings.Join(colRefs, ", "))
+			return errors.WithSQLState(
+				errors.Errorf(errors.SVDB_CONSTRAINT_UNIQUE, "UNIQUE constraint failed: %s", strings.Join(colRefs, ", ")),
+				errors.SQLState_UniqueViolation,
+			)
 		}
 	}
 	return nil
@@ -4637,13 +4640,15 @@ func (db *Database) execInsertOrIgnore(stmt *QP.InsertStmt) (Result, error) {
 
 // parseUniqueConflictCols extracts the column names from a UNIQUE constraint
 // failed error message of the form "UNIQUE constraint failed: tbl.col1, tbl.col2".
+// Also handles the extended format "[CODE][STATE] UNIQUE constraint failed: ...".
 // Returns nil when the message does not match the expected format.
 func parseUniqueConflictCols(errMsg string) []string {
 	const prefix = "UNIQUE constraint failed: "
-	if !strings.HasPrefix(errMsg, prefix) {
+	idx := strings.Index(errMsg, prefix)
+	if idx < 0 {
 		return nil
 	}
-	refs := strings.Split(errMsg[len(prefix):], ", ")
+	refs := strings.Split(errMsg[idx+len(prefix):], ", ")
 	cols := make([]string, 0, len(refs))
 	for _, ref := range refs {
 		if dot := strings.LastIndex(ref, "."); dot >= 0 {

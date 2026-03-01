@@ -7,6 +7,7 @@ import (
 
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/errors"
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 	"github.com/cyw0ng95/sqlvibe/internal/VM"
 )
@@ -268,7 +269,10 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		pkCols := ctx.db.primaryKeys[tableName]
 		if len(pkCols) > 0 {
 			if ctx.db.pkHashContains(tableName, row) {
-				return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
+				return errors.WithSQLState(
+					errors.Errorf(errors.SVDB_CONSTRAINT_PRIMARYKEY, "UNIQUE constraint failed: %s.%s", tableName, pkCols[0]),
+					errors.SQLState_UniqueViolation,
+				)
 			}
 		}
 
@@ -536,7 +540,10 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 	pkCols := ctx.db.primaryKeys[tableName]
 	if len(pkCols) > 0 {
 		if ctx.db.pkHashContains(tableName, row) {
-			return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
+			return errors.WithSQLState(
+				errors.Errorf(errors.SVDB_CONSTRAINT_PRIMARYKEY, "UNIQUE constraint failed: %s.%s", tableName, pkCols[0]),
+				errors.SQLState_UniqueViolation,
+			)
 		}
 	}
 
