@@ -16,11 +16,11 @@ This plan covers converting key extensions and the DS (Data Storage) subsystem t
 | Phase 4 | CGO-DS: B-Tree & Page Mgmt | libsvdb_ds | ✅ Implemented |
 | Phase 5 | CGO-DS: Columnar & Vector | libsvdb_ds | ✅ Implemented |
 | Phase 6 | CGO-DS: Index & Bitmap | libsvdb_ds | ✅ Implemented |
-| Phase 7 | VM: Hash Functions (JOIN) | libsvdb_vm | Pending |
-| Phase 8 | VM: String Comparison | libsvdb_vm | Pending |
-| Phase 9 | VM: Batch Execution | libsvdb_vm | Pending |
-| Phase 10 | VM: Sorting (ORDER BY) | libsvdb_vm | Pending |
-| Phase 11 | DS: Compression (LZ4/ZSTD) | libsvdb_ds | Pending |
+| Phase 7 | VM: Hash Functions (JOIN) | libsvdb_vm | ✅ Implemented |
+| Phase 8 | VM: String Comparison | libsvdb_vm | ✅ Implemented |
+| Phase 9 | VM: Batch Execution | libsvdb_vm | ✅ Implemented |
+| Phase 10 | VM: Sorting (ORDER BY) | libsvdb_vm | ✅ Implemented |
+| Phase 11 | DS: Compression (LZ4/ZSTD) | libsvdb_ds | ✅ Implemented |
 
 ---
 
@@ -693,29 +693,29 @@ func Compress(data []byte) []byte {
   - [x] Skip list operations
 
 ### CGO-VM (Phases 7-10)
-- [ ] Phase 7: VM Hash Functions (JOIN)
-  - [ ] xxHash/CityHash integration
-  - [ ] Batch hashing API
-  - [ ] JOIN performance improvement (2-3×)
-- [ ] Phase 8: VM String Comparison
-  - [ ] SIMD comparison kernels
-  - [ ] Batch comparison API
-  - [ ] WHERE/JOIN improvement (1.5-2×)
-- [ ] Phase 9: VM Batch Execution
-  - [ ] Batch instruction execution
-  - [ ] Vector operations
-  - [ ] General query improvement (2-4×)
-- [ ] Phase 10: VM Sorting
-  - [ ] Radix sort for integers
-  - [ ] SIMD quicksort for strings
-  - [ ] ORDER BY improvement (2-3×)
+- [x] Phase 7: VM Hash Functions (JOIN)
+  - [x] xxHash/CityHash integration
+  - [x] Batch hashing API
+  - [x] JOIN performance improvement (2-3×)
+- [x] Phase 8: VM String Comparison
+  - [x] SIMD comparison kernels
+  - [x] Batch comparison API
+  - [x] WHERE/JOIN improvement (1.5-2×)
+- [x] Phase 9: VM Batch Execution
+  - [x] Batch instruction execution
+  - [x] Vector operations
+  - [x] General query improvement (2-4×)
+- [x] Phase 10: VM Sorting
+  - [x] Radix sort for integers
+  - [x] SIMD quicksort for strings
+  - [x] ORDER BY improvement (2-3×)
 
 ### DS Compression (Phase 11)
-- [ ] Phase 11: DS Compression
-  - [ ] LZ4 integration
-  - [ ] ZSTD integration
-  - [ ] PRAGMA compression support
-  - [ ] 5-10× compression speedup
+- [x] Phase 11: DS Compression
+  - [x] LZ4 integration
+  - [x] ZSTD integration
+  - [x] PRAGMA compression support
+  - [x] 5-10× compression speedup
 
 ### General Requirements
 - [x] All extensions work with `-t` (pure Go)
