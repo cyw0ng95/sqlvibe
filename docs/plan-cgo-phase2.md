@@ -1,12 +1,18 @@
-# Plan CGO Switch - Phase 2: Query Execution Layer
+# Plan CGO Switch - Phase 2 & 3: Query Execution + Code Generator
 
 ## Summary
 
-Implement Phase 2 of CGO optimization by converting query execution layer packages to use C++ for performance-critical operations, building on the completed Phase 1 (Extensions + DS + VM Core).
+Implement Phase 2 and Phase 3 of CGO optimization:
+- **Phase 2**: Query execution layer (`pkg/sqlvibe/`)
+- **Phase 3**: Code Generator subsystem (`internal/CG/`)
 
 ## Overview
 
+### Phase 1 Complete ✅
+
 Phase 1 (Phases 1-18) is complete. All extension and VM core optimizations are implemented and tested.
+
+### Phase 2: Query Execution Layer
 
 Phase 2 focuses on the query execution layer in `pkg/sqlvibe/` to address remaining performance bottlenecks.
 
@@ -18,6 +24,25 @@ Phase 2 focuses on the query execution layer in `pkg/sqlvibe/` to address remain
 | Phase 22 | pkg/sqlvibe: VM Context | libsvdb_vm | Pending |
 | Phase 23 | pkg/sqlvibe: Window Functions | libsvdb_vm | Pending |
 | Phase 24 | pkg/sqlvibe: Set Operations | libsvdb_vm | Pending |
+
+### Phase 3: Code Generator (CG) Subsystem
+
+Phase 3 replaces the pure Go Code Generator with a high-performance C++ implementation.
+
+See [`docs/plan-cgo-phase3-cg.md`](docs/plan-cgo-phase3-cg.md) for detailed Phase 3 plan.
+
+| Phase | Module | Library | Status |
+|-------|--------|---------|--------|
+| Phase 3.1 | CGO Infrastructure | libsvdb_cg | Pending |
+| Phase 3.2 | C++ Compiler | libsvdb_cg | Pending |
+| Phase 3.3 | SIMD Optimizations | libsvdb_cg | Pending |
+| Phase 3.4 | Integration Testing | libsvdb_cg | Pending |
+| Phase 3.5 | Remove Pure Go | libsvdb_cg | Pending |
+
+**Phase 3 Summary:**
+- **Total Estimated Effort:** 6 weeks
+- **Expected Speedup:** 2-4× for query compilation
+- **Key Components:** Compiler, ExprCompiler, Optimizer, PlanCache, SIMD eval
 
 ---
 
