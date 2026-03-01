@@ -101,7 +101,7 @@ return cursor.Data[cursor.Index], false
 
 func (ca *CursorArray) GetRow(id int) (map[string]interface{}, bool) {
 util.Assert(id >= 0 && id < MaxCursors, "cursor ID %d out of bounds [0, %d)", id, MaxCursors)
-if id >= len(ca.cursors) || ca.cursors[id] == nil {
+if id < 0 || id >= len(ca.cursors) || ca.cursors[id] == nil {
 return nil, true
 }
 cursor := ca.cursors[id]

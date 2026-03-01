@@ -11,8 +11,8 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 
 | Subsystem | Total | C++ Complete | CGO Wrapper | Go-Only | Progress |
 |-----------|-------|--------------|-------------|---------|----------|
-| **DS** (Data Storage) | 36 | 20 | 18 | 12 | 56% |
-| **VM** (Virtual Machine) | 30 | 21 | 11 | 15 | 70% |
+| **DS** (Data Storage) | 36 | 20 | 19 | 12 | 58% |
+| **VM** (Virtual Machine) | 30 | 21 | 12 | 15 | 72% |
 | **QP** (Query Processing) | 15 | 12 | 7 | 4 | 80% |
 | **CG** (Code Generation) | 8 | 7 | 7 | 1 | 88% |
 | **TM** (Transaction Mgmt) | 1 | 1 | 1 | 0 | 100% |
@@ -43,6 +43,7 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | `internal/DS/cell.go` | `src/core/DS/cell.cpp` | ✅ CGO | Cell encode/decode |
 | `internal/DS/overflow.go` | `src/core/DS/overflow.cpp` | ✅ CGO | Always-on CGO (no fallback); Direct C pointer for callbacks |
 | `internal/DS/cache_cgo.go` | `src/core/DS/cache.cpp` | ✅ CGO | **Always-on CGO** (no fallback); Direct C pointer, self-contained |
+| `internal/DS/skip_list.go` | `src/core/DS/skip_list.h` | ✅ CGO | Always-on; int/float→`_int` API, string/bytes→`_str` API; goKeys for Range/Pairs |
 
 **Architecture Note**: All CGO files are unconditional (no build tags) — matching the pattern of `value.go`, `encoding.go`. C++ is the only implementation. `cache_cgo.go` uses direct C pointer (no registry overhead). `overflow_cgo.go` requires registry for Go PageManager callbacks. See `docs/plan-cgo-architecture-fix.md`.
 
@@ -108,7 +109,7 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 |---------|----------|--------|-------|
 | `internal/VM/bytecode_vm.go` | `src/core/VM/bytecode_vm.cpp` | ⚠️ PARTIAL | C++ complete, Go wrapper needs CGO |
 | `internal/VM/bytecode_handlers.go` | `src/core/VM/opcodes.cpp` | ❌ TODO | Only opcode metadata in C++, handlers in Go |
-| `internal/VM/cursor.go` | `src/core/VM/cursor.cpp` | ⚠️ PARTIAL | C++ complete, Go wrapper needs CGO |
+| `internal/VM/cursor.go` | `src/core/VM/cursor.cpp` | ✅ CGO | Always-on; dual-layer: C++ metadata shadow + Go row-data; `cursors []*Cursor` kept for test compat |
 | `internal/VM/exec.go` | `src/core/VM/exec.cpp` | ⚠️ PARTIAL | C++ complete, Go wrapper needs CGO |
 | `internal/VM/dispatch.go` | `src/core/VM/dispatch.cpp` | ⚠️ PARTIAL | C++ complete, Go wrapper needs CGO |
 | `internal/VM/engine.go` | `src/core/VM/query_engine.cpp` | ⚠️ PARTIAL | C++ complete, Go wrapper needs CGO |

@@ -188,18 +188,27 @@ return t == TypeInt || t == TypeFloat || t == TypeBool
 }
 
 // valueToInt64Key encodes a Value as an int64 for the C++ int-key API.
-// TypeFloat uses bit-pattern encoding (math.Float64bits cast to int64); this
-// preserves ordering for non-negative finite floats. NaN/Inf are not supported.
+// TypeFloat uses a sort-preserving encoding: positive floats keep their bit
+// pattern with the sign bit forced to 1 (so they sort after all negatives);
+// negative floats have all bits flipped (so they sort before positives).
+// This is the standard IEEE 754 total-order encoding used by database engines.
+// NaN/Inf are not supported as skip-list keys.
 // TypeNull maps to math.MinInt64 (nullKeyInt64 sentinel).
 func valueToInt64Key(v Value) int64 {
-switch v.Type {
-case TypeInt, TypeBool:
-return v.Int
-case TypeFloat:
-return int64(math.Float64bits(v.Float))
-default:
-return nullKeyInt64
-}
+	switch v.Type {
+	case TypeInt, TypeBool:
+		return v.Int
+	case TypeFloat:
+		bits := math.Float64bits(v.Float)
+		if bits>>63 == 0 {
+			// positive: set MSB so all positives sort after all negatives
+			return int64(bits | (1 << 63))
+		}
+		// negative: flip all bits so negatives sort in ascending numeric order
+		return int64(^bits)
+	default:
+		return nullKeyInt64
+	}
 }
 
 func int64SliceToUint32(s []C.int64_t) []uint32 {
@@ -213,90 +222,72 @@ out[i] = uint32(v)
 return out
 }
 
-// strKeyArgs returns the C pointer and length for string/bytes keys.
-// The returned pointer is valid only as long as the string or bytes slice is live;
-// callers must hold a reference.
-func strKeyArgs(key Value) (*C.uint8_t, C.size_t) {
-switch key.Type {
-case TypeString:
-if len(key.Str) == 0 {
-return nil, 0
-}
-cs := C.CString(key.Str)
-// NOTE: caller must free cs with C.free.
-return (*C.uint8_t)(unsafe.Pointer(cs)), C.size_t(len(key.Str))
-case TypeBytes:
-if len(key.Bytes) == 0 {
-return nil, 0
-}
-return (*C.uint8_t)(unsafe.Pointer(&key.Bytes[0])), C.size_t(len(key.Bytes))
-}
-return nil, 0
-}
-
 func (sl *SkipList) cInsert(key Value, rowIdx int64) {
-switch key.Type {
-case TypeInt, TypeBool:
-C.svdb_skiplist_insert_int(sl.cSkipList, C.int64_t(key.Int), C.int64_t(rowIdx))
-case TypeFloat:
-C.svdb_skiplist_insert_int(sl.cSkipList, C.int64_t(math.Float64bits(key.Float)), C.int64_t(rowIdx))
-case TypeNull:
-C.svdb_skiplist_insert_int(sl.cSkipList, C.int64_t(nullKeyInt64), C.int64_t(rowIdx))
-case TypeString:
-ptr, slen := strKeyArgs(key)
-if key.Type == TypeString && len(key.Str) > 0 {
-defer C.free(unsafe.Pointer(ptr))
-}
-C.svdb_skiplist_insert_str(sl.cSkipList, ptr, slen, C.int64_t(rowIdx))
-case TypeBytes:
-ptr, slen := strKeyArgs(key)
-C.svdb_skiplist_insert_str(sl.cSkipList, ptr, slen, C.int64_t(rowIdx))
-}
+	switch key.Type {
+	case TypeInt, TypeBool:
+		C.svdb_skiplist_insert_int(sl.cSkipList, C.int64_t(key.Int), C.int64_t(rowIdx))
+	case TypeFloat:
+		C.svdb_skiplist_insert_int(sl.cSkipList, C.int64_t(valueToInt64Key(key)), C.int64_t(rowIdx))
+	case TypeNull:
+		C.svdb_skiplist_insert_int(sl.cSkipList, C.int64_t(nullKeyInt64), C.int64_t(rowIdx))
+	case TypeString:
+		// C.CString allocates; free after the call.
+		cs := C.CString(key.Str)
+		C.svdb_skiplist_insert_str(sl.cSkipList, (*C.uint8_t)(unsafe.Pointer(cs)), C.size_t(len(key.Str)), C.int64_t(rowIdx))
+		C.free(unsafe.Pointer(cs))
+	case TypeBytes:
+		// TypeBytes: point directly into the Go slice — no C allocation.
+		if len(key.Bytes) == 0 {
+			C.svdb_skiplist_insert_str(sl.cSkipList, nil, 0, C.int64_t(rowIdx))
+		} else {
+			C.svdb_skiplist_insert_str(sl.cSkipList, (*C.uint8_t)(unsafe.Pointer(&key.Bytes[0])), C.size_t(len(key.Bytes)), C.int64_t(rowIdx))
+		}
+	}
 }
 
 func (sl *SkipList) cDelete(key Value, rowIdx int64) {
-switch key.Type {
-case TypeInt, TypeBool:
-C.svdb_skiplist_delete_int(sl.cSkipList, C.int64_t(key.Int), C.int64_t(rowIdx))
-case TypeFloat:
-C.svdb_skiplist_delete_int(sl.cSkipList, C.int64_t(math.Float64bits(key.Float)), C.int64_t(rowIdx))
-case TypeNull:
-C.svdb_skiplist_delete_int(sl.cSkipList, C.int64_t(nullKeyInt64), C.int64_t(rowIdx))
-case TypeString:
-ptr, slen := strKeyArgs(key)
-if len(key.Str) > 0 {
-defer C.free(unsafe.Pointer(ptr))
-}
-C.svdb_skiplist_delete_str(sl.cSkipList, ptr, slen, C.int64_t(rowIdx))
-case TypeBytes:
-ptr, slen := strKeyArgs(key)
-C.svdb_skiplist_delete_str(sl.cSkipList, ptr, slen, C.int64_t(rowIdx))
-}
+	switch key.Type {
+	case TypeInt, TypeBool:
+		C.svdb_skiplist_delete_int(sl.cSkipList, C.int64_t(key.Int), C.int64_t(rowIdx))
+	case TypeFloat:
+		C.svdb_skiplist_delete_int(sl.cSkipList, C.int64_t(valueToInt64Key(key)), C.int64_t(rowIdx))
+	case TypeNull:
+		C.svdb_skiplist_delete_int(sl.cSkipList, C.int64_t(nullKeyInt64), C.int64_t(rowIdx))
+	case TypeString:
+		cs := C.CString(key.Str)
+		C.svdb_skiplist_delete_str(sl.cSkipList, (*C.uint8_t)(unsafe.Pointer(cs)), C.size_t(len(key.Str)), C.int64_t(rowIdx))
+		C.free(unsafe.Pointer(cs))
+	case TypeBytes:
+		if len(key.Bytes) == 0 {
+			C.svdb_skiplist_delete_str(sl.cSkipList, nil, 0, C.int64_t(rowIdx))
+		} else {
+			C.svdb_skiplist_delete_str(sl.cSkipList, (*C.uint8_t)(unsafe.Pointer(&key.Bytes[0])), C.size_t(len(key.Bytes)), C.int64_t(rowIdx))
+		}
+	}
 }
 
 func (sl *SkipList) cFind(key Value) []uint32 {
-var buf [skipListFindBufSize]C.int64_t
-var n int
-switch key.Type {
-case TypeInt, TypeBool:
-n = int(C.svdb_skiplist_find_int(sl.cSkipList, C.int64_t(key.Int), &buf[0], skipListFindBufSize))
-case TypeFloat:
-n = int(C.svdb_skiplist_find_int(sl.cSkipList, C.int64_t(math.Float64bits(key.Float)), &buf[0], skipListFindBufSize))
-case TypeNull:
-n = int(C.svdb_skiplist_find_int(sl.cSkipList, C.int64_t(nullKeyInt64), &buf[0], skipListFindBufSize))
-case TypeString:
-ptr, slen := strKeyArgs(key)
-if len(key.Str) > 0 {
-defer C.free(unsafe.Pointer(ptr))
-n = int(C.svdb_skiplist_find_str(sl.cSkipList, ptr, slen, &buf[0], skipListFindBufSize))
-}
-case TypeBytes:
-ptr, slen := strKeyArgs(key)
-if len(key.Bytes) > 0 {
-n = int(C.svdb_skiplist_find_str(sl.cSkipList, ptr, slen, &buf[0], skipListFindBufSize))
-}
-}
-return int64SliceToUint32(buf[:n])
+	var buf [skipListFindBufSize]C.int64_t
+	var n int
+	switch key.Type {
+	case TypeInt, TypeBool:
+		n = int(C.svdb_skiplist_find_int(sl.cSkipList, C.int64_t(key.Int), &buf[0], skipListFindBufSize))
+	case TypeFloat:
+		n = int(C.svdb_skiplist_find_int(sl.cSkipList, C.int64_t(valueToInt64Key(key)), &buf[0], skipListFindBufSize))
+	case TypeNull:
+		n = int(C.svdb_skiplist_find_int(sl.cSkipList, C.int64_t(nullKeyInt64), &buf[0], skipListFindBufSize))
+	case TypeString:
+		cs := C.CString(key.Str)
+		n = int(C.svdb_skiplist_find_str(sl.cSkipList, (*C.uint8_t)(unsafe.Pointer(cs)), C.size_t(len(key.Str)), &buf[0], skipListFindBufSize))
+		C.free(unsafe.Pointer(cs))
+	case TypeBytes:
+		if len(key.Bytes) == 0 {
+			n = int(C.svdb_skiplist_find_str(sl.cSkipList, nil, 0, &buf[0], skipListFindBufSize))
+		} else {
+			n = int(C.svdb_skiplist_find_str(sl.cSkipList, (*C.uint8_t)(unsafe.Pointer(&key.Bytes[0])), C.size_t(len(key.Bytes)), &buf[0], skipListFindBufSize))
+		}
+	}
+	return int64SliceToUint32(buf[:n])
 }
 
 func (sl *SkipList) cFindCount(key Value) int {
