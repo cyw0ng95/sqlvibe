@@ -59,3 +59,25 @@ func HandleCacheGrind(ctx Ctx) ([]string, [][]interface{}, error) {
 	rows := [][]interface{}{{int64(m.UsedPages), int64(m.FreePages), int64(0), int64(0)}}
 	return cols, rows, nil
 }
+
+// HandleCachePlan handles PRAGMA cache_plan [= 0|1].
+// When no value is provided, returns the current status (1=enabled, 0=disabled).
+// When a value is provided, enables (1) or disables (0) the query plan cache.
+func HandleCachePlan(ctx Ctx, stmt *QP.PragmaStmt) ([]string, [][]interface{}, error) {
+if stmt.Value != nil {
+enabled := IntValue(stmt.Value) != 0
+ctx.SetPlanCacheEnabled(enabled)
+v := int64(0)
+if enabled {
+v = 1
+}
+cols, rows := Result("cache_plan", v)
+return cols, rows, nil
+}
+v := int64(0)
+if ctx.GetPlanCacheEnabled() {
+v = 1
+}
+cols, rows := Result("cache_plan", v)
+return cols, rows, nil
+}

@@ -95,10 +95,10 @@ Current: 27.7% → Target: 50%
 
 ## 5. Success Criteria
 
-- [ ] Prepared statement cache implemented
-- [ ] Query plan cache implemented
-- [ ] Cache PRAGMAs working
-- [ ] compiler/ subpackage created
-- [ ] compiler/*_test.go added (~35 tests)
-- [ ] All tests pass
+- [x] Prepared statement cache implemented
+- [x] Query plan cache implemented
+- [x] Cache PRAGMAs working
+- [x] compiler/ subpackage created
+- [x] compiler/*_test.go added (~64 tests)
+- [x] All tests pass
 - [ ] Coverage: internal/CG → 50%

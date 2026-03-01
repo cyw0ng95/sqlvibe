@@ -49,6 +49,11 @@ type Ctx interface {
 	SetMaxMemoryBytes(bytes int64)
 	GetQueryCacheMax() int
 	SetQueryCacheMax(n int)
+
+	// Plan cache
+	GetPlanCacheEnabled() bool
+	SetPlanCacheEnabled(enabled bool)
+	GetStmtCacheLen() int
 }
 
 // StorageMetrics holds storage statistics.
