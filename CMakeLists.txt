@@ -39,6 +39,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/internal/DS/cgo/CMakeLists.txt)
     add_subdirectory(internal/DS/cgo)
 endif()
 
+# Add VM CGO library
+if(EXISTS ${CMAKE_SOURCE_DIR}/internal/VM/cgo/CMakeLists.txt)
+    add_subdirectory(internal/VM/cgo)
+endif()
+
 # Build all C++ targets
 add_custom_target(cpp-build
     COMMENT "Building C++ targets in .build/cmake/"
