@@ -47,6 +47,10 @@ set(SVDB_CORE_SOURCES
     core/DS/manager.cpp
     core/DS/wal.cpp
     core/DS/skip_list.cpp
+    core/DS/overflow.cpp
+    core/DS/cache.cpp
+    core/DS/columnar.cpp
+    core/DS/row_store.cpp
 
     # VM - Virtual Machine
     core/VM/hash.cpp
@@ -67,6 +71,7 @@ set(SVDB_CORE_SOURCES
     core/VM/program.cpp
     core/VM/query_engine.cpp
     core/VM/exec.cpp
+    core/VM/bytecode_vm.cpp
 
     # QP - Query Processing
     core/QP/tokenizer.cpp
@@ -75,6 +80,11 @@ set(SVDB_CORE_SOURCES
     core/QP/type_infer.cpp
     core/QP/dag.cpp
     core/QP/binder.cpp
+    core/QP/parser.cpp
+    core/QP/parser_select.cpp
+    core/QP/parser_expr.cpp
+    core/QP/parser_dml.cpp
+    core/QP/parser_ddl.cpp
 
     # CG - Code Generation
     core/CG/compiler.cpp

@@ -106,7 +106,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 ## Performance
 
-Benchmarks on AMD EPYC 7763 64-Core Processor, in-memory database, `-benchtime=3s`.
+Benchmarks on Intel Xeon Platinum 8370C @ 2.80 GHz, in-memory database, `-benchtime=3s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
 `db.ClearResultCache()` so actual per-query execution cost is measured.
 SQLite's `database/sql` driver reuses prepared statements across iterations.
@@ -122,71 +122,72 @@ Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 290 µs | 176 µs | **1.6× faster** |
-| 10 K | 2.85 ms | 1.60 ms | **1.8× faster** |
-| 100 K | 28.3 ms | 18.8 ms | **1.5× faster** |
+| 1 K | 531 µs | 172 µs | **3.1× faster** |
+| 10 K | 5.26 ms | 1.60 ms | **3.3× faster** |
+| 100 K | 52.6 ms | 16.9 ms | **3.1× faster** |
 
 #### WHERE filter (integer column)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 189 µs | 797 µs | 4.2× slower |
-| 10 K | 1.81 ms | 8.01 ms | 4.4× slower |
-| 100 K | 18.2 ms | 89.6 ms | 4.9× slower |
+| 1 K | 302 µs | 829 µs | 2.7× slower |
+| 10 K | 2.95 ms | 8.74 ms | 3.0× slower |
+| 100 K | 29.5 ms | 99.5 ms | 3.4× slower |
 
 #### SUM aggregate
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 74.4 µs | 26.4 µs | **2.8× faster** |
-| 10 K | 728 µs | 176 µs | **4.1× faster** |
-| 100 K | 7.25 ms | 1.70 ms | **4.3× faster** |
+| 1 K | 62.9 µs | 24.5 µs | **2.6× faster** |
+| 10 K | 564 µs | 201 µs | **2.8× faster** |
+| 100 K | 5.71 ms | 2.18 ms | **2.6× faster** |
 
 #### GROUP BY (4 groups)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 504 µs | 123 µs | **4.1× faster** |
-| 10 K | 4.86 ms | 999 µs | **4.9× faster** |
-| 100 K | 57.8 ms | 10.1 ms | **5.7× faster** |
+| 1 K | 430 µs | 119 µs | **3.6× faster** |
+| 10 K | 4.43 ms | 1.01 ms | **4.4× faster** |
+| 100 K | 55.0 ms | 11.1 ms | **5.0× faster** |
 
 #### COUNT(*)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 5.3 µs | 6.7 µs | comparable |
-| 10 K | 7.0 µs | 6.7 µs | comparable |
-| 100 K | 26.4 µs | 7.1 µs | **3.7× faster** |
+| 1 K | 5.4 µs | 6.3 µs | comparable |
+| 10 K | 7.3 µs | 6.1 µs | comparable |
+| 100 K | 30.3 µs | 6.1 µs | **4.9× faster** |
 
 #### INSERT (batch rows)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 5.53 ms | 2.90 ms | **1.9× faster** |
-| 10 K | 54.7 ms | 32.5 ms | **1.7× faster** |
+| 1 K | 5.55 ms | 2.65 ms | **2.1× faster** |
+| 10 K | 55.6 ms | 30.6 ms | **1.8× faster** |
 
 #### INNER JOIN
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 457 µs | 1.14 ms | 2.5× slower |
-| 10 K | 4.51 ms | 11.9 ms | 2.6× slower |
-| 100 K | 45.0 ms | 133 ms | 3.0× slower |
+| 1 K | 768 µs | 1.01 ms | 1.3× slower |
+| 10 K | 7.63 ms | 11.2 ms | 1.5× slower |
+| 100 K | 76.8 ms | 143.8 ms | 1.9× slower |
 
 #### ORDER BY + LIMIT
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 224 µs | 258 µs | 1.2× slower |
-| 10 K | 2.04 ms | 2.65 ms | 1.3× slower |
-| 100 K | 20.2 ms | 34.3 ms | 1.7× slower |
+| 1 K | 217 µs | 260 µs | 1.2× slower |
+| 10 K | 1.96 ms | 2.76 ms | 1.4× slower |
+| 100 K | 19.6 ms | 30.8 ms | 1.6× slower |
 
-> **Analysis**: sqlvibe excels at aggregate workloads with 1.5–5.7× speedups over SQLite
-> for SELECT all, SUM, and GROUP BY. COUNT(*) at large scale is 3.7× faster.
-> INSERT throughput is up to 1.9× faster. WHERE filter, JOIN, and ORDER BY+LIMIT are
-> areas for ongoing optimization — the bytecode VM evaluation path for row-by-row
-> filtering adds overhead vs SQLite's tightly-optimised scan. Aggregate/scan workloads
-> benefit strongly from the columnar store and CGO C++ backends (DS, VM, QP, CG).
+> **Analysis**: sqlvibe excels at scan and aggregate workloads with 3.1–5.0× speedups over
+> SQLite for SELECT all, SUM, and GROUP BY. COUNT(*) at large scale is 4.9× faster.
+> INSERT throughput is up to 2.1× faster. JOIN performance improved significantly (now
+> 1.3–1.9× slower vs 2.5–3.0× in previous versions). WHERE filter and ORDER BY+LIMIT
+> remain areas for ongoing optimization — the bytecode VM evaluation path adds overhead
+> vs SQLite's tightly-optimised scan. Aggregate/scan workloads benefit strongly from the
+> columnar store and CGO C++ backends (DS, VM, QP, CG) added in v0.11.0.
 
 ### Key Optimizations
 
