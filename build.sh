@@ -91,41 +91,55 @@ if [[ $ENABLE_CGO -eq 1 ]]; then
     echo "====> LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 fi
 
-# If no test/bench/fuzz requested, just build the package
+# If no test/bench/fuzz requested, just build the package and binaries
 if [[ $RUN_TESTS -eq 0 && $RUN_BENCH -eq 0 && $RUN_FUZZ -eq 0 ]]; then
-    echo "====> Building package..."
+    echo "====> Building package and binaries..."
     echo "  CMD: go build -tags $EXT_TAGS ./..."
     go build -tags "$EXT_TAGS" ./...
-    echo "====> Build complete."
+    
+    echo "  CMD: go build -tags $EXT_TAGS -o $BUILD_DIR/bin/sv-cli ./cmd/sv-cli"
+    mkdir -p "$BUILD_DIR/bin"
+    go build -tags "$EXT_TAGS" -o "$BUILD_DIR/bin/sv-cli" ./cmd/sv-cli
+    
+    if [[ -d "./cmd/sv-check" ]]; then
+        echo "  CMD: go build -tags $EXT_TAGS -o $BUILD_DIR/bin/sv-check ./cmd/sv-check"
+        go build -tags "$EXT_TAGS" -o "$BUILD_DIR/bin/sv-check" ./cmd/sv-check
+    fi
+    
+    echo "====> Build complete. Binaries in $BUILD_DIR/bin/"
     exit 0
 fi
 
 VERBOSE_FLAG=""
 [[ $VERBOSE -eq 1 ]] && VERBOSE_FLAG="-v"
 
-# If tests were not requested, perform a build now (respect CGO) and skip tests.
-if [[ $RUN_TESTS -eq 0 ]]; then
-    echo ""
-    echo "====> '-t' not specified: building project (no tests)..."
-    if [[ $ENABLE_CGO -eq 1 ]]; then
-        CGO_ENVAR=1
-    else
-        CGO_ENVAR=0
-    fi
-    mkdir -p "$BUILD_DIR"
-    # Use CGO_ENABLED to control cgo during build and include extension tags
-    env CGO_ENABLED=$CGO_ENVAR go build -tags "$EXT_TAGS" ./... 2>&1 | tee "$BUILD_DIR/build.log"
-    echo "====> Build complete. Log: $BUILD_DIR/build.log"
-
-    # If no other actions requested, exit after build
-    if [[ $RUN_BENCH -eq 0 && $RUN_FUZZ -eq 0 ]]; then
-        echo "====> No benchmarks or fuzz requested; exiting after build."
-        exit 0
-    fi
-fi
-
 # Coverage profile files collected in this run (for later merge)
 COVER_PROFILES=()
+
+# ----- build binaries ---------------------------------------------------------
+
+# Build binaries if tests are not requested, or after tests complete
+build_binaries() {
+    echo ""
+    echo "====> Building binaries..."
+    mkdir -p "$BUILD_DIR/bin"
+    
+    echo "  CMD: go build -tags $EXT_TAGS -o $BUILD_DIR/bin/sv-cli ./cmd/sv-cli"
+    go build -tags "$EXT_TAGS" -o "$BUILD_DIR/bin/sv-cli" ./cmd/sv-cli
+    
+    if [[ -d "./cmd/sv-check" ]]; then
+        echo "  CMD: go build -tags $EXT_TAGS -o $BUILD_DIR/bin/sv-check ./cmd/sv-check"
+        go build -tags "$EXT_TAGS" -o "$BUILD_DIR/bin/sv-check" ./cmd/sv-check
+    fi
+    
+    echo "====> Binaries built in $BUILD_DIR/bin/"
+}
+
+# If tests were not requested, build and exit
+if [[ $RUN_TESTS -eq 0 && $RUN_BENCH -eq 0 && $RUN_FUZZ -eq 0 ]]; then
+    build_binaries
+    exit 0
+fi
 
 # ----- unit tests -------------------------------------------------------------
 
