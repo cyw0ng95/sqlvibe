@@ -25,15 +25,17 @@ func NewSchemaExtractorWithSource(btree *DS.BTree, source SchemaSource) *SchemaE
 // ExtractTables extracts all table information from the database
 func (se *SchemaExtractor) ExtractTables() ([]TableInfo, error) {
 	if se.source != nil {
-		tables := make([]TableInfo, 0)
-		for _, name := range se.source.GetTableNames() {
+		tableNames := se.source.GetTableNames()
+		viewNames := se.source.GetViewNames()
+		tables := make([]TableInfo, 0, len(tableNames)+len(viewNames))
+		for _, name := range tableNames {
 			tables = append(tables, TableInfo{
 				TableName:   name,
 				TableSchema: TableSchemaMain,
 				TableType:   se.source.GetTableType(name),
 			})
 		}
-		for _, name := range se.source.GetViewNames() {
+		for _, name := range viewNames {
 			tables = append(tables, TableInfo{
 				TableName:   name,
 				TableSchema: TableSchemaMain,

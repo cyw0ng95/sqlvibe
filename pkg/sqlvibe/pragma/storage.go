@@ -46,7 +46,9 @@ func HandleStorageInfo(ctx Ctx) ([]string, [][]interface{}, error) {
 	return cols, rows, nil
 }
 
-// estimatedBytesPerRow is a rough estimate used for row-store memory reporting.
+// estimatedBytesPerRow is a rough per-row memory estimate for row-store reporting.
+// 256 bytes approximates a typical mixed-type row (a few small integer/string columns).
+// Tables with large TEXT/BLOB columns will be significantly underestimated.
 const estimatedBytesPerRow = 256
 
 // HandleMemoryStats returns detailed memory usage statistics.
