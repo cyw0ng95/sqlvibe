@@ -1,8 +1,8 @@
-# Plan v0.10.12 - Auto Vacuum + VM Refactoring
+# Plan v0.10.12 - Auto Vacuum + Query Execution Optimization
 
 ## Summary
 
-Implement auto vacuum and incremental vacuum, refactor VM execution into subpackage.
+Implement auto vacuum, query execution optimizations, and refactor VM execution into subpackage.
 
 ## Background
 
@@ -10,6 +10,7 @@ Implement auto vacuum and incremental vacuum, refactor VM execution into subpack
 - PRAGMA auto_vacuum: Implemented but basic
 - PRAGMA incremental_vacuum: Not implemented
 - vm_exec.go: 2270 lines (too large)
+- Query execution: Basic implementation, room for optimization
 
 ---
 
@@ -32,6 +33,29 @@ Implement auto vacuum and incremental vacuum, refactor VM execution into subpack
 | PRAGMA page_count | Total pages |
 | PRAGMA optimize | Run ANALYZE automatically |
 
+### 1.3 Query Execution Optimization
+
+| Optimization | Description |
+|--------------|-------------|
+| Predicate Pushdown | Push WHERE conditions to storage layer |
+| Column Pruning | Only read required columns from storage |
+| Short-circuit Eval | Stop evaluation when result is determined |
+| Expression Caching | Cache computed expression results |
+
+**Implementation:**
+```sql
+-- Before: Filter in VM layer
+SELECT * FROM (SELECT * FROM t WHERE x > 10) WHERE x < 100;
+
+-- After: Push both conditions to storage
+SELECT * FROM t WHERE x > 10 AND x < 100;
+```
+
+**Benefits:**
+- Reduce data transfer from storage to VM
+- Minimize memory allocations
+- Faster query execution
+
 ---
 
 ## 2. Refactoring
@@ -50,8 +74,19 @@ pkg/sqlvibe/
     ├── update.go        # UPDATE execution
     ├── delete.go        # DELETE execution
     ├── aggregate.go     # Aggregate execution
-    └── cursor.go        # Cursor management
+    ├── cursor.go       # Cursor management
+    └── optimize.go     # Query optimization
 ```
+
+### Code-Level Optimizations
+
+| Optimization | Target | Description |
+|--------------|--------|-------------|
+| Function Inlining | Hot paths | Inline frequently called functions |
+| Reduce Allocations | vm_exec.go | Reuse buffers, reduce string conversions |
+| Type Switching | expression eval | Optimize type assertions |
+| Slice Pre-allocation | result sets | Pre-allocate result slices |
+| String Interning | column names | Reduce string duplication |
 
 ---
 
@@ -69,8 +104,9 @@ Improve execution layer test coverage
 | vm/update_test.go | UPDATE execution | ~8 |
 | vm/delete_test.go | DELETE execution | ~8 |
 | vm/aggregate_test.go | Aggregates | ~8 |
+| vm/optimize_test.go | Query optimization | ~6 |
 
-**Total New Tests**: ~40
+**Total New Tests**: ~46
 
 ---
 
@@ -81,8 +117,12 @@ Improve execution layer test coverage
 3. Add vm/*_test.go files
 4. Implement incremental vacuum
 5. Add storage PRAGMAs
-6. Run all tests
-7. Commit
+6. Implement predicate pushdown
+7. Implement column pruning
+8. Implement expression caching
+9. Apply code-level optimizations
+10. Run all tests
+11. Commit
 
 ---
 
@@ -91,6 +131,10 @@ Improve execution layer test coverage
 - [ ] Incremental vacuum implemented
 - [ ] Auto vacuum enhanced
 - [ ] Storage PRAGMAs working
+- [ ] Predicate pushdown working
+- [ ] Column pruning working
+- [ ] Expression caching working
+- [ ] Code-level optimizations applied
 - [ ] vm/ subpackage created
-- [ ] vm/*_test.go added (~40 tests)
+- [ ] vm/*_test.go added (~46 tests)
 - [ ] All tests pass
