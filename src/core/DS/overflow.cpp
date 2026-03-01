@@ -2,6 +2,9 @@
 #include <cstdlib>
 #include <cstring>
 
+/* Maximum overflow chain length (corruption guard). */
+static const int SVDB_OVERFLOW_MAX_CHAIN_LENGTH = 10000;
+
 /* Read a big-endian uint32 from buf. */
 static uint32_t read_be32(const uint8_t* buf) {
     return ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |
@@ -124,7 +127,7 @@ int svdb_overflow_free_chain(const svdb_page_manager_t* pm, uint32_t first_page)
     int guard = 0;
 
     while (current != 0) {
-        if (++guard > 10000) return 0;  /* corruption guard */
+        if (++guard > SVDB_OVERFLOW_MAX_CHAIN_LENGTH) return 0;  /* corruption guard */
 
         uint8_t* page_data = nullptr;
         size_t   page_size = 0;
@@ -149,7 +152,7 @@ int svdb_overflow_chain_length(const svdb_page_manager_t* pm,
     size_t   count   = 0;
 
     while (current != 0) {
-        if (++count > 10000) return 0;  /* corruption guard */
+        if (++count > (size_t)SVDB_OVERFLOW_MAX_CHAIN_LENGTH) return 0;  /* corruption guard */
 
         uint8_t* page_data = nullptr;
         size_t   page_size = 0;

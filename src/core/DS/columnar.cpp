@@ -26,10 +26,10 @@ struct ColumnData {
         entry = *v;
         if (v->val_type == SVDB_TYPE_TEXT && v->str_data) {
             strings.emplace_back(v->str_data, v->str_len);
-            entry.str_data = nullptr; /* patched at read time */
+            entry.str_data = nullptr; /* data lives in strings[]; pointer reconstructed in get() */
         } else if (v->val_type == SVDB_TYPE_BLOB && v->bytes_data) {
             strings.emplace_back(v->bytes_data, v->bytes_len);
-            entry.bytes_data = nullptr;
+            entry.bytes_data = nullptr; /* data lives in strings[]; pointer reconstructed in get() */
         } else {
             strings.emplace_back();
         }

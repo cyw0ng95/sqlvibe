@@ -13,7 +13,9 @@ static const int SVDB_CACHE_DEFAULT_CAPACITY  = 2000;
 /* Normalize a raw capacity value (same logic as Go NewCache). */
 static int normalize_capacity(int cap) {
     if (cap < 0) {
-        cap = ((-cap) * 1024) / SVDB_CACHE_DEFAULT_PAGE_SIZE;
+        /* Use int64 arithmetic to avoid overflow for extreme values. */
+        int64_t kib_bytes = (int64_t)(-cap) * 1024;
+        cap = (int)(kib_bytes / SVDB_CACHE_DEFAULT_PAGE_SIZE);
     }
     if (cap <= 0) {
         cap = SVDB_CACHE_DEFAULT_CAPACITY;
