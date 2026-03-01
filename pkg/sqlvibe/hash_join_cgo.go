@@ -4,8 +4,8 @@
 package sqlvibe
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/cgo/../../.build/cmake/lib -lsvdb_vm_phase2
-#cgo CFLAGS: -I${SRCDIR}/cgo
+#cgo LDFLAGS: -L${SRCDIR}/../../.build/cmake/lib -lsvdb_vm
+#cgo CFLAGS: -I${SRCDIR}/../../internal/VM/cgo
 #include "hash_join.h"
 #include <stdlib.h>
 */
