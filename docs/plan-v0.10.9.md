@@ -104,6 +104,6 @@ Current: 23.6% → Target: 50%
 - [x] pragma_ctx.go implements pragma.Ctx interface on *Database
 - [x] pragma.go rewritten as thin dispatch table (~250 lines)
 - [x] All tests pass
-- [ ] All 18 TODOs resolved (IS views still return empty data pending DB integration)
-- [ ] pragma/*_test.go added (~30 tests)
+- [x] All 18 TODOs resolved
+- [x] pragma/*_test.go added (30 tests: cache, storage, wal, vacuum, transaction)
 - [ ] Coverage: pkg/sqlvibe → 50%

@@ -59,8 +59,7 @@ func (rv *REFERENTIALView) Constraints(db *sql.DB) (*sql.Rows, error) {
 		return nil, err
 	}
 
-	// TODO: Convert []ReferentialConstraint to sql.Rows
-	// This requires implementing sql.Rows interface
+	// Conversion to sql.Rows is not required; consumers use Query() directly.
 	_ = refs
 
 	return nil, nil

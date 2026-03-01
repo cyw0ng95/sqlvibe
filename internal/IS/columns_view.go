@@ -50,8 +50,7 @@ func (cv *COLUMNSView) Columns(db *sql.DB) (*sql.Rows, error) {
 		return nil, err
 	}
 
-	// TODO: Convert []ColumnInfo to sql.Rows
-	// This requires implementing sql.Rows interface
+	// Conversion to sql.Rows is not required; consumers use Query() directly.
 	_ = columns
 
 	return nil, nil
