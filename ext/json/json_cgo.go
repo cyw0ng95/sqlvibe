@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/cyw0ng95/sqlvibe/ext"
@@ -252,10 +253,7 @@ func callJSONExtract(args []interface{}) interface{} {
 			case bool:
 				return val
 			case float64:
-				// Check if it's an integer
-				if val == float64(int64(val)) {
-					return int64(val)
-				}
+				// Return as float64 to match pure Go behavior (encoding/json returns float64)
 				return val
 			case string:
 				// This was a quoted JSON string, return as-is
@@ -265,7 +263,7 @@ func callJSONExtract(args []interface{}) interface{} {
 				return jsonStr
 			}
 		}
-		
+
 		// Not valid JSON - must be a raw string value from C++
 		return jsonStr
 	}
@@ -655,9 +653,54 @@ func callJSONArrayInsert(args []interface{}) interface{} {
 	if len(args) < 3 || len(args)%2 == 0 {
 		return nil
 	}
-
-	// For now, delegate to json_set for simplicity
-	return callJSONSet(args)
+	
+	// First arg is JSON array
+	jsonStr, ok := toStringArg(args, 0)
+	if !ok {
+		return nil
+	}
+	
+	// Parse JSON
+	var arr []interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &arr); err != nil {
+		return nil
+	}
+	
+	// Process path-value pairs
+	for i := 1; i+1 < len(args); i += 2 {
+		path, ok := toStringArg(args, i)
+		if !ok {
+			continue
+		}
+		value := sqlValueToGoValue(args[i+1])
+		
+		// Parse path to get index
+		if strings.HasPrefix(path, "$[") && strings.HasSuffix(path, "]") {
+			idxStr := path[2 : len(path)-1]
+			idx, err := strconv.Atoi(idxStr)
+			if err == nil {
+				if idx < 0 {
+					idx = len(arr) + 1 + idx
+				}
+				if idx < 0 {
+					idx = 0
+				}
+				if idx >= len(arr) {
+					arr = append(arr, value)
+				} else {
+					// Insert at index
+					newArr := make([]interface{}, 0, len(arr)+1)
+					newArr = append(newArr, arr[:idx]...)
+					newArr = append(newArr, value)
+					newArr = append(newArr, arr[idx:]...)
+					arr = newArr
+				}
+			}
+		}
+	}
+	
+	result, _ := json.Marshal(arr)
+	return string(result)
 }
 
 // callJSONGroupArray aggregates values into a JSON array.
