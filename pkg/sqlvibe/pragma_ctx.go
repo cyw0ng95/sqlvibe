@@ -7,8 +7,8 @@ import (
 
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/TM"
 	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/pragma"
-	"github.com/cyw0ng95/sqlvibe/src/core/TM"
 )
 
 // --- Cache ---

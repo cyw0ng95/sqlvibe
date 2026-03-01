@@ -18,8 +18,8 @@ import (
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
 	"github.com/cyw0ng95/sqlvibe/internal/SF/errors"
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
+	"github.com/cyw0ng95/sqlvibe/internal/TM"
 	"github.com/cyw0ng95/sqlvibe/internal/VM"
-	"github.com/cyw0ng95/sqlvibe/src/core/TM"
 )
 
 // queryResultCache is a thread-safe in-process cache for full SELECT query results.

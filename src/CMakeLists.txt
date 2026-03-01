@@ -63,6 +63,9 @@ set(SVDB_CORE_SOURCES
     core/CG/optimizer.cpp
     core/CG/plan_cache.cpp
 
+    # TM - Transaction Management
+    core/TM/transaction.cpp
+
     # Wrapper - Invoke chain
     core/wrapper/invoke_chain_wrapper.cpp
 
@@ -79,6 +82,7 @@ target_include_directories(svdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/VM
     ${CMAKE_CURRENT_SOURCE_DIR}/core/QP
     ${CMAKE_CURRENT_SOURCE_DIR}/core/CG
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/TM
     ${CMAKE_CURRENT_SOURCE_DIR}/core/wrapper
     ${CMAKE_CURRENT_SOURCE_DIR}/core/cgo
 )
