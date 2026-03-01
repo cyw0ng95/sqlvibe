@@ -4152,6 +4152,25 @@ func (db *Database) execAlterTable(stmt *QP.AlterTableStmt) (Result, error) {
 			db.buildIndexData(idxName)
 		}
 		return Result{}, nil
+	case "RENAME_INDEX":
+		if stmt.OldIndexName == "" || stmt.NewName == "" {
+			return Result{}, fmt.Errorf("RENAME INDEX: index names cannot be empty")
+		}
+		idx, exists := db.indexes[stmt.OldIndexName]
+		if !exists {
+			return Result{}, fmt.Errorf("no such index: %s", stmt.OldIndexName)
+		}
+		if _, taken := db.indexes[stmt.NewName]; taken {
+			return Result{}, fmt.Errorf("index already exists: %s", stmt.NewName)
+		}
+		idx.Name = stmt.NewName
+		db.indexes[stmt.NewName] = idx
+		delete(db.indexes, stmt.OldIndexName)
+		if data, ok := db.indexData[stmt.OldIndexName]; ok {
+			db.indexData[stmt.NewName] = data
+			delete(db.indexData, stmt.OldIndexName)
+		}
+		return Result{}, nil
 	}
 	return Result{}, nil
 }

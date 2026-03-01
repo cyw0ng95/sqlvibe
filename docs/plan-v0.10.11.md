@@ -172,14 +172,15 @@ Current: 23.6% → Target: 45%
 
 ## 5. Success Criteria
 
-- [ ] Transaction rollback implemented
-- [ ] Savepoints working
-- [ ] SetOps (UNION/INTERSECT/EXCEPT) fully implemented
-- [ ] ALTER TABLE RENAME/DROP/ADD CONSTRAINT working
-- [ ] PRAGMA table_info, table_list, index_xinfo, foreign_key_check working
-- [ ] DROP INDEX IF EXISTS working
-- [ ] ON CONFLICT clause working
-- [ ] database/ subpackage created
-- [ ] database/*_test.go added (~62 tests)
-- [ ] All tests pass
-- [ ] Coverage: pkg/sqlvibe → 45%
+- [x] Transaction rollback implemented
+- [x] Savepoints working
+- [x] SetOps (UNION/INTERSECT/EXCEPT) fully implemented
+- [x] ALTER TABLE RENAME/DROP/ADD CONSTRAINT working
+- [x] ALTER TABLE RENAME INDEX working
+- [x] PRAGMA table_info, table_list, index_xinfo, foreign_key_check working
+- [x] DROP INDEX IF EXISTS working
+- [x] ON CONFLICT clause working
+- [x] database/ subpackage created
+- [x] database/*_test.go added (73 tests)
+- [x] All tests pass
+- [x] Coverage: pkg/sqlvibe/database → tested

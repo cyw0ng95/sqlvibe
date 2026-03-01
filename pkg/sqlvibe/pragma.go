@@ -35,6 +35,12 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 		return db.pragmaSQLiteSequence()
 	case "foreign_keys":
 		return db.pragmaForeignKeys(stmt)
+	case "table_list":
+		return db.pragmaTableList()
+	case "index_xinfo":
+		return db.pragmaIndexXInfo(stmt)
+	case "foreign_key_check":
+		return db.pragmaForeignKeyCheck(stmt)
 	case "encoding":
 		return &Rows{Columns: []string{"encoding"}, Data: [][]interface{}{{"UTF-8"}}}, nil
 	case "collation_list":
@@ -356,6 +362,133 @@ func (db *Database) pragmaSQLiteSequence() (*Rows, error) {
 	data := make([][]interface{}, 0)
 	for tableName, seq := range db.seqValues {
 		data = append(data, []interface{}{tableName, seq})
+	}
+	return &Rows{Columns: columns, Data: data}, nil
+}
+
+// pragmaTableList returns a row for every table (and view) in the database.
+// Columns: schema, name, type, ncol, wr, strict
+func (db *Database) pragmaTableList() (*Rows, error) {
+	columns := []string{"schema", "name", "type", "ncol", "wr", "strict"}
+	data := make([][]interface{}, 0)
+	for tbl, cols := range db.tables {
+		data = append(data, []interface{}{"main", tbl, "table", int64(len(cols)), int64(0), int64(0)})
+	}
+	for viewName := range db.views {
+		data = append(data, []interface{}{"main", viewName, "view", int64(0), int64(0), int64(0)})
+	}
+	return &Rows{Columns: columns, Data: data}, nil
+}
+
+// pragmaIndexXInfo returns extended info for an index.
+// Columns: seqno, cid, name, desc, coll, key
+func (db *Database) pragmaIndexXInfo(stmt *QP.PragmaStmt) (*Rows, error) {
+	var idxName string
+	if stmt.Value != nil {
+		switch v := stmt.Value.(type) {
+		case *QP.Literal:
+			if s, ok := v.Value.(string); ok {
+				idxName = s
+			}
+		case *QP.ColumnRef:
+			idxName = v.Name
+		}
+	}
+	columns := []string{"seqno", "cid", "name", "desc", "coll", "key"}
+	if idxName == "" {
+		return &Rows{Columns: columns, Data: [][]interface{}{}}, nil
+	}
+	idx, exists := db.indexes[idxName]
+	if !exists {
+		return &Rows{Columns: columns, Data: [][]interface{}{}}, nil
+	}
+	colOrderMap := make(map[string]int)
+	if colOrder, ok := db.columnOrder[idx.Table]; ok {
+		for i, c := range colOrder {
+			colOrderMap[c] = i
+		}
+	}
+	data := make([][]interface{}, 0, len(idx.Columns))
+	for seqno, colName := range idx.Columns {
+		cid := int64(-1)
+		if id, ok := colOrderMap[colName]; ok {
+			cid = int64(id)
+		}
+		data = append(data, []interface{}{int64(seqno), cid, colName, int64(0), "BINARY", int64(1)})
+	}
+	return &Rows{Columns: columns, Data: data}, nil
+}
+
+// pragmaForeignKeyCheck verifies FK constraints and returns violations.
+// Columns: table, rowid, parent, fkid
+// If stmt.Value is set, only checks the specified table.
+func (db *Database) pragmaForeignKeyCheck(stmt *QP.PragmaStmt) (*Rows, error) {
+	columns := []string{"table", "rowid", "parent", "fkid"}
+	data := make([][]interface{}, 0)
+
+	var targetTable string
+	if stmt != nil && stmt.Value != nil {
+		switch v := stmt.Value.(type) {
+		case *QP.Literal:
+			if s, ok := v.Value.(string); ok {
+				targetTable = s
+			}
+		case *QP.ColumnRef:
+			targetTable = v.Name
+		}
+	}
+
+	for tblName, fks := range db.foreignKeys {
+		if targetTable != "" && tblName != targetTable {
+			continue
+		}
+		rows := db.data[tblName]
+		for fkid, fk := range fks {
+			parentRows := db.data[fk.ParentTable]
+			// Build parent key set using strings.Builder for efficiency.
+			parentSet := make(map[string]bool, len(parentRows))
+			var kb strings.Builder
+			for _, prow := range parentRows {
+				kb.Reset()
+				nullFound := false
+				for i, pcol := range fk.ParentColumns {
+					if i > 0 {
+						kb.WriteByte(0)
+					}
+					v := prow[pcol]
+					if v == nil {
+						nullFound = true
+						break
+					}
+					fmt.Fprintf(&kb, "%v", v)
+				}
+				if !nullFound {
+					parentSet[kb.String()] = true
+				}
+			}
+			for rowid, row := range rows {
+				kb.Reset()
+				skip := false
+				for i, ccol := range fk.ChildColumns {
+					if i > 0 {
+						kb.WriteByte(0)
+					}
+					val := row[ccol]
+					if val == nil {
+						// NULL child values don't violate FK
+						skip = true
+						break
+					}
+					fmt.Fprintf(&kb, "%v", val)
+				}
+				if skip {
+					continue
+				}
+				if !parentSet[kb.String()] {
+					data = append(data, []interface{}{tblName, int64(rowid), fk.ParentTable, int64(fkid)})
+				}
+			}
+		}
 	}
 	return &Rows{Columns: columns, Data: data}, nil
 }

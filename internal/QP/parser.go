@@ -219,9 +219,10 @@ func (d *DropViewStmt) NodeType() string { return "DropViewStmt" }
 // AlterTableStmt represents ALTER TABLE
 type AlterTableStmt struct {
 	Table          string
-	Action         string // "ADD_COLUMN", "RENAME_TO", "DROP_COLUMN", "RENAME_COLUMN", "ADD_CONSTRAINT"
+	Action         string // "ADD_COLUMN", "RENAME_TO", "DROP_COLUMN", "RENAME_COLUMN", "ADD_CONSTRAINT", "RENAME_INDEX"
 	Column         *ColumnDef
 	NewName        string
+	OldIndexName   string   // for RENAME_INDEX
 	ConstraintName string   // for ADD CONSTRAINT
 	CheckExpr      Expr     // for ADD CONSTRAINT CHECK
 	UniqueColumns  []string // for ADD CONSTRAINT UNIQUE
