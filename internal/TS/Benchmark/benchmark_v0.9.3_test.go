@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/opt"
 )
 
 // -----------------------------------------------------------------
@@ -118,7 +118,7 @@ func BenchmarkSIMDVectorSumInt64(b *testing.B) {
 		}
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				_ = sqlvibe.VectorSumInt64(data)
+				_ = opt.VectorSumInt64(data)
 			}
 		})
 	}
@@ -135,7 +135,7 @@ func BenchmarkSIMDVectorSumFloat64(b *testing.B) {
 		}
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				_ = sqlvibe.VectorSumFloat64(data)
+				_ = opt.VectorSumFloat64(data)
 			}
 		})
 	}
@@ -153,7 +153,7 @@ func BenchmarkSIMDVectorAddInt64(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		sqlvibe.VectorAddInt64(dst, a, bv)
+		opt.VectorAddInt64(dst, a, bv)
 	}
 }
 
@@ -169,7 +169,7 @@ func BenchmarkSIMDVectorMulFloat64(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		sqlvibe.VectorMulFloat64(dst, a, bv)
+		opt.VectorMulFloat64(dst, a, bv)
 	}
 }
 

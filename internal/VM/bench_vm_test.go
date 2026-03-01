@@ -7,7 +7,155 @@ import (
 	"github.com/cyw0ng95/sqlvibe/internal/VM/benchdata"
 )
 
-// BenchmarkVM_ArithmeticOps measures basic arithmetic instruction throughput.
+// bcTestContext is a minimal BcVmContext for bytecode VM benchmarks.
+type bcTestContext struct {
+	tables map[string][]map[string]interface{}
+	cols   map[string][]string
+}
+
+func (c *bcTestContext) GetTableRows(table string) ([]map[string]interface{}, []string, error) {
+	return c.tables[table], c.cols[table], nil
+}
+func (c *bcTestContext) GetTableSchema(table string) map[string]string { return nil }
+
+// BenchmarkBcVM_Arithmetic measures BytecodeVM arithmetic instruction throughput.
+func BenchmarkBcVM_Arithmetic(b *testing.B) {
+	bld := VM.NewBytecodeBuilder()
+	bld.SetColNames([]string{"result"})
+	r0 := bld.AllocReg()
+	r1 := bld.AllocReg()
+	r2 := bld.AllocReg()
+	c0 := bld.AddConst(VM.VmInt(42))
+	c1 := bld.AddConst(VM.VmInt(7))
+	bld.EmitABC(VM.BcLoadConst, 0, c0, r0)
+	bld.EmitABC(VM.BcLoadConst, 0, c1, r1)
+	for i := 0; i < 20; i++ {
+		bld.EmitABC(VM.BcAdd, r0, r1, r2)
+		bld.EmitABC(VM.BcMul, r0, r2, r2)
+		bld.EmitABC(VM.BcSub, r2, r1, r2)
+	}
+	bld.EmitAB(VM.BcResultRow, r2, 1)
+	bld.Emit(VM.BcHalt)
+	prog := bld.Build()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		vm := VM.NewBytecodeVM(prog, nil)
+		if err := vm.Run(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkBcVM_TableScan_1k measures BytecodeVM scan throughput over 1000 rows.
+func BenchmarkBcVM_TableScan_1k(b *testing.B) {
+	benchmarkBcVMTableScan(b, 1000)
+}
+
+// BenchmarkBcVM_TableScan_10k measures BytecodeVM scan throughput over 10000 rows.
+func BenchmarkBcVM_TableScan_10k(b *testing.B) {
+	benchmarkBcVMTableScan(b, 10000)
+}
+
+// BenchmarkBcVM_TableScan_100k measures BytecodeVM scan throughput over 100000 rows.
+func BenchmarkBcVM_TableScan_100k(b *testing.B) {
+	benchmarkBcVMTableScan(b, 100000)
+}
+
+func benchmarkBcVMTableScan(b *testing.B, n int) {
+	b.Helper()
+	cols := []string{"id", "val"}
+	rows := benchdata.MakeIntTableRows(n, cols)
+	ctx := &bcTestContext{
+		tables: map[string][]map[string]interface{}{"t": rows},
+		cols:   map[string][]string{"t": cols},
+	}
+
+	bld := VM.NewBytecodeBuilder()
+	bld.SetColNames([]string{"id", "val"})
+	rID := bld.AllocReg()
+	rVal := bld.AllocReg()
+	tblConst := bld.AddConst(VM.VmText("t"))
+	lblEnd := bld.AllocLabel()
+
+	bld.EmitAB(VM.BcOpenCursor, 0, tblConst)
+	bld.EmitJump(VM.BcRewind, 0, lblEnd)
+	loopStart := bld.PC()
+	bld.EmitABC(VM.BcColumn, 0, 0, rID)
+	bld.EmitABC(VM.BcColumn, 0, 1, rVal)
+	bld.EmitAB(VM.BcResultRow, rID, 2)
+	bld.EmitABC(VM.BcNext, 0, 0, int32(loopStart))
+	bld.FixupLabel(lblEnd)
+	bld.Emit(VM.BcHalt)
+	prog := bld.Build()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		vm := VM.NewBytecodeVM(prog, ctx)
+		if err := vm.Run(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkBcVM_FuncCall measures BytecodeVM scalar function call overhead.
+func BenchmarkBcVM_FuncCall(b *testing.B) {
+	bld := VM.NewBytecodeBuilder()
+	bld.SetColNames([]string{"v"})
+	rArg := bld.AllocReg()
+	rDst := bld.AllocReg()
+	cStr := bld.AddConst(VM.VmText("hello world"))
+	cFn := bld.AddConst(VM.VmText("upper"))
+	bld.EmitABC(VM.BcLoadConst, 0, cStr, rArg)
+	// BcCall: A=funcConst, B=nArgs, C=dst (args at regs[C-B..C-1])
+	bld.EmitABC(VM.BcCall, cFn, 1, rDst)
+	bld.EmitAB(VM.BcResultRow, rDst, 1)
+	bld.Emit(VM.BcHalt)
+	prog := bld.Build()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		vm := VM.NewBytecodeVM(prog, nil)
+		if err := vm.Run(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkBcVM_Compare measures BytecodeVM comparison instruction throughput.
+func BenchmarkBcVM_Compare(b *testing.B) {
+	bld := VM.NewBytecodeBuilder()
+	bld.SetColNames([]string{"result"})
+	r0 := bld.AllocReg()
+	r1 := bld.AllocReg()
+	r2 := bld.AllocReg()
+	c0 := bld.AddConst(VM.VmInt(100))
+	c1 := bld.AddConst(VM.VmInt(200))
+	bld.EmitABC(VM.BcLoadConst, 0, c0, r0)
+	bld.EmitABC(VM.BcLoadConst, 0, c1, r1)
+	for i := 0; i < 20; i++ {
+		bld.EmitABC(VM.BcEq, r0, r1, r2)
+		bld.EmitABC(VM.BcLt, r0, r1, r2)
+		bld.EmitABC(VM.BcGe, r1, r0, r2)
+	}
+	bld.EmitAB(VM.BcResultRow, r2, 1)
+	bld.Emit(VM.BcHalt)
+	prog := bld.Build()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		vm := VM.NewBytecodeVM(prog, nil)
+		if err := vm.Run(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+
 func BenchmarkVM_ArithmeticOps(b *testing.B) {
 	prog := benchdata.GenerateArithProgram(20)
 	b.ReportAllocs()

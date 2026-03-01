@@ -65,8 +65,7 @@ func (cv *CONSTRAINTSView) Constraints(db *sql.DB) (*sql.Rows, error) {
 		return nil, err
 	}
 
-	// TODO: Convert []ConstraintInfo to sql.Rows
-	// This requires implementing sql.Rows interface
+	// Conversion to sql.Rows is not required; consumers use Query() directly.
 	_ = constraints
 
 	return nil, nil

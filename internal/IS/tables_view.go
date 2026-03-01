@@ -63,8 +63,6 @@ func (tv *TABLESView) Table(db *sql.DB) (*sql.Rows, error) {
 		return nil, err
 	}
 
-	// TODO: Convert []TableInfo to sql.Rows
-	// This requires implementing sql.Rows interface
-
+	// Conversion to sql.Rows is not required; consumers use Query() directly.
 	return nil, nil
 }

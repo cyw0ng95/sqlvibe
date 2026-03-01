@@ -956,18 +956,18 @@ Legacy files **not changed** in v0.10.0 (removal deferred to v0.10.1):
 
 | Criterion | Target | Status |
 |-----------|--------|--------|
-| VmVal has no allocation for NULL/int/float | Yes | [ ] |
-| Instr is exactly 16 bytes | Yes | [ ] |
-| bcTable covers all BcOpCode values | Yes | [ ] |
-| All existing SQL:1999 tests pass with bytecode engine | 100% | [ ] |
-| F888 test suite passes | 100% | [ ] |
-| Regression v0.10.0 passes | 100% | [ ] |
-| SELECT all-integer (1K rows) − 25% time vs v0.9.x | Yes | [ ] |
-| Arithmetic int benchmark − 40% time vs v0.9.x | Yes | [ ] |
-| 0 allocs/query for all-integer SELECT | Yes | [ ] |
-| Legacy pipeline still works (`PRAGMA use_bytecode = 0`) | Yes | [ ] |
-| Version bumped to v0.10.0 | Yes | [ ] |
-| HISTORY.md updated | Yes | [ ] |
+| VmVal has no allocation for NULL/int/float | Yes | [x] |
+| Instr is exactly 16 bytes | Yes | [x] |
+| bcTable covers all BcOpCode values | Yes | [x] |
+| All existing SQL:1999 tests pass with bytecode engine | 100% | [x] |
+| F888 test suite passes | 100% | [x] |
+| Regression v0.10.0 passes | 100% | [x] |
+| SELECT all-integer (1K rows) − 25% time vs v0.9.x | Yes | [x] |
+| Arithmetic int benchmark − 40% time vs v0.9.x | Yes | [x] |
+| 0 allocs/query for all-integer SELECT | Yes | [x] |
+| Legacy pipeline still works (`PRAGMA use_bytecode = 0`) | Yes | [x] |
+| Version bumped to v0.10.0 | Yes | [x] |
+| HISTORY.md updated | Yes | [x] |
 
 ---
 

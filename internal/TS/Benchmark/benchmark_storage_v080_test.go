@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // -----------------------------------------------------------------
@@ -108,7 +107,7 @@ func BenchmarkStorage_FilterEqual_1K_VectorizedFilter(b *testing.B) {
 	target := DS.IntValue(5)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = sqlvibe.VectorizedFilter(col, "=", target)
+		_ = DS.VectorizedFilter(col, "=", target)
 	}
 }
 
@@ -137,7 +136,7 @@ func BenchmarkStorage_ColumnarSum_1K_HybridStore(b *testing.B) {
 	col := hs.ColStore().GetColumn("val")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = sqlvibe.ColumnarSum(col)
+		_ = DS.ColumnarSum(col)
 	}
 }
 
@@ -166,7 +165,7 @@ func BenchmarkStorage_ColumnarCount_1K_HybridStore(b *testing.B) {
 	col := hs.ColStore().GetColumn("val")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = sqlvibe.ColumnarCount(col)
+		_ = DS.ColumnarCount(col)
 	}
 }
 
@@ -232,7 +231,7 @@ func BenchmarkStorage_MemoryProfile_VectorFilter(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = sqlvibe.VectorizedFilter(col, "=", target)
+		_ = DS.VectorizedFilter(col, "=", target)
 	}
 }
 
@@ -246,7 +245,7 @@ func BenchmarkStorage_MemoryProfile_ColumnarSum(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = sqlvibe.ColumnarSum(col)
+		_ = DS.ColumnarSum(col)
 	}
 }
 
@@ -268,7 +267,7 @@ func BenchmarkStorage_MemoryProfile_ColumnarGroupBy(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = sqlvibe.ColumnarGroupBy(keyCol, valCol, "sum")
+		_ = DS.ColumnarGroupBy(keyCol, valCol, "sum")
 	}
 }
 

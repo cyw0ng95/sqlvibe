@@ -7,7 +7,9 @@ import (
 
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/SF/errors"
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
+	svctx "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/context"
 )
 
 // applyTypeAffinity coerces row values to match declared column type affinities.
@@ -267,7 +269,10 @@ func (ctx *dsVmContext) InsertRow(tableName string, row map[string]interface{}) 
 		pkCols := ctx.db.primaryKeys[tableName]
 		if len(pkCols) > 0 {
 			if ctx.db.pkHashContains(tableName, row) {
-				return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
+				return errors.WithSQLState(
+					errors.Errorf(errors.SVDB_CONSTRAINT_PRIMARYKEY, "UNIQUE constraint failed: %s.%s", tableName, pkCols[0]),
+					errors.SQLState_UniqueViolation,
+				)
 			}
 		}
 
@@ -535,7 +540,10 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 	pkCols := ctx.db.primaryKeys[tableName]
 	if len(pkCols) > 0 {
 		if ctx.db.pkHashContains(tableName, row) {
-			return fmt.Errorf("UNIQUE constraint failed: %s.%s", tableName, pkCols[0])
+			return errors.WithSQLState(
+				errors.Errorf(errors.SVDB_CONSTRAINT_PRIMARYKEY, "UNIQUE constraint failed: %s.%s", tableName, pkCols[0]),
+				errors.SQLState_UniqueViolation,
+			)
 		}
 	}
 
@@ -548,11 +556,6 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 	newIdx := len(ctx.db.data[tableName]) - 1
 	ctx.db.addToIndexes(tableName, row, newIdx)
 
-	// Update storage engine
-	rowID := int64(len(ctx.db.data[tableName]))
-	serialized := ctx.db.serializeRow(row)
-	ctx.db.engine.Insert(tableName, uint64(rowID), serialized)
-
 	// Fire AFTER INSERT triggers
 	if err := ctx.db.fireTriggers(tableName, "INSERT", "AFTER", nil, row, 0); err != nil {
 		return err
@@ -561,182 +564,37 @@ func (ctx *dbVmContext) InsertRow(tableName string, row map[string]interface{}) 
 	return nil
 }
 
-// evaluateCheckConstraint evaluates a CHECK constraint expression with row values
+// evaluateCheckConstraint evaluates a CHECK constraint expression with row values.
+// Delegates to the context subpackage for the actual evaluation.
 func (ctx *dbVmContext) evaluateCheckConstraint(expr QP.Expr, row map[string]interface{}) interface{} {
-	switch e := expr.(type) {
-	case *QP.Literal:
-		return e.Value
-
-	case *QP.ColumnRef:
-		// Look up column value in the row
-		if val, ok := row[e.Name]; ok {
-			return val
-		}
-		return nil
-
-	case *QP.BinaryExpr:
-		// Evaluate left and right operands
-		left := ctx.evaluateCheckConstraint(e.Left, row)
-		right := ctx.evaluateCheckConstraint(e.Right, row)
-
-		// Handle NULL propagation
-		if left == nil || right == nil {
-			// In SQL, NULL comparisons return NULL (which is falsy for CHECK)
-			return nil
-		}
-
-		// Perform the operation
-		switch e.Op {
-		case QP.TokenEq:
-			return ctx.db.engine.CompareVals(left, right) == 0
-		case QP.TokenNe:
-			return ctx.db.engine.CompareVals(left, right) != 0
-		case QP.TokenLt:
-			return ctx.db.engine.CompareVals(left, right) < 0
-		case QP.TokenLe:
-			return ctx.db.engine.CompareVals(left, right) <= 0
-		case QP.TokenGt:
-			return ctx.db.engine.CompareVals(left, right) > 0
-		case QP.TokenGe:
-			return ctx.db.engine.CompareVals(left, right) >= 0
-		case QP.TokenAnd:
-			// AND: both must be truthy
-			return isTruthy(left) && isTruthy(right)
-		case QP.TokenOr:
-			// OR: at least one must be truthy
-			return isTruthy(left) || isTruthy(right)
-		case QP.TokenPlus:
-			return addValues(left, right)
-		case QP.TokenMinus:
-			return subtractValues(left, right)
-		case QP.TokenAsterisk:
-			return multiplyValues(left, right)
-		case QP.TokenSlash:
-			return divideValues(left, right)
-		}
-
-	case *QP.UnaryExpr:
-		val := ctx.evaluateCheckConstraint(e.Expr, row)
-		if e.Op == QP.TokenMinus {
-			if iv, ok := val.(int64); ok {
-				return -iv
-			}
-			if fv, ok := val.(float64); ok {
-				return -fv
-			}
-		}
-		return val
-	}
-
-	return nil
+	return svctx.EvalCheckExpr(expr, row)
 }
 
 // Helper functions for CHECK constraint evaluation
+
+// isTruthy reports whether a SQL value is logically true.
+// Delegates to the context subpackage.
 func isTruthy(val interface{}) bool {
-	if val == nil {
-		return false
-	}
-	switch v := val.(type) {
-	case bool:
-		return v
-	case int64:
-		return v != 0
-	case float64:
-		return v != 0.0
-	case string:
-		return len(v) > 0
-	default:
-		return true
-	}
+	return svctx.IsTruthy(val)
 }
 
-// Arithmetic helper functions for CHECK constraint evaluation
+// Arithmetic helper functions for CHECK constraint evaluation.
+// These delegate to the context subpackage.
+
 func addValues(left, right interface{}) interface{} {
-	if l, ok := left.(int64); ok {
-		if r, ok := right.(int64); ok {
-			return l + r
-		}
-		if r, ok := right.(float64); ok {
-			return float64(l) + r
-		}
-	}
-	if l, ok := left.(float64); ok {
-		if r, ok := right.(int64); ok {
-			return l + float64(r)
-		}
-		if r, ok := right.(float64); ok {
-			return l + r
-		}
-	}
-	return nil
+	return svctx.AddVals(left, right)
 }
 
 func subtractValues(left, right interface{}) interface{} {
-	if l, ok := left.(int64); ok {
-		if r, ok := right.(int64); ok {
-			return l - r
-		}
-		if r, ok := right.(float64); ok {
-			return float64(l) - r
-		}
-	}
-	if l, ok := left.(float64); ok {
-		if r, ok := right.(int64); ok {
-			return l - float64(r)
-		}
-		if r, ok := right.(float64); ok {
-			return l - r
-		}
-	}
-	return nil
+	return svctx.SubVals(left, right)
 }
 
 func multiplyValues(left, right interface{}) interface{} {
-	if l, ok := left.(int64); ok {
-		if r, ok := right.(int64); ok {
-			return l * r
-		}
-		if r, ok := right.(float64); ok {
-			return float64(l) * r
-		}
-	}
-	if l, ok := left.(float64); ok {
-		if r, ok := right.(int64); ok {
-			return l * float64(r)
-		}
-		if r, ok := right.(float64); ok {
-			return l * r
-		}
-	}
-	return nil
+	return svctx.MulVals(left, right)
 }
 
 func divideValues(left, right interface{}) interface{} {
-	if l, ok := left.(int64); ok {
-		if r, ok := right.(int64); ok {
-			if r != 0 {
-				return l / r
-			}
-		}
-		if r, ok := right.(float64); ok {
-			if r != 0.0 {
-				return float64(l) / r
-			}
-		}
-	}
-	if l, ok := left.(float64); ok {
-		if r, ok := right.(int64); ok {
-			if r != 0 {
-				return l / float64(r)
-			}
-		}
-		if r, ok := right.(float64); ok {
-			if r != 0.0 {
-				return l / r
-			}
-		}
-	}
-	return nil
+	return svctx.DivVals(left, right)
 }
 
 func (ctx *dbVmContext) UpdateRow(tableName string, rowIndex int, row map[string]interface{}) error {

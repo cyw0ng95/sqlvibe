@@ -14,6 +14,14 @@ func (db *Database) handleExplain(stmt *QP.ExplainStmt, sql string) (*Rows, erro
 		return db.explainQueryPlan(stmt)
 	}
 
+	// EXPLAIN ANALYZE is handled by the profiling extension (SVDB_EXT_PROFILING)
+	if stmt.Analyze {
+		return &Rows{
+			Columns: []string{"error"},
+			Data:    [][]interface{}{{"EXPLAIN ANALYZE requires SVDB_EXT_PROFILING build tag"}},
+		}, nil
+	}
+
 	sqlType := stmt.Query.NodeType()
 	if sqlType == "SelectStmt" {
 		// Strip "EXPLAIN" prefix from SQL and compile

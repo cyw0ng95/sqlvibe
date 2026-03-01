@@ -7,7 +7,7 @@ import (
 )
 
 func TestRegistry_Creation(t *testing.T) {
-	btree := &DS.BTree{} // TODO: Use proper BTree initialization
+	btree := &DS.BTree{}
 	registry := NewRegistry(btree)
 
 	if registry == nil {

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
+	"github.com/cyw0ng95/sqlvibe/internal/VM"
 )
 
 // mergedRowPool is a pool of map[string]interface{} objects used as scratch
@@ -302,7 +303,7 @@ func (db *Database) execHashJoin(stmt *QP.SelectStmt) ([][]interface{}, []string
 			merged := buildJoinMergedRow(leftRow, leftTable, leftAlias, leftCols,
 				rightRow, rightTable, rightAlias, rightCols)
 
-			if stmt.Where != nil && !db.engine.EvalBool(merged, stmt.Where) {
+			if stmt.Where != nil && !VM.EvalBoolRow(merged, stmt.Where) {
 				putMergedRow(merged)
 				continue
 			}
@@ -332,10 +333,10 @@ func (db *Database) execHashJoin(stmt *QP.SelectStmt) ([][]interface{}, []string
 							}
 						}
 					} else {
-						row = append(row, db.engine.EvalExpr(merged, c))
+						row = append(row, VM.EvalExprRow(merged, c))
 					}
 				default:
-					row = append(row, db.engine.EvalExpr(merged, col))
+					row = append(row, VM.EvalExprRow(merged, col))
 				}
 			}
 			putMergedRow(merged)

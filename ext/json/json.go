@@ -24,7 +24,8 @@ func (e *JSONExtension) Description() string { return "JSON extension" }
 func (e *JSONExtension) Functions() []string {
 	return []string{
 		"json", "json_array", "json_extract", "json_invalid",
-		"json_isvalid", "json_length", "json_object", "json_quote",
+		"json_isvalid", "json_valid", "json_length", "json_array_length",
+		"json_object", "json_quote", "json_keys",
 		"json_remove", "json_replace", "json_set", "json_type", "json_update",
 		// v0.9.17 additions
 		"jsonb", "jsonb_array", "jsonb_object",
@@ -50,14 +51,16 @@ func (e *JSONExtension) CallFunc(name string, args []interface{}) interface{} {
 		return evalJSONExtract(args)
 	case "JSON_INVALID":
 		return evalJSONInvalid(args)
-	case "JSON_ISVALID":
+	case "JSON_ISVALID", "JSON_VALID":
 		return evalJSONIsValid(args)
-	case "JSON_LENGTH":
+	case "JSON_LENGTH", "JSON_ARRAY_LENGTH":
 		return evalJSONLength(args)
 	case "JSON_OBJECT":
 		return evalJSONObject(args)
 	case "JSON_QUOTE":
 		return evalJSONQuote(args)
+	case "JSON_KEYS":
+		return evalJSONKeys(args)
 	case "JSON_REMOVE":
 		return evalJSONRemove(args)
 	case "JSON_REPLACE":
@@ -649,6 +652,50 @@ func evalJSONQuote(args []interface{}) interface{} {
 		b, _ := gojson.Marshal(fmt.Sprintf("%v", x))
 		return string(b)
 	}
+}
+
+// evalJSONKeys returns an array of keys from a JSON object.
+func evalJSONKeys(args []interface{}) interface{} {
+	if len(args) < 1 {
+		return nil
+	}
+	s, ok := toStringArg(args, 0)
+	if !ok {
+		return nil
+	}
+	root, valid := parseJSON(s)
+	if !valid {
+		return nil
+	}
+
+	var target interface{} = root
+	if len(args) >= 2 {
+		pathStr, ok2 := toStringArg(args, 1)
+		if !ok2 {
+			return nil
+		}
+		segs, ok3 := parsePath(pathStr)
+		if !ok3 {
+			return nil
+		}
+		val, found := getAtPath(root, segs)
+		if !found {
+			return nil
+		}
+		target = val
+	}
+
+	obj, ok := target.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	b, _ := gojson.Marshal(keys)
+	return string(b)
 }
 
 // evalJSONRemove removes one or more paths from a JSON value.

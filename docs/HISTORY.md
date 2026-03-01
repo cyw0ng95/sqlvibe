@@ -1,5 +1,693 @@
 # sqlvibe Release History
 
+## Current Version: v0.10.15 (2026-03-01)
+
+**Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
+
+**Test Status**: All 84+ SQL:1999 test suites passing.
+
+---
+
+## **v0.10.15** (2026-03-01)
+
+### Features
+
+#### context/ Subpackage (`pkg/sqlvibe/context/`)
+New standalone helper subpackage extracted from `vm_context.go` for improved testability:
+- **eval.go**: `IsTruthy`, `AddVals`, `SubVals`, `MulVals`, `DivVals` — pure arithmetic/truthiness helpers.
+- **check.go**: `EvalCheckExpr`, `CheckPasses` — standalone CHECK constraint evaluation.
+- **aggregate.go**: `AnyValueAcc`, `ModeAcc` / `NewModeAcc` — accumulators for `ANY_VALUE()` and `MODE()`.
+
+#### window/ Subpackage (`pkg/sqlvibe/window/`)
+New standalone helper subpackage extracted from `window.go` for improved testability:
+- **partition.go**: `RowSet`, `BuildPartitionGroups`, `SortRowIndices`, `SameOrderKey`,
+  `MakeRowMap`, `EvalExprOnRow`, `ComputeKey`, `GetArgVal`, `CompareVals`, `ToFloat64`.
+- **frame.go**: `ResolveFrameBounds`, `ResolveFramePos`, `FrameBoundOffset` — window frame helpers.
+- **func.go**: `ComputePartitionValues`, `ComputeWindowAgg`, `ComputeOrderedWindowValues`,
+  `ComputeRankValues`, `ComputeRankFloat`, `ComputeCumeDist`, `ComputeLag`, `ComputeLead`.
+
+#### Aggregate Functions
+- `ANY_VALUE(expr)` — returns the first non-NULL value in a group.
+- `MODE(expr)` — returns the most frequent value in a group (first-seen tie-breaking).
+
+#### CLI: .dump Enhancements
+- `Database.Dump(w, DumpOptions)` — dump schema + data as SQL statements.
+- `Database.DumpDataOnly(w)` — dump only INSERT statements.
+- `Database.DumpSchemaOnly(w)` — dump only CREATE TABLE/VIEW/INDEX statements.
+- CLI `.dump [FILE] [--data-only|--schema-only|--inserts]` — dump current database.
+
+#### CLI: .export Fix
+- `.export csv|json FILE TABLE` — now correctly exports a table to CSV or JSON file
+  (previously printed an error instead of writing the file).
+
+### Tests
+- Added ~18 tests in `pkg/sqlvibe/context/` (eval_test.go, check_test.go, aggregate_test.go).
+- Added ~18 tests in `pkg/sqlvibe/window/` (partition_test.go, frame_test.go, func_test.go).
+
+---
+
+## **v0.10.14** (2026-03-01)
+
+### Features
+
+#### Arena Memory Optimizations
+- **Larger chunk size**: Default arena chunk size increased from 64 KB to 256 KB,
+  reducing chunk-allocation frequency in hot query paths.
+- **Chunk pool (`sync.Pool`)**: Arena now recycles freed 256 KB chunks via a
+  package-level pool, avoiding repeated GC-visible allocations across queries.
+- **New statistics methods** on `Arena`:
+  - `TotalBytesAllocated()` — cumulative bytes allocated since creation.
+  - `NumAllocs()` — total number of `Alloc`/`AllocSlice` calls since creation.
+
+#### Memory Pragmas
+- `PRAGMA memory_status` — returns Go runtime `MemStats`: `heap_alloc`,
+  `heap_sys`, `heap_in_use`, `heap_idle`, `heap_released`, `num_gc`,
+  `total_alloc`.
+- `PRAGMA heap_limit [= N]` — read or set the advisory maximum heap size in
+  bytes (backed by `max_memory`; actual GC limits are still managed by Go).
+
+#### engine/ Subpackage (`internal/VM/engine/`)
+New standalone query engine utilities, fully testable without the
+`QueryEngine` struct:
+
+- **select.go**: `FilterRows`, `ProjectRow`, `ProjectRows`, `ApplyDistinct`,
+  `ApplyLimitOffset`, `ColNames`.
+- **aggregate.go**: `GroupRows`, `CountRows`, `SumRows`, `AvgRows`,
+  `MinRows`, `MaxRows`, `GroupByAndAggregate`.
+- **sort.go**: `SortKey`, `SortOrder`, `NullOrder`, `SortRowsByKeys`,
+  `TopKRows`, `ReverseRows`.
+- **join.go**: `MergeRows`, `MergeRowsWithAlias`, `CrossJoin`, `InnerJoin`,
+  `LeftOuterJoin`.
+- **window.go**: `PartitionRows`, `RowNumbers`, `Ranks`, `DenseRanks`,
+  `LagValues`, `LeadValues`, `NthValues`, `FirstValues`, `LastValues`.
+- **subquery.go**: `ExistsRows`, `ScalarRow`, `InRows`, `NotInRows`,
+  `AllRows`, `AnyRows`, `FilteredRows`.
+
+### Tests
+- `engine/select_test.go` — 7 tests for SELECT utilities.
+- `engine/aggregate_test.go` — 9 tests for aggregate helpers.
+- `engine/sort_test.go` — 7 tests for sort operations.
+- `engine/join_test.go` — 7 tests for join operations.
+- `engine/window_test.go` — 7 tests for window function helpers.
+- `pragma/storage_test.go` — 3 new tests for `memory_status` and `heap_limit`.
+
+**Total new tests**: ~40
+
+---
+
+## **v0.10.13** (2026-03-01)
+
+### Features
+
+#### Query Cache Enhancements
+- `PRAGMA cache_plan` — read or set plan-cache enable flag (1=enabled, 0=disabled)
+- `PRAGMA cache_plan = 0` — disable the compiled query plan cache at runtime
+- `PRAGMA cache_plan = 1` — re-enable the compiled query plan cache
+- `StmtCache` — new parsed-statement cache (`internal/CG/stmt_cache.go`) with LRU eviction
+  - `NewStmtCache(limit int)` — create a cache with configurable capacity
+  - `Put(sql, stmt)` / `Get(sql)` / `Invalidate()` / `Len()` public API
+  - Integrated into `Database` struct (`stmtCache` field, capacity 512)
+  - Cleared by `PRAGMA shrink_memory` and `ClearCaches()`
+- `planCacheEnabled` flag on `Database` — controls whether bytecode plans are cached
+  - Defaults to `true`; toggled via `PRAGMA cache_plan`
+
+#### compiler/ Subpackage (`internal/CG/compiler/`)
+New pure-helper subpackage extracted from `internal/CG/compiler.go`:
+- **select.go** — SELECT helpers: `HasAggregates`, `HasWindowFunctions`, `ShouldUseColumnar`,
+  `IsStarSelect`, `HasJoin`, `GetSelectColumnNames`, `ExprOutputName`
+- **aggregate.go** — Aggregate helpers: `IsAggregateFunction`, `ExprHasAggregate`,
+  `ExtractAggregates`, `CountAggregateFunctions`
+- **window.go** — Window helpers: `IsWindowFunction`, `ExtractWindowFunctions`,
+  `HasNamedWindows`, `FrameSpecString`
+- **subquery.go** — Subquery helpers: `HasSubquery`, `HasWhereSubquery`,
+  `HasColumnSubquery`, `ExtractSubqueries`
+- **dml.go** — DML helpers: `InsertColumnNames`, `InsertValueRowCount`,
+  `UpdateColumnList`, `HasReturning`, `IsInsertWithSelect`,
+  `DeleteHasWhere`, `UpdateHasWhere`
+- **cte.go** — CTE helpers: `HasCTEs`, `IsRecursiveCTE`, `HasRecursiveCTE`,
+  `CTENames`, `FindCTE`, `CTEReferences`
+- **64 tests** across 5 test files in `internal/CG/compiler/`
+
+#### Cache Tests
+- 7 new tests in `internal/CG/cache_test.go` for `StmtCache` + `PlanCache`
+- 3 new tests in `pkg/sqlvibe/pragma/cache_test.go` for `PRAGMA cache_plan`
+
+---
+
+## **v0.10.12** (2026-03-01)
+
+### Features
+
+#### Auto Vacuum & Incremental Vacuum
+- `PRAGMA incremental_vacuum` — reclaim free pages (all available pages when N=0)
+- `PRAGMA incremental_vacuum(N)` — reclaim up to N free pages
+- Enhanced auto vacuum reporting with free-page metrics
+
+#### Storage PRAGMAs
+- `PRAGMA freelist_count` — returns number of free/unused pages
+- `PRAGMA page_count` — returns total number of pages in database
+
+#### Query Execution Subpackage (pkg/sqlvibe/vm/)
+- Extracted pure helper functions into `pkg/sqlvibe/vm/` subpackage:
+  - `vm.ExtractLimitInt` — parses LIMIT+OFFSET to row count
+  - `vm.IsSimpleSelectStar` — detects simple SELECT * fast path
+  - `vm.DeduplicateRows` / `vm.DeduplicateRowsN` — result set deduplication
+  - `vm.IsSimpleAggregate` — detects COUNT(*)/SUM/MIN/MAX fast path
+  - `vm.IsVectorizedFilterEligible` — checks eligibility for vectorized filter
+  - `vm.ExtractFilterInfo` / `vm.FilterInfo` — extracts WHERE clause details
+  - `vm.CollectColumnRefs` — collects column references from expressions
+  - `vm.ExprToSQL` / `vm.LiteralToString` — SQL serialization helpers
+- Optimization helpers in `vm/optimize.go`:
+  - `vm.PruneColumns` — column pruning for reduced storage reads
+  - `vm.CanPushdownWhere` — checks if WHERE can be pushed down to storage
+  - `vm.SplitPredicates` — splits WHERE into pushable vs. VM predicates
+  - `vm.NewColumnSet` / `vm.ColumnSet` — O(1) membership set for columns
+- `vm_exec.go` now delegates to `vm/` subpackage (thin wrappers)
+- 51 new tests across 6 test files in `pkg/sqlvibe/vm/`
+
+---
+
+## **v0.10.11** (2026-03-01)
+
+### Features
+
+#### Transaction Rollback & Savepoints
+- Transaction rollback with `txSnapshot` fully functional
+- Savepoints: `SAVEPOINT`, `RELEASE SAVEPOINT`, `ROLLBACK TO SAVEPOINT`
+- Nested savepoint stacks working correctly
+
+#### Set Operations (UNION/INTERSECT/EXCEPT)
+- `UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT` fully implemented in `setops.go`
+- All four operations tested in `database/query_test.go`
+
+#### ALTER TABLE Enhancements
+- `ALTER TABLE t RENAME COLUMN old TO new` (with or without COLUMN keyword)
+- `ALTER TABLE t DROP COLUMN col`
+- `ALTER TABLE t ADD CONSTRAINT name CHECK/UNIQUE`
+- `ALTER TABLE t RENAME INDEX old TO new` (new in v0.10.11)
+- New `OldIndexName` field in `AlterTableStmt` for index renaming
+
+#### PRAGMA Enhancements
+- `PRAGMA table_list` — lists all tables and views with schema/name/type/ncol/wr/strict
+- `PRAGMA index_xinfo(idx)` — extended index info (seqno, cid, name, desc, coll, key)
+- `PRAGMA foreign_key_check` / `PRAGMA foreign_key_check(table)` — report FK violations
+
+#### Index Management
+- `DROP INDEX IF EXISTS` — safe index deletion
+- Index rename via `ALTER TABLE t RENAME INDEX old TO new`
+
+#### Constraint Validation
+- `ON CONFLICT DO NOTHING` / `ON CONFLICT DO UPDATE SET` fully working
+- UNIQUE, NOT NULL, CHECK constraint enforcement on INSERT
+- `PRAGMA foreign_key_check` for runtime FK validation
+
+#### database/ Subpackage
+- New `pkg/sqlvibe/database/` subpackage with operation-specific helpers:
+  - `database.go` — `DB` wrapper + `Open`/`New`
+  - `ddl.go` — `DDL` helper (CreateTable, DropTable, AlterTable, CreateIndex, DropIndex, CreateView, DropView)
+  - `dml.go` — `DML` helper (Insert, Update, Delete with/without params)
+  - `query.go` — `Query` helper (Select, SelectWithParams, SelectNamed, Pragma)
+  - `transaction.go` — `Txn` helper (Begin, Exec, Savepoint, ReleaseSavepoint, RollbackToSavepoint)
+  - `prepare.go` — `Prepare` helper (Statement)
+  - `meta.go` — `Meta` helper (TableInfo, TableList, IndexList, IndexInfo, IndexXInfo, ForeignKeyList, Schema)
+  - `constraint.go` — `Constraint` helper (ForeignKeyCheck, ForeignKeyCheckTable, QuickCheck, IntegrityCheck)
+
+### Tests
+- 73 new tests in `pkg/sqlvibe/database/`:
+  - `ddl_test.go` (~10 tests)
+  - `dml_test.go` (~10 tests)
+  - `query_test.go` (~9 tests)
+  - `transaction_test.go` (~6 tests)
+  - `constraint_test.go` (~8 tests)
+  - `meta_test.go` (~7 tests)
+  - `alter_test.go` (~8 tests)
+  - `pragma_test.go` (~8 tests)
+  - `index_test.go` (~6 tests)
+  - `prepare_test.go` (~3 tests)
+
+---
+
+## **v0.10.10** (2026-03-01)
+
+### Features
+
+#### SQLSTATE Error Codes
+- Added `SQLState` field to `*Error` struct (`internal/SF/errors`)
+- New `sqlstate.go` with SQLSTATE constants (23000, 23502, 23503, 23505, 23514, 22001, 22003)
+- `WithSQLState(e, state)` helper to attach SQLSTATE to errors
+- `SQLStateOf(err)` returns SQLSTATE for any error; maps known constraint codes automatically
+- `Error.Error()` includes `[SQLSTATE]` in formatted string when set
+- Constraint errors now return proper `SVDB_CONSTRAINT_PRIMARYKEY` / `SVDB_CONSTRAINT_UNIQUE` codes with SQLSTATE 23505
+
+#### Schema Parser
+- New `ParseTableSchema(ddl)` in `internal/QP` — parses CREATE TABLE DDL to `*ParsedTableSchema`
+- New `ParseViewSchema(ddl)` — parses CREATE VIEW DDL to `*ParsedViewSchema`
+- `ExprToString(expr)` utility converts AST expressions back to SQL string
+
+#### .schema Command / `Schema()` API
+- Added `Database.Schema(tableName)` method — returns DDL for specific table or all tables
+
+### Refactoring
+
+#### Parser Subpackage Split
+- `internal/QP/parser.go` (3858 lines) split into 7 focused files in same package:
+  - `parser_select.go`: SELECT, parseFuncArgList, parseTableRef, window/CTE parsing
+  - `parser_dml.go`: INSERT, UPDATE, DELETE, standalone VALUES
+  - `parser_create.go`: CREATE TABLE/INDEX/VIEW/TRIGGER/VIRTUAL TABLE
+  - `parser_alter.go`: DROP, ALTER TABLE
+  - `parser_txn.go`: PRAGMA, EXPLAIN, BEGIN/COMMIT/ROLLBACK, SAVEPOINT, BACKUP, VACUUM
+  - `parser_expr.go`: all expression parsing + evalConstExpr helpers
+- `internal/QP/parser/` subpackage with ~40 black-box parser tests
+
+### Bug Fixes
+
+#### Resolved TODOs
+- `internal/TS/SQL1999/E171/01_test.go`: now checks SQLSTATE code on duplicate key
+- `internal/IS/registry_test.go`: removed TODO comment on BTree initialization
+
+---
+
+## **v0.10.9** (2026-03-01)
+
+### Refactoring: pragma/ subpackage + IS SchemaSource
+
+#### pragma/ Subpackage
+- Extracted all pragma handlers from `pragma.go` (1017 lines) into `pkg/sqlvibe/pragma/` subpackage
+- New files: `ctx.go`, `helpers.go`, `cache.go`, `storage.go`, `wal.go`, `vacuum.go`, `transaction.go`, `compat.go`
+- `pragma.go` rewritten as thin dispatch table (~250 lines)
+- `pragma_ctx.go` implements `pragma.Ctx` interface on `*Database`
+
+#### IS SchemaSource Interface
+- Added `FKInfo` type to `internal/IS`
+- Added `SchemaSource` interface to `internal/IS`
+- Updated `SchemaExtractor` with `NewSchemaExtractorWithSource` constructor
+- Added `NewMetadataProviderWithSource` to `MetadataProvider`
+- `SchemaExtractor` methods now use `SchemaSource` when available
+
+---
+
+## **v0.10.8** (2026-03-01)
+
+### Features: SQL:1999 + CLI Enhancements
+
+#### Window Functions (Complete Implementation)
+- **ROW_NUMBER()**: Assign unique sequential integers to rows
+- **RANK()**: Rank with gaps for ties
+- **DENSE_RANK()**: Rank without gaps
+- **NTILE(n)**: Distribute rows into n buckets
+- **LAG/LEAD**: Access previous/next row values
+- **FIRST_VALUE/LAST_VALUE**: First/last value in window
+- **PERCENT_RANK**: Relative rank as percentage
+- **CUME_DIST**: Cumulative distribution
+
+**Syntax:**
+```sql
+SELECT 
+    name,
+    salary,
+    ROW_NUMBER() OVER (ORDER BY salary DESC) as rank,
+    LAG(salary, 1) OVER (ORDER BY salary) as prev_salary
+FROM employees;
+```
+
+#### Recursive CTEs (WITH RECURSIVE)
+- Support for recursive common table expressions
+- Anchor and recursive member evaluation
+- UNION ALL for recursion
+- Tree/graph traversal support
+
+**Syntax:**
+```sql
+WITH RECURSIVE cnt(x) AS (
+    SELECT 1
+    UNION ALL
+    SELECT x+1 FROM cnt WHERE x < 100
+)
+SELECT x FROM cnt;
+```
+
+#### Index Optimization for Large Datasets
+- **Skip List Optimization**: Improved cache locality
+- **RoaringBitmap**: Optimized for sparse/dense data
+- **Batch Index Operations**: Reduced overhead
+- **Parallel Index Scans**: Multi-threaded index traversal
+
+#### CLI Improvements
+- **Command History**: Persistent history with `.history` command
+- **Auto-Completion**: SQL keywords, tables, columns
+- **Enhanced Help**: `.help` shows all commands
+- **Schema Cache**: Automatic schema refresh for completion
+
+**New Commands:**
+- `.history` - Show command history (last 20 commands)
+- `.complete` - Show auto-completion help
+- TAB completion for keywords/tables/columns
+
+**History File**: `~/.sqlvibe_history`
+
+#### Implementation Changes
+- `cmd/sv-cli/history.go`: **NEW** - HistoryManager, AutoCompleter
+- `cmd/sv-cli/main.go`: Enhanced with history, auto-complete
+- `pkg/sqlvibe/window.go`: Complete window function implementations
+- `pkg/sqlvibe/database.go`: execRecursiveCTE for WITH RECURSIVE
+- `internal/DS/skip_list.go`: Cache locality optimizations
+- `internal/DS/bloom_filter.go`: Bitmap optimizations
+
+#### Tests
+- All existing tests pass
+- Window function tests for all functions
+- Recursive CTE tests for tree traversal
+- CLI history and completion tests
+
+---
+
+## **v0.10.7** (2026-03-01)
+
+### Features: CLI Enhancements + Generated Columns
+
+#### CLI Enhancements
+
+**Output Modes:**
+- `.mode csv` - Comma-separated values
+- `.mode table` - ASCII table with borders (default)
+- `.mode list` - Column=value format
+- `.mode json` - JSON array output
+
+**Query Timer:**
+- `.timer on` - Show query execution time
+- `.timer off` - Disable timer
+
+**Import/Export:**
+- `.import FILE TABLE` - Import CSV file into table
+- `.export csv FILE` - Export table to CSV
+- `.export json FILE` - Export table to JSON
+
+**File I/O:**
+- `.read FILE` - Execute SQL from file
+- `.output FILE` - Redirect output to file
+- `.output stdout` - Restore output to stdout
+
+**Display Options:**
+- `.nullvalue TEXT` - Set string for NULL values
+- `.width N1 N2 ...` - Set column widths
+- `.headers on|off` - Toggle column headers
+
+#### Generated Columns
+
+**Syntax:**
+```sql
+CREATE TABLE t (
+    id INTEGER PRIMARY KEY,
+    first_name TEXT,
+    last_name TEXT,
+    full_name TEXT GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED
+);
+```
+
+**Implementation:**
+- Parser support for `GENERATED ALWAYS AS (expr) [STORED|VIRTUAL]`
+- Added `GeneratedExpr` and `GeneratedStored` fields to `ColumnDef`
+- New keywords: `GENERATED`, `STORED`
+
+#### Implementation Changes
+- `cmd/sv-cli/formatter.go`: **NEW** - Output formatters (table, CSV, list, JSON)
+- `cmd/sv-cli/importer.go`: **NEW** - CSV import and SQL file execution
+- `cmd/sv-cli/exporter.go`: **NEW** - CSV/JSON export
+- `cmd/sv-cli/main.go`: Enhanced with new meta-commands
+- `internal/QP/parser.go`: Generated column parsing
+- `internal/QP/tokenizer.go`: Added GENERATED, STORED keywords
+
+#### Tests
+- All existing tests pass
+- CLI output modes tested manually
+
+---
+
+## **v0.10.5** (2026-03-01)
+
+### Features: Storage Enhancements
+
+#### Track 1: WAL Improvements
+- `PRAGMA wal_truncate = ON/OFF`: Truncate WAL file after successful checkpoint
+- `PRAGMA synchronous = OFF|NORMAL|FULL|EXTRA`: Support all SQLite synchronous modes
+- `PRAGMA journal_size_limit = N`: Limit WAL file size in bytes
+
+#### Track 2: Memory Management
+- `PRAGMA cache_memory = N`: Set memory budget for page cache (bytes)
+- `PRAGMA max_rows = N`: Set limit on rows per table
+- `PRAGMA memory_stats`: Return detailed memory usage statistics
+  - `page_cache_used`: Current page cache bytes
+  - `page_cache_max`: Configured max bytes
+  - `row_store_used`: Row store bytes (estimated)
+  - `wal_size`: WAL file bytes
+  - `total_memory`: Total memory used
+
+#### Track 3: Backup Enhancements
+- `BackupToWithCallback(path, callback)`: Streaming backup with progress callback
+- `BackupToWriter(io.Writer)`: Backup to any io.Writer destination
+- `BackupManifest` struct: Enhanced metadata with version, page size, compression, row count
+- `GetBackupManifest()`: Return database metadata for backup
+
+#### Implementation Changes
+- `pkg/sqlvibe/pragma.go`:
+  - Added `pragmaWALTruncate()`: Handle wal_truncate PRAGMA
+  - Added `pragmaMemoryStats()`: Return memory statistics
+  - Added `pragmaCacheMemory()`: Handle cache_memory PRAGMA
+  - Added `pragmaMaxRows()`: Handle max_rows PRAGMA
+- `internal/DS/manager.go`:
+  - Added `SetMaxPages()`: Enforce page cache memory budget
+- `pkg/sqlvibe/backup.go`:
+  - Added `BackupToWithCallback()`: Progress callback support
+  - Added `BackupToWriter()`: Stream backup to io.Writer
+  - Added `BackupManifest` struct and `GetBackupManifest()`
+  - Added `Callback` field to `BackupConfig`
+
+#### Tests
+
+All tests run via `./build.sh -t` with build tags `SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_EXT_FTS5`:
+- ✅ SQL:1999 compatibility (84+ test suites) - **ALL PASSING**
+- ✅ Unit tests (75%+ coverage in core packages)
+- ✅ Integration tests
+- ✅ SQLite comparison tests
+- ✅ Benchmarks
+
+---
+
+## **v0.10.3** (2026-03-01)
+
+### Features: Advanced SQL Features + Window Function Enhancements
+
+#### Track 1: Window Frame Support
+- Window frame parsing: `ROWS/RANGE BETWEEN ... AND ...`
+- Frame bound types: `UNBOUNDED PRECEDING/FOLLOWING`, `N PRECEDING/FOLLOWING`, `CURRENT ROW`
+- Frame execution support in window function evaluation
+
+#### Track 2: Named Windows (WINDOW Clause)
+- New `WindowDef` struct in `internal/QP/parser.go`: `Name`, `Partition`, `OrderBy`, `Frame`
+- `SelectStmt.Windows []WindowDef` field for WINDOW clause storage
+- Parser support: `WINDOW name AS (window_spec), ...`
+- `parseWindowSpecOrName()` handles both named references and inline specs
+- Usage: `SELECT func() OVER w FROM t WINDOW w AS (PARTITION BY x ORDER BY y)`
+
+#### Track 3: JSON Function Enhancements (`ext/json/json.go`)
+- Added `JSON_VALID` alias for `JSON_ISVALID`
+- Added `JSON_ARRAY_LENGTH` alias for `JSON_LENGTH`
+- Added `JSON_KEYS` function: returns array of keys from JSON object
+- New `evalJSONKeys()` implementation with optional path support
+
+#### Track 4: Math Functions (Already Implemented)
+- `POWER(x, y)`: x raised to power y
+- `MOD(x, y)`: remainder of x/y
+- `LOG(x)`, `LOG10(x)`: logarithm functions
+- `EXP(x)`: e raised to power x
+- `LN(x)`: natural logarithm
+
+#### Track 5: String Functions (Already Implemented)
+- `INSTR(haystack, needle)`: position of substring (1-based)
+- `HEX(x)`: convert to hexadecimal
+- `UNHEX(x)`: convert from hexadecimal
+
+#### Parser Changes
+- `internal/QP/parser.go`:
+  - Added `WindowDef` struct
+  - Added `SelectStmt.Windows` field
+  - Added WINDOW clause parsing in `parseSelect()`
+  - Added `parseWindowSpecOrName()` for named window support
+
+#### Tests
+- All existing tests pass
+- Pre-existing datetime function tests (F051) remain failing (unrelated to this release)
+
+---
+
+## **v0.10.2** (2026-03-01)
+
+### Features: FTS5 Full-Text Search Extension
+
+#### Track 1: Tokenizers (`ext/fts5/tokenizer.go`)
+- New `Tokenizer` interface: `Tokenize(text) []Token`
+- `ASCIITokenizer`: whitespace/punctuation splitting, lowercase normalization
+- `PorterTokenizer`: Porter stemming algorithm (reduces words to root form)
+- `Unicode61Tokenizer`: Unicode character classification, multi-language support
+- `GetTokenizer(name)` factory function for tokenizer selection
+
+#### Track 2: Inverted Index (`ext/fts5/index.go`)
+- New `FTS5Index` struct with term → document inverted index
+- `DocInfo` struct: `DocID`, `Column`, `Position` for occurrence tracking
+- `DocMeta` struct: `TokenCount`, `Lengths` per column
+- `Insert(docID, values)`: adds document to index with tokenization
+- `Delete(docID, values)`: removes document from index
+- `QueryTerm(term)`: finds all documents containing a term
+- `QueryPrefix(prefix)`: finds documents with terms starting with prefix
+- `QueryPhrase(terms)`: finds documents containing exact phrase
+- `GetTermCount(term)`: returns document frequency for BM25
+- `GetDocCount()`: returns total document count
+
+#### Track 3: Query Parser (`ext/fts5/query.go`)
+- New `MatchExpr` AST: `Op`, `Term`, `Column`, `Children`
+- `MatchOp` constants: `MatchTerm`, `MatchAnd`, `MatchOr`, `MatchNot`, `MatchPhrase`, `MatchPrefix`
+- `QueryParser` with recursive descent parsing
+- Supported syntax:
+  - Term search: `hello`
+  - Prefix search: `test*`
+  - Phrase search: `"hello world"`
+  - Boolean AND: `hello AND world`
+  - Boolean OR: `hello OR goodbye`
+  - Boolean NOT: `NOT world`
+  - Column filter: `title:hello`
+- `ExecuteQuery(index, expr)`: executes match expression against index
+
+#### Track 4: BM25 Ranking (`ext/fts5/rank.go`)
+- `BM25(docLen, avgDL, tf, df, N, params)`: core BM25 scoring function
+- `BM25Params` struct: `K1` (term frequency saturation), `B` (length normalization)
+- `DefaultBM25Params()`: returns k1=1.2, b=0.75
+- `Ranker` struct: `ScoreDocument(docID, terms)`, `ScoreDocuments(docIDs, terms)`
+- `Highlighter` struct: `Highlight(text, terms)` with configurable tags
+- `SnippetExtractor` struct: `Snippet(text, terms)` with context window
+
+#### Track 5: Virtual Table Module (`ext/fts5/fts5.go`)
+- `FTS5Module` implements `DS.VTabModule`: `Create`, `Connect`
+- `FTS5Table` struct: virtual table instance with index, tokenizer, ranker
+- `fts5Cursor` implements `DS.VTabCursor`:
+  - `Filter(idxNum, idxStr, args)`: parses MATCH expression, executes query
+  - `Next()`: moves to next matching document
+  - `Column(col)`: returns column value (score or docID)
+  - `RowID()`: returns document ID
+  - `Eof()`: checks end of results
+  - `Close()`: closes cursor
+- Helper methods: `GetBM25()`, `GetHighlight(col, text)`, `GetSnippet(col, text)`
+
+#### Track 6: Module Registration (`ext/fts5/init.go`)
+- `init()` registers `"fts5"` module via `IS.RegisterVTabModule`
+- Auto-loaded when `ext/fts5` package is imported
+
+#### Tests
+- New `ext/fts5/fts5_test.go`: 50+ unit tests
+  - Tokenizer tests: ASCII, Porter, Unicode61
+  - Index tests: Insert, Delete, QueryTerm, QueryPrefix, QueryPhrase
+  - Parser tests: term, AND, OR, NOT, prefix, column filter
+  - Query execution tests: simple, AND, OR
+  - BM25 tests: basic scoring, zero documents, ranker
+  - Highlight/Snippet tests
+  - Virtual table tests: Create, Insert, Filter, Next, Column, RowID, GetBM25, GetHighlight, GetSnippet
+- Code coverage: 75.5%
+
+#### Documentation
+- New `ext/fts5/README.md`: usage guide, MATCH syntax, tokenizer options, API reference
+
+---
+
+## **v0.10.1** (2026-02-28)
+
+### Features: VIRTUAL TABLE Framework
+
+#### Track 1: Core Interfaces (`internal/DS/vtab.go`)
+- New `VTabCursor` interface: `Filter`, `Next`, `Column`, `RowID`, `Eof`, `Close`
+- New `VTab` interface: `BestIndex`, `Open`, `Columns`, `Disconnect`, `Destroy`
+- New `VTabModule` interface: `Create`, `Connect`
+- New `IndexInfo`, `IndexConstraint`, `IndexOrderBy` structs for query planning
+
+#### Track 1: Module Base (`internal/DS/vtab_module.go`)
+- `TableModule` embed struct with default no-op `BestIndex` implementation
+
+#### Track 1: Store Cursors (`internal/DS/vtab_cursor.go`)
+- `RowStoreCursor` wraps `RowStore` to implement `VTabCursor`
+- `HybridStoreCursor` wraps `HybridStore` to implement `VTabCursor`
+
+#### Track 1: Registry (`internal/IS/vtab_registry.go`)
+- Thread-safe global module registry: `RegisterVTabModule` / `GetVTabModule`
+
+#### Track 2: Parser Support
+- Added `VIRTUAL` keyword to tokenizer
+- New `CreateVirtualTableStmt` AST node: `IfNotExists`, `ModuleName`, `ModuleArgs`
+- New `parseCreateVirtualTable()` hooked into `parseCreate()`
+
+#### Track 4: Built-in Series Module (`pkg/sqlvibe/vtab_series.go`)
+- `seriesModule` implements `DS.VTabModule` for integer sequence generation
+- `SELECT * FROM series(start, stop[, step])` — generates integer sequence
+- `CREATE VIRTUAL TABLE t USING series(start, stop)` — named virtual table
+- Registered via `init()` as `"series"` module
+
+#### Track 4: Execution (`pkg/sqlvibe/vtab_exec.go`)
+- `execCreateVirtualTable` handles `CREATE VIRTUAL TABLE` statements
+- `execVTabQuery` materializes virtual table rows via cursor
+- `execVTabQuerySelect` routes SELECT queries through virtual tables (with type inference)
+
+#### Track 5: Tests (`internal/TS/Vtab/vtab_test.go`)
+- 7 tests: registry, RowStoreCursor scan, series basic range, step, CREATE VIRTUAL TABLE, empty range, IF NOT EXISTS
+
+## **v0.10.0** (2026-02-27)
+
+### Features: Real Bytecode Execution Engine
+
+#### Track A: Typed Value System
+- New `VmVal` 32-byte typed SQL scalar (no `interface{}` boxing) in `internal/VM/value.go`
+- `ValTag` constants: `TagNull`, `TagInt`, `TagFloat`, `TagText`, `TagBlob`, `TagBool`
+- Constructors: `VmNull()`, `VmInt()`, `VmFloat()` never allocate
+- Arithmetic helpers: `AddVmVal`, `SubVmVal`, `MulVmVal`, `DivVmVal`, `ModVmVal`, `NegVmVal`, `ConcatVmVal`
+- `ToInterface()` / `FromInterface()` for legacy API boundaries
+
+#### Track B: Compact Instruction Format
+- New `Instr` 16-byte fixed-width instruction in `internal/VM/instr.go`
+- Four instructions fit in a 64-byte L1 cache line
+- `InstrFlag` constants: `InstrFlagImmA`, `InstrFlagConstB`, `InstrFlagJumpC`, `InstrFlagTypedInt`, `InstrFlagTypedFloat`, `InstrFlagNullable`
+
+#### Track C: Opcode Set
+- New `BcOpCode uint16` constants in `internal/VM/bc_opcodes.go`
+- 36 opcodes: `BcNoop` through `BcCall` (arithmetic, comparison, logical, cursor, aggregate, function call)
+- `BcOpName` map for debug display
+
+#### Track D: Bytecode Program and Builder
+- New `BytecodeProg` struct with `Instrs`, `Consts`, `NumRegs`, `ColNames`
+- New `BytecodeBuilder` with `Emit`/`EmitA`/`EmitAB`/`EmitABC`/`EmitJump`, `AddConst`, `AllocReg`, `AllocLabel`, `FixupLabel`, `Build`
+
+#### Track E: Bytecode VM
+- New `BytecodeVM` in `internal/VM/bytecode_vm.go` with dispatch table `[NumBcOpcodes]BcOpHandler`
+- `BcVmContext` interface for storage access (`GetTableRows`, `GetTableSchema`)
+- All 36 opcode handlers in `internal/VM/bytecode_handlers.go`
+- Built-in scalar functions: `abs`, `length`, `upper`, `lower`, `coalesce`, `ifnull`, `typeof`, `nullif`
+
+#### Track F: Bytecode Compiler
+- New `BytecodeCompiler` in `internal/CG/bytecode_compiler.go`
+- Compiles `SELECT` statements (literals and FROM-table with WHERE filter)
+- Expression compiler in `internal/CG/bytecode_expr.go`: literals, column refs, binary/unary ops, function calls, CASE, CAST
+- `CompileInsert`/`CompileUpdate`/`CompileDelete` return errors (deferred to v0.10.1)
+
+#### Track G: Integration
+- `PRAGMA use_bytecode = 0|1` to opt-in (default: 0)
+- Dual-dispatch in `execSelectStmt`: tries bytecode path first, falls back to legacy on error
+- `dbBcVmContext` bridges `*Database` to `BcVmContext`
+
+#### Tests
+- New `internal/VM/value_test.go`: VmVal size, constructors, arithmetic, NULL propagation, ToInterface/FromInterface
+- New `internal/VM/instr_test.go`: Instr size (16 bytes), field packing, cache-line check
+- New `internal/VM/bytecode_prog_test.go`: builder emit, label fixup, const pool
+- New `internal/VM/bytecode_vm_test.go`: load const, arithmetic, jump, table scan
+- New `internal/CG/bytecode_compiler_test.go`: SELECT literal, multi-column, FROM table, WHERE filter
+- New `internal/TS/SQL1999/F888/01_test.go`: end-to-end bytecode tests
+- New `internal/TS/Regression/regression_v0.10.0_test.go`: NULL propagation, overflow, LIKE, CAST, agg all-NULL
+- New `internal/TS/Benchmark/benchmark_v0.10.0_test.go`: BC_SelectAll1K, BC_ArithInt, BC_WhereFilter, BC_SumAggregate, BC_Allocs
+
 ## **v0.9.17** (2026-02-26)
 
 ### Features: JSON Extension Enhancement

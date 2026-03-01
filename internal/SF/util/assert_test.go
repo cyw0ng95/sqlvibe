@@ -78,3 +78,49 @@ func TestAssertFalse_Fail(t *testing.T) {
 	}()
 	AssertFalse(true, "this is true")
 }
+
+func TestAssertNotNil_NilInterface(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("AssertNotNil should have panicked for nil interface")
+		}
+	}()
+	AssertNotNil(nil, "nilval")
+}
+
+// --- pool.go -----------------------------------------------------------------
+
+func TestGetPutByteBuffer(t *testing.T) {
+	buf := GetByteBuffer()
+	if buf == nil {
+		t.Fatal("expected non-nil buffer")
+	}
+	if len(*buf) == 0 {
+		t.Error("expected non-empty buffer")
+	}
+	// Return to pool
+	PutByteBuffer(buf)
+	// nil should not panic
+	PutByteBuffer(nil)
+}
+
+func TestGetPutInterfaceSlice(t *testing.T) {
+	s := GetInterfaceSlice()
+	if s == nil {
+		t.Fatal("expected non-nil slice")
+	}
+	if len(*s) != 0 {
+		t.Error("expected empty slice (reset to length 0)")
+	}
+	*s = append(*s, "a", "b", "c")
+	PutInterfaceSlice(s)
+
+	// Next Get should have length 0 (reset)
+	s2 := GetInterfaceSlice()
+	if len(*s2) != 0 {
+		t.Errorf("expected reset slice, got length %d", len(*s2))
+	}
+	PutInterfaceSlice(s2)
+	// nil should not panic
+	PutInterfaceSlice(nil)
+}

@@ -606,18 +606,55 @@ sqlvibe/
 
 ## 11. Build and Test Commands
 
+**Always use `build.sh` to run tests, benchmarks, fuzzing, and coverage.**
+Output is collected under `.build/` (excluded from git).
+
+```bash
+# Run all unit tests (default when no flag is given)
+./build.sh -t
+
+# Run all unit tests + generate HTML coverage report (.build/coverage.html)
+./build.sh -t -c
+
+# Run benchmarks only
+./build.sh -b
+
+# Run tests + benchmarks + merged coverage report
+./build.sh -t -b -c
+
+# Run fuzz seed corpus (30 s per target by default)
+./build.sh -f
+
+# Fuzz for a longer duration per target
+./build.sh -f --fuzz-time 5m
+
+# Everything: tests + benchmarks + fuzz + coverage
+./build.sh -t -b -f -c
+
+# Verbose output
+./build.sh -t -v
+```
+
+Options summary:
+
+| Flag | Description |
+|------|-------------|
+| `-t` | Run unit tests (`go test -tags SVDB_EXT_JSON,SVDB_EXT_MATH ./...`) |
+| `-b` | Run benchmarks (`./internal/TS/Benchmark/...`) |
+| `-f` | Run fuzz seed corpus for `FuzzSQL` and `FuzzDBFile` |
+| `-c` | Collect coverage and produce `.build/coverage.html` |
+| `--fuzz-time D` | Duration per fuzz target (e.g. `30s`, `5m`) |
+| `-v` | Verbose test output |
+| `-h` | Print help |
+
+Direct `go test` commands (for IDE integration or CI):
+
 ```bash
 # Build the project
 go build ./...
 
-# Run all tests
-go test ./...
-
-# Run all tests including extensions (recommended for full coverage)
+# Run all tests (with extension tags)
 go test -tags SVDB_EXT_JSON,SVDB_EXT_MATH ./...
-
-# Run SQLite comparison tests
-go test ./test/sqllogictest/...
 
 # Run specific test
 go test -run TestName ./...
@@ -655,57 +692,77 @@ go vet ./...
 
 ---
 
-## 13. Current Status: v0.8.0 - New Columnar Architecture
+## 13. Current Status: v0.10.4 - Storage Enhancements
 
 ### 13.1 Completed Features
 
-**Storage Layer (v0.8.0)**:
+**Storage Layer (v0.10.4)**:
 - ✅ HybridStore: Adaptive row/column storage switching
 - ✅ ColumnVector: Typed column storage (int64, float64, string, bytes)
 - ✅ RoaringBitmap: Fast bitmap indexes for O(1) filtering
-- ✅ SkipList: Ordered data structure
+- ✅ B-Tree: Balanced tree storage with compression support
+- ✅ WAL: Write-ahead logging with checkpoint and truncate
+- ✅ PageManager: Memory-mapped page management
 - ✅ Arena allocator: Zero-GC query execution
-- ✅ Persistence: New binary format (not SQLite compatible)
 
-**Query Engine (v0.7.x - v0.8.0)**:
-- ✅ Plan cache: Skip tokenize/parse/codegen for repeated queries
-- ✅ Result cache: Full query result caching (FNV-1a keyed)
-- ✅ Predicate pushdown: Evaluate WHERE at Go layer before VM
-- ✅ Branch prediction: 2-bit saturating counter in OpNext
+**Query Engine (v0.10.x)**:
+- ✅ Bytecode VM: Register-based execution (200+ opcodes)
+- ✅ Query optimizer: Predicate pushdown, constant folding
+- ✅ Window functions: ROW_NUMBER, RANK, LAG, LEAD, etc.
+- ✅ WINDOW clause: Named window specifications
+- ✅ Window frames: ROWS/RANGE BETWEEN support
+- ✅ CTEs: Recursive and non-recursive common table expressions
+- ✅ Set operations: UNION, INTERSECT, EXCEPT (with ALL)
 
-**Virtual Machine (VM)**:
-- ✅ Cursor management with 256 max cursors
-- ✅ Register-based execution (~200 opcodes)
-- ✅ Expression evaluation
-- ✅ Subquery handling with caching
+**Extensions**:
+- ✅ FTS5 (v0.10.2): Full-text search with BM25 ranking
+- ✅ JSON (v0.9.17): JSON1-compatible functions
+- ✅ Math: Advanced math functions (POWER, LOG, trig)
+- ✅ Virtual tables: series(), json_each(), etc.
 
-### 13.2 Performance Achievements (v0.7.8)
+**Storage Enhancements (v0.10.4)**:
+- ✅ PRAGMA wal_truncate: Auto-truncate WAL after checkpoint
+- ✅ PRAGMA synchronous: OFF/NORMAL/FULL/EXTRA modes
+- ✅ PRAGMA memory_stats: Detailed memory usage statistics
+- ✅ PRAGMA cache_memory: Page cache memory budget
+- ✅ PRAGMA max_rows: Row limit per table
+- ✅ BackupToWithCallback: Streaming backup with progress
+- ✅ BackupToWriter: Backup to any io.Writer
+- ✅ BackupManifest: Enhanced backup metadata
+
+### 13.2 Performance Achievements (v0.10.0)
 
 | Benchmark | sqlvibe | SQLite Go | Winner |
 |-----------|--------:|----------:|--------|
-| SELECT all (1K) | 578 ns | 1,015 ns | **1,755x faster** |
-| Result cache hit | <1 µs | 138 µs | **>100x faster** |
-| GROUP BY | 1.34 µs | 539 µs | **2.5x faster** |
-| INSERT single | 11.3 µs | 24.5 µs | **2.2x faster** |
+| SELECT all (1K) | 182 µs | 292 µs | **1.6x faster** |
+| WHERE filter (1K) | 104 µs | 188 µs | **1.8x faster** |
+| SUM aggregate (1K) | 20.7 µs | 66.7 µs | **3.2x faster** |
+| GROUP BY (1K) | 128 µs | 480 µs | **3.8x faster** |
 
 ### 13.3 Testing Status
 
-All tests passing:
-- ✅ SQL:1999 compatibility (56/56 suites)
-- ✅ Unit tests
+All tests passing (except pre-existing datetime tests):
+- ✅ SQL:1999 compatibility (84+ test suites)
+- ✅ Unit tests (75%+ coverage in core packages)
 - ✅ Integration tests
 - ✅ SQLite comparison tests
 - ✅ Benchmarks
+- ⚠️ F051 datetime functions (pre-existing, unrelated)
 
-### 13.4 v0.8.0 Breaking Changes
+### 13.4 Recent Releases
 
-- **SQLite file format compatibility**: REMOVED
-- Database files are no longer readable by SQLite tools
-- Only SQL interface remains compatible
+| Version | Date | Features |
+|---------|------|----------|
+| v0.10.4 | 2026-03-01 | Storage: WAL truncate, memory stats, streaming backup |
+| v0.10.3 | 2026-03-01 | Advanced SQL: WINDOW clause, JSON_KEYS |
+| v0.10.2 | 2026-03-01 | FTS5: Full-text search with BM25 |
+| v0.10.1 | 2026-02-28 | Coverage: +25% in critical packages |
+| v0.10.0 | 2026-02-27 | Bytecode VM: Always-on execution engine |
 
-### 13.5 Next Steps (see docs/plan-v0.8.0.md)
+### 13.5 Next Steps (see docs/plan-v0.10.4.md)
 
-1. Complete remaining storage engine features
-2. Add compression (LZ4, RLE)
-3. Add encryption support
-4. Improve WHERE filtering performance
+1. Complete remaining storage engine optimizations
+2. Add more SQL:1999 features (CLI, temporal types)
+3. Improve WAL performance with async checkpoint
+4. Add compression (LZ4, ZSTD)
+5. Enhance concurrency with MVCC
