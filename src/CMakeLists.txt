@@ -66,6 +66,9 @@ set(SVDB_CORE_SOURCES
     # TM - Transaction Management
     core/TM/transaction.cpp
 
+    # PB - Platform Bridges (VFS)
+    core/PB/vfs.cpp
+
     # Wrapper - Invoke chain
     core/wrapper/invoke_chain_wrapper.cpp
 
@@ -83,6 +86,7 @@ target_include_directories(svdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/QP
     ${CMAKE_CURRENT_SOURCE_DIR}/core/CG
     ${CMAKE_CURRENT_SOURCE_DIR}/core/TM
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/PB
     ${CMAKE_CURRENT_SOURCE_DIR}/core/wrapper
     ${CMAKE_CURRENT_SOURCE_DIR}/core/cgo
 )
