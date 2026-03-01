@@ -80,3 +80,19 @@ func HandleMaxRows(ctx Ctx, stmt *QP.PragmaStmt) ([]string, [][]interface{}, err
 	cols, rows := Result("max_rows", v)
 	return cols, rows, nil
 }
+
+// HandleFreelistCount handles PRAGMA freelist_count (read-only).
+// Returns the number of unused/free pages in the database file.
+func HandleFreelistCount(ctx Ctx) ([]string, [][]interface{}, error) {
+	m := ctx.StorageMetrics()
+	cols, rows := Result("freelist_count", int64(m.FreePages))
+	return cols, rows, nil
+}
+
+// HandlePageCount handles PRAGMA page_count (read-only).
+// Returns the total number of pages in the database file.
+func HandlePageCount(ctx Ctx) ([]string, [][]interface{}, error) {
+	m := ctx.StorageMetrics()
+	cols, rows := Result("page_count", int64(m.PageCount))
+	return cols, rows, nil
+}

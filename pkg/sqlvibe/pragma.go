@@ -86,6 +86,12 @@ func (db *Database) handlePragma(stmt *QP.PragmaStmt) (*Rows, error) {
 	// --- Vacuum/maintenance pragmas ---
 	case "auto_vacuum":
 		return wrapPragmaResult(pragma.HandleAutoVacuum(db, stmt))
+	case "incremental_vacuum":
+		return wrapPragmaResult(pragma.HandleIncrementalVacuum(db, stmt))
+	case "freelist_count":
+		return wrapPragmaResult(pragma.HandleFreelistCount(db))
+	case "page_count":
+		return wrapPragmaResult(pragma.HandlePageCount(db))
 	case "shrink_memory":
 		return wrapPragmaResult(pragma.HandleShrinkMemory(db))
 	case "optimize":

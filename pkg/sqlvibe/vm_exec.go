@@ -1,7 +1,6 @@
 package sqlvibe
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	IS "github.com/cyw0ng95/sqlvibe/internal/IS"
 	"github.com/cyw0ng95/sqlvibe/internal/QP"
 	"github.com/cyw0ng95/sqlvibe/internal/VM"
+	svvm "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/vm"
 )
 
 func (db *Database) ExecVM(sql string) (*Rows, error) {
@@ -925,105 +925,19 @@ func (db *Database) execVMQuery(sql string, stmt *QP.SelectStmt) (*Rows, error) 
 }
 
 // extractLimitInt returns the integer value of a LIMIT expression, or 0 if not a constant integer.
+// extractLimitInt delegates to vm.ExtractLimitInt.
 func extractLimitInt(limitExpr, offsetExpr QP.Expr) int {
-	if limitExpr == nil {
-		return 0
-	}
-	lim := 0
-	off := 0
-	if lit, ok := limitExpr.(*QP.Literal); ok {
-		if n, ok := lit.Value.(int64); ok {
-			lim = int(n)
-		}
-	}
-	if offsetExpr != nil {
-		if lit, ok := offsetExpr.(*QP.Literal); ok {
-			if n, ok := lit.Value.(int64); ok {
-				off = int(n)
-			}
-		}
-	}
-	if lim <= 0 {
-		return 0
-	}
-	return off + lim
+	return svvm.ExtractLimitInt(limitExpr, offsetExpr)
 }
 
-// isSimpleSelectStar reports whether stmt is a plain SELECT * FROM table with
-// no WHERE, GROUP BY, ORDER BY, DISTINCT, LIMIT, JOINs, or subqueries.
-// Such queries are eligible for execSelectStarFast.
+// isSimpleSelectStar delegates to vm.IsSimpleSelectStar.
 func isSimpleSelectStar(stmt *QP.SelectStmt) bool {
-	if stmt == nil || stmt.From == nil {
-		return false
-	}
-	if stmt.From.Join != nil || stmt.From.Subquery != nil {
-		return false
-	}
-	if stmt.Where != nil {
-		return false
-	}
-	if stmt.GroupBy != nil {
-		return false
-	}
-	if len(stmt.OrderBy) > 0 {
-		return false
-	}
-	if stmt.Distinct {
-		return false
-	}
-	if stmt.Limit != nil {
-		return false
-	}
-	if len(stmt.Columns) != 1 {
-		return false
-	}
-	cr, ok := stmt.Columns[0].(*QP.ColumnRef)
-	return ok && cr.Name == "*" && cr.Table == ""
+	return svvm.IsSimpleSelectStar(stmt)
 }
 
-// isSimpleAggregate reports whether stmt is a simple single-aggregate query
-// (COUNT(*), SUM(col), MIN(col), MAX(col)) with no JOIN, GROUP BY, HAVING,
-// DISTINCT, or subquery in FROM.  Returns the aggregate name and column name.
+// isSimpleAggregate delegates to vm.IsSimpleAggregate.
 func isSimpleAggregate(stmt *QP.SelectStmt) (funcName string, colName string, ok bool) {
-	if stmt == nil || stmt.From == nil {
-		return
-	}
-	if stmt.From.Join != nil || stmt.From.Subquery != nil {
-		return
-	}
-	if stmt.GroupBy != nil || stmt.Having != nil || stmt.Distinct {
-		return
-	}
-	if stmt.Where != nil {
-		return
-	}
-	if len(stmt.Columns) != 1 {
-		return
-	}
-	fc, isFc := stmt.Columns[0].(*QP.FuncCall)
-	if !isFc || fc.Distinct {
-		return
-	}
-	upper := strings.ToUpper(fc.Name)
-	switch upper {
-	case "COUNT":
-		// Only fast-path COUNT(*) — COUNT(col) must skip NULLs, handled by VM.
-		if len(fc.Args) == 0 {
-			return "COUNT", "*", true
-		}
-		if len(fc.Args) == 1 {
-			if cr, ok2 := fc.Args[0].(*QP.ColumnRef); ok2 && cr.Name == "*" {
-				return "COUNT", "*", true
-			}
-		}
-	case "SUM", "MIN", "MAX":
-		if len(fc.Args) == 1 {
-			if cr, ok2 := fc.Args[0].(*QP.ColumnRef); ok2 {
-				return upper, cr.Name, true
-			}
-		}
-	}
-	return
+	return svvm.IsSimpleAggregate(stmt)
 }
 
 // tryAggregateFastPath handles simple COUNT(*)/SUM/MIN/MAX queries by routing
@@ -1107,114 +1021,17 @@ func (db *Database) tryAggregateFastPath(stmt *QP.SelectStmt) *Rows {
 	return nil
 }
 
-// filterInfo holds extracted WHERE clause information for vectorized filtering.
-type filterInfo struct {
-	colName string
-	op      string
-	value   DS.Value
-}
+// filterInfo is an alias for vm.FilterInfo kept for internal use.
+type filterInfo = svvm.FilterInfo
 
-// isVectorizedFilterEligible checks if WHERE clause can use vectorized filter.
+// isVectorizedFilterEligible delegates to vm.IsVectorizedFilterEligible.
 func isVectorizedFilterEligible(stmt *QP.SelectStmt) bool {
-	if stmt == nil || stmt.From == nil {
-		return false
-	}
-	if stmt.From.Join != nil || stmt.From.Subquery != nil {
-		return false
-	}
-	if stmt.Where == nil {
-		return false
-	}
-	if stmt.GroupBy != nil || stmt.Having != nil || stmt.Distinct {
-		return false
-	}
-
-	// Check that SELECT columns are simple: either * or column references only.
-	// Function calls, expressions, etc. should fall through to VM.
-	for _, col := range stmt.Columns {
-		switch col.(type) {
-		case *QP.ColumnRef:
-			// OK - either * or column name
-		case *QP.AliasExpr:
-			// Alias is OK as long as the underlying expression is simple
-			if _, ok := col.(*QP.AliasExpr).Expr.(*QP.ColumnRef); !ok {
-				return false
-			}
-		default:
-			// Function calls, expressions, etc. - not eligible
-			return false
-		}
-	}
-
-	bin, ok := stmt.Where.(*QP.BinaryExpr)
-	if !ok {
-		return false
-	}
-
-	switch bin.Op {
-	case QP.TokenEq, QP.TokenNe, QP.TokenLt, QP.TokenLe, QP.TokenGt, QP.TokenGe:
-	default:
-		return false
-	}
-
-	_, ok = bin.Left.(*QP.ColumnRef)
-	if !ok {
-		return false
-	}
-
-	_, ok = bin.Right.(*QP.Literal)
-	if !ok {
-		return false
-	}
-
-	return true
+	return svvm.IsVectorizedFilterEligible(stmt)
 }
 
-// extractFilterInfo extracts column name, operator, and value from WHERE clause.
+// extractFilterInfo delegates to vm.ExtractFilterInfo.
 func extractFilterInfo(stmt *QP.SelectStmt) *filterInfo {
-	bin := stmt.Where.(*QP.BinaryExpr)
-	col := bin.Left.(*QP.ColumnRef)
-	lit := bin.Right.(*QP.Literal)
-
-	var op string
-	switch bin.Op {
-	case QP.TokenEq:
-		op = "="
-	case QP.TokenNe:
-		op = "!="
-	case QP.TokenLt:
-		op = "<"
-	case QP.TokenLe:
-		op = "<="
-	case QP.TokenGt:
-		op = ">"
-	case QP.TokenGe:
-		op = ">="
-	}
-
-	var val DS.Value
-	switch v := lit.Value.(type) {
-	case int64:
-		val = DS.IntValue(v)
-	case float64:
-		val = DS.FloatValue(v)
-	case string:
-		val = DS.StringValue(v)
-	case bool:
-		if v {
-			val = DS.IntValue(1)
-		} else {
-			val = DS.IntValue(0)
-		}
-	default:
-		return nil
-	}
-
-	return &filterInfo{
-		colName: col.Name,
-		op:      op,
-		value:   val,
-	}
+	return svvm.ExtractFilterInfo(stmt)
 }
 
 // tryVectorizedFilterFastPath handles simple WHERE queries using vectorized operations.
@@ -1242,7 +1059,7 @@ func (db *Database) tryVectorizedFilterFastPath(stmt *QP.SelectStmt) *Rows {
 		return nil
 	}
 
-	colVec := hs.ColStore().GetColumn(info.colName)
+	colVec := hs.ColStore().GetColumn(info.ColName)
 	if colVec == nil {
 		return nil
 	}
@@ -1254,7 +1071,7 @@ func (db *Database) tryVectorizedFilterFastPath(stmt *QP.SelectStmt) *Rows {
 		return nil
 	}
 
-	rb := DS.VectorizedFilter(colVec, info.op, info.value)
+	rb := DS.VectorizedFilter(colVec, info.Op, info.Value)
 	if rb == nil {
 		return nil
 	}
@@ -1496,81 +1313,14 @@ func (db *Database) applyDefaults(sql string, tableName string, tableCols []stri
 	return result
 }
 
+// literalToString delegates to vm.LiteralToString.
 func literalToString(val interface{}) string {
-	// Handle QP.Literal wrapper
-	if lit, ok := val.(*QP.Literal); ok {
-		val = lit.Value
-	}
-	// Handle QP.Expr (e.g., DEFAULT (1+1)) - serialize back to SQL
-	if expr, ok := val.(QP.Expr); ok {
-		return exprToSQL(expr)
-	}
-	switch v := val.(type) {
-	case int64:
-		return fmt.Sprintf("%d", v)
-	case float64:
-		return fmt.Sprintf("%v", v)
-	case string:
-		return "'" + strings.ReplaceAll(v, "'", "''") + "'"
-	case []byte:
-		return "X'" + hex.EncodeToString(v) + "'"
-	case bool:
-		if v {
-			return "1"
-		}
-		return "0"
-	default:
-		return "NULL"
-	}
+	return svvm.LiteralToString(val)
 }
 
-// exprToSQL converts a QP expression to a SQL string representation.
+// exprToSQL delegates to vm.ExprToSQL.
 func exprToSQL(expr QP.Expr) string {
-	if expr == nil {
-		return "NULL"
-	}
-	switch e := expr.(type) {
-	case *QP.Literal:
-		if e.Value == nil {
-			return "NULL"
-		}
-		return literalToString(e.Value)
-	case *QP.ColumnRef:
-		if e.Table != "" {
-			return e.Table + "." + e.Name
-		}
-		return e.Name
-	case *QP.BinaryExpr:
-		var op string
-		switch e.Op {
-		case QP.TokenPlus:
-			op = "+"
-		case QP.TokenMinus:
-			op = "-"
-		case QP.TokenAsterisk:
-			op = "*"
-		case QP.TokenSlash:
-			op = "/"
-		case QP.TokenPercent:
-			op = "%"
-		default:
-			op = "+"
-		}
-		return "(" + exprToSQL(e.Left) + " " + op + " " + exprToSQL(e.Right) + ")"
-	case *QP.UnaryExpr:
-		if e.Op == QP.TokenMinus {
-			return "-" + exprToSQL(e.Expr)
-		}
-		return exprToSQL(e.Expr)
-	case *QP.FuncCall:
-		args := make([]string, len(e.Args))
-		for i, arg := range e.Args {
-			args[i] = exprToSQL(arg)
-		}
-		return e.Name + "(" + strings.Join(args, ", ") + ")"
-	default:
-		return "NULL"
-	}
+	return svvm.ExprToSQL(expr)
 }
 
 func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
@@ -1636,125 +1386,19 @@ func (db *Database) execVMDML(sql string, tableName string) (Result, error) {
 	return Result{RowsAffected: vm.RowsAffected()}, nil
 }
 
-// deduplicateRows removes duplicate rows, preserving the first occurrence of each unique row.
-// Uses strings.Builder + type switch to avoid fmt.Sprintf overhead.
+// deduplicateRows delegates to vm.DeduplicateRows.
 func deduplicateRows(rows [][]interface{}) [][]interface{} {
-	seen := make(map[string]struct{}, len(rows))
-	result := make([][]interface{}, 0, len(rows))
-	var b strings.Builder
-	for _, row := range rows {
-		b.Reset()
-		for i, v := range row {
-			if i > 0 {
-				b.WriteByte(',')
-			}
-			switch val := v.(type) {
-			case int64:
-				b.WriteString(strconv.FormatInt(val, 10))
-			case float64:
-				b.WriteString(strconv.FormatFloat(val, 'f', -1, 64))
-			case string:
-				b.WriteString(val)
-			case bool:
-				if val {
-					b.WriteString("true")
-				} else {
-					b.WriteString("false")
-				}
-			case []byte:
-				b.WriteString(string(val))
-			case nil:
-				b.WriteString("<nil>")
-			default:
-				fmt.Fprintf(&b, "%v", val)
-			}
-		}
-		key := b.String()
-		if _, dup := seen[key]; !dup {
-			seen[key] = struct{}{}
-			result = append(result, row)
-		}
-	}
-	return result
+	return svvm.DeduplicateRows(rows)
 }
 
-// deduplicateRowsN is like deduplicateRows but uses only the first n columns as the
-// dedup key. This is used when rows have extra ORDER BY columns appended beyond the
-// projected SELECT columns; only the SELECT columns should determine uniqueness.
+// deduplicateRowsN delegates to vm.DeduplicateRowsN.
 func deduplicateRowsN(rows [][]interface{}, n int) [][]interface{} {
-	seen := make(map[string]struct{}, len(rows))
-	result := make([][]interface{}, 0, len(rows))
-	var b strings.Builder
-	for _, row := range rows {
-		b.Reset()
-		limit := n
-		if limit > len(row) {
-			limit = len(row)
-		}
-		for i, v := range row[:limit] {
-			if i > 0 {
-				b.WriteByte(',')
-			}
-			switch val := v.(type) {
-			case int64:
-				b.WriteString(strconv.FormatInt(val, 10))
-			case float64:
-				b.WriteString(strconv.FormatFloat(val, 'f', -1, 64))
-			case string:
-				b.WriteString(val)
-			case bool:
-				if val {
-					b.WriteString("true")
-				} else {
-					b.WriteString("false")
-				}
-			case []byte:
-				b.WriteString(string(val))
-			case nil:
-				b.WriteString("<nil>")
-			default:
-				fmt.Fprintf(&b, "%v", val)
-			}
-		}
-		key := b.String()
-		if _, dup := seen[key]; !dup {
-			seen[key] = struct{}{}
-			result = append(result, row)
-		}
-	}
-	return result
+	return svvm.DeduplicateRowsN(rows, n)
 }
 
+// collectColumnRefs delegates to vm.CollectColumnRefs.
 func collectColumnRefs(expr QP.Expr) []string {
-	if expr == nil {
-		return nil
-	}
-	var refs []string
-	switch e := expr.(type) {
-	case *QP.ColumnRef:
-		if e.Name != "" && e.Name != "*" {
-			refs = append(refs, e.Name)
-		}
-	case *QP.BinaryExpr:
-		refs = append(refs, collectColumnRefs(e.Left)...)
-		refs = append(refs, collectColumnRefs(e.Right)...)
-	case *QP.UnaryExpr:
-		refs = append(refs, collectColumnRefs(e.Expr)...)
-	case *QP.FuncCall:
-		for _, arg := range e.Args {
-			refs = append(refs, collectColumnRefs(arg)...)
-		}
-	case *QP.CaseExpr:
-		refs = append(refs, collectColumnRefs(e.Operand)...)
-		for _, when := range e.Whens {
-			refs = append(refs, collectColumnRefs(when.Condition)...)
-			refs = append(refs, collectColumnRefs(when.Result)...)
-		}
-		refs = append(refs, collectColumnRefs(e.Else)...)
-	case *QP.AliasExpr:
-		refs = append(refs, collectColumnRefs(e.Expr)...)
-	}
-	return refs
+	return svvm.CollectColumnRefs(expr)
 }
 
 // resolveNaturalUsing synthesizes a JOIN ON condition for NATURAL JOIN and JOIN ... USING (cols).

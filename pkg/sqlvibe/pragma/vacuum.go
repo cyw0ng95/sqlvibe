@@ -20,6 +20,33 @@ func HandleAutoVacuum(ctx Ctx, stmt *QP.PragmaStmt) ([]string, [][]interface{}, 
 	return cols, rows, nil
 }
 
+// HandleIncrementalVacuum handles PRAGMA incremental_vacuum [(N)].
+// It reclaims up to N free pages (or all free pages when N is 0 or omitted).
+// In the in-memory engine there are no physical free pages, so the operation
+// returns the count of logically free pages reported by the storage layer.
+func HandleIncrementalVacuum(ctx Ctx, stmt *QP.PragmaStmt) ([]string, [][]interface{}, error) {
+	// Determine how many pages were requested (0 = all).
+	n := int64(0)
+	if stmt.Value != nil {
+		n = IntValue(stmt.Value)
+		if n < 0 {
+			n = 0
+		}
+	}
+	// For the in-memory engine, honor auto_vacuum mode but there are no
+	// physical pages to reclaim. Return the number of pages actually freed.
+	freed := int64(0)
+	m := ctx.StorageMetrics()
+	available := int64(m.FreePages)
+	if n == 0 || n > available {
+		freed = available
+	} else {
+		freed = n
+	}
+	cols, rows := Result("freelist_count", freed)
+	return cols, rows, nil
+}
+
 // HandleShrinkMemory handles PRAGMA shrink_memory.
 func HandleShrinkMemory(ctx Ctx) ([]string, [][]interface{}, error) {
 	ctx.ClearCaches()

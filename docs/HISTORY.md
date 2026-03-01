@@ -1,10 +1,43 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.11 (2026-03-01)
+## Current Version: v0.10.12 (2026-03-01)
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
 **Test Status**: All 84+ SQL:1999 test suites passing.
+
+---
+
+## **v0.10.12** (2026-03-01)
+
+### Features
+
+#### Auto Vacuum & Incremental Vacuum
+- `PRAGMA incremental_vacuum` — reclaim free pages (all available pages when N=0)
+- `PRAGMA incremental_vacuum(N)` — reclaim up to N free pages
+- Enhanced auto vacuum reporting with free-page metrics
+
+#### Storage PRAGMAs
+- `PRAGMA freelist_count` — returns number of free/unused pages
+- `PRAGMA page_count` — returns total number of pages in database
+
+#### Query Execution Subpackage (pkg/sqlvibe/vm/)
+- Extracted pure helper functions into `pkg/sqlvibe/vm/` subpackage:
+  - `vm.ExtractLimitInt` — parses LIMIT+OFFSET to row count
+  - `vm.IsSimpleSelectStar` — detects simple SELECT * fast path
+  - `vm.DeduplicateRows` / `vm.DeduplicateRowsN` — result set deduplication
+  - `vm.IsSimpleAggregate` — detects COUNT(*)/SUM/MIN/MAX fast path
+  - `vm.IsVectorizedFilterEligible` — checks eligibility for vectorized filter
+  - `vm.ExtractFilterInfo` / `vm.FilterInfo` — extracts WHERE clause details
+  - `vm.CollectColumnRefs` — collects column references from expressions
+  - `vm.ExprToSQL` / `vm.LiteralToString` — SQL serialization helpers
+- Optimization helpers in `vm/optimize.go`:
+  - `vm.PruneColumns` — column pruning for reduced storage reads
+  - `vm.CanPushdownWhere` — checks if WHERE can be pushed down to storage
+  - `vm.SplitPredicates` — splits WHERE into pushable vs. VM predicates
+  - `vm.NewColumnSet` / `vm.ColumnSet` — O(1) membership set for columns
+- `vm_exec.go` now delegates to `vm/` subpackage (thin wrappers)
+- 51 new tests across 6 test files in `pkg/sqlvibe/vm/`
 
 ---
 
