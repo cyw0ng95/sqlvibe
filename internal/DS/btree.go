@@ -16,7 +16,18 @@ var prefetchWorkerPool = &struct {
 	tasks chan func()
 }{}
 
-// BTree represents a B-Tree using the new encoding infrastructure
+// BTree represents a B-Tree using the new encoding infrastructure.
+//
+// Search delegates to the C++ CBTree implementation (via cbt) for table
+// B-Trees (isTable=true). Index B-Trees (isTable=false) use the pure-Go
+// search path because Go and C++ assign different byte values to index page
+// types: Go uses 0x02 for index-leaf / 0x0a for index-interior, while the C++
+// implementation follows the canonical SQLite format where 0x0a is the index-
+// leaf and 0x02 is the index-interior page type. Pages written by Go Insert
+// would therefore be misidentified by the C++ search for index trees.
+//
+// Table page types agree in both implementations (0x0d leaf, 0x05 interior),
+// so CBTree can safely search pages written by Go for table B-Trees.
 type BTree struct {
 	pm              *PageManager
 	om              *OverflowManager
@@ -25,6 +36,7 @@ type BTree struct {
 	rootPage        uint32
 	isTable         bool
 	prefetchEnabled bool // enable async child-page prefetching during search
+	cbt             *CBTree // C++ CGO wrapper for search; lazily initialized (table trees only)
 }
 
 // BTreeCursor represents a position in the B-Tree
@@ -123,17 +135,35 @@ func (bt *BTree) prefetchChildren(page *Page, count int) {
 	}
 }
 
-// Search finds a value by key in the B-Tree
+// getCBTree returns the lazily-initialized C++ BTree wrapper.
+// It is created the first time Search is called after rootPage is set.
+// Only used for table B-Trees (isTable=true) since the Go and C++ page type
+// constants for index trees differ: Go uses 0x02=index leaf / 0x0a=index interior,
+// while C++ follows the SQLite format: 0x0a=index leaf / 0x02=index interior.
+func (bt *BTree) getCBTree() *CBTree {
+	if !bt.isTable {
+		return nil
+	}
+	if bt.cbt == nil && bt.rootPage != 0 {
+		bt.cbt = NewCBTree(bt.pm, bt.rootPage, bt.isTable)
+	}
+	return bt.cbt
+}
+
+// Search finds a value by key in the B-Tree.
+// Delegates to the C++ BTree implementation for fast search via CGO.
 func (bt *BTree) Search(key []byte) ([]byte, error) {
 	if bt.rootPage == 0 {
 		return nil, nil
 	}
-
+	if cbt := bt.getCBTree(); cbt != nil {
+		return cbt.Search(key)
+	}
+	// fallback: should not reach here in practice
 	page, err := bt.pm.ReadPage(bt.rootPage)
 	if err != nil {
 		return nil, err
 	}
-
 	return bt.searchPage(page, key)
 }
 
@@ -304,6 +334,7 @@ func (bt *BTree) Insert(key []byte, value []byte) error {
 	util.Assert(len(key) > 0, "insert key cannot be empty")
 	// Note: value can be empty for index entries
 
+	prevRoot := bt.rootPage
 	if bt.rootPage == 0 {
 		// Create root page
 		pageNum, err := bt.pm.AllocatePage()
@@ -331,7 +362,13 @@ func (bt *BTree) Insert(key []byte, value []byte) error {
 		}
 	}
 
-	return bt.insertIntoPage(bt.rootPage, key, value)
+	err := bt.insertIntoPage(bt.rootPage, key, value)
+	// If rootPage changed (first allocation), invalidate cached CBTree so it's
+	// re-created with the correct root on the next Search call.
+	if bt.rootPage != prevRoot {
+		bt.cbt = nil
+	}
+	return err
 }
 
 func (bt *BTree) insertIntoPage(pageNum uint32, key []byte, value []byte) error {

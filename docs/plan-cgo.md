@@ -87,17 +87,17 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 
 | Subsystem | Total | C++ Only | CGO Wrapper | Go-Only | Progress |
 |-----------|-------|----------|-------------|---------|----------|
-| **DS** (Data Storage) | 36 | 22 | 12 | 2 | 94% |
+| **DS** (Data Storage) | 36 | 22 | 13 | 1 | 97% |
 | **VM** (Virtual Machine) | 30 | 19 | 9 | 2 | 93% |
 | **QP** (Query Processing) | 15 | 12 | 3 | 0 | 100% |
-| **CG** (Code Generation) | 8 | 7 | 0 | 1 | 88% |
+| **CG** (Code Generation) | 11 | 0 | 7 | 4 | 100% |
 | **TM** (Transaction Mgmt) | 1 | 1 | 0 | 0 | 100% |
 | **PB** (Platform Bridges) | 1 | 1 | 0 | 0 | 100% |
 | **SF** (System Framework) | 1 | 1 | 0 | 0 | 100% |
 | **IS** (Info Schema) | 1 | 1 | 0 | 0 | 100% |
 | **Wrapper** | 1 | 0 | 1 | 0 | 100% |
 | **CGO** (Special Cases) | 1 | 0 | 1 | 0 | 100% |
-| **TOTAL** | **97** | **64** | **26** | **5** | **95%** |
+| **TOTAL** | **102** | **57** | **34** | **7** | **97%** |
 
 **Legend**:
 - **C++ Only**: Pure C++ implementation (no Go callbacks, no CGO overhead)
@@ -134,7 +134,7 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 
 | Go File | C++ File | Status | Notes |
 |---------|----------|--------|-------|
-| `internal/DS/btree.go` | `src/core/DS/btree.cpp` | ⚠️ PARTIAL | C++ has insert/delete/search, Go wrapper NOT using CGO (needs cursor support) |
+| `internal/DS/btree.go` | `src/core/DS/btree.cpp` | ✅ CGO | **Phase DS-btree COMPLETE**: `BTree.Search()` delegates to `CBTree` (C++) for table B-Trees via lazy init; index B-Trees use Go search (page type constants differ: Go 0x02=index leaf vs C++ 0x0a=index leaf); cursor stays in Go |
 | `internal/DS/column_store_cgo.go` | `src/core/DS/columnar.cpp` | ✅ CGO | **Always-on CGO** (no fallback); dual-layer: Go read-cache + C++ authoritative store |
 | `internal/DS/row_store_cgo.go` | `src/core/DS/row_store.cpp` | ✅ CGO | **Always-on CGO** (no fallback); dual-layer: Go read-cache + C++ authoritative store |
 
@@ -260,12 +260,12 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 | Go File | C++ File | Status | Notes |
 |---------|----------|--------|-------|
 | `internal/CG/cg_cgo.go` | `src/core/CG/compiler.cpp` | ✅ CGO | |
-| `internal/CG/expr_compiler.go` | `src/core/CG/expr_compiler.cpp` | ✅ CGO | |
-| `internal/CG/optimizer.go` | `src/core/CG/optimizer.cpp` | ✅ CGO | |
-| `internal/CG/plan_cache.go` | `src/core/CG/plan_cache.cpp` | ✅ CGO | |
-| `internal/CG/direct_compiler.go` | `src/core/CG/direct_compiler.cpp` | ✅ CGO | |
-| `internal/CG/bytecode_compiler.go` | `src/core/CG/bytecode_compiler.cpp` | ✅ CGO | |
-| `internal/CG/register.go` | `src/core/CG/register.cpp` | ✅ CGO | |
+| `internal/CG/expr_compiler.go` + `expr_compiler_cgo.go` | `src/core/CG/expr_compiler.cpp` | ✅ CGO | `expr_compiler_cgo.go`: `cExprPruneInstructions`/`cExprOpcodeHistogram` wrappers |
+| `internal/CG/optimizer.go` | `src/core/CG/optimizer.cpp` | ✅ CGO | Optimizer applied via `cg_cgo.go` `CGOptimizeProgram` |
+| `internal/CG/plan_cache.go` + `plan_cache_cgo.go` | `src/core/CG/plan_cache.cpp` | ✅ CGO | `plan_cache_cgo.go`: `CPlanCache` wraps `svdb_cg_cache_t` |
+| `internal/CG/direct_compiler.go` + `direct_compiler_cgo.go` | `src/core/CG/direct_compiler.cpp` | ✅ CGO | `canFastPath()` delegates to `cDirectIsSimpleSelect()`; `direct_compiler_cgo.go` exposes `svdb_direct_*` helpers |
+| `internal/CG/bytecode_compiler.go` + `bytecode_compiler_cgo.go` | `src/core/CG/bytecode_compiler.cpp` | ✅ CGO | `bytecode_compiler_cgo.go`: `cBcCanUseFastPath`/`cBcHasAggregates`/etc. analysis helpers |
+| `internal/CG/register_cgo.go` (new) | `src/core/CG/register.cpp` | ✅ CGO | `CRegisterAllocator` + `CInstrEmitter` wrappers via `register_api.h` (C-compatible) |
 
 ### 📋 Go-Only
 
@@ -851,5 +851,5 @@ A Go wrapper can be removed when ALL of these are true:
 
 ---
 
-**Last Updated**: 2026-03-02 (Boundary-CGO architecture; Phase DS-9 freelist.go + balance.go legacy removal; 82%)
+**Last Updated**: 2026-03-02 (DS btree.go + CG complete: register_cgo.go, direct_compiler_cgo.go, expr_compiler_cgo.go, plan_cache_cgo.go, bytecode_compiler_cgo.go; 97%)
 **Next Review**: After Phase 6 architecture cleanup
