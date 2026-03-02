@@ -1,6 +1,7 @@
 #include "engine_api.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <algorithm>
 #include <vector>
 #include <string>
@@ -354,7 +355,9 @@ svdb_engine_rows_t* svdb_engine_cross_join(
     if (!left || !right || left->num_rows == 0 || right->num_rows == 0)
         return svdb_engine_rows_alloc(0);
 
-    int32_t count = left->num_rows * right->num_rows;
+    int64_t count64 = (int64_t)left->num_rows * (int64_t)right->num_rows;
+    if (count64 > INT32_MAX) return nullptr;
+    int32_t count = (int32_t)count64;
     svdb_engine_rows_t* out = svdb_engine_rows_alloc(count);
     if (!out) return nullptr;
 

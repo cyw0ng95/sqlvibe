@@ -12,8 +12,11 @@ import (
 	"unsafe"
 )
 
-// maxCSlice is the upper-bound used when constructing Go slice headers over
-// C arrays via unsafe.Pointer.  It must be larger than any array we handle.
+// maxCSlice is the upper-bound capacity used when constructing Go slice headers
+// over C-allocated arrays via unsafe.Pointer.  268,435,456 (2^28) is chosen as
+// a conservatively large value that fits in a 32-bit signed integer and is far
+// larger than any row array we will ever allocate, while staying well below any
+// reasonable address-space limit (arrays are individually malloc'd at size n).
 const maxCSlice = 1 << 28
 
 // goValToC converts a Go interface{} to a C svdb_engine_value_t.
@@ -303,6 +306,8 @@ func CSortRows(rows []Row, keys []CSortKey) []Row {
 		cKeySlice[i].null_order = C.int32_t(k.NullOrder)
 	}
 	defer func() {
+		// cKeyNames is fully populated by the loop above and is safe to free
+		// even if svdb_engine_sort_rows panics.
 		for _, p := range cKeyNames {
 			C.free(unsafe.Pointer(p))
 		}
