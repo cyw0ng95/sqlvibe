@@ -332,6 +332,62 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 
 ---
 
+## libsvdb Core - Final Target State
+
+**Vision**: libsvdb is the **standalone C++ database core**. Go is only a thin wrapper 
+for the public API. All database operations execute entirely in C++.
+
+### libsvdb.so (C++ Core - Standalone Library)
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **Storage Engine** | | |
+| ├─ B-Tree | 🔄 In Progress | Full C++ with embedded PageManager |
+| ├─ PageManager | 🔄 In Progress | C++ page I/O |
+| ├─ WAL | ✅ Complete | |
+| ├─ Freelist | ✅ Complete | |
+| ├─ Columnar Store | 🔄 In Progress | Full C++ CRUD |
+| └─ Row Store | 🔄 In Progress | Full C++ CRUD |
+| **Query Execution** | | |
+| ├─ Bytecode VM | 🔄 In Progress | 200+ opcodes in C++ |
+| ├─ Expression Engine | ✅ Complete | |
+| ├─ Aggregate Engine | ✅ Complete | |
+| └─ Cursor Management | 🔄 In Progress | |
+| **Query Processing** | | |
+| ├─ Tokenizer | ✅ Complete | |
+| ├─ Parser | 🔄 In Progress | Full SQL parsing |
+| ├─ Analyzer | ✅ Complete | |
+| ├─ Binder | ✅ Complete | |
+| └─ Optimizer | ✅ Complete | |
+| **Transaction Manager** | ✅ Complete | |
+| **VFS (Platform Bridges)** | ✅ Complete | |
+
+### Go Thin Wrapper (After v0.11.0 Complete)
+
+**After libsvdb core is complete**, Go wrappers become thin API boundaries only:
+
+| Current (82% C++) | Target (libsvdb Core) |
+|------------------|----------------------|
+| CGO for inner operations | CGO only at public API |
+| Go callbacks for B-Tree | No Go callbacks anywhere |
+| Go orchestration | Pure C++ execution |
+| Go result retrieval | Thin wrapper for results |
+
+### Transition: When Go Wrappers Can Be Removed
+
+| Component | Current State | Can Remove Go When |
+|-----------|--------------|-------------------|
+| DS: value.go | C++ Only | ✅ Already removable |
+| DS: btree.go | CGO Wrapper | B-Tree embeds PageManager |
+| DS: columnar.cpp | CGO Wrapper | Full CRUD in C++ |
+| DS: row_store.cpp | CGO Wrapper | Full CRUD in C++ |
+| DS: overflow.cpp | CGO Wrapper | Embedded in PageManager |
+| VM: bytecode_vm.cpp | CGO Wrapper | All opcodes in C++ |
+| VM: cursor.cpp | CGO Wrapper | Full cursor in C++ |
+| QP: parser.cpp | CGO Wrapper | Full parser in C++ |
+
+---
+
 ## Go-Only Files (Will NOT Be Migrated)
 
 These files implement Go-specific patterns or orchestration logic and should remain in Go:
@@ -668,6 +724,45 @@ sqlvibe/
 **Total Estimated Effort**: 25-35 working days (5-7 weeks)
 
 **Key Change**: Phases now focus on C++ Only migration (eliminating Go callbacks) rather than just wrapping C++ with CGO.
+
+---
+
+## v0.11.0 Milestones: Complete libsvdb Core
+
+**Target**: Complete all libsvdb C++ core migrations in v0.11.0
+
+### Storage Engine (Complete in v0.11.0)
+
+| Milestone | Criteria | Current | Target |
+|-----------|----------|---------|--------|
+| M1: B-Tree Full C++ | Embed PageManager in btree.cpp, no Go callbacks | 30% | 100% |
+| M2: Overflow Full C++ | Overflow chains in C++, no registry | 50% | 100% |
+| M3: Columnar Full C++ | Full CRUD in columnar.cpp, thin wrapper | 60% | 100% |
+| M4: Row Store Full C++ | Full CRUD in row_store.cpp, thin wrapper | 60% | 100% |
+
+### Execution Engine (Complete in v0.11.0)
+
+| Milestone | Criteria | Current | Target |
+|-----------|----------|---------|--------|
+| M5: Bytecode VM Full C++ | 200+ opcodes in C++, Go wrapper = thin API | 20% | 100% |
+| M6: Cursor Full C++ | Full cursor in C++, no Go dependencies | 40% | 100% |
+| M7: Parser Full C++ | Full SQL parsing in C++ | 70% | 100% |
+
+### Final State (v0.11.0 Complete)
+
+| Criteria | Description |
+|----------|-------------|
+| Zero Go Callbacks | C++ never calls back to Go |
+| Thin Go Wrapper | Go only wraps public API boundary |
+| libsvdb Standalone | libsvdb.so is self-contained C++ library |
+
+### Go Wrapper Removal Criteria
+
+A Go wrapper can be removed when ALL of these are true:
+1. ✅ C++ implementation is self-contained (no Go callbacks)
+2. ✅ All inner C++ modules call each other directly
+3. ✅ CGO boundary is only at public API
+4. ✅ Tests pass with C++ implementation
 
 ---
 
