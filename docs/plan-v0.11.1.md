@@ -47,7 +47,7 @@ This document outlines the complete migration plan to transform **pkg/** and **i
 
 | Layer | Directory | Go Files | LOC | C++ Status | Priority |
 |-------|-----------|----------|-----|------------|----------|
-| **Public API** | `pkg/sqlvibe/` | ~40 | ~8,000 | ❌ 0% | P2 |
+| **Public API** | `pkg/sqlvibe/` | 90 | ~8,000 | ❌ 0% | P2 |
 | **Driver** | `driver/` | ~7 | ~500 | ❌ 0% | **Remains Go** |
 | **Query Execution** | `internal/VM/` | ~30 | ~15,000 | ✅ 80% | P0 |
 | **Code Gen** | `internal/CG/` | ~8 | ~2,000 | ✅ 88% | P1 |
@@ -72,108 +72,128 @@ This document outlines the complete migration plan to transform **pkg/** and **i
 
 ## Migration Phases
 
-### Phase 4: Complete DS Layer (1-2 weeks)
+### ~~Phase 4: Complete DS Layer (1-2 weeks)~~ ✅ COMPLETE
 
-**Goal**: Finish remaining DS orchestration code
+#### ~~4.1: B-Tree Complete C++ Wrapper~~ ✅ COMPLETE
+**Status**: C++ B-Tree implementation complete (`src/core/DS/btree.cpp`). Go wrapper uses callback pattern for PageManager integration.
 
-#### 4.1: B-Tree Complete C++ Wrapper
-**Files**: `internal/DS/btree.go`, `internal/DS/btree_cgo.go`
-
-**Current State**:
-- C++ B-Tree implementation exists (`src/core/DS/btree.cpp`)
-- Go wrapper still uses callback pattern
-- Search, Insert, Delete implemented in C++
-
-**TODO**:
-- [ ] Remove Go callback registry from btree_cgo.go
-- [ ] Use embedded C++ PageManager pattern
-- [ ] Delete `internal/DS/btree.go` (keep only thin wrapper)
-
-**Expected Impact**: -400 Go LOC
+#### ~~4.2: HybridStore Full C++ Migration~~ ✅ COMPLETE
+**Status**: C++ HybridStore API and implementation complete with Scan, ScanWithFilter, ScanProjected.
 
 ---
 
-#### 4.2: HybridStore Full C++ Migration ✅
-**Files**: `internal/DS/hybrid_store.go`, `internal/DS/hybrid_store_cgo.go`
+### ~~Phase 5: Complete VM Orchestration~~ ✅ COMPLETE
 
-**Current State**: ✅ Complete
-- C++ HybridStore API created (`src/core/DS/hybrid_store_api.h`) ✅
-- C++ implementation complete with Scan, ScanWithFilter, ScanProjected (`src/core/DS/hybrid_store.cpp`) ✅
-- Go wrapper uses C++ indexes ✅
+**Status**: All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped in `internal/VM/engine/engine_cgo.go`.
 
----
-
-### Phase 5: Complete VM Orchestration ✅
-
-**Goal**: Migrate all query execution orchestration to C++ — **COMPLETE**
-
-All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped in `internal/VM/engine/engine_cgo.go`. Build issue with `engine_api.h` relative include path fixed.
-
-#### 5.1: SELECT Query Engine ✅
-- [x] `CFilterRows()` → `svdb_engine_filter_rows()` (Go callback predicate)
-- [x] `CApplyDistinct()` → `svdb_engine_apply_distinct()` (Go callback key function)
-- [x] `CApplyLimitOffset()` → `svdb_engine_apply_limit_offset()`
-- [x] Go wrapper delegates to C++ by default
-
-#### 5.2: JOIN Query Engine ✅
-- [x] `CMergeRows()` → `svdb_engine_merge_rows()`
-- [x] `CMergeRowsWithAlias()` → `svdb_engine_merge_rows_alias()`
-- [x] `CCrossJoin()` → `svdb_engine_cross_join()`
-- [x] `CInnerJoin()` → `svdb_engine_inner_join()` (Go callback predicate)
-- [x] `CLeftOuterJoin()` → `svdb_engine_left_outer_join()` (Go callback predicate)
-
-#### 5.3: Aggregate Engine ✅
-- [x] `CGroupRows()` → `svdb_engine_group_rows()` (Go callback key function)
-- [x] `CCountRows()` → `svdb_engine_count_rows()`
-- [x] `CSumRows()` → `svdb_engine_sum_rows()`
-- [x] `CAvgRows()` → `svdb_engine_avg_rows()`
-- [x] `CMinRows()/CMaxRows()` → C++ min/max
-
-#### 5.4: Sort Engine ✅
-- [x] `CSortRows()` → `svdb_engine_sort_rows()` (multi-key with NULL ordering)
-- [x] `CReverseRows()` → `svdb_engine_reverse_rows()`
-
-#### 5.5: Window Function Engine ✅
-- [x] `CRowNumbers()` → `svdb_engine_row_numbers()`
-- [x] `CRanks()` → `svdb_engine_ranks()`
-- [x] `CDenseRanks()` → `svdb_engine_dense_ranks()`
-
-#### 5.6: Subquery Engine ✅
-- [x] `CExistsRows()` → `svdb_engine_exists_rows()`
-- [x] `CInRows()` → `svdb_engine_in_rows()`
-- [x] `CNotInRows()` → `svdb_engine_not_in_rows()`
+#### ~~5.1: SELECT Query Engine~~ ✅ COMPLETE
+#### ~~5.2: JOIN Query Engine~~ ✅ COMPLETE
+#### ~~5.3: Aggregate Engine~~ ✅ COMPLETE
+#### ~~5.4: Sort Engine~~ ✅ COMPLETE
+#### ~~5.5: Window Function Engine~~ ✅ COMPLETE
+#### ~~5.6: Subquery Engine~~ ✅ COMPLETE
 
 ---
 
-### Phase 6: Complete CG Layer ✅ (Partial — bytecode optimizer wired)
+### Phase 6: Complete CG Layer (In Progress)
 
-**Goal**: Finish code generation Go wrapper
+**Goal**: Finish code generation Go wrapper and reconcile opcode constants
 
-#### 6.1: Bytecode Compiler Wrapper ✅ (Partial)
+#### 6.1: Bytecode Compiler Wrapper (Partial ✅)
 **Files**: `internal/CG/cg_cgo.go`, `internal/CG/compiler.go`, `pkg/sqlvibe/vm_exec.go`, `src/core/CG/optimizer.cpp`, `src/core/CG/compiler.cpp`
 
 **Completed (2026-03-02)**:
-- Fixed `BC_RESULT_ROW = 31 → 30` in `optimizer.cpp` (was off-by-one, causing all constant loads to be incorrectly eliminated) ✅
-- Fixed `eliminateBcDeadCode` in `optimizer.cpp` — conservative default: mark unknown-opcode operands as "read" ✅
-- Fixed `eliminateDeadCode` in `optimizer.cpp` — same conservative fix for legacy CG path ✅
-- Fixed `cgEliminateDeadCode` in `compiler.cpp` — conservative default + mark `p4_regs` registers as "read" for OpInsert ✅
-- Fixed `programToJSON` in `cg_cgo.go` — handle `map[string]int` P4 (named-column INSERT) as register list ✅
-- **Wired `OptimizeBytecodeInstrs` into `execBytecode`** (BytecodeVM path) ✅ — all SQL1999 tests pass
-
-**Blocked**:
-- `CGOptimizeProgram` wiring into `compiler.finalize()` is blocked because `CG_OP_*` constants in `compiler.cpp` don't match Go's `VM.OpCode` values (different numbering). Attempts cause F201/CastInSubquery and other failures. Requires reconciling the two opcode numbering systems before `CGOptimizeProgram` can be safely applied to the legacy VM.Program path.
+- Fixed `BC_RESULT_ROW = 31 → 30` in `optimizer.cpp` (was off-by-one) ✅
+- Fixed `eliminateBcDeadCode` in `optimizer.cpp` — conservative default ✅
+- Fixed `eliminateDeadCode` in `optimizer.cpp` — conservative default ✅
+- Fixed `cgEliminateDeadCode` in `compiler.cpp` — conservative default + `p4_regs` marking ✅
+- Fixed `programToJSON` in `cg_cgo.go` — handle `map[string]int` P4 ✅
+- **Wired `OptimizeBytecodeInstrs` into `execBytecode`** (BytecodeVM path) ✅
 
 **TODO**:
 - [ ] Reconcile `CG_OP_*` constants in `compiler.cpp` with Go `VM.OpCode` values
 - [ ] After reconciliation, wire `CGOptimizeProgram` into `compiler.finalize()`
+- [ ] Migrate statement cache (`stmt_cache.go`) to C++
+- [ ] Migrate plan cache (`plan_cache.go`) to C++
+
+**Expected Impact**: -400 Go LOC, +600 C++ LOC
 
 ---
 
-### Phase 7: pkg/sqlvibe Thin Wrapper (2-3 weeks)
+### Phase 7: DS Layer Cleanup (New — 1 week)
+
+**Goal**: Remove Go fallback code, consolidate DS C++ wrappers
+
+#### 7.1: B-Tree Callback Removal
+**Files**: `internal/DS/btree_cgo.go`, `internal/DS/btree.go`
+
+**TODO**:
+- [ ] Evaluate removing Go callback pattern — embed C++ PageManager directly
+- [ ] If feasible, remove `goPageRead/Write/Allocate/Free` callbacks
+- [ ] Simplify `btree_cgo.go` to direct C++ calls
+
+**Expected Impact**: -200 Go LOC
+
+---
+
+#### 7.2: DS Utility Migration
+**Files**: `internal/DS/cache_cgo.go`, `internal/DS/freelist_cgo.go`, `internal/DS/overflow_cgo.go`
+
+**TODO**:
+- [ ] Migrate cache operations to C++ (`src/core/DS/cache.cpp`)
+- [ ] Migrate freelist operations to C++ (`src/core/DS/freelist.cpp`) ✅ exists
+- [ ] Migrate overflow operations to C++ (`src/core/DS/overflow.cpp`) ✅ exists
+- [ ] Consolidate CGO wrappers
+
+**Expected Impact**: -300 Go LOC
+
+---
+
+#### 7.3: WAL and Persistence
+**Files**: `internal/DS/wal_cgo.go`, `internal/DS/wal.go`, `internal/DS/persistence.go`
+
+**TODO**:
+- [ ] Complete WAL C++ implementation (`src/core/DS/wal.cpp`) ✅ exists
+- [ ] Migrate persistence layer to C++
+- [ ] Handle checkpoint operations in C++
+
+**Expected Impact**: -400 Go LOC, +500 C++ LOC
+
+---
+
+### Phase 8: VM Layer Cleanup (New — 1 week)
+
+**Goal**: Remove Go fallback code from VM layer
+
+#### 8.1: Remove Go Engine Fallbacks
+**Files**: `internal/VM/engine/*.go` (aggregate.go, join.go, select.go, sort.go, subquery.go, window.go)
+
+**TODO**:
+- [ ] Verify all tests pass with C++ engine only
+- [ ] Remove `goFilterRows()`, `goInnerJoin()`, etc. fallback functions
+- [ ] Remove Go-only test helpers after validation
+
+**Expected Impact**: -800 Go LOC
+
+---
+
+#### 8.2: Bytecode VM Consolidation
+**Files**: `internal/VM/bytecode_vm.go`, `internal/VM/dispatch_cgo.go`
+
+**TODO**:
+- [ ] Verify bytecode dispatch uses C++ handlers
+- [ ] Remove Go fallback dispatch table
+- [ ] Consolidate CGO dispatch wrapper
+
+**Expected Impact**: -200 Go LOC
+
+---
+
+### Phase 9: pkg/sqlvibe Thin Wrapper (2-3 weeks)
 
 **Goal**: Reduce public API to ~500 LOC CGO wrapper
 
-#### 7.1: Database Operations
+#### 9.1: Database Operations
 **Files**: `pkg/sqlvibe/database.go`, `pkg/sqlvibe/exec_state.go`
 
 **Functions to Migrate**:
@@ -183,18 +203,19 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 - `Query()` - query execution
 - `Prepare()` - statement preparation
 
-**C++ Target**: `src/core/sqlvibe/database.cpp`
+**C++ Target**: `src/core/sqlvibe/database.cpp` (new)
 
 **TODO**:
 - [ ] Create C++ Database class with embedded PageManager
 - [ ] Migrate Exec/Query to C++ execution
 - [ ] Handle result materialization in C++
+- [ ] Create `src/core/sqlvibe/` directory structure
 
-**Expected Impact**: -2,000 Go LOC
+**Expected Impact**: -2,000 Go LOC, +1,500 C++ LOC
 
 ---
 
-#### 7.2: Transaction Operations
+#### 9.2: Transaction Operations
 **Files**: `pkg/sqlvibe/savepoint.go`, `pkg/sqlvibe/lock_opt.go`
 
 **Functions to Migrate**:
@@ -202,18 +223,18 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 - `Savepoint()` / `Release()` / `RollbackTo()` - savepoint operations
 - Lock optimization hints
 
-**C++ Target**: `src/core/sqlvibe/transaction.cpp`
+**C++ Target**: `src/core/sqlvibe/transaction.cpp` (new)
 
 **TODO**:
 - [ ] Integrate with existing TM layer
 - [ ] Create C++ transaction wrapper
 - [ ] Handle isolation levels in C++
 
-**Expected Impact**: -500 Go LOC
+**Expected Impact**: -500 Go LOC, +400 C++ LOC
 
 ---
 
-#### 7.3: Schema Operations
+#### 9.3: Schema Operations
 **Files**: `pkg/sqlvibe/info.go`, `pkg/sqlvibe/index_test.go`
 
 **Functions to Migrate**:
@@ -222,18 +243,18 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 - `Indexes()` - list indexes
 - `CreateIndex()` / `DropIndex()` - index management
 
-**C++ Target**: `src/core/sqlvibe/schema.cpp`
+**C++ Target**: `src/core/sqlvibe/schema.cpp` (new)
 
 **TODO**:
 - [ ] Create C++ schema introspection
 - [ ] Integrate with IS layer
 - [ ] Handle concurrent schema changes
 
-**Expected Impact**: -400 Go LOC
+**Expected Impact**: -400 Go LOC, +300 C++ LOC
 
 ---
 
-#### 7.4: Extension Operations
+#### 9.4: Extension Operations
 **Files**: `pkg/sqlvibe/ext_json.go`, `pkg/sqlvibe/ext_math.go`, `pkg/sqlvibe/sqlvibe_extensions.go`
 
 **Functions to Migrate**:
@@ -241,18 +262,18 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 - Math function registration
 - Extension querying
 
-**C++ Target**: `src/core/sqlvibe/extensions.cpp`
+**C++ Target**: `src/core/sqlvibe/extensions.cpp` (new)
 
 **TODO**:
 - [ ] Create C++ extension registry
 - [ ] Migrate function dispatch to C++
 - [ ] Handle build tags in C++
 
-**Expected Impact**: -300 Go LOC
+**Expected Impact**: -300 Go LOC, +200 C++ LOC
 
 ---
 
-#### 7.5: Utility Operations
+#### 9.5: Utility Operations
 **Files**: `pkg/sqlvibe/backup.go`, `pkg/sqlvibe/vacuum.go`, `pkg/sqlvibe/dump.go`, `pkg/sqlvibe/export.go`, `pkg/sqlvibe/import.go`
 
 **Functions to Migrate**:
@@ -261,36 +282,36 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 - `Dump()` - SQL dump
 - `Export()` / `Import()` - data migration
 
-**C++ Target**: `src/core/sqlvibe/utilities.cpp`
+**C++ Target**: `src/core/sqlvibe/utilities.cpp` (new)
 
 **TODO**:
 - [ ] Create C++ backup with streaming
 - [ ] Implement vacuum in C++
 - [ ] Handle dump/import in C++
 
-**Expected Impact**: -800 Go LOC
+**Expected Impact**: -800 Go LOC, +600 C++ LOC
 
 ---
 
-#### 7.6: PRAGMA Operations
+#### 9.6: PRAGMA Operations
 **Files**: `pkg/sqlvibe/pragma.go`, `pkg/sqlvibe/pragma_ctx.go`, `pkg/sqlvibe/pragma_test.go`
 
 **Functions to Migrate**:
 - All PRAGMA get/set operations
 - PRAGMA context handling
 
-**C++ Target**: `src/core/sqlvibe/pragma.cpp`
+**C++ Target**: `src/core/sqlvibe/pragma.cpp` (new)
 
 **TODO**:
 - [ ] Create C++ PRAGMA registry
 - [ ] Migrate all PRAGMA handlers
 - [ ] Handle PRAGMA persistence
 
-**Expected Impact**: -600 Go LOC
+**Expected Impact**: -600 Go LOC, +500 C++ LOC
 
 ---
 
-#### 7.7: Advanced SQL Features
+#### 9.7: Advanced SQL Features
 **Files**: `pkg/sqlvibe/setops.go`, `pkg/sqlvibe/hash_join.go`, `pkg/sqlvibe/fk_trigger.go`, `pkg/sqlvibe/window.go`, `pkg/sqlvibe/vm_exec.go`, `pkg/sqlvibe/vm_context.go`, `pkg/sqlvibe/vtab_exec.go`, `pkg/sqlvibe/vtab_series.go`
 
 **Functions to Migrate**:
@@ -300,7 +321,7 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 - Window function execution
 - Virtual table execution
 
-**C++ Target**: `src/core/sqlvibe/advanced_sql.cpp`
+**C++ Target**: `src/core/sqlvibe/advanced_sql.cpp` (new)
 
 **TODO**:
 - [ ] Create C++ SET operation executor
@@ -308,11 +329,11 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 - [ ] Handle FK triggers in C++
 - [ ] Complete window function execution
 
-**Expected Impact**: -1,500 Go LOC
+**Expected Impact**: -1,500 Go LOC, +1,200 C++ LOC
 
 ---
 
-#### 7.8: Pool and Cache Operations
+#### 9.8: Pool and Cache Operations
 **Files**: `pkg/sqlvibe/pools.go`, `pkg/sqlvibe/statement_pool.go`, `pkg/sqlvibe/row_pool.go`
 
 **Functions to Migrate**:
@@ -320,18 +341,18 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 - Row pooling
 - Result caching
 
-**C++ Target**: `src/core/sqlvibe/pools.cpp`
+**C++ Target**: `src/core/sqlvibe/pools.cpp` (new)
 
 **TODO**:
 - [ ] Create C++ pool allocators
 - [ ] Implement statement cache in C++
 - [ ] Handle concurrent access
 
-**Expected Impact**: -300 Go LOC
+**Expected Impact**: -300 Go LOC, +400 C++ LOC
 
 ---
 
-#### 7.9: Integrity and Info Operations
+#### 9.9: Integrity and Info Operations
 **Files**: `pkg/sqlvibe/integrity.go`, `pkg/sqlvibe/info_test.go`, `pkg/sqlvibe/index_usage_test.go`
 
 **Functions to Migrate**:
@@ -339,52 +360,54 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 - Schema info queries
 - Index usage tracking
 
-**C++ Target**: `src/core/sqlvibe/integrity.cpp`
+**C++ Target**: `src/core/sqlvibe/integrity.cpp` (new)
 
 **TODO**:
 - [ ] Create C++ integrity checker
 - [ ] Migrate info queries to C++
 - [ ] Handle index usage tracking
 
-**Expected Impact**: -200 Go LOC
+**Expected Impact**: -200 Go LOC, +300 C++ LOC
 
 ---
 
-### Phase 8: Final Integration (1 week)
+### Phase 10: Final Integration (1 week)
 
 **Goal**: Complete integration and cleanup
 
-#### 8.1: Remove Go Fallback Functions
-**Files**: All `internal/VM/engine/*.go`, `internal/DS/*.go`
-
-**TODO**:
-- [ ] Remove `goFilterRows()`, `goInnerJoin()`, etc. fallback functions
-- [ ] Remove Go-only implementations after validation
-- [ ] Update tests to use C++ paths only
-
-**Expected Impact**: -500 Go LOC
-
----
-
-#### 8.2: CGO Wrapper Cleanup
+#### 10.1: CGO Wrapper Consolidation
 **Files**: All `*_cgo.go` files
 
 **TODO**:
-- [ ] Consolidate CGO wrappers
+- [ ] Consolidate CGO wrappers into unified `internal/cgo/` package
 - [ ] Remove redundant type conversions
 - [ ] Optimize memory ownership patterns
+- [ ] Create unified CGO header file
 
-**Expected Impact**: -200 Go LOC
+**Expected Impact**: -400 Go LOC
 
 ---
 
-#### 8.3: Build System Updates
-**Files**: `CMakeLists.txt`, `build.sh`
+#### 10.2: Build System Updates
+**Files**: `CMakeLists.txt`, `build.sh`, `src/CMakeLists.txt`
 
 **TODO**:
 - [ ] Add all new C++ files to CMakeLists.txt
+- [ ] Create `src/core/sqlvibe/CMakeLists.txt`
 - [ ] Update build tags if needed
 - [ ] Optimize compile flags for C++
+- [ ] Add SIMD optimizations for new C++ code
+
+---
+
+#### 10.3: Test Validation
+**Files**: `tests/`
+
+**TODO**:
+- [ ] Run full test suite with C++ only paths
+- [ ] Remove Go-only test helpers
+- [ ] Add C++ unit tests for new modules
+- [ ] Benchmark comparison with Go fallback removed
 
 ---
 
@@ -408,12 +431,12 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 
 | Phase | Duration | Go LOC Reduced | C++ LOC Added | Risk |
 |-------|----------|----------------|---------------|------|
-| **Phase 4**: DS Complete | 1-2 weeks | -700 | +500 | Low |
-| **Phase 5**: VM Complete | 3-4 weeks | -1,050 | +2,000 | Medium |
-| **Phase 6**: CG Complete | 1 week | -200 | +300 | Low |
-| **Phase 7**: pkg/sqlvibe | 2-3 weeks | -6,600 | +4,000 | Medium |
-| **Phase 8**: Integration | 1 week | -700 | - | Low |
-| **TOTAL** | **8-11 weeks** | **-9,250 Go LOC** | **+6,800 C++ LOC** | |
+| **Phase 6**: CG Complete | 1 week | -400 | +600 | Low |
+| **Phase 7**: DS Cleanup | 1 week | -900 | +500 | Low |
+| **Phase 8**: VM Cleanup | 1 week | -1,000 | - | Low |
+| **Phase 9**: pkg/sqlvibe | 2-3 weeks | -6,600 | +5,000 | Medium |
+| **Phase 10**: Integration | 1 week | -400 | - | Low |
+| **TOTAL** | **6-8 weeks** | **-9,300 Go LOC** | **+6,100 C++ LOC** | |
 
 ---
 
@@ -470,13 +493,14 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 - [x] **HybridStore C++ scan** complete — Scan, ScanWithFilter, ScanProjected in hybrid_store.cpp ✅
 - [x] **Phase 6 bytecode optimizer bugs fixed** — `BC_RESULT_ROW` off-by-one fixed, conservative default for unknown opcodes, `p4_regs` marking for OpInsert ✅
 - [x] **Phase 6 bytecode optimizer wired** — `OptimizeBytecodeInstrs` in `execBytecode` (BytecodeVM path); all SQL1999 tests pass ✅
-- [ ] **Phase 6 legacy optimizer** — `CGOptimizeProgram` in `finalize()` blocked: `CG_OP_*` constants in compiler.cpp don't match Go `VM.OpCode` values
+- [ ] **Phase 6 legacy optimizer** — `CGOptimizeProgram` in `finalize()`: reconcile `CG_OP_*` constants with Go `VM.OpCode` values
 - [x] **README performance updated** — fresh v0.11.1 benchmarks (AMD EPYC 7763) ✅
 - [x] **All 89+ SQL:1999 tests** passing ✅
-- [ ] **B-Tree Phase 4.1** — Remove Go callbacks, use embedded C++ PageManager
-- [ ] **pkg/sqlvibe/** reduced to <500 LOC wrapper (Phase 7)
-- [ ] **5× average speedup** over SQLite (Phase 7/8)
-- [ ] **CG statement cache** migrated to C++ (Phase 6, optional)
+- [ ] **DS Layer Cleanup** (Phase 7) — WAL, cache, freelist, overflow C++ wrappers consolidated
+- [ ] **VM Layer Cleanup** (Phase 8) — Go engine fallbacks removed
+- [ ] **pkg/sqlvibe/** reduced to <500 LOC wrapper (Phase 9)
+- [ ] **5× average speedup** over SQLite (Phase 9/10)
+- [ ] **CG statement/plan cache** migrated to C++ (Phase 6/9)
 - [ ] **Documentation** updated (ARCHITECTURE.md)
 
 ---
@@ -487,3 +511,20 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 - `docs/plan-v0.11.1.md` - Phase 5 libsvdb consolidation (superseded by this plan)
 - `docs/ARCHITECTURE.md` - System architecture overview
 - `docs/HISTORY.md` - Release history (update with v0.11.1 changes)
+
+---
+
+## Appendix: C++ Module Status
+
+| Module | Directory | Status | Files |
+|--------|-----------|--------|-------|
+| **Core VM** | `src/core/VM/` | ✅ Complete | engine.cpp, aggregate_engine.cpp, bytecode_vm.cpp, etc. |
+| **Core DS** | `src/core/DS/` | ✅ Complete | btree.cpp, hybrid_store.cpp, wal.cpp, etc. |
+| **Core CG** | `src/core/CG/` | 🚧 In Progress | optimizer.cpp, compiler.cpp, bytecode_compiler.cpp |
+| **Core QP** | `src/core/QP/` | ✅ Complete | Parser, tokenizer in C++ |
+| **Core TM** | `src/core/TM/` | ✅ Complete | Transaction manager |
+| **Core IS** | `src/core/IS/` | ✅ Complete | Information schema |
+| **Core SF** | `src/core/SF/` | ✅ Complete | System foundation |
+| **Core PB** | `src/core/PB/` | ✅ Complete | Platform abstraction |
+| **sqlvibe API** | `src/core/sqlvibe/` | ❌ Not Started | (new directory to be created) |
+| **Extensions** | `src/ext/` | ✅ Complete | JSON, Math, FTS5 |
