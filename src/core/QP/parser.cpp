@@ -2,6 +2,7 @@
 #include "parser_select.h"
 #include "parser_dml.h"
 #include "parser_ddl.h"
+#include "parser_expr.h"
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -282,7 +283,17 @@ svdb_ast_node_t* svdb_parser_parse(svdb_parser_t* parser) {
         return svdb_parser_parse_drop(parser, parser->sql.data(), parser->sql.size());
     }
 
-    parser->error_msg = "unsupported statement: " + kw;
+    /* Fall through to expression parsing when the SQL does NOT start with a
+     * known SQL statement keyword (e.g. "1 + 2", "a IS NULL", "(x > 0)").
+     * If it starts with an unrecognised keyword such as EXPLAIN or PRAGMA,
+     * treat it as an unsupported statement rather than an expression. */
+    if (kw.empty()) {
+        svdb_ast_node_t* expr_node = svdb_parser_parse_expr(
+            parser, parser->sql.data(), parser->sql.size());
+        if (expr_node) return expr_node;
+    }
+
+    parser->error_msg = "unsupported statement: " + (kw.empty() ? "(unknown)" : kw);
     return nullptr;
 }
 

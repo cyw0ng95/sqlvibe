@@ -32,8 +32,8 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | Subsystem | Total | C++ Only | CGO Wrapper | Go-Only | Progress |
 |-----------|-------|----------|-------------|---------|----------|
 | **DS** (Data Storage) | 36 | 15 | 10 | 11 | 69% |
-| **VM** (Virtual Machine) | 30 | 15 | 6 | 9 | 72% |
-| **QP** (Query Processing) | 15 | 10 | 3 | 2 | 87% |
+| **VM** (Virtual Machine) | 30 | 15 | 9 | 6 | 80% |
+| **QP** (Query Processing) | 15 | 10 | 4 | 1 | 93% |
 | **CG** (Code Generation) | 8 | 7 | 0 | 1 | 88% |
 | **TM** (Transaction Mgmt) | 1 | 1 | 0 | 0 | 100% |
 | **PB** (Platform Bridges) | 1 | 1 | 0 | 0 | 100% |
@@ -41,7 +41,7 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | **IS** (Info Schema) | 1 | 1 | 0 | 0 | 100% |
 | **Wrapper** | 1 | 0 | 1 | 0 | 100% |
 | **CGO** (Special Cases) | 1 | 0 | 1 | 0 | 100% |
-| **TOTAL** | **97** | **51** | **21** | **24** | **74%** |
+| **TOTAL** | **97** | **51** | **25** | **20** | **78%** |
 
 **Legend**:
 - **C++ Only**: Pure C++ implementation (no Go callbacks, no CGO overhead)
@@ -137,6 +137,9 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | `internal/VM/exec.go` | `src/core/VM/exec.cpp` | ⚠️ PARTIAL | Utility functions migrated via `vm_utils_cgo.go` (classify, hash, cache, columnar); full exec still in Go |
 | `internal/VM/dispatch.go` | `src/core/VM/dispatch.cpp` | ✅ CGO | **Phase 6d**: `dispatch_cgo.go` exposes CVMState + CDispatcher wrappers; Go dispatch logic still in `dispatch.go` |
 | `internal/VM/engine.go` | `src/core/VM/query_engine.cpp` | ⚠️ PARTIAL | Query classification + comment-stripping migrated via `vm_utils_cgo.go`; VM struct still in Go |
+| `internal/VM/expr_engine_cgo.go` | `src/core/VM/expr_engine.cpp` | ✅ CGO | **Phase 3.2 COMPLETE**: CExprEngine wrapper; EvalIntOp/FloatOp/Compare/Logic |
+| `internal/VM/aggregate_engine_cgo.go` | `src/core/VM/aggregate_engine.cpp` | ✅ CGO | **Phase 3.3 COMPLETE**: CAggregateEngine wrapper; SetGroupBy/Accumulate*/Count/Sum/Avg/Min/Max |
+| `internal/VM/expr_eval_cgo.go` | `src/core/VM/expr_eval.cpp` | ✅ CGO | **Phase 3.4 COMPLETE**: Batch ops: CompareInt64/Float64/Add/Sub/MulBatch, FilterMask |
 
 ### 📋 Go-Only (Orchestration Layer)
 
@@ -177,9 +180,9 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 
 | Go File | C++ File | Status | Notes |
 |---------|----------|--------|-------|
-| `internal/QP/parser.go` | `src/core/QP/parser.cpp` | ✅ CGO | **Phase 4.1 PARTIAL**: Full token-based parsing for SELECT/INSERT/UPDATE/DELETE/CREATE/DROP; `parser_cgo.go` Go wrapper added |
+| `internal/QP/parser.go` | `src/core/QP/parser.cpp` | ✅ CGO | **Phase 4.1 COMPLETE**: Full token-based parsing + expression fallback; `parser_cgo.go` Go wrapper added |
 | `internal/QP/parser_select.go` | `src/core/QP/parser_select.cpp` | ✅ CGO | SELECT with columns, table, WHERE |
-| `internal/QP/parser_expr.go` | `src/core/QP/parser_expr.cpp` | 🚧 STUB | Expression parsing still stub |
+| `internal/QP/parser_expr.go` | `src/core/QP/parser_expr.cpp` | ✅ CGO | **Phase 4.2 COMPLETE**: Full expression parser; Pratt precedence climbing; `ParseExpr` Go API |
 | `internal/QP/parser_dml.go` | `src/core/QP/parser_dml.cpp` | ✅ CGO | INSERT VALUES, UPDATE SET/WHERE, DELETE WHERE |
 | `internal/QP/parser_create.go` | `src/core/QP/parser_ddl.cpp` | ✅ CGO | CREATE TABLE/INDEX/VIEW, DROP TABLE/INDEX/VIEW |
 
@@ -523,19 +526,53 @@ func (bt *BTree) Insert(key, value []byte) error {
 
 **Complexity**: Very High | **Effort**: Phase 1 complete
 
+#### 3.2 ExprEngine CGO Wrapper ✅ COMPLETE
+- [x] `internal/VM/expr_engine_cgo.go`: CExprEngine struct wrapping C++ ExprEngine
+- [x] `expr_engine_api.h`: C-compatible header for CGO (avoids C++ STL headers)
+- [x] EvalIntOp/EvalFloatOp/EvalCompare/EvalLogic
+- [x] Tests: `expr_engine_cgo_test.go`
+
+#### 3.3 AggregateEngine CGO Wrapper ✅ COMPLETE
+- [x] `internal/VM/aggregate_engine_cgo.go`: CAggregateEngine struct wrapping C++ AggregateEngine
+- [x] `aggregate_engine_api.h`: C-compatible header for CGO
+- [x] SetGroupBy/AccumulateInt/AccumulateFloat/AccumulateText
+- [x] Count/SumInt/SumFloat/Avg/Min/Max
+- [x] Added `expr_engine.cpp` + `aggregate_engine.cpp` to CMakeLists.txt
+- [x] Tests: `aggregate_engine_cgo_test.go`
+
+#### 3.4 ExprEval Batch Operations CGO Wrapper ✅ COMPLETE
+- [x] `internal/VM/expr_eval_cgo.go`: batch comparison, arithmetic, filter
+- [x] CompareInt64/Float64Batch, Add/Sub/MulInt64/Float64Batch, FilterMask
+- [x] Uses runtime.Pinner for Go→C pointer safety
+- [x] Tests: `expr_eval_cgo_test.go`
+
 ### Phase 4: QP Layer - Query Processing (Medium Priority)
 
-#### 4.1 SQL Parser Implementation
+#### 4.1 SQL Parser Implementation ✅ COMPLETE
 - [x] Parser stubs created
 - [x] Implement full SELECT parsing in `parser_select.cpp` (columns, table, WHERE)
 - [x] Implement full DML parsing in `parser_dml.cpp` (INSERT VALUES, UPDATE SET, DELETE WHERE)
 - [x] Implement full DDL parsing in `parser_ddl.cpp` (CREATE TABLE/INDEX/VIEW, DROP)
 - [x] Create Go CGO wrapper `internal/QP/parser_cgo.go` (CParser, CASTNode, ParseSQL)
 - [x] Extended `parser.h` with AST attribute accessors (svdb_ast_get_table, columns, values, where)
-- [ ] Implement full expression parsing in `parser_expr.cpp`
-- [ ] Wire up C++ parser as primary parser (Go parser remains authoritative)
 
-**Complexity**: Very High | **Effort**: Foundation complete
+#### 4.2 Expression Parser Implementation ✅ COMPLETE
+- [x] Implement full expression parser in `parser_expr.cpp`
+  - Pratt precedence climbing for arithmetic (+, -, *, /, %)
+  - Comparisons (=, !=, <>, <, <=, >, >=)
+  - Logical (AND, OR, NOT)
+  - IS [NOT] NULL
+  - LIKE / NOT LIKE
+  - BETWEEN ... AND ...
+  - IN (...) / NOT IN (...)
+  - Function calls: func(...)
+  - CASE WHEN ... THEN ... END
+  - Parenthesized sub-expressions
+  - String concat via `||`
+- [x] Extended `parser_expr.h` with `svdb_parser_parse_expr_at` for incremental parsing
+- [x] Added `ParseExpr` Go convenience function to `parser_cgo.go`
+- [x] Expression fallback in `svdb_parser_parse` (for SQL that doesn't start with statement keyword)
+- [x] Tests: `parser_expr_cgo_test.go`
 
 ### Phase 5: Legacy Code Removal (Systematic Cleanup)
 
@@ -606,8 +643,8 @@ sqlvibe/
 | Phase 0 | Analysis & Planning | ✅ Complete | - | None |
 | Phase 1 | Eliminate Registry Overhead | ✅ CGO Wrapper Done | 4-5 days | Phase 0 |
 | Phase 2 | DS Layer (C++ Only) | ✅ Complete | 4-6 days | Phase 1 |
-| Phase 3 | VM Layer (C++ Only) | ✅ Handlers Done | 8-11 days | Phase 2 |
-| Phase 4 | QP Parser (C++ Only) | ✅ Foundation Done | 5-10 days | Phase 3 |
+| Phase 3 | VM Layer (C++ Only) | ✅ Phases 3.1-3.4 Done | 8-11 days | Phase 2 |
+| Phase 4 | QP Parser (C++ Only) | ✅ Phases 4.1+4.2 Done | 5-10 days | Phase 3 |
 | Phase 5 | Legacy code removal | ✅ Wave 1+2 Done | 3-5 days | Phases 1-4 |
 | Phase 6 | Architecture cleanup | Pending | 2-3 days | Phase 5 |
 | Phase 7 | Testing & validation | 🔄 Ongoing | 1-2 days | All phases |
@@ -661,5 +698,5 @@ sqlvibe/
 
 ---
 
-**Last Updated**: 2026-03-02 (Phase 1.1+3.1+4.1 complete)
+**Last Updated**: 2026-03-02 (Phase 3.2/3.3/3.4+4.2 complete)
 **Next Review**: After Phase 6 architecture cleanup

@@ -44,10 +44,11 @@ extern "C" svdb_ast_node_t* svdb_parser_parse_select(svdb_parser_t* parser,
             pos = parser_skip_ws(s, pos);
             if (pos >= s.size()) break;
             /* Check for FROM keyword */
-            size_t tmp = pos;
-            size_t tmp = pos;
-            std::string kw = parser_read_keyword(s, tmp);
-            if (kw == "FROM") break;
+            {
+                size_t tmp = pos;
+                std::string kw = parser_read_keyword(s, tmp);
+                if (kw == "FROM") break;
+            }
             /* Read column expression: may be "table.col", "expr AS alias", function call.
              * Do NOT advance pos here — process the current character as column content. */
             size_t start = pos;

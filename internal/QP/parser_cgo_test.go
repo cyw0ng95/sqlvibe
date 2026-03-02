@@ -149,6 +149,9 @@ func TestCParser_UnknownSQL(t *testing.T) {
 		t.Error("expected non-empty error for unsupported statement")
 	}
 }
+
+// TestCParser_Update tests UPDATE parsing with parallel columns/values.
+func TestCParser_Update(t *testing.T) {
 	node, errMsg := ParseSQL("UPDATE orders SET status = 'shipped', qty = 5 WHERE id = 10")
 	if node == nil {
 		t.Fatalf("ParseSQL returned nil: %s", errMsg)

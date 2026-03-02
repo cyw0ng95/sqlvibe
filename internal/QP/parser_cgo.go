@@ -4,6 +4,7 @@ package QP
 #cgo LDFLAGS: -L${SRCDIR}/../../.build/cmake/lib -lsvdb -lstdc++
 #cgo CFLAGS: -I${SRCDIR}/../../src/core/QP
 #include "parser.h"
+#include "parser_expr.h"
 #include <stdlib.h>
 */
 import "C"
@@ -173,5 +174,31 @@ func ParseSQL(sql string) (*CASTNode, string) {
 	if node == nil {
 		return nil, p.Error()
 	}
+	return node, ""
+}
+
+// ParseExpr is a convenience function that directly invokes the C++ expression
+// parser (svdb_parser_parse_expr) and returns the CASTNode.
+// Unlike ParseSQL, this bypasses the statement dispatcher and parses any
+// SQL expression: arithmetic, comparisons, BETWEEN, IS NULL, LIKE, etc.
+func ParseExpr(sql string) (*CASTNode, string) {
+	p := NewCParser(sql)
+	if p.ptr == nil {
+		return nil, "failed to create parser"
+	}
+	cs := C.CString(sql)
+	defer C.free(unsafe.Pointer(cs))
+	nodePtr := C.svdb_parser_parse_expr(
+		(*C.svdb_parser_t)(p.ptr), cs, C.size_t(len(sql)))
+	if nodePtr == nil {
+		return nil, p.Error()
+	}
+	node := &CASTNode{ptr: unsafe.Pointer(nodePtr)}
+	runtime.SetFinalizer(node, func(n *CASTNode) {
+		if n.ptr != nil {
+			C.svdb_ast_node_free((*C.svdb_ast_node_t)(n.ptr))
+			n.ptr = nil
+		}
+	})
 	return node, ""
 }
