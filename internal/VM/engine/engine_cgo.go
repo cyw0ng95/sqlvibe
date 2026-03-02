@@ -27,8 +27,8 @@ const maxCSlice = 1 << 28
 // goValToC converts a Go interface{} to a C svdb_engine_value_t.
 // Text/blob str_data is heap-allocated with malloc; the caller or the C
 // svdb_engine_rows_free will free it.
-func goValToC(v interface{}) C.svdb_engine_value_t {
-	var cv C.svdb_engine_value_t
+func goValToC(v interface{}) C.svdb_value_t {
+	var cv C.svdb_value_t
 	if v == nil {
 		cv.val_type = C.SVDB_VAL_NULL
 		return cv
@@ -71,7 +71,7 @@ func goValToC(v interface{}) C.svdb_engine_value_t {
 }
 
 // cValToGo converts a C svdb_engine_value_t to a Go interface{}.
-func cValToGo(cv C.svdb_engine_value_t) interface{} {
+func cValToGo(cv C.svdb_value_t) interface{} {
 	switch cv.val_type {
 	case C.SVDB_VAL_NULL:
 		return nil
@@ -101,12 +101,12 @@ func goFillCRow(crow *C.svdb_engine_row_t, r Row) {
 		return
 	}
 	ptrSize := unsafe.Sizeof((*C.char)(nil))
-	valSize := C.size_t(unsafe.Sizeof(C.svdb_engine_value_t{}))
+	valSize := C.size_t(unsafe.Sizeof(C.svdb_value_t{}))
 	crow.col_names = (**C.char)(C.malloc(C.size_t(n) * C.size_t(ptrSize)))
-	crow.vals = (*C.svdb_engine_value_t)(C.malloc(C.size_t(n) * valSize))
+	crow.vals = (*C.svdb_value_t)(C.malloc(C.size_t(n) * valSize))
 
 	names := (*[maxCSlice]*C.char)(unsafe.Pointer(crow.col_names))[:n:n]
-	vals := (*[maxCSlice]C.svdb_engine_value_t)(unsafe.Pointer(crow.vals))[:n:n]
+	vals := (*[maxCSlice]C.svdb_value_t)(unsafe.Pointer(crow.vals))[:n:n]
 
 	i := 0
 	for k, v := range r {
@@ -141,7 +141,7 @@ func cRowToGo(crow *C.svdb_engine_row_t) Row {
 		return r
 	}
 	names := (*[maxCSlice]*C.char)(unsafe.Pointer(crow.col_names))[:n:n]
-	vals := (*[maxCSlice]C.svdb_engine_value_t)(unsafe.Pointer(crow.vals))[:n:n]
+	vals := (*[maxCSlice]C.svdb_value_t)(unsafe.Pointer(crow.vals))[:n:n]
 	for i := 0; i < n; i++ {
 		key := C.GoString(names[i])
 		r[key] = cValToGo(vals[i])
@@ -250,7 +250,7 @@ func goFillNewCRow(r Row) *C.svdb_engine_row_t {
 	}
 	if n > 0 {
 		names := (*[maxCSlice]*C.char)(unsafe.Pointer(crow.col_names))[:n:n]
-		vals := (*[maxCSlice]C.svdb_engine_value_t)(unsafe.Pointer(crow.vals))[:n:n]
+		vals := (*[maxCSlice]C.svdb_value_t)(unsafe.Pointer(crow.vals))[:n:n]
 		i := 0
 		for k, v := range r {
 			names[i] = C.CString(k)
@@ -389,7 +389,7 @@ func CNotInRows(value interface{}, rows []Row, col string) bool {
 }
 
 // freeValData frees heap-allocated string data in a C value produced by goValToC.
-func freeValData(cv *C.svdb_engine_value_t) {
+func freeValData(cv *C.svdb_value_t) {
 	if (cv.val_type == C.SVDB_VAL_TEXT || cv.val_type == C.SVDB_VAL_BLOB) &&
 		cv.str_data != nil {
 		C.free(unsafe.Pointer(cv.str_data))
