@@ -1,19 +1,15 @@
 package DS
 
 import (
-	"encoding/binary"
 	"fmt"
 
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 // Freelist management for SQLite-style page allocation
-// Freelist uses trunk pages that point to leaf pages
-//
-// Trunk page format:
-// - Bytes 0-3: Next trunk page (0 if last)
-// - Bytes 4-7: Number of leaf page pointers
-// - Bytes 8+: Array of page numbers (up to (pageSize-8)/4 entries)
+// Freelist uses trunk pages that point to leaf pages.
+// Low-level byte operations on trunk pages are delegated to the C++ layer
+// via freelist_cgo.go (Boundary-CGO: inner byte-level ops stay in C++).
 
 const (
 	FreelistTrunkHeaderSize = 8
@@ -47,8 +43,11 @@ func (fm *FreelistManager) AllocatePage() (uint32, error) {
 		return 0, fmt.Errorf("failed to read trunk page: %w", err)
 	}
 
-	nextTrunk := binary.BigEndian.Uint32(trunkPage.Data[0:4])
-	numLeaves := binary.BigEndian.Uint32(trunkPage.Data[4:8])
+	// Use C++ to parse trunk header (Boundary-CGO: delegate byte ops to C++)
+	nextTrunk, numLeaves, ok := CFreelistParseTrunk(trunkPage.Data)
+	if !ok {
+		return 0, fmt.Errorf("failed to parse trunk page")
+	}
 
 	if numLeaves == 0 {
 		// Trunk page has no leaves, use the trunk itself
@@ -66,10 +65,11 @@ func (fm *FreelistManager) AllocatePage() (uint32, error) {
 		return pageNum, nil
 	}
 
-	// Pop a leaf from the trunk
-	leafPage := binary.BigEndian.Uint32(trunkPage.Data[8+(numLeaves-1)*4 : 8+numLeaves*4])
-	numLeaves--
-	binary.BigEndian.PutUint32(trunkPage.Data[4:8], numLeaves)
+	// Pop the last leaf entry via C++ getter
+	leafPage := CFreelistGetEntry(trunkPage.Data, numLeaves-1)
+	if !CFreelistWriteTrunk(trunkPage.Data, nextTrunk, numLeaves-1) {
+		return 0, fmt.Errorf("failed to update trunk count")
+	}
 
 	if err := fm.pm.WritePage(trunkPage); err != nil {
 		return 0, fmt.Errorf("failed to update trunk page: %w", err)
@@ -105,9 +105,10 @@ func (fm *FreelistManager) FreePage(pageNum uint32) error {
 			return fmt.Errorf("failed to read page: %w", err)
 		}
 
-		// Initialize as trunk with 0 leaves
-		binary.BigEndian.PutUint32(page.Data[0:4], 0) // next trunk = 0
-		binary.BigEndian.PutUint32(page.Data[4:8], 0) // num leaves = 0
+		// Initialize as trunk with 0 leaves via C++ (Boundary-CGO)
+		if !CFreelistWriteTrunk(page.Data, 0, 0) {
+			return fmt.Errorf("failed to initialize trunk page")
+		}
 
 		if err := fm.pm.WritePage(page); err != nil {
 			return fmt.Errorf("failed to write trunk page: %w", err)
@@ -122,14 +123,14 @@ func (fm *FreelistManager) FreePage(pageNum uint32) error {
 		return fmt.Errorf("failed to read trunk page: %w", err)
 	}
 
-	numLeaves := binary.BigEndian.Uint32(trunkPage.Data[4:8])
-	maxLeaves := uint32((fm.pm.PageSize() - FreelistTrunkHeaderSize) / 4)
+	maxLeaves := CFreelistMaxEntries(fm.pm.PageSize())
+	_, numLeaves, _ := CFreelistParseTrunk(trunkPage.Data)
 
 	if numLeaves < maxLeaves {
-		// Add to current trunk
-		binary.BigEndian.PutUint32(trunkPage.Data[8+numLeaves*4:8+(numLeaves+1)*4], pageNum)
-		numLeaves++
-		binary.BigEndian.PutUint32(trunkPage.Data[4:8], numLeaves)
+		// Add to current trunk via C++ (Boundary-CGO)
+		if !CFreelistAddEntry(trunkPage.Data, pageNum) {
+			return fmt.Errorf("failed to add entry to trunk page")
+		}
 
 		if err := fm.pm.WritePage(trunkPage); err != nil {
 			return fmt.Errorf("failed to update trunk page: %w", err)
@@ -144,9 +145,10 @@ func (fm *FreelistManager) FreePage(pageNum uint32) error {
 		return fmt.Errorf("failed to read page: %w", err)
 	}
 
-	// Initialize new trunk
-	binary.BigEndian.PutUint32(page.Data[0:4], fm.firstTrunk) // point to old trunk
-	binary.BigEndian.PutUint32(page.Data[4:8], 0)             // 0 leaves
+	// Initialize new trunk pointing to old trunk via C++ (Boundary-CGO)
+	if !CFreelistWriteTrunk(page.Data, fm.firstTrunk, 0) {
+		return fmt.Errorf("failed to initialize new trunk page")
+	}
 
 	if err := fm.pm.WritePage(page); err != nil {
 		return fmt.Errorf("failed to write new trunk page: %w", err)
@@ -186,12 +188,15 @@ func (fm *FreelistManager) CountFreePages() (int, error) {
 		// Count the trunk itself
 		count++
 
-		// Count leaves
-		numLeaves := binary.BigEndian.Uint32(trunkPage.Data[4:8])
+		// Use C++ to parse trunk header (Boundary-CGO)
+		nextTrunk, numLeaves, ok := CFreelistParseTrunk(trunkPage.Data)
+		if !ok {
+			return 0, fmt.Errorf("failed to parse trunk page %d", currentTrunk)
+		}
 		count += int(numLeaves)
 
 		// Move to next trunk
-		currentTrunk = binary.BigEndian.Uint32(trunkPage.Data[0:4])
+		currentTrunk = nextTrunk
 
 		// Safety check
 		if count > 1000000 {
@@ -217,8 +222,11 @@ func (fm *FreelistManager) Compact() error {
 			return fmt.Errorf("failed to read trunk page %d: %w", currentTrunk, err)
 		}
 
-		nextTrunk := binary.BigEndian.Uint32(trunkPage.Data[0:4])
-		numLeaves := binary.BigEndian.Uint32(trunkPage.Data[4:8])
+		// Use C++ to parse trunk header (Boundary-CGO)
+		nextTrunk, numLeaves, ok := CFreelistParseTrunk(trunkPage.Data)
+		if !ok {
+			return fmt.Errorf("failed to parse trunk page %d", currentTrunk)
+		}
 
 		if numLeaves == 0 && nextTrunk != 0 {
 			// Empty trunk with more trunks after it, remove it
@@ -226,19 +234,19 @@ func (fm *FreelistManager) Compact() error {
 				// Removing first trunk
 				fm.firstTrunk = nextTrunk
 			} else {
-				// Update previous trunk to skip this one
+				// Update previous trunk to skip this one via C++ (Boundary-CGO)
 				prevPage, err := fm.pm.ReadPage(prevTrunk)
 				if err != nil {
 					return fmt.Errorf("failed to read previous trunk page: %w", err)
 				}
-				binary.BigEndian.PutUint32(prevPage.Data[0:4], nextTrunk)
+				_, prevLeaves, _ := CFreelistParseTrunk(prevPage.Data)
+				if !CFreelistWriteTrunk(prevPage.Data, nextTrunk, prevLeaves) {
+					return fmt.Errorf("failed to update previous trunk next pointer")
+				}
 				if err := fm.pm.WritePage(prevPage); err != nil {
 					return fmt.Errorf("failed to update previous trunk page: %w", err)
 				}
 			}
-
-			// Note: We don't actually delete the page, just remove it from the chain
-			// It will be reclaimed if needed
 
 			currentTrunk = nextTrunk
 			continue
@@ -250,3 +258,4 @@ func (fm *FreelistManager) Compact() error {
 
 	return nil
 }
+

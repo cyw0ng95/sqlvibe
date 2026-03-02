@@ -57,6 +57,8 @@ set(SVDB_CORE_SOURCES
     core/VM/compare.cpp
     core/VM/sort.cpp
     core/VM/expr_eval.cpp
+    core/VM/expr_engine.cpp
+    core/VM/aggregate_engine.cpp
     core/VM/vm_dispatch.cpp
     core/VM/dispatch.cpp
     core/VM/type_conv.cpp

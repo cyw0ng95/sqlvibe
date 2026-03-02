@@ -51,16 +51,23 @@ int svdb_bytecode_vm_get_register(svdb_bytecode_vm_t* vm,
  * opcode: one of the SVDB_BC_* values (see opcodes.h).
  * p1, p2, p3: integer operands.
  * p4_str: optional string operand (may be NULL).
+ * out_jump_pc: if non-NULL, set to the jump target PC when a jump is taken,
+ *              or to -1 if no jump (caller should use pc+1).
  *
  * Returns:
  *   0   – step completed normally, continue execution
  *  -1   – HALT reached (normal termination)
- *  < -1 – error
+ *  -2   – RESULT_ROW available (call svdb_bytecode_vm_get_result_row)
+ *  < -3 – error
  */
 int svdb_bytecode_vm_step(svdb_bytecode_vm_t* vm,
                            int opcode,
                            int p1, int p2, int p3,
-                           const char* p4_str);
+                           const char* p4_str,
+                           int* out_jump_pc);
+
+/* Return 1 if a result row is ready (RESULT_ROW was the last step). */
+int svdb_bytecode_vm_has_result(svdb_bytecode_vm_t* vm);
 
 /*
  * Reset the VM: clear all registers and internal state.

@@ -2,7 +2,6 @@ package DS
 
 import (
 	"bufio"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,12 +76,14 @@ func (w *WriteAheadLog) appendEntry(e walEntry) error {
 	if err != nil {
 		return fmt.Errorf("marshal WAL entry: %w", err)
 	}
-	var lenBuf [4]byte
-	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(data)))
-	if _, err := w.buf.Write(lenBuf[:]); err != nil {
-		return err
+	// Allocate a single contiguous buffer for the complete length-prefixed record
+	// and write it in one call. WALEncodeEntry follows the C++ WAL format spec.
+	outBuf := make([]byte, WALEntryTotalSize(len(data)))
+	n := WALEncodeEntry(outBuf, data)
+	if n == 0 {
+		return fmt.Errorf("encode WAL entry: buffer too small")
 	}
-	if _, err := w.buf.Write(data); err != nil {
+	if _, err := w.buf.Write(outBuf[:n]); err != nil {
 		return err
 	}
 	return w.buf.Flush()
@@ -131,7 +132,7 @@ func (w *WriteAheadLog) Replay(hs *HybridStore) error {
 			}
 			return fmt.Errorf("read WAL entry length: %w", err)
 		}
-		l := int(binary.LittleEndian.Uint32(lenBuf[:]))
+		l := int(WALDecodeEntryLength(lenBuf[:]))
 		if l == 0 {
 			continue
 		}
