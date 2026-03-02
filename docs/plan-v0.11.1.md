@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-03-02
 **Target Version**: v0.11.1
-**Status**: 🚧 In Progress — Phase 5 VM orchestration complete, build error fixed
+**Status**: 🚧 In Progress — Phase 6 CG_OP_* reconciliation complete, VM fallback cleanup done
 **Goal**: Migrate all `internal/` and `pkg/sqlvibe/` to C++ with thin CGO wrapper
 
 ---
@@ -109,10 +109,10 @@ This document outlines the complete migration plan to transform **pkg/** and **i
 - Fixed `cgEliminateDeadCode` in `compiler.cpp` — conservative default + `p4_regs` marking ✅
 - Fixed `programToJSON` in `cg_cgo.go` — handle `map[string]int` P4 ✅
 - **Wired `OptimizeBytecodeInstrs` into `execBytecode`** (BytecodeVM path) ✅
+- **Reconciled `CG_OP_*` constants** in `compiler.cpp` with correct `VM.OpCode` values ✅
+- **Wired `CGOptimizeProgram` into `compiler.finalize()`** (legacy VM.Program path) ✅
 
 **TODO**:
-- [ ] Reconcile `CG_OP_*` constants in `compiler.cpp` with Go `VM.OpCode` values
-- [ ] After reconciliation, wire `CGOptimizeProgram` into `compiler.finalize()`
 - [ ] Migrate statement cache (`stmt_cache.go`) to C++
 - [ ] Migrate plan cache (`plan_cache.go`) to C++
 
@@ -168,10 +168,11 @@ This document outlines the complete migration plan to transform **pkg/** and **i
 #### 8.1: Remove Go Engine Fallbacks
 **Files**: `internal/VM/engine/*.go` (aggregate.go, join.go, select.go, sort.go, subquery.go, window.go)
 
-**TODO**:
-- [ ] Verify all tests pass with C++ engine only
-- [ ] Remove `goFilterRows()`, `goInnerJoin()`, etc. fallback functions
-- [ ] Remove Go-only test helpers after validation
+**Completed (2026-03-02)**: ✅
+- Removed all unused `go*` prefixed fallback functions ✅
+- Simplified `GroupRows` to pure Go (removed wasted `CGroupRows` call) ✅
+- Inlined `goDenseRanks` into `DenseRanks` ✅
+- All tests pass ✅
 
 **Expected Impact**: -800 Go LOC
 
@@ -493,11 +494,12 @@ This document outlines the complete migration plan to transform **pkg/** and **i
 - [x] **HybridStore C++ scan** complete — Scan, ScanWithFilter, ScanProjected in hybrid_store.cpp ✅
 - [x] **Phase 6 bytecode optimizer bugs fixed** — `BC_RESULT_ROW` off-by-one fixed, conservative default for unknown opcodes, `p4_regs` marking for OpInsert ✅
 - [x] **Phase 6 bytecode optimizer wired** — `OptimizeBytecodeInstrs` in `execBytecode` (BytecodeVM path); all SQL1999 tests pass ✅
-- [ ] **Phase 6 legacy optimizer** — `CGOptimizeProgram` in `finalize()`: reconcile `CG_OP_*` constants with Go `VM.OpCode` values
+- [x] **Phase 6 legacy optimizer** — `CG_OP_*` constants reconciled with `VM.OpCode` values; `CGOptimizeProgram` wired into `compiler.finalize()` ✅
 - [x] **README performance updated** — fresh v0.11.1 benchmarks (AMD EPYC 7763) ✅
 - [x] **All 89+ SQL:1999 tests** passing ✅
+- [x] **Phase 8.1 VM Fallback cleanup** — all `go*` fallback functions removed from `internal/VM/engine/` ✅
 - [ ] **DS Layer Cleanup** (Phase 7) — WAL, cache, freelist, overflow C++ wrappers consolidated
-- [ ] **VM Layer Cleanup** (Phase 8) — Go engine fallbacks removed
+- [x] **VM Layer Cleanup** (Phase 8.1) — Go engine fallbacks removed ✅
 - [ ] **pkg/sqlvibe/** reduced to <500 LOC wrapper (Phase 9)
 - [ ] **5× average speedup** over SQLite (Phase 9/10)
 - [ ] **CG statement/plan cache** migrated to C++ (Phase 6/9)

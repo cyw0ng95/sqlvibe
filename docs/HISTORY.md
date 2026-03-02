@@ -83,6 +83,29 @@ The `CG_OP_*` constants in `compiler.cpp` use a different opcode numbering from
 Go's `VM.OpCode` values, which would cause incorrect optimisation of legacy programs.
 This mismatch is tracked in `docs/plan-v0.11.1.md` Phase 6.
 
+### Phase 6 Update — CG_OP_* Constants Reconciled + CGOptimizeProgram Wired
+
+**`src/core/CG/compiler.cpp`** — `CG_OP_*` constants:
+- Fixed all `CG_OP_*` constants to match actual `VM.OpCode` iota values from
+  `internal/VM/opcodes.go`. Previous values were incorrect (e.g. `CG_OP_RESULT_ROW=30`
+  should be `24`, `CG_OP_LOAD_CONST=1` should be `30`, `CG_OP_NULL=13` should be `0`,
+  arithmetic ops off by ~56 positions).
+
+**`internal/CG/compiler.go`** — `finalize()`:
+- `CGOptimizeProgram` now wired into `compiler.finalize()` after the Go optimizer.
+  Programs compiled via the main compiler path now receive both Go + C++ optimization
+  passes, enabling C++ dead-code elimination on the legacy VM.Program path.
+
+### Phase 8.1 — Go Engine Fallbacks Removed
+
+All unused `go*`-prefixed fallback functions removed from `internal/VM/engine/`:
+- `select.go`: removed `goFilterRows`, `goApplyDistinct`, `goApplyLimitOffset`, `goColNames`
+- `join.go`: removed `goMergeRows`, `goMergeRowsWithAlias`, `goCrossJoin`, `goInnerJoin`, `goLeftOuterJoin`
+- `aggregate.go`: removed `goGroupRows`, `goCountRows`, `goSumRows`, `goAvgRows`, `goMinRows`, `goMaxRows`, `toFloat`; simplified `GroupRows` to pure Go
+- `sort.go`: removed `goSortRowsByKeys`, `goReverseRows`; removed unused `sort` import
+- `window.go`: removed `goRowNumbers`; inlined `goDenseRanks` into `DenseRanks`
+- `subquery.go`: removed `goExistsRows`, `goInRows`, `goNotInRows`
+
 ### Performance (v0.11.1, AMD EPYC 7763)
 
 | Workload | SQLite | sqlvibe | Result |

@@ -1,7 +1,5 @@
 package engine
 
-import "sort"
-
 /*
 #cgo LDFLAGS: -L${SRCDIR}/../../../.build/cmake/lib -lsvdb -lstdc++
 #cgo CFLAGS: -I${SRCDIR}/../../../src/core/VM/engine
@@ -36,7 +34,6 @@ type SortKey struct {
 // SortRowsByKeys sorts rows stably by the ordered list of sort keys.
 // The cmp function compares two non-nil column values and must return a
 // negative number if a < b, zero if a == b, or a positive number if a > b.
-// Uses C++ implementation by default for better performance.
 func SortRowsByKeys(rows []Row, keys []SortKey, cmp func(a, b interface{}) int) []Row {
 	if len(keys) == 0 {
 		return rows
@@ -53,42 +50,6 @@ func SortRowsByKeys(rows []Row, keys []SortKey, cmp func(a, b interface{}) int) 
 	return CSortRows(rows, cKeys)
 }
 
-// goSortRowsByKeys is the pure Go implementation of SortRowsByKeys (fallback).
-func goSortRowsByKeys(rows []Row, keys []SortKey, cmp func(a, b interface{}) int) []Row {
-	if len(keys) == 0 {
-		return rows
-	}
-	out := make([]Row, len(rows))
-	copy(out, rows)
-	sort.SliceStable(out, func(i, j int) bool {
-		ri, rj := out[i], out[j]
-		for _, k := range keys {
-			ai := ri[k.ColName]
-			bi := rj[k.ColName]
-			// Handle NULLs
-			if ai == nil && bi == nil {
-				continue
-			}
-			if ai == nil {
-				return k.NullOrder == NullsFirst
-			}
-			if bi == nil {
-				return k.NullOrder != NullsFirst
-			}
-			c := cmp(ai, bi)
-			if c == 0 {
-				continue
-			}
-			if k.Order == Descending {
-				return c > 0
-			}
-			return c < 0
-		}
-		return false
-	})
-	return out
-}
-
 // TopKRows sorts rows and returns only the first k.  If k <= 0, all rows are
 // returned.  This is equivalent to SortRowsByKeys followed by ApplyLimitOffset
 // with limit=k, but avoids sorting more than needed for large k.
@@ -101,15 +62,6 @@ func TopKRows(rows []Row, k int, keys []SortKey, cmp func(a, b interface{}) int)
 }
 
 // ReverseRows reverses a slice of rows.
-// Uses C++ implementation by default for better performance.
 func ReverseRows(rows []Row) []Row {
 	return CReverseRows(rows)
-}
-
-// goReverseRows is the pure Go implementation of ReverseRows (fallback).
-func goReverseRows(rows []Row) []Row {
-	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
-		rows[i], rows[j] = rows[j], rows[i]
-	}
-	return rows
 }

@@ -332,27 +332,25 @@ static bool parseBytecodeJSON(const char* data, size_t len, CgProgram& prog, std
 /* CG_OP_* constants for the JSON-serialised CgInstr instruction set used by
  * svdb_cg_compile_select.  These values mirror VM.OpCode in internal/VM/opcodes.go.
  *
- * WARNING — KNOWN MISMATCH: the CG_OP_ values below do NOT match the VM.OpCode
- * numbering in the Go source.  For example, CG_OP_RESULT_ROW=30 matches
- * VM.OpResultRow=24 only by coincidence.  CG_OP_LOAD_CONST=1 refers to OpGoto(1),
- * not OpLoadConst(30).  This mismatch prevents CGOptimizeProgram from being safely
- * wired into compiler.finalize() for the legacy VM.Program path.
- * Tracked in docs/plan-v0.11.1.md Phase 6 — do not wire without fixing first.
+ * Values verified against the iota sequence in internal/VM/opcodes.go:
+ *   OpNull=0, OpGoto=1, ..., OpResultRow=24, OpConstNull=25, OpMove=26,
+ *   OpCopy=27, OpSCopy=28, OpIntCopy=29, OpLoadConst=30, OpColumn=31,
+ *   ..., OpAdd=60, OpSubtract=61, OpMultiply=62, OpDivide=63, OpRemainder=64.
  *
  * Within cgEliminateDeadCode below the conservative `default` handler ensures that
  * any instruction whose opcode is not explicitly listed is treated as a potential
  * reader of its operands, preventing incorrect elimination. */
-static const int32_t CG_OP_RESULT_ROW = 30;  /* mirrors VM.OpResultRow */
-static const int32_t CG_OP_LOAD_CONST = 1;   /* mirrors VM.OpLoadConst */
-static const int32_t CG_OP_MOVE       = 10;  /* mirrors VM.OpMove */
-static const int32_t CG_OP_COPY       = 11;  /* mirrors VM.OpCopy */
-static const int32_t CG_OP_SCOPY      = 12;  /* mirrors VM.OpSCopy */
-static const int32_t CG_OP_NULL       = 13;  /* mirrors VM.OpNull */
-static const int32_t CG_OP_ADD        = 4;
-static const int32_t CG_OP_SUBTRACT   = 5;
-static const int32_t CG_OP_MULTIPLY   = 6;
-static const int32_t CG_OP_DIVIDE     = 7;
-static const int32_t CG_OP_REMAINDER  = 8;
+static const int32_t CG_OP_NULL       = 0;   /* mirrors VM.OpNull */
+static const int32_t CG_OP_RESULT_ROW = 24;  /* mirrors VM.OpResultRow */
+static const int32_t CG_OP_MOVE       = 26;  /* mirrors VM.OpMove */
+static const int32_t CG_OP_COPY       = 27;  /* mirrors VM.OpCopy */
+static const int32_t CG_OP_SCOPY      = 28;  /* mirrors VM.OpSCopy */
+static const int32_t CG_OP_LOAD_CONST = 30;  /* mirrors VM.OpLoadConst */
+static const int32_t CG_OP_ADD        = 60;  /* mirrors VM.OpAdd */
+static const int32_t CG_OP_SUBTRACT   = 61;  /* mirrors VM.OpSubtract */
+static const int32_t CG_OP_MULTIPLY   = 62;  /* mirrors VM.OpMultiply */
+static const int32_t CG_OP_DIVIDE     = 63;  /* mirrors VM.OpDivide */
+static const int32_t CG_OP_REMAINDER  = 64;  /* mirrors VM.OpRemainder */
 
 static void cgEliminateDeadCode(std::vector<CgInstr>& instrs)
 {
