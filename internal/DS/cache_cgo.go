@@ -1,5 +1,3 @@
-//go:build SVDB_ENABLE_CGO_DS
-
 package DS
 
 /*

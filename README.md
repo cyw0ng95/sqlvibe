@@ -106,12 +106,12 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 ## Performance
 
-Benchmarks on Intel Xeon Platinum 8370C @ 2.80 GHz, in-memory database, `-benchtime=3s`.
+Benchmarks on AMD EPYC 7763 @ 2.45 GHz, in-memory database, `-benchtime=1s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
 `db.ClearResultCache()` so actual per-query execution cost is measured.
 SQLite's `database/sql` driver reuses prepared statements across iterations.
 Both sides iterate all result rows end-to-end.
-(`go test ./internal/TS/Benchmark/... -bench=BenchmarkCompare_ -benchtime=3s`).
+(`go test ./internal/TS/Benchmark/... -bench=BenchmarkCompare_ -benchtime=1s`).
 Results may vary on different hardware.
 
 ### SQLite vs sqlvibe
@@ -122,48 +122,48 @@ Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 531 µs | 172 µs | **3.1× faster** |
-| 10 K | 5.26 ms | 1.60 ms | **3.3× faster** |
-| 100 K | 52.6 ms | 16.9 ms | **3.1× faster** |
+| 1 K | 301 µs | 176 µs | **1.7× faster** |
+| 10 K | 2.95 ms | 1.69 ms | **1.7× faster** |
+| 100 K | 29.4 ms | 18.8 ms | **1.6× faster** |
 
 #### WHERE filter (integer column)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 302 µs | 829 µs | 2.7× slower |
-| 10 K | 2.95 ms | 8.74 ms | 3.0× slower |
-| 100 K | 29.5 ms | 99.5 ms | 3.4× slower |
+| 1 K | 191 µs | 829 µs | 4.3× slower |
+| 10 K | 1.84 ms | 8.74 ms | 4.8× slower |
+| 100 K | 18.1 ms | 99.5 ms | 5.5× slower |
 
 #### SUM aggregate
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 62.9 µs | 24.5 µs | **2.6× faster** |
-| 10 K | 564 µs | 201 µs | **2.8× faster** |
-| 100 K | 5.71 ms | 2.18 ms | **2.6× faster** |
+| 1 K | 66.9 µs | 28.5 µs | **2.4× faster** |
+| 10 K | 606 µs | 194 µs | **3.1× faster** |
+| 100 K | 6.07 ms | 2.48 ms | **2.4× faster** |
 
 #### GROUP BY (4 groups)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 430 µs | 119 µs | **3.6× faster** |
-| 10 K | 4.43 ms | 1.01 ms | **4.4× faster** |
-| 100 K | 55.0 ms | 11.1 ms | **5.0× faster** |
+| 1 K | 490 µs | 126 µs | **3.9× faster** |
+| 10 K | 4.88 ms | 1.01 ms | **4.8× faster** |
+| 100 K | 58.1 ms | 10.6 ms | **5.5× faster** |
 
 #### COUNT(*)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 5.4 µs | 6.3 µs | comparable |
-| 10 K | 7.3 µs | 6.1 µs | comparable |
-| 100 K | 30.3 µs | 6.1 µs | **4.9× faster** |
+| 1 K | 5.4 µs | 7.1 µs | comparable |
+| 10 K | 6.9 µs | 7.4 µs | comparable |
+| 100 K | 26.5 µs | 9.3 µs | **2.9× faster** |
 
 #### INSERT (batch rows)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 5.55 ms | 2.65 ms | **2.1× faster** |
-| 10 K | 55.6 ms | 30.6 ms | **1.8× faster** |
+| 1 K | 5.90 ms | 2.86 ms | **2.1× faster** |
+| 10 K | 55.8 ms | 31.3 ms | **1.8× faster** |
 
 #### INNER JOIN
 
@@ -181,13 +181,13 @@ Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
 | 10 K | 1.96 ms | 2.76 ms | 1.4× slower |
 | 100 K | 19.6 ms | 30.8 ms | 1.6× slower |
 
-> **Analysis**: sqlvibe excels at scan and aggregate workloads with 3.1–5.0× speedups over
-> SQLite for SELECT all, SUM, and GROUP BY. COUNT(*) at large scale is 4.9× faster.
-> INSERT throughput is up to 2.1× faster. JOIN performance improved significantly (now
-> 1.3–1.9× slower vs 2.5–3.0× in previous versions). WHERE filter and ORDER BY+LIMIT
-> remain areas for ongoing optimization — the bytecode VM evaluation path adds overhead
-> vs SQLite's tightly-optimised scan. Aggregate/scan workloads benefit strongly from the
-> columnar store and CGO C++ backends (DS, VM, QP, CG) added in v0.11.0.
+> **Analysis**: sqlvibe excels at scan and aggregate workloads with 1.6–5.5× speedups over
+> SQLite for SELECT all, SUM, and GROUP BY. COUNT(*) at large scale is 2.9× faster.
+> INSERT throughput is up to 2.1× faster. JOIN performance is 1.3–1.9× slower.
+> WHERE filter and ORDER BY+LIMIT remain areas for ongoing optimization — the bytecode VM
+> evaluation path adds overhead vs SQLite's tightly-optimised scan. Aggregate/scan workloads
+> benefit strongly from the columnar store and CGO C++ backends (DS, VM, QP, CG) added in v0.11.0,
+> with dual-layer ColumnStore/RowStore (CGO C++ authoritative + Go read-cache) added in v0.11.1.
 
 ### Key Optimizations
 

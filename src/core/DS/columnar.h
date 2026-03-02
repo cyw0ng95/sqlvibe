@@ -54,6 +54,17 @@ int svdb_column_store_get_row(svdb_column_store_t* store, int idx,
 /* Mark row at idx as deleted (idempotent). */
 void svdb_column_store_delete_row(svdb_column_store_t* store, int idx);
 
+/* Return 1 if the row at idx is deleted, 0 otherwise. Out of range returns 1. */
+int svdb_column_store_is_deleted(svdb_column_store_t* store, int idx);
+
+/*
+ * Update all column values for the existing row at idx.
+ * If num_values < num_cols, remaining columns become NULL.
+ * If idx is out of range, does nothing.
+ */
+void svdb_column_store_update_row(svdb_column_store_t* store, int idx,
+                                   const svdb_value_t* values, int num_values);
+
 /* Return total row count (including deleted rows). */
 int svdb_column_store_row_count(svdb_column_store_t* store);
 
