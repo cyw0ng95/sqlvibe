@@ -46,9 +46,9 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 
 | Subsystem | Total | C++ Only | CGO Wrapper | Go-Only | Progress |
 |-----------|-------|----------|-------------|---------|----------|
-| **DS** (Data Storage) | 36 | 20 | 12 | 4 | 89% |
+| **DS** (Data Storage) | 36 | 22 | 12 | 2 | 94% |
 | **VM** (Virtual Machine) | 30 | 19 | 9 | 2 | 93% |
-| **QP** (Query Processing) | 15 | 10 | 4 | 1 | 93% |
+| **QP** (Query Processing) | 15 | 12 | 3 | 0 | 100% |
 | **CG** (Code Generation) | 8 | 7 | 0 | 1 | 88% |
 | **TM** (Transaction Mgmt) | 1 | 1 | 0 | 0 | 100% |
 | **PB** (Platform Bridges) | 1 | 1 | 0 | 0 | 100% |
@@ -56,7 +56,7 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 | **IS** (Info Schema) | 1 | 1 | 0 | 0 | 100% |
 | **Wrapper** | 1 | 0 | 1 | 0 | 100% |
 | **CGO** (Special Cases) | 1 | 0 | 1 | 0 | 100% |
-| **TOTAL** | **97** | **60** | **27** | **8** | **90%** |
+| **TOTAL** | **97** | **64** | **26** | **5** | **95%** |
 
 **Legend**:
 - **C++ Only**: Pure C++ implementation (no Go callbacks, no CGO overhead)
@@ -109,10 +109,8 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 | `internal/DS/vtab.go` | Virtual table interface (Go) |
 | `internal/DS/vtab_module.go` | Virtual table module |
 | `internal/DS/vtab_cursor.go` | Virtual table cursor |
-| `internal/DS/column_vector.go` | Go column vector |
 | `internal/DS/row.go` | Go row structure |
 | `internal/DS/skip_list.go` | Go skip list (C++ exists but not migrated) |
-| `internal/DS/bloom_filter.go` | Go bloom filter |
 
 ### C++ Files Without Go Counterparts (New → Now Wrapped)
 
@@ -122,6 +120,8 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 | `src/core/DS/page.cpp` | `internal/DS/page_cgo.go` | ✅ CGO |
 | `src/core/DS/manager.cpp` | `internal/DS/manager_cgo.go` | ✅ CGO — **Phase DS-8 COMPLETE** |
 | `src/core/DS/wal.cpp` | `internal/DS/wal_cgo.go` | ✅ CGO — **Phase DS-7 COMPLETE** |
+| `src/core/DS/bloom_filter.cpp` | (none) | ✅ C++ Only - New implementation |
+| `src/core/DS/column_vector.cpp` | (none) | ✅ C++ Only - New implementation |
 
 ---
 
@@ -191,6 +191,8 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 | `internal/QP/dag.go` | `src/core/QP/dag.cpp` | ✅ CGO | |
 | `internal/QP/normalize.go` | `src/core/QP/normalize.cpp` | ✅ CGO | |
 | `internal/QP/type_infer.go` | `src/core/QP/type_infer.cpp` | ✅ CGO | |
+| `internal/QP/parser_alter.go` | `src/core/QP/parser_alter.cpp` | ✅ CGO | ALTER TABLE parsing |
+| `internal/QP/parser_txn.go` | `src/core/QP/parser_txn.cpp` | ✅ CGO | Transaction parsing |
 
 ### 🚧 C++ Stubs Created (In Progress)
 
@@ -207,8 +209,6 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 | Go File | Reason |
 |---------|--------|
 | `internal/QP/tokenizer_count.go` | CGO wrapper for tokenizer |
-| `internal/QP/parser_alter.go` | ALTER TABLE parsing |
-| `internal/QP/parser_txn.go` | Transaction parsing |
 
 ---
 

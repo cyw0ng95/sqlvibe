@@ -23,6 +23,10 @@ typedef struct svdb_ast_node_t svdb_ast_node_t;
 #define SVDB_AST_CREATE     5
 #define SVDB_AST_DROP       6
 #define SVDB_AST_EXPR       7
+#define SVDB_AST_ALTER      8
+#define SVDB_AST_BEGIN      9
+#define SVDB_AST_COMMIT    10
+#define SVDB_AST_ROLLBACK  11
 
 /* Create a parser for the given SQL string (sql_len bytes). */
 svdb_parser_t* svdb_parser_create(const char* sql, size_t sql_len);

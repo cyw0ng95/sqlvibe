@@ -51,6 +51,8 @@ set(SVDB_CORE_SOURCES
     core/DS/cache.cpp
     core/DS/columnar.cpp
     core/DS/row_store.cpp
+    core/DS/bloom_filter.cpp
+    core/DS/column_vector.cpp
 
     # VM - Virtual Machine
     core/VM/hash.cpp
@@ -87,6 +89,8 @@ set(SVDB_CORE_SOURCES
     core/QP/parser_expr.cpp
     core/QP/parser_dml.cpp
     core/QP/parser_ddl.cpp
+    core/QP/parser_alter.cpp
+    core/QP/parser_txn.cpp
 
     # CG - Code Generation
     core/CG/compiler.cpp
