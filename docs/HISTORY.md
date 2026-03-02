@@ -1,10 +1,45 @@
 # sqlvibe Release History
 
-## Current Version: v0.11.0 (2026-03-02)
+## Current Version: v0.11.1 (2026-03-02)
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
 **Test Status**: All 84+ SQL:1999 test suites passing.
+
+---
+
+## **v0.11.1** (2026-03-02)
+
+### Phase 5 P0 — C++ Query Engine Module
+
+Added `src/core/VM/engine/` C++ module as the foundation for the Phase 5
+Go→C++ orchestration migration (see `docs/plan-v0.11.1.md`).
+
+#### C++ Engine API (`src/core/VM/engine/engine_api.h` / `engine.cpp`)
+
+New C-compatible API with full implementations:
+
+- **Types**: `svdb_engine_value_t`, `svdb_engine_row_t`, `svdb_engine_rows_t`,
+  `svdb_engine_sort_key_t` with `SVDB_VAL_{NULL,INT,FLOAT,TEXT,BLOB}` constants
+- **Allocation**: `svdb_engine_rows_alloc/free`, `svdb_engine_row_alloc/free`
+- **SELECT**: `svdb_engine_apply_limit_offset`, `svdb_engine_col_names`
+- **JOIN**: `svdb_engine_merge_rows`, `svdb_engine_merge_rows_alias`, `svdb_engine_cross_join`
+- **Aggregate**: `svdb_engine_count_rows`
+- **Sort**: `svdb_engine_sort_rows` (multi-key stable sort, ASC/DESC, NULLS FIRST/LAST),
+  `svdb_engine_reverse_rows`
+- **Subquery**: `svdb_engine_exists_rows`, `svdb_engine_in_rows`,
+  `svdb_engine_not_in_rows` (SQL three-valued-logic for NULL)
+- **Window**: `svdb_engine_row_numbers`, `svdb_engine_ranks`, `svdb_engine_dense_ranks`
+
+#### CGO Wrapper (`internal/VM/engine/engine_cgo.go`)
+
+New file exposing all C++ operations to Go with `C`-prefix functions:
+`CApplyLimitOffset`, `CColNames`, `CMergeRows`, `CMergeRowsWithAlias`,
+`CCrossJoin`, `CCountRows`, `CSortRows` (with `CSortKey` type), `CReverseRows`,
+`CExistsRows`, `CInRows`, `CNotInRows`, `CRowNumbers`, `CRanks`, `CDenseRanks`.
+
+Existing Go implementations (`select.go`, `join.go`, `aggregate.go`, `sort.go`,
+`subquery.go`, `window.go`) are **unchanged** — all existing tests continue to pass.
 
 ---
 
