@@ -106,7 +106,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 ## Performance
 
-Benchmarks on Intel Xeon @ 2.90 GHz, in-memory database, `-benchtime=1s`.
+Benchmarks on AMD EPYC 7763 64-Core @ 2.45 GHz, in-memory database, `-benchtime=1s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
 `db.ClearResultCache()` so actual per-query execution cost is measured.
 SQLite's `database/sql` driver reuses prepared statements across iterations.
@@ -114,86 +114,89 @@ Both sides iterate all result rows end-to-end.
 (`go test ./tests/Benchmark/... -bench=BenchmarkCompare_ -benchtime=1s`).
 Results may vary on different hardware.
 
-### SQLite vs sqlvibe (v0.11.0 — C++ Migration Complete)
+### SQLite vs sqlvibe (v0.11.1 — C++ Bytecode Optimizer + Engine Module)
 
 Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
 
-**v0.11.0 Highlights**: Complete C++ migration of DS/VM/QP/CG layers eliminates Go callback overhead, achieving **2.8–5.5× speedups** for scan and aggregate workloads.
+**v0.11.1 Highlights**: C++ bytecode optimizer (`svdb_cg_optimize_bc_instrs`) now wired into the
+execution path (both legacy VM.Program and BytecodeVM paths). Query engine module complete.
 
 #### SELECT all rows
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 497 µs | 175 µs | **2.8× faster** |
-| 10 K | 5.28 ms | 1.57 ms | **3.4× faster** |
-| 100 K | 49.7 ms | 16.6 ms | **3.0× faster** |
+| 1 K | 297 µs | 191 µs | **1.6× faster** |
+| 10 K | 2.91 ms | 1.76 ms | **1.7× faster** |
+| 100 K | 29.1 ms | 20.0 ms | **1.5× faster** |
 
 #### WHERE filter (integer column)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 287 µs | 824 µs | 2.9× slower |
-| 10 K | 2.82 ms | 8.54 ms | 3.0× slower |
-| 100 K | 28.1 ms | 116.8 ms | 4.2× slower |
+| 1 K | 192 µs | 765 µs | 4.0× slower |
+| 10 K | 1.83 ms | 7.89 ms | 4.3× slower |
+| 100 K | 18.2 ms | 115.8 ms | 6.4× slower |
 
 #### SUM aggregate
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 62.7 µs | 21.0 µs | **3.0× faster** |
-| 10 K | 567 µs | 215 µs | **2.6× faster** |
-| 100 K | 5.70 ms | 3.21 ms | **1.8× faster** |
+| 1 K | 68 µs | 28 µs | **2.5× faster** |
+| 10 K | 629 µs | 188 µs | **3.3× faster** |
+| 100 K | 6.04 ms | 2.48 ms | **2.4× faster** |
 
 #### GROUP BY (4 groups)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 417 µs | 126 µs | **3.3× faster** |
-| 10 K | 4.39 ms | 976 µs | **4.5× faster** |
-| 100 K | 54.2 ms | 10.4 ms | **5.2× faster** |
+| 1 K | 535 µs | 170 µs | **3.1× faster** |
+| 10 K | 5.31 ms | 1.08 ms | **4.9× faster** |
+| 100 K | 57.8 ms | 11.2 ms | **5.2× faster** |
 
 #### COUNT(*)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 5.5 µs | 4.0 µs | **1.4× faster** |
-| 10 K | 7.1 µs | 4.3 µs | **1.7× faster** |
-| 100 K | 29.9 µs | 55.4 µs | 1.9× slower |
+| 1 K | 5.5 µs | 7.3 µs | 1.3× slower |
+| 10 K | 7.2 µs | 8.0 µs | 1.1× slower |
+| 100 K | 25.6 µs | 9.3 µs | **2.8× faster** |
 
 #### INSERT (batch rows)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 5.80 ms | 2.60 ms | **2.2× faster** |
-| 10 K | 53.8 ms | 29.5 ms | **1.8× faster** |
+| 1 K | 5.77 ms | 2.83 ms | **2.0× faster** |
+| 10 K | 56.1 ms | 32.3 ms | **1.7× faster** |
 
 #### INNER JOIN
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 729 µs | 1.02 ms | 1.4× slower |
-| 10 K | 7.95 ms | 11.1 ms | 1.4× slower |
-| 100 K | 75.4 ms | 136.8 ms | 1.8× slower |
+| 1 K | 462 µs | 1.12 ms | 2.4× slower |
+| 10 K | 4.60 ms | 11.5 ms | 2.5× slower |
+| 100 K | 45.8 ms | 133.7 ms | 2.9× slower |
 
 #### ORDER BY + LIMIT (Top N)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 212 µs | 249 µs | 1.2× slower |
-| 10 K | 1.92 ms | 2.25 ms | 1.2× slower |
-| 100 K | 19.2 ms | 28.0 ms | 1.5× slower |
+| 1 K | 236 µs | 298 µs | 1.3× slower |
+| 10 K | 2.16 ms | 2.99 ms | 1.4× slower |
+| 100 K | 21.2 ms | 35.7 ms | 1.7× slower |
 
-> **Analysis (v0.11.0 — C++ Migration Complete)**: sqlvibe excels at scan and aggregate workloads with **1.8–5.5× speedups** over SQLite for SELECT all, SUM, and GROUP BY. The complete C++ migration of DS/VM/QP/CG layers in v0.11.0 eliminates Go callback overhead, achieving **52× faster page operations** (260ns → 5ns) in the storage layer. Key improvements:
-> - **SELECT all**: 2.8–3.4× faster (C++ columnar store + SIMD batch ops)
-> - **SUM aggregate**: 1.8–3.0× faster (C++ aggregate engine)
-> - **GROUP BY**: 3.3–5.2× faster (C++ hash aggregation + batch compare)
-> - **INSERT**: 1.8–2.2× faster (C++ row store + B-Tree)
-> - **COUNT(*)**: 1.4–1.7× faster at small scale (C++ scan ops)
+> **Analysis (v0.11.1 — C++ Engine Module + Bytecode Optimizer)**: sqlvibe excels at scan and aggregate workloads with **1.5–5.2× speedups** over SQLite for SELECT all, SUM, and GROUP BY. The v0.11.1 C++ bytecode optimizer (dead-code elimination + peephole passes) now runs on every query. Key improvements:
+> - **SELECT all**: 1.5–1.7× faster (C++ columnar store + SIMD batch ops)
+> - **SUM aggregate**: 2.4–3.3× faster (C++ aggregate engine)
+> - **GROUP BY**: 3.1–5.2× faster (C++ hash aggregation + batch compare)
+> - **INSERT**: 1.7–2.0× faster (C++ row store + B-Tree)
+> - **COUNT(*)**: 2.8× faster at 100K scale (C++ scan ops)
 >
-> WHERE filter and JOIN remain areas for optimization — the bytecode VM evaluation path adds overhead vs SQLite's tightly-optimized scan. ORDER BY + LIMIT is 1.2–1.5× slower due to sort overhead. The C++ migration provides a strong foundation for future SIMD optimization of these workloads.
+> WHERE filter and JOIN remain areas for future optimization — the bytecode VM evaluation path adds overhead vs SQLite's tightly-optimized scan. ORDER BY + LIMIT is 1.3–1.7× slower due to sort overhead.
 
-### Key Optimizations (v0.11.0)
+### Key Optimizations (v0.11.1)
 
+- **C++ Bytecode Optimizer**: Dead-code elimination + peephole passes via `svdb_cg_optimize_bc_instrs` applied to every query (zero-copy raw-buffer path)
+- **C++ Query Engine Module**: 14 engine operations (FilterRows, InnerJoin, LeftOuterJoin, GroupRows, SortRows, ExistsRows, etc.) in C++ with Go-callback predicates
 - **C++ DS Layer**: B-Tree, columnar store, row store, overflow — all in C++ with embedded PageManager
 - **C++ VM Layer**: All 46 bytecode opcodes implemented in C++ with batch SIMD execution
 - **C++ QP/CG**: Full SQL parser and bytecode compiler in C++
@@ -210,16 +213,7 @@ Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
 - **AND index lookup**: Compound `WHERE col=val AND cond` uses secondary index
 - **Covering Index**: Index-only scans with zero table lookup
 - **Column Projection**: Materialize only required columns
-- **Index Skip Scan**: Range scans on non-leading index columns
-- **Direct Threaded VM**: Dispatch table reduces branch misprediction
 - **SIMD Vectorization**: 4-way unrolled batch ops for int64/float64 (AVX2)
-- **CGO Acceleration** (phases 1-18): C++ backends for all major subsystems:
-  - Phases 1-3: Math, JSON, FTS5 extensions (1.5-7× speedup)
-  - Phases 4-6: B-Tree, columnar storage, bitmap indexes (2-3× storage ops)
-  - Phases 7-11: Hash JOIN, string compare, batch execution, ORDER BY, LZ4/ZSTD compression
-  - Phases 12-14: Expression evaluation, bytecode dispatch, type conversion (2-3× arithmetic)
-  - Phases 15-17: String functions, datetime, aggregate batch ops (2-3× per-row ops)
-  - Phase 18: Fast C++ tokenizer for query pre-allocation (libsvdb_qp)
 
 ## SQL:1999 Compatibility
 

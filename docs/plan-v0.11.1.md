@@ -145,23 +145,27 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 
 ---
 
-### Phase 6: Complete CG Layer (1 week)
+### Phase 6: Complete CG Layer ✅ (Partial — bytecode optimizer wired)
 
 **Goal**: Finish code generation Go wrapper
 
-#### 6.1: Bytecode Compiler Wrapper
-**Files**: `internal/CG/cg_cgo.go`, `internal/CG/compiler.go`
+#### 6.1: Bytecode Compiler Wrapper ✅ (Partial)
+**Files**: `internal/CG/cg_cgo.go`, `internal/CG/compiler.go`, `pkg/sqlvibe/vm_exec.go`, `src/core/CG/optimizer.cpp`, `src/core/CG/compiler.cpp`
 
-**Current State**:
-- C++ compiler exists (`src/core/CG/compiler.cpp`)
-- Go wrapper handles statement caching
+**Completed (2026-03-02)**:
+- Fixed `BC_RESULT_ROW = 31 → 30` in `optimizer.cpp` (was off-by-one, causing all constant loads to be incorrectly eliminated) ✅
+- Fixed `eliminateBcDeadCode` in `optimizer.cpp` — conservative default: mark unknown-opcode operands as "read" ✅
+- Fixed `eliminateDeadCode` in `optimizer.cpp` — same conservative fix for legacy CG path ✅
+- Fixed `cgEliminateDeadCode` in `compiler.cpp` — conservative default + mark `p4_regs` registers as "read" for OpInsert ✅
+- Fixed `programToJSON` in `cg_cgo.go` — handle `map[string]int` P4 (named-column INSERT) as register list ✅
+- **Wired `OptimizeBytecodeInstrs` into `execBytecode`** (BytecodeVM path) ✅ — all SQL1999 tests pass
+
+**Blocked**:
+- `CGOptimizeProgram` wiring into `compiler.finalize()` is blocked because `CG_OP_*` constants in `compiler.cpp` don't match Go's `VM.OpCode` values (different numbering). Attempts cause F201/CastInSubquery and other failures. Requires reconciling the two opcode numbering systems before `CGOptimizeProgram` can be safely applied to the legacy VM.Program path.
 
 **TODO**:
-- [ ] Create C++ statement cache
-- [ ] Migrate bytecode optimization to C++
-- [ ] Remove Go compiler orchestration
-
-**Expected Impact**: -200 Go LOC
+- [ ] Reconcile `CG_OP_*` constants in `compiler.cpp` with Go `VM.OpCode` values
+- [ ] After reconciliation, wire `CGOptimizeProgram` into `compiler.finalize()`
 
 ---
 
@@ -464,12 +468,16 @@ All engine functions implemented in `src/core/VM/engine/engine.cpp` and wrapped 
 - [x] **All VM orchestration** (Phase 5) migrated to C++ — all 14 engine functions in engine.cpp ✅
 - [x] **Build error fixed** — engine_api.h include path corrected, C.svdb_value_t type fixed ✅
 - [x] **HybridStore C++ scan** complete — Scan, ScanWithFilter, ScanProjected in hybrid_store.cpp ✅
+- [x] **Phase 6 bytecode optimizer bugs fixed** — `BC_RESULT_ROW` off-by-one fixed, conservative default for unknown opcodes, `p4_regs` marking for OpInsert ✅
+- [x] **Phase 6 bytecode optimizer wired** — `OptimizeBytecodeInstrs` in `execBytecode` (BytecodeVM path); all SQL1999 tests pass ✅
+- [ ] **Phase 6 legacy optimizer** — `CGOptimizeProgram` in `finalize()` blocked: `CG_OP_*` constants in compiler.cpp don't match Go `VM.OpCode` values
+- [x] **README performance updated** — fresh v0.11.1 benchmarks (AMD EPYC 7763) ✅
 - [x] **All 89+ SQL:1999 tests** passing ✅
 - [ ] **B-Tree Phase 4.1** — Remove Go callbacks, use embedded C++ PageManager
 - [ ] **pkg/sqlvibe/** reduced to <500 LOC wrapper (Phase 7)
 - [ ] **5× average speedup** over SQLite (Phase 7/8)
-- [ ] **CG statement cache** migrated to C++ (Phase 6)
-- [ ] **Documentation** updated (ARCHITECTURE.md, HISTORY.md)
+- [ ] **CG statement cache** migrated to C++ (Phase 6, optional)
+- [ ] **Documentation** updated (ARCHITECTURE.md)
 
 ---
 

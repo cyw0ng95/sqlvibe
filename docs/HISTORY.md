@@ -41,6 +41,59 @@ All Go engine files (`select.go`, `join.go`, `aggregate.go`, `sort.go`,
 `window.go`, `subquery.go`) delegate to the C++ implementations via CGO callbacks.
 Existing Go fallback implementations retained for compatibility.
 
+### Phase 6 — C++ Optimizer Bugs Fixed + BytecodeVM Optimizer Wired
+
+Three correctness bugs found and fixed in the C++ dead-code elimination passes:
+
+**`src/core/CG/optimizer.cpp`** — `eliminateBcDeadCode`:
+- **Critical fix**: `BC_RESULT_ROW` was `31` (pointing at BcHalt) instead of `30` (BcResultRow).
+  This caused the optimizer to never mark any result registers as "read", so it was
+  silently eliminating all `BcLoadConst` instructions — dropping every literal value
+  from the output.
+- **Complete opcode table**: Added all 36 BcOpCode constants with correct values
+  (BcNeg=9, BcEq=11..BcGe=16, BcAnd/Or/Not=17..19, BcIsNull/NotNull=20..21,
+  BcJump*=22..24, BcOpenCursor/Rewind/Next=25..27, BcColumn/Rowid=28..29,
+  BcHalt=31, BcAggInit/Step/Final=32..34, BcCall=35). Previous code was using
+  wrong constants (`BC_CALL=42` instead of `35`, etc.), causing misidentified opcodes.
+- **BcCall args fix**: `BcCall` reads registers `C-B..C-1` (not ins.a/ins.b which are
+  a const-pool index and arg count respectively). Args loaded by `BcLoadReg` before
+  a `BcCall` were being incorrectly eliminated, breaking CAST/function expressions.
+- **Conservative default**: Added `default` handler that marks all positive operand
+  registers of unknown opcodes as "read" (safety net for any future opcodes).
+- **BcAggStep**: Added explicit case marking the value register (B) as "read".
+- Same conservative fix applied to `eliminateDeadCode` (legacy CG path).
+
+**`src/core/CG/compiler.cpp`** — `cgEliminateDeadCode`:
+- **p4_regs fix**: Added `default` handler that iterates `ins.p4_regs` (p4_type==3)
+  for unknown opcodes (e.g. `OpInsert` with positional register list) and marks each
+  register as "read", preventing elimination of constant loads that feed INSERT ops.
+
+**`internal/CG/cg_cgo.go`** — `programToJSON`:
+- **map[string]int fix**: Named-column INSERT instructions carrying `map[string]int` P4
+  now serialize as `p4_type=3/p4_regs` instead of being silently dropped, so the C++
+  optimizer correctly sees which registers are used by the INSERT.
+
+**`pkg/sqlvibe/vm_exec.go`** — `execBytecode`:
+- `CG.OptimizeBytecodeInstrs(prog.Instrs)` wired into the BytecodeVM path after
+  compilation — zero-copy raw instruction-buffer path (no JSON round-trip).
+  All SQL1999 tests continue to pass.
+
+**Note**: `CGOptimizeProgram` (legacy VM.Program path via JSON) remains unwired.
+The `CG_OP_*` constants in `compiler.cpp` use a different opcode numbering from
+Go's `VM.OpCode` values, which would cause incorrect optimisation of legacy programs.
+This mismatch is tracked in `docs/plan-v0.11.1.md` Phase 6.
+
+### Performance (v0.11.1, AMD EPYC 7763)
+
+| Workload | SQLite | sqlvibe | Result |
+|----------|-------:|--------:|--------|
+| SELECT all 1K | 297 µs | 191 µs | **1.6× faster** |
+| SUM 1K | 68 µs | 28 µs | **2.5× faster** |
+| GROUP BY 1K | 535 µs | 170 µs | **3.1× faster** |
+| GROUP BY 100K | 57.8 ms | 11.2 ms | **5.2× faster** |
+| INSERT 1K | 5.77 ms | 2.83 ms | **2.0× faster** |
+| COUNT(*) 100K | 25.6 µs | 9.3 µs | **2.8× faster** |
+
 ---
 
 ## **v0.11.0** (2026-03-02)
