@@ -41,8 +41,19 @@ typedef struct {
     free_page_fn free_page;
 } svdb_page_manager_t;
 
-// Create a new B-Tree instance
+// Create a new B-Tree instance (with Go callbacks - legacy)
 svdb_btree_t* svdb_btree_create(const svdb_btree_config_t* config, const svdb_page_manager_t* pm);
+
+// Create a new B-Tree instance with embedded C++ PageManager (no Go callbacks)
+// This is the preferred method for v0.11.0+ - eliminates Go callback overhead
+// Parameters:
+//   - db_path: Path to the SQLite database file
+//   - root_page: Root page number (1-based, 0 for new B-Tree)
+//   - is_table: 1 for table B-Tree, 0 for index B-Tree
+//   - page_size: Page size (must be valid per svdb_manager_is_valid_page_size)
+//   - cache_pages: Number of pages to cache (0 = use default 2000)
+svdb_btree_t* svdb_btree_create_embedded(const char* db_path, uint32_t root_page, 
+                                         int is_table, uint32_t page_size, int cache_pages);
 
 // Destroy a B-Tree instance
 void svdb_btree_destroy(svdb_btree_t* bt);
@@ -69,6 +80,54 @@ uint32_t svdb_btree_get_leaf_count(svdb_btree_t* bt);
 // Returns cell index or -1 if not found
 int svdb_btree_binary_search(const uint8_t* page_data, size_t page_size,
                               const uint8_t* key, size_t key_len, int is_table);
+
+#ifdef __cplusplus
+}
+
+#include <string>
+
+namespace svdb {
+namespace ds {
+
+// C++ wrapper for embedded B-Tree
+class BTreeEmbedded {
+public:
+    BTreeEmbedded(const std::string& db_path, uint32_t root_page, 
+                  bool is_table, uint32_t page_size, int cache_pages = 0);
+    ~BTreeEmbedded();
+
+    // Delete copy
+    BTreeEmbedded(const BTreeEmbedded&) = delete;
+    BTreeEmbedded& operator=(const BTreeEmbedded&) = delete;
+
+    // Search - returns true if found
+    bool Search(const uint8_t* key, size_t key_len, uint8_t** value, size_t* value_len);
+
+    // Insert
+    bool Insert(const uint8_t* key, size_t key_len, const uint8_t* value, size_t value_len);
+
+    // Delete
+    bool Delete(const uint8_t* key, size_t key_len);
+
+    // Stats
+    uint32_t GetDepth() const;
+    uint32_t GetLeafCount() const;
+
+    // Sync changes to disk
+    bool Sync();
+
+    // Check if valid
+    bool IsValid() const { return btree_ != nullptr; }
+
+private:
+    svdb_btree_t* btree_;
+};
+
+} // namespace ds
+} // namespace svdb
+
+extern "C" {
+#endif
 
 #ifdef __cplusplus
 }

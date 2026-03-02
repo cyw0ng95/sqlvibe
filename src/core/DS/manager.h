@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -46,6 +47,60 @@ uint32_t svdb_manager_read_header_num_pages(const uint8_t* data, size_t data_siz
 /* Write the database size to the header.
  * Returns 1 on success, 0 if data_size < 32. */
 int svdb_manager_write_header_num_pages(uint8_t* data, size_t data_size, uint32_t num_pages);
+
+/* -------------------------------------------------------------------------
+ * Self-contained C++ PageManager (for embedding in B-Tree)
+ * ------------------------------------------------------------------------- */
+
+typedef struct svdb_page_manager svdb_page_manager;
+
+/* Create a self-contained PageManager that owns file I/O.
+ * The PageManager will:
+ *   - Open the database file directly
+ *   - Maintain its own page cache
+ *   - Handle read/write/allocate/free without Go callbacks
+ * 
+ * Parameters:
+ *   - db_path: Path to the SQLite database file
+ *   - page_size: Page size (must be valid per svdb_manager_is_valid_page_size)
+ *   - cache_pages: Number of pages to cache (0 = use default 2000)
+ * 
+ * Returns: PageManager handle, or NULL on error */
+svdb_page_manager* svdb_page_manager_create(const char* db_path, uint32_t page_size, int cache_pages);
+
+/* Destroy a PageManager.
+ * Closes the file and frees all resources. */
+void svdb_page_manager_destroy(svdb_page_manager* pm);
+
+/* Read a page from the database.
+ * Returns 1 on success, 0 on error.
+ * On success, *page_data points to cached page data (valid until next PM operation). */
+int svdb_page_manager_read(svdb_page_manager* pm, uint32_t page_num, 
+                           const uint8_t** page_data, size_t* page_size);
+
+/* Write a page to the database.
+ * Returns 1 on success, 0 on error. */
+int svdb_page_manager_write(svdb_page_manager* pm, uint32_t page_num,
+                            const uint8_t* page_data, size_t page_size);
+
+/* Allocate a new page.
+ * Returns 1 on success, 0 on error.
+ * On success, *page_num contains the new page number. */
+int svdb_page_manager_allocate(svdb_page_manager* pm, uint32_t* page_num);
+
+/* Free a page.
+ * Returns 1 on success, 0 on error. */
+int svdb_page_manager_free(svdb_page_manager* pm, uint32_t page_num);
+
+/* Get the page size. */
+uint32_t svdb_page_manager_get_page_size(const svdb_page_manager* pm);
+
+/* Get the current database size (number of pages). */
+uint32_t svdb_page_manager_get_num_pages(const svdb_page_manager* pm);
+
+/* Sync all pending writes to disk.
+ * Returns 1 on success, 0 on error. */
+int svdb_page_manager_sync(svdb_page_manager* pm);
 
 #ifdef __cplusplus
 }

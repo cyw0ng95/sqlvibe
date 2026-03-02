@@ -61,7 +61,10 @@ private:
     std::mutex mutex_;
 };
 
-// C-compatible wrapper functions
+} // namespace pb
+} // namespace svdb
+
+// C-compatible wrapper functions (outside namespace)
 extern "C" {
 
 void* SVDB_PB_VFS_Create();
@@ -80,8 +83,5 @@ int SVDB_PB_VFS_Delete(void* vfs, const char* path);
 int SVDB_PB_VFS_Exists(void* vfs, const char* path);
 
 } // extern "C"
-
-} // namespace pb
-} // namespace svdb
 
 #endif // SVDB_PB_VFS_H
