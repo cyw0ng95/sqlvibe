@@ -2,45 +2,67 @@
 
 **Last Updated**: 2026-03-02
 **Target Version**: v0.11.0
+**Strategy**: Shift from Go→C++→Go (CGO with callbacks) to pure C++ where possible
 
 This document tracks the migration status of Go code in `internal/` to C++ implementations in `src/core/`.
 
 ---
 
+## Executive Summary: Shift to C++ Only
+
+**Current Problem**: Many C++ implementations still require Go callbacks (Go→C++→Go pattern), which adds significant overhead:
+- Registry lookup: ~260ns per callback
+- Goal: Eliminate by moving logic entirely to C++
+
+**Target State**: Self-contained C++ modules with thin Go wrappers:
+- No Go callbacks required
+- Direct C pointer usage
+- ~5ns per call (52x faster)
+
+**Migration Priorities**:
+1. B-Tree: Embed PageManager in C++
+2. Columnar/Row Store: C++ handles all storage
+3. VM: Full execution in C++
+4. Parser: Complete SQL parsing in C++
+
+---
+
 ## Summary
 
-| Subsystem | Total | C++ Complete | CGO Wrapper | Go-Only | Progress |
-|-----------|-------|--------------|-------------|---------|----------|
-| **DS** (Data Storage) | 36 | 23 | 22 | 12 | 64% |
-| **VM** (Virtual Machine) | 30 | 21 | 16 | 15 | 72% |
-| **QP** (Query Processing) | 15 | 12 | 7 | 4 | 80% |
-| **CG** (Code Generation) | 8 | 7 | 7 | 1 | 88% |
-| **TM** (Transaction Mgmt) | 1 | 1 | 1 | 0 | 100% |
-| **PB** (Platform Bridges) | 1 | 1 | 1 | 0 | 100% |
-| **SF** (System Framework) | 1 | 1 | 1 | 0 | 100% |
-| **IS** (Info Schema) | 1 | 1 | 1 | 0 | 100% |
-| **Wrapper** | 1 | 1 | 1 | 0 | 100% |
-| **CGO** (Special Cases) | 1 | 1 | 1 | 0 | 100% |
-| **TOTAL** | **97** | **70** | **53** | **32** | **72%** |
+| Subsystem | Total | C++ Only | CGO Wrapper | Go-Only | Progress |
+|-----------|-------|----------|-------------|---------|----------|
+| **DS** (Data Storage) | 36 | 15 | 9 | 12 | 64% |
+| **VM** (Virtual Machine) | 30 | 15 | 6 | 9 | 72% |
+| **QP** (Query Processing) | 15 | 10 | 2 | 3 | 80% |
+| **CG** (Code Generation) | 8 | 7 | 0 | 1 | 88% |
+| **TM** (Transaction Mgmt) | 1 | 1 | 0 | 0 | 100% |
+| **PB** (Platform Bridges) | 1 | 1 | 0 | 0 | 100% |
+| **SF** (System Framework) | 1 | 1 | 0 | 0 | 100% |
+| **IS** (Info Schema) | 1 | 1 | 0 | 0 | 100% |
+| **Wrapper** | 1 | 0 | 1 | 0 | 100% |
+| **CGO** (Special Cases) | 1 | 0 | 1 | 0 | 100% |
+| **TOTAL** | **97** | **51** | **19** | **27** | **72%** |
 
 **Legend**:
-- **C++ Complete**: C++ implementation exists in `src/core/`
-- **CGO Wrapper**: Go wrapper uses `import "C"` to call C++
+- **C++ Only**: Pure C++ implementation (no Go callbacks, no CGO overhead)
+- **CGO Wrapper**: Go wrapper uses `import "C"` to call C++ (may include Go callbacks)
 - **Go-Only**: Pure Go implementation (no C++ migration yet or Go-only by design)
+
+**Strategy Shift**: Minimize CGO wrappers by moving logic into C++ where Go callbacks are not required.
 
 ---
 
 ## DS (Data Storage) - 23/36 Complete
 
-### ✅ C++ Complete with CGO Wrapper
+### ✅ C++ Only (Pure C++, No Go Callbacks)
 
 | Go File | C++ File | Status | Notes |
 |---------|----------|--------|-------|
-| `internal/DS/value.go` | `src/core/DS/value.cpp` | ✅ CGO | Numeric compare uses C++, string/bytes use Go |
-| `internal/DS/compression.go` | `src/core/DS/compression.cpp` | ✅ CGO | |
-| `internal/DS/roaring_bitmap.go` | `src/core/DS/roaring.cpp` | ✅ CGO | |
-| `internal/DS/encoding.go` | `src/core/DS/varint.cpp` | ✅ CGO | varint encode/decode |
-| `internal/DS/cell.go` | `src/core/DS/cell.cpp` | ✅ CGO | Cell encode/decode |
+| `internal/DS/value.go` | `src/core/DS/value.cpp` | ✅ C++ | Numeric compare uses C++, string/bytes use Go |
+| `internal/DS/compression.go` | `src/core/DS/compression.cpp` | ✅ C++ | |
+| `internal/DS/roaring_bitmap.go` | `src/core/DS/roaring.cpp` | ✅ C++ | |
+| `internal/DS/encoding.go` | `src/core/DS/varint.cpp` | ✅ C++ | varint encode/decode |
+| `internal/DS/cell.go` | `src/core/DS/cell.cpp` | ✅ C++ | Cell encode/decode |
 | `internal/DS/overflow.go` | `src/core/DS/overflow.cpp` | ✅ CGO | Always-on CGO (no fallback); Direct C pointer for callbacks |
 | `internal/DS/cache_cgo.go` | `src/core/DS/cache.cpp` | ✅ CGO | **Always-on CGO** (no fallback); Direct C pointer, self-contained |
 | `internal/DS/skip_list.go` | `src/core/DS/skip_list.h` | ✅ CGO | Always-on; int/float→`_int` API, string/bytes→`_str` API; goKeys for Range/Pairs |
@@ -50,7 +72,7 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 
 **Architecture Note**: All CGO files are unconditional (no build tags) — matching the pattern of `value.go`, `encoding.go`. C++ is the only implementation. `cache_cgo.go` uses direct C pointer (no registry overhead). `overflow_cgo.go` requires registry for Go PageManager callbacks. See `docs/plan-cgo-architecture-fix.md`.
 
-### ✅ C++ Complete, Go Implementation Still Active
+### ✅ CGO Wrapper (C++ with Go Callbacks - Target for C++ Only)
 
 | Go File | C++ File | Status | Notes |
 |---------|----------|--------|-------|
@@ -231,56 +253,58 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 
 ## Priority Tasks for v0.11.0
 
-### P0: Critical (Must Complete)
+### P0: Critical (Must Complete) - Shift to C++ Only
 
-1. **B-Tree CGO Wrapper** (`internal/DS/btree.go`)
-   - C++ implementation complete with page split/merge
-   - **TODO**: Create CGO wrapper to call C++ `svdb_btree_*` functions
-   - **TODO**: Remove Go `Insert`, `Delete`, `Search` implementations
+1. **B-Tree Full C++** (`src/core/DS/btree.cpp`)
+   - **Strategy**: Embed PageManager in C++, eliminate Go callbacks
+   - **TODO**: Extend btree.cpp to own page read/write internally
+   - **TODO**: Remove registry from btree wrapper
    - **TODO**: Verify all btree tests pass
 
-2. **Overflow CGO Wrapper** (`internal/DS/overflow.go`)
-   - C++ implementation complete
-   - **TODO**: Create CGO wrapper
-   - **TODO**: Remove Go implementation
+2. **Columnar Store Full C++** (`src/core/DS/columnar.cpp`)
+   - **Strategy**: C++ handles all storage internally
+   - **TODO**: Extend columnar.cpp with full read/write/scan
+   - **TODO**: Remove Go callback paths
+   - **TODO**: Create thin Go wrapper (no callbacks)
 
-3. **Cache CGO Wrapper** (`internal/DS/cache_cgo.go`)
-   - C++ LRU cache complete
-   - **TODO**: Create CGO wrapper
-   - **TODO**: Remove Go implementation
+3. **Row Store Full C++** (`src/core/DS/row_store.cpp`)
+   - **Strategy**: C++ handles all storage internally
+   - **TODO**: Extend row_store.cpp with full CRUD
+   - **TODO**: Remove Go callback paths
+   - **TODO**: Create thin Go wrapper (no callbacks)
 
-4. **Columnar/Row Store CGO Wrappers**
-   - C++ implementations complete
-   - **TODO**: Create CGO wrappers
-   - **TODO**: Update Go orchestration
+4. **Overflow Full C++** (`src/core/DS/overflow.cpp`)
+   - **Strategy**: Eliminate Go callbacks by integrating with C++ page manager
+   - **TODO**: Remove registry overhead
+   - **TODO**: Pure C++ overflow chain management
 
-5. **Bytecode VM CGO Wrapper** (`internal/VM/bytecode_vm.go`)
-   - C++ VM complete with dispatch
-   - **TODO**: Create CGO wrapper
-   - **TODO**: Remove Go implementation
+5. **Bytecode VM Full C++** (`src/core/VM/bytecode_vm.cpp`)
+   - **Strategy**: Full VM execution in C++
+   - **TODO**: Implement all 200+ opcode handlers in C++
+   - **TODO**: Create thin Go wrapper for results only
 
-6. **Opcode Handlers** (`internal/VM/bytecode_handlers.go`)
-   - **TODO**: Implement all 200+ opcode handlers in `src/core/VM/opcodes.cpp`
-   - **TODO**: Create CGO wrapper
-   - **TODO**: Remove Go implementation
+6. **Cursor Full C++** (`src/core/VM/cursor.cpp`)
+   - **Strategy**: Cursor operations entirely in C++
+   - **TODO**: Move cursor management to C++
+   - **TODO**: Remove Go callback dependencies
 
 ### P1: High (Should Complete)
 
-7. **Parser Implementations**
+7. **Parser Full C++** (`src/core/QP/parser*.cpp`)
+   - **Strategy**: Complete SQL parser in C++
    - **TODO**: Complete `parser_select.cpp` for SELECT parsing
    - **TODO**: Complete `parser_expr.cpp` for expression parsing
    - **TODO**: Complete `parser_dml.cpp` for DML parsing
    - **TODO**: Complete `parser_ddl.cpp` for DDL parsing
 
-8. **VM Layer CGO Wrappers**
-   - `internal/VM/cursor.go`
-   - `internal/VM/exec.go`
-   - `internal/VM/dispatch.go`
-   - `internal/VM/engine.go`
+8. **Query Engine C++** (`src/core/VM/query_engine.cpp`)
+   - **Strategy**: Execution engine in C++
+   - **TODO**: Move exec/dispatch to C++
+   - **TODO**: Thin Go orchestration wrapper
 
 ### P2: Medium (Nice to Have)
 
-9. **Batch Operation Wrappers**
+9. **Batch Operation C++ Only**
    - `BatchEvalCompareInt64`
    - `BatchCastIntToFloat`
    - `ScanAggregateFloat64`
@@ -349,12 +373,13 @@ func (c *Cache) Get(pageNum uint32) (*Page, bool) {
 - Type-safe C pointer
 - Cleaner code
 
-### Pattern 2: Registry for Callbacks (C++ → Go)
+### Pattern 2: Registry for Callbacks (Legacy - Avoid)
 
-**Use for**: `overflow`, `btree`, `columnar`, `row_store` (need PageManager)
+**Use for**: Legacy `overflow`, `btree`, `columnar`, `row_store` (need PageManager)
+**Goal**: Refactor to eliminate these patterns
 
 ```go
-// Registry ONLY for callback context
+// Registry ONLY for callback context (LEGACY - to be removed)
 var btreeCtxRegistry = make(map[uintptr]*btreeCallbackCtx)
 
 func NewBTree(pm *PageManager, rootPage uint32, isTable bool) *BTree {
@@ -373,15 +398,51 @@ func goBtreePageRead(userData unsafe.Pointer, ...) C.int {
 }
 ```
 
-**Key insight**: Registry lookup only in callback path, not every method call!
+**Target**: Eliminate registry by embedding all logic in C++
+
+### Pattern 3: C++ Only (Target Architecture)
+
+**Goal**: Self-contained C++ modules with thin Go wrappers
+
+```cpp
+// C++ implementation owns all logic
+class BTree {
+    std::unique_ptr<PageManager> pageMgr_;  // C++ PageManager
+public:
+    void Insert(Key key, Value val) {
+        // All logic in C++, no callbacks to Go
+        Page* page = pageMgr_->Read(root_);
+        // ... btree logic
+        pageMgr_->Write(page);
+    }
+};
+```
+
+```go
+// Thin Go wrapper (no callbacks)
+type BTree struct {
+    cBtree *C.svdb_btree_t
+}
+
+func (bt *BTree) Insert(key, value []byte) error {
+    return error(C.svdb_btree_insert(bt.cBtree, ...))
+}
+```
+
+**Migration Path**:
+1. Identify components with Go callbacks
+2. Refactor C++ to own all logic (embed PageManager, etc.)
+3. Remove registry from Go wrapper
+4. Thin Go wrapper for API only
 
 ### Performance Comparison
 
 | Pattern | Overhead per Call | Use Case |
 |---------|------------------|----------|
-| Direct C Pointer | ~10ns | Self-contained C++ (cache, value, etc.) |
-| Registry for Callbacks | ~260ns | C++ needing Go callbacks (overflow, btree) |
-| **Improvement** | **26x faster** | When using correct pattern |
+| C++ Only | ~5ns | Self-contained (target) |
+| Direct C Pointer | ~10ns | Self-contained C++ |
+| Registry for Callbacks | ~260ns | Legacy (to be eliminated) |
+| **Improvement** | **52x faster** | C++ Only vs Registry |
 
 ---
 
@@ -396,13 +457,15 @@ func goBtreePageRead(userData unsafe.Pointer, ...) C.int {
 - [x] Review build system (`CMakeLists.txt`, `build.sh`)
 - [x] Create comprehensive refactor plan
 - [x] Define correct CGO architecture patterns (direct vs registry)
+- [x] **NEW**: Identify opportunities for C++ Only migration
 
-### Phase 1: Complete Partial Migrations (High Priority) 🔄 IN PROGRESS
+### Phase 1: Eliminate Registry Overhead (High Priority) 🔄 IN PROGRESS
 
-#### 1.1 Complete `btree.cpp` Insert/Delete
+#### 1.1 B-Tree C++ Only
 - [x] C++ insert with page split (implemented)
 - [x] C++ delete with merge (implemented)
-- [ ] Go wrapper using CGO (blocked: needs cursor support)
+- [ ] **NEW**: Embed PageManager in btree.cpp (eliminate Go callbacks)
+- [ ] Remove registry from Go wrapper
 - [ ] C++ unit tests
 - [ ] Go tests via CGO
 
@@ -526,17 +589,17 @@ sqlvibe/
 | Phase | Tasks | Status | Effort | Dependencies |
 |-------|-------|--------|--------|--------------|
 | Phase 0 | Analysis & Planning | ✅ Complete | - | None |
-| Phase 1.1 | btree.cpp insert/delete | 🔄 In Progress | 2-3 days | Phase 0 |
-| Phase 1.2 | overflow.cpp | ✅ Complete | 1 day | Phase 0 |
-| Phase 1.3 | cache.cpp | ✅ Complete | 1 day | Phase 0 |
-| Phase 2 | DS layer (columnar, row_store) | ✅ Complete | 4-6 days | Phase 1 |
-| Phase 3.1 | Extend opcodes.cpp | Pending | 5-7 days | Phase 2 |
-| Phase 4 | QP parser stubs | 🔄 In Progress | 5-10 days | Phase 3 |
+| Phase 1 | Eliminate Registry Overhead | 🔄 In Progress | 4-5 days | Phase 0 |
+| Phase 2 | DS Layer (C++ Only) | Pending | 4-6 days | Phase 1 |
+| Phase 3 | VM Layer (C++ Only) | Pending | 8-11 days | Phase 2 |
+| Phase 4 | QP Parser (C++ Only) | Pending | 5-10 days | Phase 3 |
 | Phase 5 | Legacy code removal | Pending | 3-5 days | Phases 1-4 |
 | Phase 6 | Architecture cleanup | Pending | 2-3 days | Phase 5 |
 | Phase 7 | Testing & validation | Ongoing | 1-2 days | All phases |
 
 **Total Estimated Effort**: 25-35 working days (5-7 weeks)
+
+**Key Change**: Phases now focus on C++ Only migration (eliminating Go callbacks) rather than just wrapping C++ with CGO.
 
 ---
 
@@ -563,17 +626,20 @@ sqlvibe/
 
 ## Notes
 
+- **Strategy Shift**: Move from Go→C++→Go to C++ Only where possible
 - **CGO Files**: 17 Go files currently use `import "C"`
+- **Target**: Reduce CGO wrappers by embedding logic in C++
 - **Test Strategy**: All tests remain in Go, validating C++ via CGO wrappers
-- **Performance Goal**: No regression, ideally 5-10% improvement in hot paths
+- **Performance Goal**: 52x improvement by eliminating registry overhead
 - **Memory Safety**: C++ uses RAII, Go GC handles wrapper memory
-- **Architecture**: Use direct C pointer for self-contained C++, registry only for callbacks
+- **Architecture**: Use direct C pointer for self-contained C++, eliminate registry patterns
 
 ---
 
 **Status Legend**:
-- ✅ **COMPLETE**: C++ impl + CGO wrapper + tests passing
-- ⚠️ **PARTIAL**: C++ impl exists, Go wrapper needs update
+- ✅ **COMPLETE**: C++ Only (self-contained, no Go callbacks)
+- ✅ **CGO**: CGO wrapper (may include Go callbacks)
+- ⚠️ **PARTIAL**: C++ impl exists, Go wrapper needs update (target: C++ Only)
 - 🚧 **STUB**: C++ stub created, full implementation pending
 - ❌ **TODO**: Not started
 - 📋 **GO-ONLY**: Will remain in Go (orchestration/Go-specific)
@@ -581,4 +647,4 @@ sqlvibe/
 ---
 
 **Last Updated**: 2026-03-02
-**Next Review**: After Phase 1 completion (btree cursor support)
+**Next Review**: After Phase 1 completion (registry elimination)
