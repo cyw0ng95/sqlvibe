@@ -35,6 +35,9 @@ svdb_row_store_t* svdb_row_store_create_embedded(const char* const* col_names,
 /* Destroy the store and free all memory. */
 void svdb_row_store_destroy(svdb_row_store_t* store);
 
+/* Destroy an embedded row store (with persistence metadata). */
+void svdb_row_store_destroy_embedded(svdb_row_store_t* store);
+
 /*
  * Persist the row store to disk using embedded PageManager.
  */

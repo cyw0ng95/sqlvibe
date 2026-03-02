@@ -43,6 +43,9 @@ svdb_column_store_t* svdb_column_store_create_embedded(const char* const* col_na
 /* Destroy the store and free all memory. */
 void svdb_column_store_destroy(svdb_column_store_t* store);
 
+/* Destroy an embedded column store (with persistence metadata). */
+void svdb_column_store_destroy_embedded(svdb_column_store_t* store);
+
 /*
  * Persist the column store to disk using embedded PageManager.
  * Returns 1 on success, 0 on error.

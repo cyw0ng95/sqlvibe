@@ -41,9 +41,6 @@ typedef struct {
     free_page_fn free_page;
 } svdb_page_manager_t;
 
-// Create a new B-Tree instance (with Go callbacks - legacy)
-svdb_btree_t* svdb_btree_create(const svdb_btree_config_t* config, const svdb_page_manager_t* pm);
-
 // Create a new B-Tree instance with embedded C++ PageManager (no Go callbacks)
 // This is the preferred method for v0.11.0+ - eliminates Go callback overhead
 // Parameters:
@@ -52,8 +49,19 @@ svdb_btree_t* svdb_btree_create(const svdb_btree_config_t* config, const svdb_pa
 //   - is_table: 1 for table B-Tree, 0 for index B-Tree
 //   - page_size: Page size (must be valid per svdb_manager_is_valid_page_size)
 //   - cache_pages: Number of pages to cache (0 = use default 2000)
-svdb_btree_t* svdb_btree_create_embedded(const char* db_path, uint32_t root_page, 
+//
+// Returns: B-Tree handle, or NULL on error
+svdb_btree_t* svdb_btree_create_embedded(const char* db_path, uint32_t root_page,
                                          int is_table, uint32_t page_size, int cache_pages);
+
+// Create a new B-Tree instance (with Go callbacks - legacy, deprecated)
+// Only use this if you cannot use the embedded version.
+// Parameters:
+//   - config: B-Tree configuration
+//   - pm: Page manager callbacks (provided by Go)
+//
+// Returns: B-Tree handle, or NULL on error
+svdb_btree_t* svdb_btree_create(const svdb_btree_config_t* config, const svdb_page_manager_t* pm);
 
 // Destroy a B-Tree instance
 void svdb_btree_destroy(svdb_btree_t* bt);

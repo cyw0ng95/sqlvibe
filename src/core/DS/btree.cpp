@@ -8,10 +8,75 @@
 // Internal B-Tree structure
 struct svdb_btree {
     svdb_btree_config_t config;
-    svdb_page_manager_t pm;
+    
+    // Embedded PageManager (for self-contained mode)
+    svdb_page_manager* embedded_pm;
+    bool own_embedded_pm;
+    
+    // Callback-based PageManager (legacy mode)
+    svdb_page_manager_t callback_pm;
+    bool use_callbacks;
+    
     uint32_t depth;
     uint32_t leaf_count;
 };
+
+// Helper: Read page using embedded or callback PageManager
+static int btree_read_page(svdb_btree_t* bt, uint32_t page_num,
+                           uint8_t** page_data, size_t* page_size) {
+    if (!bt || page_num == 0) return 0;
+    
+    if (bt->use_callbacks && bt->callback_pm.read_page) {
+        return bt->callback_pm.read_page(bt->callback_pm.user_data, page_num, page_data, page_size);
+    } else if (bt->embedded_pm) {
+        const uint8_t* const_data = nullptr;
+        int result = svdb_page_manager_read(bt->embedded_pm, page_num, &const_data, page_size);
+        if (result && const_data) {
+            // Cast away const - caller should not modify
+            *page_data = const_cast<uint8_t*>(const_data);
+        }
+        return result;
+    }
+    return 0;
+}
+
+// Helper: Write page using embedded or callback PageManager
+static int btree_write_page(svdb_btree_t* bt, uint32_t page_num,
+                            const uint8_t* page_data, size_t page_size) {
+    if (!bt || page_num == 0) return 0;
+    
+    if (bt->use_callbacks && bt->callback_pm.write_page) {
+        return bt->callback_pm.write_page(bt->callback_pm.user_data, page_num, 
+                                          const_cast<uint8_t*>(page_data), page_size);
+    } else if (bt->embedded_pm) {
+        return svdb_page_manager_write(bt->embedded_pm, page_num, page_data, page_size);
+    }
+    return 0;
+}
+
+// Helper: Allocate page using embedded or callback PageManager
+static int btree_allocate_page(svdb_btree_t* bt, uint32_t* page_num) {
+    if (!bt) return 0;
+    
+    if (bt->use_callbacks && bt->callback_pm.allocate_page) {
+        return bt->callback_pm.allocate_page(bt->callback_pm.user_data, page_num);
+    } else if (bt->embedded_pm) {
+        return svdb_page_manager_allocate(bt->embedded_pm, page_num);
+    }
+    return 0;
+}
+
+// Helper: Free page using embedded or callback PageManager
+static int btree_free_page(svdb_btree_t* bt, uint32_t page_num) {
+    if (!bt || page_num == 0) return 0;
+    
+    if (bt->use_callbacks && bt->callback_pm.free_page) {
+        return bt->callback_pm.free_page(bt->callback_pm.user_data, page_num);
+    } else if (bt->embedded_pm) {
+        return svdb_page_manager_free(bt->embedded_pm, page_num);
+    }
+    return 0;
+}
 
 // Page type constants
 static const uint8_t PAGE_TYPE_TABLE_LEAF = 0x0d;
@@ -181,32 +246,32 @@ static int search_leaf_page(const uint8_t* page_data, size_t page_size,
 // Search in an interior page
 static int search_interior_page(const uint8_t* page_data, size_t page_size,
                                 const uint8_t* key, size_t key_len, int is_table,
-                                const svdb_page_manager_t* pm, uint32_t* child_page) {
+                                svdb_btree_t* bt, uint32_t* child_page) {
     int num_cells = (page_data[3] << 8) | page_data[4];
-    
+
     // Find the right child
     for (int i = 0; i < num_cells; i++) {
         int cell_ptr_offset = 8 + i * 2;
         uint16_t cell_offset = (page_data[cell_ptr_offset] << 8) | page_data[cell_ptr_offset + 1];
-        
+
         uint32_t left_child;
         int64_t rowid;
         int n;
-        
+
         if (is_table) {
             // Table interior: left_child (4 bytes) + rowid (varint)
             left_child = (page_data[cell_offset] << 24) |
                          (page_data[cell_offset + 1] << 16) |
                          (page_data[cell_offset + 2] << 8) |
                          page_data[cell_offset + 3];
-            
+
             svdb_get_varint(page_data + cell_offset + 4, page_size - cell_offset - 4, &rowid, &n);
-            
+
             // Compare rowid
             int64_t search_rowid;
             int key_bytes;
             svdb_get_varint(key, key_len, &search_rowid, &key_bytes);
-            
+
             if (search_rowid <= rowid) {
                 *child_page = left_child;
                 return 1;
@@ -217,23 +282,23 @@ static int search_interior_page(const uint8_t* page_data, size_t page_size,
                          (page_data[cell_offset + 1] << 16) |
                          (page_data[cell_offset + 2] << 8) |
                          page_data[cell_offset + 3];
-            
+
             size_t key_len_cell = page_size - cell_offset - 4;
             const uint8_t* cell_key = page_data + cell_offset + 4;
-            
+
             // Compare keys
             size_t cmp_len = (key_len < key_len_cell) ? key_len : key_len_cell;
             int cmp = std::memcmp(key, cell_key, cmp_len);
-            
+
             if (cmp <= 0) {
                 *child_page = left_child;
                 return 1;
             }
         }
     }
-    
+
     // Use rightmost child
-    uint32_t right_child = (page_data[8] << 24) | (page_data[9] << 16) | 
+    uint32_t right_child = (page_data[8] << 24) | (page_data[9] << 16) |
                            (page_data[10] << 8) | page_data[11];
     *child_page = right_child;
     return 1;
@@ -245,24 +310,60 @@ svdb_btree_t* svdb_btree_create(const svdb_btree_config_t* config, const svdb_pa
     if (!config || !pm) {
         return nullptr;
     }
-    
+
     svdb_btree_t* bt = static_cast<svdb_btree_t*>(std::calloc(1, sizeof(svdb_btree_t)));
     if (!bt) {
         return nullptr;
     }
-    
+
     bt->config = *config;
-    bt->pm = *pm;
+    bt->callback_pm = *pm;
+    bt->use_callbacks = true;
+    bt->embedded_pm = nullptr;
+    bt->own_embedded_pm = false;
     bt->depth = 1;
     bt->leaf_count = 0;
-    
+
+    return bt;
+}
+
+svdb_btree_t* svdb_btree_create_embedded(const char* db_path, uint32_t root_page,
+                                         int is_table, uint32_t page_size, int cache_pages) {
+    if (!db_path || !svdb_manager_is_valid_page_size(page_size)) {
+        return nullptr;
+    }
+
+    svdb_btree_t* bt = static_cast<svdb_btree_t*>(std::calloc(1, sizeof(svdb_btree_t)));
+    if (!bt) {
+        return nullptr;
+    }
+
+    bt->config.root_page = root_page;
+    bt->config.is_table = is_table;
+    bt->config.page_size = page_size;
+    bt->use_callbacks = false;
+    bt->embedded_pm = svdb_page_manager_create(db_path, page_size, cache_pages);
+    bt->own_embedded_pm = (bt->embedded_pm != nullptr);
+    bt->depth = 1;
+    bt->leaf_count = 0;
+
+    if (!bt->embedded_pm) {
+        std::free(bt);
+        return nullptr;
+    }
+
     return bt;
 }
 
 void svdb_btree_destroy(svdb_btree_t* bt) {
-    if (bt) {
-        std::free(bt);
+    if (!bt) return;
+    
+    // Destroy embedded PageManager if we own it
+    if (bt->own_embedded_pm && bt->embedded_pm) {
+        svdb_page_manager_destroy(bt->embedded_pm);
     }
+    
+    std::free(bt);
 }
 
 int svdb_btree_search(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
@@ -270,37 +371,37 @@ int svdb_btree_search(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
     if (!bt || !key || key_len == 0 || !value || !value_len) {
         return 0;
     }
-    
+
     *value = nullptr;
     *value_len = 0;
-    
+
     if (bt->config.root_page == 0) {
         return 0;  // Empty tree
     }
-    
+
     // Read root page
     uint8_t* page_data = nullptr;
     size_t page_size = 0;
-    
-    if (!bt->pm.read_page || bt->pm.read_page(bt->pm.user_data, bt->config.root_page, &page_data, &page_size) != 0) {
+
+    if (btree_read_page(bt, bt->config.root_page, &page_data, &page_size) != 1) {
         return 0;
     }
-    
+
     if (!page_data || page_size < 12) {
         return 0;
     }
-    
+
     uint8_t page_type = page_data[0];
     int is_table = (page_type == PAGE_TYPE_TABLE_LEAF || page_type == PAGE_TYPE_TABLE_INTERIOR);
     int is_leaf = (page_type == PAGE_TYPE_TABLE_LEAF || page_type == PAGE_TYPE_INDEX_LEAF);
-    
+
     // Navigate tree
     uint32_t current_page = bt->config.root_page;
-    
+
     while (current_page != 0) {
         // Read current page
         if (current_page != bt->config.root_page) {
-            if (!bt->pm.read_page || bt->pm.read_page(bt->pm.user_data, current_page, &page_data, &page_size) != 0) {
+            if (btree_read_page(bt, current_page, &page_data, &page_size) != 1) {
                 return 0;
             }
             if (!page_data || page_size < 12) {
@@ -309,7 +410,7 @@ int svdb_btree_search(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
             page_type = page_data[0];
             is_leaf = (page_type == PAGE_TYPE_TABLE_LEAF || page_type == PAGE_TYPE_INDEX_LEAF);
         }
-        
+
         if (is_leaf) {
             // Search in leaf
             int found = search_leaf_page(page_data, page_size, key, key_len, is_table, value, value_len);
@@ -317,13 +418,13 @@ int svdb_btree_search(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
         } else {
             // Navigate to child
             uint32_t child_page;
-            if (!search_interior_page(page_data, page_size, key, key_len, is_table, &bt->pm, &child_page)) {
+            if (!search_interior_page(page_data, page_size, key, key_len, is_table, bt, &child_page)) {
                 return 0;
             }
             current_page = child_page;
         }
     }
-    
+
     return 0;
 }
 
@@ -518,12 +619,11 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
                       const uint8_t* value, size_t value_len) {
     if (!bt || !key || key_len == 0 || !value) return 0;
     if (bt->config.root_page == 0) return 0;
-    if (!bt->pm.read_page || !bt->pm.write_page) return 0;
-
+    
     // Read root page
     uint8_t* page_data = nullptr;
     size_t page_size = 0;
-    if (bt->pm.read_page(bt->pm.user_data, bt->config.root_page, &page_data, &page_size) != 0)
+    if (btree_read_page(bt, bt->config.root_page, &page_data, &page_size) != 1)
         return 0;
     if (!page_data || page_size < 8) return 0;
 
@@ -534,9 +634,9 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
     if (!is_leaf) {
         // Navigate to the leaf (simplified: only handles single-level tree for now)
         uint32_t child_page;
-        if (!search_interior_page(page_data, page_size, key, key_len, is_table, &bt->pm, &child_page))
+        if (!search_interior_page(page_data, page_size, key, key_len, is_table, bt, &child_page))
             return 0;
-        if (bt->pm.read_page(bt->pm.user_data, child_page, &page_data, &page_size) != 0)
+        if (btree_read_page(bt, child_page, &page_data, &page_size) != 1)
             return 0;
         if (!page_data || page_size < 8) return 0;
         page_type = page_data[0];
@@ -546,7 +646,7 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
         // Try to insert into leaf
         int ok = insert_into_leaf(page_data, page_size, key, key_len, value, value_len, is_table);
         if (ok) {
-            bt->pm.write_page(bt->pm.user_data, child_page, page_data, page_size);
+            btree_write_page(bt, child_page, page_data, page_size);
             return 1;
         }
         return 0; // Would need split – left as future work
@@ -555,20 +655,19 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
     // Root is a leaf: try direct insert
     int ok = insert_into_leaf(page_data, page_size, key, key_len, value, value_len, is_table);
     if (ok) {
-        bt->pm.write_page(bt->pm.user_data, bt->config.root_page, page_data, page_size);
+        btree_write_page(bt, bt->config.root_page, page_data, page_size);
         bt->leaf_count++;
         return 1;
     }
 
     // Page is full – allocate a new page and split (simple root-only split)
-    if (!bt->pm.allocate_page) return 0;
     uint32_t new_page_num = 0;
-    if (bt->pm.allocate_page(bt->pm.user_data, &new_page_num) != 0) return 0;
+    if (btree_allocate_page(bt, &new_page_num) != 1) return 0;
 
     // Read new page
     uint8_t* new_page_data = nullptr;
     size_t new_page_size = 0;
-    if (bt->pm.read_page(bt->pm.user_data, new_page_num, &new_page_data, &new_page_size) != 0)
+    if (btree_read_page(bt, new_page_num, &new_page_data, &new_page_size) != 1)
         return 0;
     if (!new_page_data) return 0;
 
@@ -629,8 +728,8 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
     page_data[4] = (uint8_t)(split & 0xff);
 
     // Write both pages
-    bt->pm.write_page(bt->pm.user_data, bt->config.root_page, page_data, page_size);
-    bt->pm.write_page(bt->pm.user_data, new_page_num, new_page_data, new_page_size);
+    btree_write_page(bt, bt->config.root_page, page_data, page_size);
+    btree_write_page(bt, new_page_num, new_page_data, new_page_size);
     bt->depth = 2;
     bt->leaf_count++;
 
@@ -666,20 +765,20 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
 
     // Insert the new key into the determined page
     if (!use_new_page) {
-        if (bt->pm.read_page(bt->pm.user_data, bt->config.root_page, &page_data, &page_size) == 0 &&
+        if (btree_read_page(bt, bt->config.root_page, &page_data, &page_size) == 1 &&
             page_data && page_size >= 8) {
             int r = insert_into_leaf(page_data, page_size, key, key_len, value, value_len, is_table);
             if (r) {
-                bt->pm.write_page(bt->pm.user_data, bt->config.root_page, page_data, page_size);
+                btree_write_page(bt, bt->config.root_page, page_data, page_size);
                 return 1;
             }
         }
     } else {
-        if (bt->pm.read_page(bt->pm.user_data, new_page_num, &new_page_data, &new_page_size) == 0 &&
+        if (btree_read_page(bt, new_page_num, &new_page_data, &new_page_size) == 1 &&
             new_page_data && new_page_size >= 8) {
             int r = insert_into_leaf(new_page_data, new_page_size, key, key_len, value, value_len, is_table);
             if (r) {
-                bt->pm.write_page(bt->pm.user_data, new_page_num, new_page_data, new_page_size);
+                btree_write_page(bt, new_page_num, new_page_data, new_page_size);
                 return 1;
             }
         }
@@ -690,12 +789,11 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
 int svdb_btree_delete(svdb_btree_t* bt, const uint8_t* key, size_t key_len) {
     if (!bt || !key || key_len == 0) return 0;
     if (bt->config.root_page == 0) return 0;
-    if (!bt->pm.read_page || !bt->pm.write_page) return 0;
 
     // Read root page
     uint8_t* page_data = nullptr;
     size_t page_size = 0;
-    if (bt->pm.read_page(bt->pm.user_data, bt->config.root_page, &page_data, &page_size) != 0)
+    if (btree_read_page(bt, bt->config.root_page, &page_data, &page_size) != 1)
         return 0;
     if (!page_data || page_size < 8) return 0;
 
@@ -706,9 +804,9 @@ int svdb_btree_delete(svdb_btree_t* bt, const uint8_t* key, size_t key_len) {
     if (!is_leaf) {
         // Navigate to leaf for delete
         uint32_t child_page;
-        if (!search_interior_page(page_data, page_size, key, key_len, is_table, &bt->pm, &child_page))
+        if (!search_interior_page(page_data, page_size, key, key_len, is_table, bt, &child_page))
             return 0;
-        if (bt->pm.read_page(bt->pm.user_data, child_page, &page_data, &page_size) != 0)
+        if (btree_read_page(bt, child_page, &page_data, &page_size) != 1)
             return 0;
         if (!page_data || page_size < 8) return 0;
         page_type = page_data[0];
@@ -716,14 +814,14 @@ int svdb_btree_delete(svdb_btree_t* bt, const uint8_t* key, size_t key_len) {
         if (!is_leaf) return 0;
 
         int ok = delete_from_leaf(page_data, page_size, key, key_len, is_table);
-        if (ok) bt->pm.write_page(bt->pm.user_data, child_page, page_data, page_size);
+        if (ok) btree_write_page(bt, child_page, page_data, page_size);
         return ok;
     }
 
     // Root is a leaf
     int ok = delete_from_leaf(page_data, page_size, key, key_len, is_table);
     if (ok) {
-        bt->pm.write_page(bt->pm.user_data, bt->config.root_page, page_data, page_size);
+        btree_write_page(bt, bt->config.root_page, page_data, page_size);
         if (bt->leaf_count > 0) bt->leaf_count--;
     }
     return ok;
@@ -739,127 +837,50 @@ uint32_t svdb_btree_get_leaf_count(svdb_btree_t* bt) {
     return bt->leaf_count;
 }
 
-} // extern "C"
-
 /* -------------------------------------------------------------------------
  * Embedded B-Tree (no Go callbacks)
  * ----------------------------------------------------------------------- */
 
 #include <string>
 
-namespace svdb {
-namespace ds {
-
-// Forward declarations for embedded B-Tree operations
-static int embedded_btree_search(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
-                                  uint8_t** value, size_t* value_len);
-static int embedded_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
-                                  const uint8_t* value, size_t value_len);
-static int embedded_btree_delete(svdb_btree_t* bt, const uint8_t* key, size_t key_len);
-
-struct EmbeddedBTree {
-    svdb_btree_config_t config;
-    svdb_page_manager* pm;  // Embedded C++ PageManager
-    uint32_t depth;
-    uint32_t leaf_count;
-    bool own_pm;  // Whether we own the PageManager
-};
-
-// Create B-Tree with embedded PageManager
-extern "C" {
-
-svdb_btree_t* svdb_btree_create_embedded(const char* db_path, uint32_t root_page,
-                                          int is_table, uint32_t page_size, int cache_pages) {
-    if (!db_path || !svdb_manager_is_valid_page_size(page_size)) {
-        return nullptr;
-    }
-
-    EmbeddedBTree* bt = new (std::nothrow) EmbeddedBTree;
-    if (!bt) return nullptr;
-
-    bt->config.root_page = root_page;
-    bt->config.is_table = is_table;
-    bt->config.page_size = page_size;
-    bt->depth = 0;
-    bt->leaf_count = 0;
-    bt->own_pm = true;
-
-    // Create embedded PageManager
-    bt->pm = svdb_page_manager_create(db_path, page_size, cache_pages);
-    if (!bt->pm) {
-        delete bt;
-        return nullptr;
-    }
-
-    // Initialize root page if needed (new B-Tree)
-    if (root_page == 0) {
-        uint32_t new_root;
-        if (svdb_page_manager_allocate(bt->pm, &new_root)) {
-            bt->config.root_page = new_root;
-            
-            // Initialize empty leaf page
-            const uint8_t* page_data;
-            size_t page_size_out;
-            if (svdb_page_manager_read(bt->pm, new_root, &page_data, &page_size_out)) {
-                // Page already zero-initialized from allocation
-                bt->depth = 1;
-                bt->leaf_count = 0;
-            }
-        }
-    }
-
-    return reinterpret_cast<svdb_btree_t*>(bt);
-}
-
-// Wrapper functions for embedded B-Tree
+// Wrapper functions for embedded B-Tree (deprecated - use direct embedded PM instead)
+// These are kept for backwards compatibility but should not be used
 static int embedded_pm_read(void* user_data, uint32_t page_num, uint8_t** page_data, size_t* page_size) {
-    EmbeddedBTree* bt = static_cast<EmbeddedBTree*>(user_data);
-    const uint8_t* data = nullptr;
-    size_t size = 0;
-    if (svdb_page_manager_read(bt->pm, page_num, &data, &size)) {
-        // Need to copy since cached data may change
-        *page_data = static_cast<uint8_t*>(std::malloc(size));
-        if (*page_data) {
-            std::memcpy(*page_data, data, size);
-            *page_size = size;
-            return 1;
-        }
-    }
-    return 0;
+    svdb_btree_t* bt = static_cast<svdb_btree_t*>(user_data);
+    return btree_read_page(bt, page_num, page_data, page_size);
 }
 
 static int embedded_pm_write(void* user_data, uint32_t page_num, const uint8_t* page_data, size_t page_size) {
-    EmbeddedBTree* bt = static_cast<EmbeddedBTree*>(user_data);
-    return svdb_page_manager_write(bt->pm, page_num, page_data, page_size);
+    svdb_btree_t* bt = static_cast<svdb_btree_t*>(user_data);
+    return btree_write_page(bt, page_num, page_data, page_size);
 }
 
 static int embedded_pm_allocate(void* user_data, uint32_t* page_num) {
-    EmbeddedBTree* bt = static_cast<EmbeddedBTree*>(user_data);
-    return svdb_page_manager_allocate(bt->pm, page_num);
+    svdb_btree_t* bt = static_cast<svdb_btree_t*>(user_data);
+    return btree_allocate_page(bt, page_num);
 }
 
 static int embedded_pm_free(void* user_data, uint32_t page_num) {
-    EmbeddedBTree* bt = static_cast<EmbeddedBTree*>(user_data);
-    return svdb_page_manager_free(bt->pm, page_num);
+    svdb_btree_t* bt = static_cast<svdb_btree_t*>(user_data);
+    return btree_free_page(bt, page_num);
 }
 
 } // extern "C"
+
+namespace svdb {
+namespace ds {
 
 // C++ wrapper implementation
 BTreeEmbedded::BTreeEmbedded(const std::string& db_path, uint32_t root_page,
                              bool is_table, uint32_t page_size, int cache_pages)
     : btree_(nullptr) {
-    btree_ = svdb_btree_create_embedded(db_path.c_str(), root_page, 
+    btree_ = svdb_btree_create_embedded(db_path.c_str(), root_page,
                                         is_table ? 1 : 0, page_size, cache_pages);
 }
 
 BTreeEmbedded::~BTreeEmbedded() {
     if (btree_) {
-        EmbeddedBTree* bt = reinterpret_cast<EmbeddedBTree*>(btree_);
-        if (bt->pm && bt->own_pm) {
-            svdb_page_manager_destroy(bt->pm);
-        }
-        delete bt;
+        svdb_btree_destroy(btree_);
         btree_ = nullptr;
     }
 }
@@ -891,11 +912,7 @@ uint32_t BTreeEmbedded::GetLeafCount() const {
 
 bool BTreeEmbedded::Sync() {
     if (!btree_) return false;
-    EmbeddedBTree* bt = reinterpret_cast<EmbeddedBTree*>(btree_);
-    if (bt->pm) {
-        return svdb_page_manager_sync(bt->pm) == 1;
-    }
-    return false;
+    return svdb_page_manager_sync(btree_->embedded_pm) == 1;
 }
 
 } // namespace ds
