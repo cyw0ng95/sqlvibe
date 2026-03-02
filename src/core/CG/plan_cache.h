@@ -2,6 +2,7 @@
 #define SVDB_CG_PLAN_CACHE_H
 
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {

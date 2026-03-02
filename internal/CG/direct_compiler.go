@@ -2,7 +2,6 @@ package CG
 
 import (
 	"fmt"
-	"strings"
 
 	QP "github.com/cyw0ng95/sqlvibe/internal/QP"
 	VM "github.com/cyw0ng95/sqlvibe/internal/VM"
@@ -24,17 +23,9 @@ func NewDirectCompiler(tables func(string) ([]string, error), cache *PlanCache) 
 
 // canFastPath returns true for simple single-table SELECT queries without
 // subqueries, CTEs, window functions, or complex expressions.
+// Delegates to C++ direct_compiler for consistent analysis.
 func canFastPath(sql string) bool {
-	upper := strings.ToUpper(strings.TrimSpace(sql))
-	if !strings.HasPrefix(upper, "SELECT") {
-		return false
-	}
-	for _, kw := range []string{"WITH ", "WINDOW ", "OVER ", "JOIN ", "UNION ", "INTERSECT ", "EXCEPT "} {
-		if strings.Contains(upper, kw) {
-			return false
-		}
-	}
-	return true
+	return cDirectIsSimpleSelect(sql)
 }
 
 // IsFastPath reports whether a SQL query qualifies for the direct compilation path.
