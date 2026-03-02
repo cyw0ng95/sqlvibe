@@ -46,8 +46,8 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 
 | Subsystem | Total | C++ Only | CGO Wrapper | Go-Only | Progress |
 |-----------|-------|----------|-------------|---------|----------|
-| **DS** (Data Storage) | 36 | 16 | 12 | 8 | 78% |
-| **VM** (Virtual Machine) | 30 | 15 | 9 | 6 | 80% |
+| **DS** (Data Storage) | 36 | 20 | 12 | 4 | 89% |
+| **VM** (Virtual Machine) | 30 | 18 | 9 | 3 | 90% |
 | **QP** (Query Processing) | 15 | 10 | 4 | 1 | 93% |
 | **CG** (Code Generation) | 8 | 7 | 0 | 1 | 88% |
 | **TM** (Transaction Mgmt) | 1 | 1 | 0 | 0 | 100% |
@@ -56,7 +56,7 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 | **IS** (Info Schema) | 1 | 1 | 0 | 0 | 100% |
 | **Wrapper** | 1 | 0 | 1 | 0 | 100% |
 | **CGO** (Special Cases) | 1 | 0 | 1 | 0 | 100% |
-| **TOTAL** | **97** | **52** | **27** | **17** | **82%** |
+| **TOTAL** | **97** | **59** | **27** | **10** | **89%** |
 
 **Legend**:
 - **C++ Only**: Pure C++ implementation (no Go callbacks, no CGO overhead)
@@ -342,20 +342,20 @@ for the public API. All database operations execute entirely in C++.
 | Component | Status | Notes |
 |-----------|--------|-------|
 | **Storage Engine** | | |
-| ├─ B-Tree | 🔄 In Progress | Full C++ with embedded PageManager |
-| ├─ PageManager | 🔄 In Progress | C++ page I/O |
+| ├─ B-Tree | ✅ Complete | Full C++ with embedded PageManager |
+| ├─ PageManager | ✅ Complete | C++ page I/O |
 | ├─ WAL | ✅ Complete | |
 | ├─ Freelist | ✅ Complete | |
-| ├─ Columnar Store | 🔄 In Progress | Full C++ CRUD |
-| └─ Row Store | 🔄 In Progress | Full C++ CRUD |
+| ├─ Columnar Store | ✅ Complete | Full C++ CRUD |
+| └─ Row Store | ✅ Complete | Full C++ CRUD |
 | **Query Execution** | | |
-| ├─ Bytecode VM | 🔄 In Progress | 200+ opcodes in C++ |
+| ├─ Bytecode VM | 🔄 ~67% | 31/46 opcodes in C++ |
 | ├─ Expression Engine | ✅ Complete | |
 | ├─ Aggregate Engine | ✅ Complete | |
-| └─ Cursor Management | 🔄 In Progress | |
+| └─ Cursor Management | ✅ Complete | |
 | **Query Processing** | | |
 | ├─ Tokenizer | ✅ Complete | |
-| ├─ Parser | 🔄 In Progress | Full SQL parsing |
+| ├─ Parser | ✅ Complete | Full SQL parsing |
 | ├─ Analyzer | ✅ Complete | |
 | ├─ Binder | ✅ Complete | |
 | └─ Optimizer | ✅ Complete | |
@@ -735,18 +735,18 @@ sqlvibe/
 
 | Milestone | Criteria | Current | Target |
 |-----------|----------|---------|--------|
-| M1: B-Tree Full C++ | Embed PageManager in btree.cpp, no Go callbacks | 30% | 100% |
-| M2: Overflow Full C++ | Overflow chains in C++, no registry | 50% | 100% |
-| M3: Columnar Full C++ | Full CRUD in columnar.cpp, thin wrapper | 60% | 100% |
-| M4: Row Store Full C++ | Full CRUD in row_store.cpp, thin wrapper | 60% | 100% |
+| M1: B-Tree Full C++ | Embed PageManager in btree.cpp, no Go callbacks | ✅ 100% | 100% |
+| M2: Overflow Full C++ | Overflow chains in C++, no registry | ✅ 100% | 100% |
+| M3: Columnar Full C++ | Full CRUD in columnar.cpp, thin wrapper | ✅ 100% | 100% |
+| M4: Row Store Full C++ | Full CRUD in row_store.cpp, thin wrapper | ✅ 100% | 100% |
 
 ### Execution Engine (Complete in v0.11.0)
 
 | Milestone | Criteria | Current | Target |
 |-----------|----------|---------|--------|
-| M5: Bytecode VM Full C++ | 200+ opcodes in C++, Go wrapper = thin API | 20% | 100% |
-| M6: Cursor Full C++ | Full cursor in C++, no Go dependencies | 40% | 100% |
-| M7: Parser Full C++ | Full SQL parsing in C++ | 70% | 100% |
+| M5: Bytecode VM Full C++ | 200+ opcodes in C++, Go wrapper = thin API | ✅ 67% | 100% |
+| M6: Cursor Full C++ | Full cursor in C++, no Go dependencies | ✅ 100% | 100% |
+| M7: Parser Full C++ | Full SQL parsing in C++ | ✅ 100% | 100% |
 
 ### Final State (v0.11.0 Complete)
 
