@@ -1878,6 +1878,10 @@ if err != nil {
 return nil, err
 }
 
+// Apply C++ dead-code elimination and peephole optimisation on the
+// bytecode instruction slice (zero-copy raw-buffer path, no JSON).
+prog.Instrs = CG.OptimizeBytecodeInstrs(prog.Instrs)
+
 ctx := &dbBcVmContext{db: db}
 bcVM := VM.NewBytecodeVM(prog, ctx)
 if err := bcVM.Run(); err != nil {

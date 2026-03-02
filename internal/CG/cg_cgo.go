@@ -117,6 +117,17 @@ func programToJSON(prog *VM.Program, colNames []string) ([]byte, error) {
 		case []int:
 			ij.P4Type = 3
 			ij.P4Regs = v
+		case map[string]int:
+			// Named-column INSERT: extract register values as a register list
+			// so the C++ optimizer can mark them as "read". Iteration order of Go
+			// maps is non-deterministic, but that is fine — the optimizer only needs
+			// the set of registers, not their order.
+			regs := make([]int, 0, len(v))
+			for _, reg := range v {
+				regs = append(regs, reg)
+			}
+			ij.P4Type = 3
+			ij.P4Regs = regs
 		}
 		pj.Instructions[i] = ij
 	}

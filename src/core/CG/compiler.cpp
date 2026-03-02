@@ -329,6 +329,19 @@ static bool parseBytecodeJSON(const char* data, size_t len, CgProgram& prog, std
  * track all register reads without relying on the flat-int32 optimizer.
  */
 
+/* CG_OP_* constants for the JSON-serialised CgInstr instruction set used by
+ * svdb_cg_compile_select.  These values mirror VM.OpCode in internal/VM/opcodes.go.
+ *
+ * WARNING — KNOWN MISMATCH: the CG_OP_ values below do NOT match the VM.OpCode
+ * numbering in the Go source.  For example, CG_OP_RESULT_ROW=30 matches
+ * VM.OpResultRow=24 only by coincidence.  CG_OP_LOAD_CONST=1 refers to OpGoto(1),
+ * not OpLoadConst(30).  This mismatch prevents CGOptimizeProgram from being safely
+ * wired into compiler.finalize() for the legacy VM.Program path.
+ * Tracked in docs/plan-v0.11.1.md Phase 6 — do not wire without fixing first.
+ *
+ * Within cgEliminateDeadCode below the conservative `default` handler ensures that
+ * any instruction whose opcode is not explicitly listed is treated as a potential
+ * reader of its operands, preventing incorrect elimination. */
 static const int32_t CG_OP_RESULT_ROW = 30;  /* mirrors VM.OpResultRow */
 static const int32_t CG_OP_LOAD_CONST = 1;   /* mirrors VM.OpLoadConst */
 static const int32_t CG_OP_MOVE       = 10;  /* mirrors VM.OpMove */
@@ -366,7 +379,21 @@ static void cgEliminateDeadCode(std::vector<CgInstr>& instrs)
                     readCount[r]++;
             }
             break;
+        case CG_OP_LOAD_CONST:
+        case CG_OP_NULL:
+            /* writes to destination register; no source registers to mark */
+            break;
         default:
+            /* Unknown opcode: conservatively mark all operand fields as read
+             * to prevent incorrect elimination of instructions that feed them.
+             * This includes register lists carried in p4_regs (e.g. OpInsert). */
+            if (ins.p1 >= 0) readCount[ins.p1]++;
+            if (ins.p2 >= 0) readCount[ins.p2]++;
+            /* p3 is not a separate field in CgInstr; p4_int is destination.
+             * Don't mark p4_int as "read" since it's output, not input. */
+            if (ins.p4_type == 3) {
+                for (auto r : ins.p4_regs) readCount[r]++;
+            }
             break;
         }
     }

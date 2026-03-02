@@ -91,7 +91,17 @@ static void eliminateDeadCode(std::vector<Instr>& v)
             for (int32_t r = ins.p1; r < ins.p1 + ins.p3; ++r)
                 readCount[r]++;
             break;
+        case OP_LOAD_CONST:
+            /* OP_LOAD_CONST writes p1 (dest) from constant pool; no registers read.
+             * (Note: OP_ prefix is for the legacy VM.OpCode numbering, distinct from
+             *  the BC_ prefix used in eliminateBcDeadCode for the bytecode VM path.) */
+            break;
         default:
+            /* Unknown opcode: conservatively mark all operand fields as read
+             * to prevent incorrect elimination of instructions that feed them. */
+            if (ins.p1 >= 0) readCount[ins.p1]++;
+            if (ins.p2 >= 0) readCount[ins.p2]++;
+            if (ins.p3 >= 0) readCount[ins.p3]++;
             break;
         }
     }
@@ -161,7 +171,32 @@ static const uint16_t BC_MUL         = 6;
 static const uint16_t BC_DIV         = 7;
 static const uint16_t BC_MOD         = 8;
 static const uint16_t BC_CONCAT      = 10;
-static const uint16_t BC_RESULT_ROW  = 31; /* BcResultRow = 31 */
+static const uint16_t BC_NEG         = 9;  /* BcNeg: writes C, reads A */
+static const uint16_t BC_EQ          = 11; /* BcEq..BcGe: write C, read A and B */
+static const uint16_t BC_NE          = 12;
+static const uint16_t BC_LT          = 13;
+static const uint16_t BC_LE          = 14;
+static const uint16_t BC_GT          = 15;
+static const uint16_t BC_GE          = 16;
+static const uint16_t BC_AND         = 17;
+static const uint16_t BC_OR          = 18;
+static const uint16_t BC_NOT         = 19;  /* BcNot: writes C, reads A */
+static const uint16_t BC_IS_NULL     = 20;  /* BcIsNull: writes C, reads A */
+static const uint16_t BC_NOT_NULL    = 21;  /* BcNotNull: writes C, reads A */
+static const uint16_t BC_JUMP        = 22;  /* BcJump: no reg reads */
+static const uint16_t BC_JUMP_TRUE   = 23;  /* BcJumpTrue: reads A (condition) */
+static const uint16_t BC_JUMP_FALSE  = 24;  /* BcJumpFalse: reads A (condition) */
+static const uint16_t BC_OPEN_CURSOR = 25;  /* BcOpenCursor: no reg reads */
+static const uint16_t BC_REWIND      = 26;  /* BcRewind: no reg reads */
+static const uint16_t BC_NEXT        = 27;  /* BcNext: no reg reads */
+static const uint16_t BC_COLUMN      = 28;  /* BcColumn: writes C, reads cursor A */
+static const uint16_t BC_ROWID       = 29;  /* BcRowid: writes C, reads cursor A */
+static const uint16_t BC_RESULT_ROW  = 30;  /* BcResultRow: A=first reg, B=count */
+static const uint16_t BC_HALT        = 31;  /* BcHalt: no operands */
+static const uint16_t BC_CALL        = 35;  /* BcCall: A=fn_const, B=nargs, C=dst; reads regs[C-B..C-1] */
+static const uint16_t BC_AGG_INIT    = 32;  /* BcAggInit: A=slot, no register reads */
+static const uint16_t BC_AGG_STEP    = 33;  /* BcAggStep: A=slot, B=value reg */
+static const uint16_t BC_AGG_FINAL   = 34;  /* BcAggFinal: A=slot, writes C */
 
 #pragma pack(push, 1)
 struct BcInstr { uint16_t op; uint16_t fl; int32_t a, b, c; };
@@ -175,10 +210,19 @@ static void eliminateBcDeadCode(std::vector<BcInstr>& v)
         switch (ins.op) {
         case BC_ADD: case BC_ADD_INT: case BC_SUB: case BC_MUL:
         case BC_DIV: case BC_MOD: case BC_CONCAT:
+        case BC_EQ:  case BC_NE:  case BC_LT:  case BC_LE:
+        case BC_GT:  case BC_GE:  case BC_AND: case BC_OR:
+            /* binary ops: reads A and B */
             readCount[ins.a]++;
             readCount[ins.b]++;
             break;
         case BC_LOAD_REG:
+        case BC_NEG: case BC_NOT: case BC_IS_NULL: case BC_NOT_NULL:
+            /* unary ops: reads A */
+            readCount[ins.a]++;
+            break;
+        case BC_JUMP_TRUE: case BC_JUMP_FALSE:
+            /* conditional jump: reads A (condition reg) */
             readCount[ins.a]++;
             break;
         case BC_RESULT_ROW:
@@ -186,7 +230,36 @@ static void eliminateBcDeadCode(std::vector<BcInstr>& v)
             for (int32_t r = ins.a; r < ins.a + ins.b; ++r)
                 readCount[r]++;
             break;
+        case BC_CALL:
+            /* BcCall: A=fn_const (not a register), B=nargs, C=dst.
+             * Args are at regs[C-B .. C-1]. */
+            for (int32_t r = ins.c - ins.b; r < ins.c; ++r)
+                if (r >= 0) readCount[r]++;
+            break;
+        case BC_AGG_STEP:
+            /* BcAggStep: A=aggregate slot (not register), B=value register */
+            readCount[ins.b]++;
+            break;
+        case BC_LOAD_CONST:
+        case BC_NOOP:
+        case BC_JUMP:
+        case BC_OPEN_CURSOR: case BC_REWIND: case BC_NEXT:
+        case BC_COLUMN: case BC_ROWID:
+        case BC_HALT:
+        case BC_AGG_INIT: case BC_AGG_FINAL:
+            /* BC_LOAD_CONST / BC_COLUMN / BC_ROWID write to C but read no registers
+             * (their other operands are const-pool indices or cursor IDs).
+             * The others have no meaningful register operands.
+             * BC_LOAD_CONST still appears in the elimination pass below — that is
+             * intentional: it can be eliminated if its output register C is never
+             * used by any subsequent instruction. */
+            break;
         default:
+            /* Unknown opcode: conservatively mark all positive-valued operand
+             * fields as read to prevent incorrect elimination. */
+            if (ins.a >= 0) readCount[ins.a]++;
+            if (ins.b >= 0) readCount[ins.b]++;
+            if (ins.c >= 0) readCount[ins.c]++;
             break;
         }
     }
@@ -197,6 +270,12 @@ static void eliminateBcDeadCode(std::vector<BcInstr>& v)
             return readCount.find(ins.c) == readCount.end();
         case BC_ADD: case BC_ADD_INT: case BC_SUB: case BC_MUL:
         case BC_DIV: case BC_MOD: case BC_CONCAT:
+        case BC_EQ:  case BC_NE:  case BC_LT:  case BC_LE:
+        case BC_GT:  case BC_GE:  case BC_AND: case BC_OR:
+        case BC_NEG: case BC_NOT: case BC_IS_NULL: case BC_NOT_NULL:
+        case BC_COLUMN: case BC_ROWID:
+        case BC_CALL:
+        case BC_AGG_FINAL:
             return readCount.find(ins.c) == readCount.end();
         default:
             return false;
