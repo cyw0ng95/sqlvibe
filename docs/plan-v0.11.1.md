@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-03-02  
 **Target Version**: v0.12.0  
-**Status**: 📋 Planned  
+**Status**: 🔄 In Progress (P0 C++ engine module added in v0.11.1)  
 **Strategy**: Migrate remaining Go orchestration to C++ for fully self-contained libsvdb
 
 ---
@@ -41,6 +41,16 @@ The sqlvibe C++ migration has achieved **100% completion** of core operations (D
 ## Migration Priorities
 
 ### P0: Critical — Query Execution Engine (15-20 days)
+
+**v0.11.1 Progress**: C++ engine module `src/core/VM/engine/engine.cpp` created with
+C-API header `engine_api.h`. CGO wrapper `internal/VM/engine/engine_cgo.go` exposes
+all operations with `C`-prefix functions (`CApplyLimitOffset`, `CCrossJoin`, etc.).
+
+- [x] C++ engine module created (`src/core/VM/engine/engine.cpp`)
+- [x] C API header (`src/core/VM/engine/engine_api.h`)
+- [x] CGO wrapper (`internal/VM/engine/engine_cgo.go`)
+- [x] CMakeLists.txt updated
+- [ ] Full hot-path migration (Go → C++ calls, remove Go logic)
 
 #### 5.1.1: SELECT Query Orchestration
 

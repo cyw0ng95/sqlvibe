@@ -118,6 +118,9 @@ set(SVDB_CORE_SOURCES
 
     # CGO - Hash Join
     core/cgo/hash_join.cpp
+
+    # VM Engine - Query orchestration
+    core/VM/engine/engine.cpp
 )
 
 # Build libsvdb
@@ -135,6 +138,7 @@ target_include_directories(svdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/IS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/wrapper
     ${CMAKE_CURRENT_SOURCE_DIR}/core/cgo
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/VM/engine
 )
 
 if(SVDB_COMPILE_OPTS)
