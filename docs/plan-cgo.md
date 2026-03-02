@@ -77,7 +77,8 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 | `internal/DS/compression.go` | `src/core/DS/compression.cpp` | ✅ C++ | |
 | `internal/DS/roaring_bitmap.go` | `src/core/DS/roaring.cpp` | ✅ C++ | |
 | `internal/DS/encoding.go` | `src/core/DS/varint.cpp` | ✅ C++ | varint encode/decode |
-| `internal/DS/cell.go` | `src/core/DS/cell.cpp` | ✅ C++ | **Phase DS-9 COMPLETE**: encode/decode delegated to C++; `CellData` type + `CalculateLocalPayloadSize`/`CellSize` remain Go-side |
+| `internal/DS/freelist.go` | `src/core/DS/freelist.cpp` | ✅ C++ | **Phase DS-9a COMPLETE**: AllocatePage/FreePage/CountFreePages/Compact delegate trunk byte ops to CFreelistParseTrunk/WriteTrunk/GetEntry/AddEntry (boundary CGO); `"encoding/binary"` removed |
+| `internal/DS/balance.go` | `src/core/DS/balance.cpp` | ✅ C++ | **Phase DS-9b COMPLETE**: SplitLeafPage/MergePages/RedistributeCells/IsPageOverfull/IsPageUnderfull delegate to CBalance* (boundary CGO); `"encoding/binary"` removed |
 | `internal/DS/overflow.go` | `src/core/DS/overflow.cpp` | ✅ CGO | Always-on CGO (no fallback); Direct C pointer for callbacks |
 | `internal/DS/cache_cgo.go` | `src/core/DS/cache.cpp` | ✅ CGO | **Always-on CGO** (no fallback); Direct C pointer, self-contained |
 | `internal/DS/skip_list.go` | `src/core/DS/skip_list.h` | ✅ CGO | Always-on; int/float→`_int` API, string/bytes→`_str` API; goKeys for Range/Pairs |
@@ -713,5 +714,5 @@ sqlvibe/
 
 ---
 
-**Last Updated**: 2026-03-02 (Boundary-CGO architecture; Phase DS-9 cell.go migration; 80% → 82%)
+**Last Updated**: 2026-03-02 (Boundary-CGO architecture; Phase DS-9 freelist.go + balance.go legacy removal; 82%)
 **Next Review**: After Phase 6 architecture cleanup
