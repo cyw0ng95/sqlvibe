@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "value.h"
+#include "manager.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,8 +23,22 @@ svdb_row_store_t* svdb_row_store_create(const char* const* col_names,
                                          const int* col_types,
                                          int num_cols);
 
+/*
+ * Create a row store with embedded PageManager for persistence.
+ */
+svdb_row_store_t* svdb_row_store_create_embedded(const char* const* col_names,
+                                                  const int* col_types,
+                                                  int num_cols,
+                                                  svdb_page_manager* pm,
+                                                  uint32_t root_page);
+
 /* Destroy the store and free all memory. */
 void svdb_row_store_destroy(svdb_row_store_t* store);
+
+/*
+ * Persist the row store to disk using embedded PageManager.
+ */
+int svdb_row_store_persist(svdb_row_store_t* store, svdb_page_manager* pm, uint32_t* out_root_page);
 
 /*
  * Append a row of num_values values and return its row index.

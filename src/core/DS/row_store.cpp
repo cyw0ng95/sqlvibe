@@ -1,4 +1,5 @@
 #include "row_store.h"
+#include "manager.h"
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -131,6 +132,28 @@ int svdb_row_store_row_count(svdb_row_store_t* store) {
 int svdb_row_store_live_count(svdb_row_store_t* store) {
     if (!store) return 0;
     return store->live;
+}
+
+/* -------------------------------------------------------------------------
+ * Embedded Row Store (with PageManager for persistence)
+ * ----------------------------------------------------------------------- */
+
+svdb_row_store_t* svdb_row_store_create_embedded(const char* const* col_names,
+                                                  const int* col_types,
+                                                  int num_cols,
+                                                  svdb_page_manager* pm,
+                                                  uint32_t root_page) {
+    if (!col_names || !col_types || num_cols <= 0) return nullptr;
+    
+    return svdb_row_store_create(col_names, col_types, num_cols);
+}
+
+int svdb_row_store_persist(svdb_row_store_t* store, svdb_page_manager* pm, uint32_t* out_root_page) {
+    if (!store || !pm || !out_root_page) return 0;
+    
+    /* Placeholder - full persistence requires implementing serialization */
+    (void)out_root_page;
+    return 0;
 }
 
 } /* extern "C" */
