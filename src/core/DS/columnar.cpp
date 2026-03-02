@@ -1,4 +1,5 @@
 #include "columnar.h"
+#include "manager.h"
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -152,6 +153,40 @@ int svdb_column_store_row_count(svdb_column_store_t* store) {
 int svdb_column_store_live_count(svdb_column_store_t* store) {
     if (!store) return 0;
     return store->live;
+}
+
+/* -------------------------------------------------------------------------
+ * Embedded Column Store (with PageManager for persistence)
+ * ----------------------------------------------------------------------- */
+
+struct svdb_column_store_embedded_t {
+    svdb_column_store_t* store;
+    svdb_page_manager* pm;
+    uint32_t root_page;
+    bool dirty;
+    
+    svdb_column_store_embedded_t(svdb_column_store_t* s, svdb_page_manager* p, uint32_t r)
+        : store(s), pm(p), root_page(r), dirty(false) {}
+};
+
+svdb_column_store_t* svdb_column_store_create_embedded(const char* const* col_names,
+                                                       const int* col_types,
+                                                       int num_cols,
+                                                       svdb_page_manager* pm,
+                                                       uint32_t root_page) {
+    if (!col_names || !col_types || num_cols <= 0) return nullptr;
+    
+    svdb_column_store_t* store = svdb_column_store_create(col_names, col_types, num_cols);
+    return store;
+}
+
+int svdb_column_store_persist(svdb_column_store_t* store, svdb_page_manager* pm, uint32_t* out_root_page) {
+    if (!store || !pm || !out_root_page) return 0;
+    
+    /* For now, return 0 - full persistence requires implementing serialization */
+    /* This is a placeholder for the full implementation */
+    (void)out_root_page;
+    return 0;
 }
 
 } /* extern "C" */

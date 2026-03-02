@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "value.h"
+#include "manager.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,8 +30,24 @@ svdb_column_store_t* svdb_column_store_create(const char* const* col_names,
                                                const int* col_types,
                                                int num_cols);
 
+/*
+ * Create a column store with embedded PageManager for persistence.
+ * This version stores data directly to disk using the C++ PageManager.
+ */
+svdb_column_store_t* svdb_column_store_create_embedded(const char* const* col_names,
+                                                       const int* col_types,
+                                                       int num_cols,
+                                                       svdb_page_manager* pm,
+                                                       uint32_t root_page);
+
 /* Destroy the store and free all memory. */
 void svdb_column_store_destroy(svdb_column_store_t* store);
+
+/*
+ * Persist the column store to disk using embedded PageManager.
+ * Returns 1 on success, 0 on error.
+ */
+int svdb_column_store_persist(svdb_column_store_t* store, svdb_page_manager* pm, uint32_t* out_root_page);
 
 /*
  * Append a row of num_values values.
@@ -49,7 +66,7 @@ void svdb_column_store_append_row(svdb_column_store_t* store,
  * until the next mutation of the store.
  */
 int svdb_column_store_get_row(svdb_column_store_t* store, int idx,
-                               svdb_value_t* out_values, int* out_count);
+                                svdb_value_t* out_values, int* out_count);
 
 /* Mark row at idx as deleted (idempotent). */
 void svdb_column_store_delete_row(svdb_column_store_t* store, int idx);
