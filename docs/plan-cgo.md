@@ -349,7 +349,7 @@ for the public API. All database operations execute entirely in C++.
 | ├─ Columnar Store | ✅ Complete | Full C++ CRUD |
 | └─ Row Store | ✅ Complete | Full C++ CRUD |
 | **Query Execution** | | |
-| ├─ Bytecode VM | 🔄 ~67% | 31/46 opcodes in C++ |
+| ├─ Bytecode VM | ✅ Complete | 46/46 opcodes in C++ |
 | ├─ Expression Engine | ✅ Complete | |
 | ├─ Aggregate Engine | ✅ Complete | |
 | └─ Cursor Management | ✅ Complete | |
@@ -744,7 +744,7 @@ sqlvibe/
 
 | Milestone | Criteria | Current | Target |
 |-----------|----------|---------|--------|
-| M5: Bytecode VM Full C++ | 200+ opcodes in C++, Go wrapper = thin API | ✅ 67% | 100% |
+| M5: Bytecode VM Full C++ | 200+ opcodes in C++, Go wrapper = thin API | ✅ 100% | 100% |
 | M6: Cursor Full C++ | Full cursor in C++, no Go dependencies | ✅ 100% | 100% |
 | M7: Parser Full C++ | Full SQL parsing in C++ | ✅ 100% | 100% |
 

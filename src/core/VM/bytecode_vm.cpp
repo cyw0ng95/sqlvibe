@@ -498,6 +498,85 @@ int svdb_bytecode_vm_step(svdb_bytecode_vm_t* vm,
         vm->has_result = true;
         return -2;  /* signal caller to collect result row */
 
+    /* ── Load column ─────────────────────────────────────── */
+    case SVDB_BC_LOAD_COL:
+        /* p1 = dest reg, p2 = column index */
+        if (!valid_reg(vm, p1)) return -3;
+        vm->regs[(size_t)p1].val_type = SVDB_TYPE_NULL;
+        break;
+
+    /* ── Cursor operations ───────────────────────────────── */
+    case SVDB_BC_OPEN_READ:
+    case SVDB_BC_OPEN_WRITE:
+        /* p1 = cursor ID, p2 = table ID */
+        /* In full implementation, would open a table/index */
+        break;
+
+    case SVDB_BC_REWIND:
+        /* p1 = cursor ID */
+        /* Reset cursor to beginning */
+        break;
+
+    case SVDB_BC_NEXT:
+        /* p1 = cursor ID */
+        /* Advance cursor to next row */
+        break;
+
+    case SVDB_BC_EOF:
+        /* p1 = cursor ID, p2 = target PC if not EOF */
+        /* Check if cursor is at end */
+        if (out_jump_pc && p2 > 0) {
+            /* For now, always jump - cursor check would be in full impl */
+            *out_jump_pc = p2;
+        }
+        break;
+
+    case SVDB_BC_COLUMN:
+        /* p1 = cursor ID, p2 = column index, p3 = dest reg */
+        if (!valid_reg(vm, p3)) return -3;
+        vm->regs[(size_t)p3].val_type = SVDB_TYPE_NULL;
+        break;
+
+    case SVDB_BC_ROWID:
+        /* p1 = cursor ID, p2 = dest reg */
+        if (!valid_reg(vm, p2)) return -3;
+        vm->regs[(size_t)p2].val_type = SVDB_TYPE_INT;
+        vm->regs[(size_t)p2].int_val = 0;
+        break;
+
+    case SVDB_BC_SEEK_ROWID:
+        /* p1 = cursor ID, p2 = rowid reg */
+        /* Search for rowid in table */
+        break;
+
+    /* ── Aggregate operations ────────────────────────────── */
+    case SVDB_BC_AGG_STEP:
+        /* p1 = aggregate function ID, p2 = reg containing value */
+        /* Accumulate value into aggregate */
+        break;
+
+    case SVDB_BC_AGG_FINAL:
+        /* p1 = aggregate function ID, p2 = dest reg */
+        /* Finalize aggregate and store result */
+        if (!valid_reg(vm, p2)) return -3;
+        vm->regs[(size_t)p2].val_type = SVDB_TYPE_NULL;
+        break;
+
+    /* ── Coroutine operations ───────────────────────────── */
+    case SVDB_BC_INIT_COROUTINE:
+        /* p1 = program counter reg */
+        break;
+
+    case SVDB_BC_YIELD:
+        /* p1 = program counter reg */
+        break;
+
+    /* ── Close ─────────────────────────────────────────── */
+    case SVDB_BC_CLOSE:
+        /* p1 = cursor ID */
+        /* Close cursor */
+        break;
+
     default:
         /* Unknown or unimplemented opcode — treat as NOP for extensibility. */
         break;
