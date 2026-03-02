@@ -1,5 +1,13 @@
 package DS
 
+/*
+#cgo LDFLAGS: -L${SRCDIR}/../../.build/cmake/lib -lsvdb -lstdc++
+#cgo CFLAGS: -I${SRCDIR}/../../src/core/DS
+#include "hybrid_store_api.h"
+*/
+import "C"
+import "unsafe"
+
 // Mode represents the recommended storage mode for a workload.
 type Mode int
 
@@ -23,6 +31,7 @@ type HybridStore struct {
 	rowStore    *RowStore
 	colStore    *ColumnStore
 	indexEngine *IndexEngine
+	cIndexEngine *CIndexEngine  // C++ index engine
 	arena       *Arena
 	columns     []string
 	colTypes    []ValueType
@@ -31,14 +40,16 @@ type HybridStore struct {
 
 // NewHybridStore creates a HybridStore with the given column definitions.
 func NewHybridStore(columns []string, types []ValueType) *HybridStore {
-	return &HybridStore{
-		rowStore:    NewRowStore(columns, types),
-		colStore:    NewColumnStore(columns, types),
-		indexEngine: NewIndexEngine(),
-		arena:       NewArena(64 * 1024),
-		columns:     columns,
-		colTypes:    types,
+	hs := &HybridStore{
+		rowStore:     NewRowStore(columns, types),
+		colStore:     NewColumnStore(columns, types),
+		indexEngine:  NewIndexEngine(),
+		cIndexEngine: NewCIndexEngine(),
+		arena:        NewArena(64 * 1024),
+		columns:      columns,
+		colTypes:     types,
 	}
+	return hs
 }
 
 // Insert appends a row and returns its row index.
@@ -47,7 +58,7 @@ func (hs *HybridStore) Insert(vals []Value) int {
 	idx := hs.rowStore.Insert(row)
 	hs.colStore.AppendRow(vals)
 
-	// Update indexes
+	// Update indexes (both Go and C++)
 	for ci, col := range hs.columns {
 		val := NullValue()
 		if ci < len(vals) {
@@ -55,6 +66,7 @@ func (hs *HybridStore) Insert(vals []Value) int {
 		}
 		if hs.indexEngine.HasBitmapIndex(col) || hs.indexEngine.HasSkipListIndex(col) {
 			hs.indexEngine.IndexRow(uint32(idx), col, val)
+			hs.cIndexEngine.IndexRow(uint32(idx), col, val)
 		}
 	}
 	return idx
@@ -62,11 +74,13 @@ func (hs *HybridStore) Insert(vals []Value) int {
 
 // Update replaces the values at rowIdx.
 func (hs *HybridStore) Update(rowIdx int, vals []Value) {
-	// Un-index old values
+	// Un-index old values (both Go and C++)
 	oldRow := hs.rowStore.Get(rowIdx)
 	for ci, col := range hs.columns {
 		if hs.indexEngine.HasBitmapIndex(col) || hs.indexEngine.HasSkipListIndex(col) {
-			hs.indexEngine.UnindexRow(uint32(rowIdx), col, oldRow.Get(ci))
+			oldVal := oldRow.Get(ci)
+			hs.indexEngine.UnindexRow(uint32(rowIdx), col, oldVal)
+			hs.cIndexEngine.UnindexRow(uint32(rowIdx), col, oldVal)
 		}
 	}
 
@@ -80,7 +94,7 @@ func (hs *HybridStore) Update(rowIdx int, vals []Value) {
 		}
 	}
 
-	// Re-index new values
+	// Re-index new values (both Go and C++)
 	for ci, col := range hs.columns {
 		if hs.indexEngine.HasBitmapIndex(col) || hs.indexEngine.HasSkipListIndex(col) {
 			val := NullValue()
@@ -88,6 +102,7 @@ func (hs *HybridStore) Update(rowIdx int, vals []Value) {
 				val = vals[ci]
 			}
 			hs.indexEngine.IndexRow(uint32(rowIdx), col, val)
+			hs.cIndexEngine.IndexRow(uint32(rowIdx), col, val)
 		}
 	}
 }
@@ -97,7 +112,9 @@ func (hs *HybridStore) Delete(rowIdx int) {
 	row := hs.rowStore.Get(rowIdx)
 	for ci, col := range hs.columns {
 		if hs.indexEngine.HasBitmapIndex(col) || hs.indexEngine.HasSkipListIndex(col) {
-			hs.indexEngine.UnindexRow(uint32(rowIdx), col, row.Get(ci))
+			val := row.Get(ci)
+			hs.indexEngine.UnindexRow(uint32(rowIdx), col, val)
+			hs.cIndexEngine.UnindexRow(uint32(rowIdx), col, val)
 		}
 	}
 	hs.rowStore.Delete(rowIdx)
@@ -120,17 +137,21 @@ func (hs *HybridStore) Scan() [][]Value {
 }
 
 // ScanWhere returns rows where colName == val, using an index when available.
+// Uses C++ index lookup for better performance.
 func (hs *HybridStore) ScanWhere(colName string, val Value) [][]Value {
 	colIdx := hs.rowStore.ColIndex(colName)
 	if colIdx < 0 {
 		return nil
 	}
 
-	// Use index if available
-	if hs.indexEngine.HasBitmapIndex(colName) || hs.indexEngine.HasSkipListIndex(colName) {
-		rb := hs.indexEngine.LookupEqual(colName, val)
-		if rb != nil {
-			return hs.collectRows(rb.ToSlice())
+	numCols := int32(len(hs.columns))
+
+	// Use C++ index if available
+	if hs.cIndexEngine.HasBitmapIndex(colName) || hs.cIndexEngine.HasSkipListIndex(colName) {
+		result := hs.cIndexEngine.LookupEqual(colName, val, numCols)
+		if result != nil && result.num_rows > 0 {
+			defer CScanResultFree(result)
+			return hs.collectRowsFromResult(result)
 		}
 	}
 
@@ -149,17 +170,42 @@ func (hs *HybridStore) ScanWhere(colName string, val Value) [][]Value {
 	return out
 }
 
+// collectRowsFromResult materializes rows from a C scan result.
+func (hs *HybridStore) collectRowsFromResult(result *C.svdb_scan_result_t) [][]Value {
+	if result == nil || result.num_rows <= 0 {
+		return nil
+	}
+
+	out := make([][]Value, 0, int(result.num_rows))
+	rowIndices := (*[1 << 30]int32)(unsafe.Pointer(result.row_indices))[:int(result.num_rows):int(result.num_rows)]
+
+	for _, rowIdx := range rowIndices {
+		row := hs.rowStore.Get(int(rowIdx))
+		vals := make([]Value, len(hs.columns))
+		for ci := range hs.columns {
+			vals[ci] = row.Get(ci)
+		}
+		out = append(out, vals)
+	}
+	return out
+}
+
 // ScanRange returns rows where colName is in [lo, hi], using a skip-list index when available.
+// Uses C++ index lookup for better performance.
 func (hs *HybridStore) ScanRange(colName string, lo, hi Value) [][]Value {
 	colIdx := hs.rowStore.ColIndex(colName)
 	if colIdx < 0 {
 		return nil
 	}
 
-	if hs.indexEngine.HasSkipListIndex(colName) {
-		rb := hs.indexEngine.LookupRange(colName, lo, hi, true)
-		if rb != nil {
-			return hs.collectRows(rb.ToSlice())
+	numCols := int32(len(hs.columns))
+
+	// Use C++ skip-list index if available
+	if hs.cIndexEngine.HasSkipListIndex(colName) {
+		result := hs.cIndexEngine.LookupRange(colName, lo, hi, numCols, true)
+		if result != nil && result.num_rows > 0 {
+			defer CScanResultFree(result)
+			return hs.collectRowsFromResult(result)
 		}
 	}
 
@@ -181,10 +227,13 @@ func (hs *HybridStore) ScanRange(colName string, lo, hi Value) [][]Value {
 
 // CreateIndex creates an index on the named column.
 func (hs *HybridStore) CreateIndex(colName string, useSkipList bool) {
+	// Create both Go and C++ indexes
 	if useSkipList {
 		hs.indexEngine.AddSkipListIndex(colName)
+		hs.cIndexEngine.AddSkipListIndex(colName)
 	} else {
 		hs.indexEngine.AddBitmapIndex(colName)
+		hs.cIndexEngine.AddBitmapIndex(colName)
 	}
 	// Back-fill existing rows
 	colIdx := hs.rowStore.ColIndex(colName)

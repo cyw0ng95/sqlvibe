@@ -3,31 +3,17 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "../SF/types.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Value types */
-#define SVDB_VAL_NULL   0
-#define SVDB_VAL_INT    1
-#define SVDB_VAL_FLOAT  2
-#define SVDB_VAL_TEXT   3
-#define SVDB_VAL_BLOB   4
-
-typedef struct {
-    int32_t     val_type;
-    int64_t     int_val;
-    double      float_val;
-    const char* str_data;
-    size_t      str_len;
-} svdb_engine_value_t;
-
 /* A Row is an array of (column_name, value) pairs */
 typedef struct {
-    char**              col_names;  /* null-terminated C strings */
-    svdb_engine_value_t* vals;      /* parallel value array */
-    int32_t             num_cols;
+    char**         col_names;  /* null-terminated C strings */
+    svdb_value_t*  vals;       /* parallel value array */
+    int32_t        num_cols;
 } svdb_engine_row_t;
 
 /* A Rows result — rows is an inline array of num_rows row structs */
@@ -82,12 +68,12 @@ svdb_engine_rows_t* svdb_engine_reverse_rows(const svdb_engine_rows_t* rows);
 int32_t svdb_engine_exists_rows(const svdb_engine_rows_t* rows);
 
 int32_t svdb_engine_in_rows(
-    const svdb_engine_value_t* value,
+    const svdb_value_t* value,
     const svdb_engine_rows_t*  rows,
     const char*                col_name);
 
 int32_t svdb_engine_not_in_rows(
-    const svdb_engine_value_t* value,
+    const svdb_value_t* value,
     const svdb_engine_rows_t*  rows,
     const char*                col_name);
 
@@ -96,6 +82,57 @@ int64_t* svdb_engine_row_numbers(int32_t n);
 int64_t* svdb_engine_ranks(
     const svdb_engine_rows_t* rows, const char* col_name);
 int64_t* svdb_engine_dense_ranks(
+    const svdb_engine_rows_t* rows, const char* col_name);
+
+/* Filter operations — predicate callback receives row, returns 1 to keep */
+typedef int32_t (*svdb_row_predicate_fn)(const svdb_engine_row_t* row, void* user_data);
+
+svdb_engine_rows_t* svdb_engine_filter_rows(
+    const svdb_engine_rows_t* rows,
+    svdb_row_predicate_fn pred,
+    void* user_data);
+
+/* Distinct operation — key function returns string key for deduplication */
+typedef const char* (*svdb_row_key_fn)(const svdb_engine_row_t* row, void* user_data);
+
+svdb_engine_rows_t* svdb_engine_apply_distinct(
+    const svdb_engine_rows_t* rows,
+    svdb_row_key_fn key_fn,
+    void* user_data);
+
+/* JOIN operations with predicates */
+typedef int32_t (*svdb_join_predicate_fn)(const svdb_engine_row_t* merged, void* user_data);
+
+svdb_engine_rows_t* svdb_engine_inner_join(
+    const svdb_engine_rows_t* left,
+    const svdb_engine_rows_t* right,
+    svdb_join_predicate_fn pred,
+    void* user_data);
+
+svdb_engine_rows_t* svdb_engine_left_outer_join(
+    const svdb_engine_rows_t* left,
+    const svdb_engine_rows_t* right,
+    svdb_join_predicate_fn pred,
+    void* user_data,
+    const char** right_cols,
+    int32_t num_right_cols);
+
+/* Aggregate operations */
+svdb_engine_rows_t* svdb_engine_group_rows(
+    const svdb_engine_rows_t* rows,
+    svdb_row_key_fn key_fn,
+    void* user_data);
+
+svdb_value_t svdb_engine_sum_rows(
+    const svdb_engine_rows_t* rows, const char* col_name);
+
+double svdb_engine_avg_rows(
+    const svdb_engine_rows_t* rows, const char* col_name);
+
+svdb_value_t svdb_engine_min_rows(
+    const svdb_engine_rows_t* rows, const char* col_name);
+
+svdb_value_t svdb_engine_max_rows(
     const svdb_engine_rows_t* rows, const char* col_name);
 
 #ifdef __cplusplus

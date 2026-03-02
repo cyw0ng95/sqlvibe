@@ -348,7 +348,7 @@ func TestRegression_CoalesceNULL_L1(t *testing.T) {
 
 #### 8.4.8 Fuzzer Bug Tracking (PlainFuzzer)
 
-When PlainFuzzer confirms a bug, record it in `internal/TS/PlainFuzzer/HUNTINGS.md` instead of HISTORY.md to avoid redundancy.
+When PlainFuzzer confirms a bug, record it in `tests/PlainFuzzer/HUNTINGS.md` instead of HISTORY.md to avoid redundancy.
 
 **HUNTINGS.md Format**:
 ```markdown
@@ -370,7 +370,7 @@ When PlainFuzzer confirms a bug, record it in `internal/TS/PlainFuzzer/HUNTINGS.
 
 **Workflow**:
 1. Add bug entry to `HUNTINGS.md` with full details
-2. Add regression test in `internal/TS/Regression/`
+2. Add regression test in `tests/Regression/`
 3. Commit and push
 4. Do NOT add to HISTORY.md - HUNTINGS.md is the source of truth for fuzzer bugs
 
@@ -379,7 +379,7 @@ When PlainFuzzer confirms a bug, record it in `internal/TS/PlainFuzzer/HUNTINGS.
 #### 8.4.9 SQLValidator Bug Tracking
 
 When SQLValidator finds a correctness mismatch between sqlvibe and SQLite, record it in
-`internal/TS/SQLValidator/HUNTINGS.md` instead of HISTORY.md.
+`tests/SQLValidator/HUNTINGS.md` instead of HISTORY.md.
 
 **HUNTINGS.md Format**:
 ```markdown
@@ -401,8 +401,8 @@ When SQLValidator finds a correctness mismatch between sqlvibe and SQLite, recor
 ```
 
 **Workflow**:
-1. Add bug entry to `internal/TS/SQLValidator/HUNTINGS.md` with full details
-2. Add regression test in `internal/TS/Regression/` or as a `TestSQLValidator_Regression` subcase
+1. Add bug entry to `tests/SQLValidator/HUNTINGS.md` with full details
+2. Add regression test in `tests/Regression/` or as a `TestSQLValidator_Regression` subcase
 3. Fix the root cause in the engine
 4. Commit and push
 5. Do NOT add to HISTORY.md - HUNTINGS.md is the source of truth for SQLValidator bugs
@@ -640,7 +640,7 @@ Options summary:
 | Flag | Description |
 |------|-------------|
 | `-t` | Run unit tests (`go test -tags SVDB_EXT_JSON,SVDB_EXT_MATH ./...`) |
-| `-b` | Run benchmarks (`./internal/TS/Benchmark/...`) |
+| `-b` | Run benchmarks (`./tests/Benchmark/...`) |
 | `-f` | Run fuzz seed corpus for `FuzzSQL` and `FuzzDBFile` |
 | `-c` | Collect coverage and produce `.build/coverage.html` |
 | `--fuzz-time D` | Duration per fuzz target (e.g. `30s`, `5m`) |

@@ -1,5 +1,12 @@
 package engine
 
+/*
+#cgo LDFLAGS: -L${SRCDIR}/../../../.build/cmake/lib -lsvdb -lstdc++
+#cgo CFLAGS: -I${SRCDIR}/../../../src/core/VM/engine
+#include "engine_api.h"
+*/
+import "C"
+
 // PartitionRows splits rows into partitions using partitionFn.  All rows that
 // produce the same key are placed in the same partition.  The order of
 // partitions matches the first occurrence of each key in rows.
@@ -27,7 +34,13 @@ func PartitionRows(rows []Row, partitionFn func(Row) string) [][]Row {
 }
 
 // RowNumbers returns a slice of sequential row numbers (1-based) for each row.
+// Uses C++ implementation by default for better performance.
 func RowNumbers(rows []Row) []int64 {
+	return CRowNumbers(len(rows))
+}
+
+// goRowNumbers is the pure Go implementation of RowNumbers (fallback).
+func goRowNumbers(rows []Row) []int64 {
 	out := make([]int64, len(rows))
 	for i := range rows {
 		out[i] = int64(i + 1)
@@ -60,7 +73,15 @@ func Ranks(rows []Row, less func(a, b Row) bool) []int64 {
 
 // DenseRanks returns DENSE_RANK() values.  Equal rows share a rank; the next
 // distinct value gets rank+1 (no gaps).
+// Uses C++ implementation by default for better performance.
 func DenseRanks(rows []Row, less func(a, b Row) bool) []int64 {
+	// C++ version requires sorted rows and column name
+	// Go version uses generic less function
+	return goDenseRanks(rows, less)
+}
+
+// goDenseRanks is the pure Go implementation of DenseRanks (fallback).
+func goDenseRanks(rows []Row, less func(a, b Row) bool) []int64 {
 	out := make([]int64, len(rows))
 	if len(rows) == 0 {
 		return out

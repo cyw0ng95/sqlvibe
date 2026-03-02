@@ -8,8 +8,6 @@ package VM
 import "C"
 import (
 	"fmt"
-	"runtime"
-	"unsafe"
 )
 
 // BcVmContext provides the BytecodeVM with access to database storage.
@@ -54,7 +52,6 @@ type BytecodeVM struct {
 	resultCols []string
 	resultRows [][]VmVal
 	flatBuf    []VmVal // flat backing buffer for zero-alloc result rows
-	cvm        unsafe.Pointer // *C.svdb_bytecode_vm_t — C++ shadow for SIMD future use
 }
 
 // NewBytecodeVM creates a VM for prog using ctx for storage access.
@@ -64,13 +61,6 @@ func NewBytecodeVM(prog *BytecodeProg, ctx BcVmContext) *BytecodeVM {
 		regs: make([]VmVal, maxInt(prog.NumRegs, 16)),
 		ctx:  ctx,
 	}
-	vm.cvm = unsafe.Pointer(C.svdb_bytecode_vm_create())
-	runtime.SetFinalizer(vm, func(v *BytecodeVM) {
-		if v.cvm != nil {
-			C.svdb_bytecode_vm_destroy((*C.svdb_bytecode_vm_t)(v.cvm))
-			v.cvm = nil
-		}
-	})
 	vm.installHandlers()
 	return vm
 }
@@ -180,11 +170,8 @@ func (vm *BytecodeVM) installHandlers() {
 	vm.bcTable[BcCall] = bcOpCall
 }
 
-// Reset clears all registers and resets the C++ shadow.
+// Reset clears all registers and resets the VM.
 func (vm *BytecodeVM) Reset() {
-	if vm.cvm != nil {
-		C.svdb_bytecode_vm_reset((*C.svdb_bytecode_vm_t)(vm.cvm))
-	}
 	vm.pc = 0
 	vm.resultCols = nil
 	vm.resultRows = nil

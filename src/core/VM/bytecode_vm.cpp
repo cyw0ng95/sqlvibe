@@ -1,596 +1,444 @@
-#include "bytecode_vm.h"
-#include "opcodes.h"
-#include "value.h"
-#include <cstdlib>
-#include <cstring>
-#include <cctype>
-#include <vector>
-#include <string>
-#include <algorithm>
+#include "bytecode_vm_api.h"
+#include <stdlib.h>
+#include <string.h>
+#include <cmath>
 
-static const int SVDB_VM_MAX_REGS = 256;
+/* Forward declaration - svdb_value_compare is defined in value.cpp */
+extern "C" int32_t svdb_value_compare(const svdb_value_t* a, const svdb_value_t* b);
 
-/* SVDB_TYPE_* constants (must match Go vm.VmValType). */
-static const int SVDB_TYPE_NULL  = 0;
-static const int SVDB_TYPE_INT   = 1;
-static const int SVDB_TYPE_REAL  = 2;
-static const int SVDB_TYPE_TEXT  = 3;
-static const int SVDB_TYPE_BLOB  = 4;
+/* ── Allocation ─────────────────────────────────────────────────────────── */
 
-struct Register {
-    int         val_type;   /* SVDB_TYPE_* */
-    int64_t     int_val;
-    double      real_val;
-    std::string str_val;    /* TEXT or BLOB */
+svdb_vm_state_t* svdb_vm_state_create(int32_t num_regs) {
+    if (num_regs <= 0) return nullptr;
+    
+    svdb_vm_state_t* state = (svdb_vm_state_t*)calloc(1, sizeof(svdb_vm_state_t));
+    if (!state) return nullptr;
+    
+    state->registers = (svdb_value_t*)calloc((size_t)num_regs, sizeof(svdb_value_t));
+    if (!state->registers) {
+        free(state);
+        return nullptr;
+    }
+    state->num_regs = num_regs;
+    state->pc = 0;
+    state->halted = 0;
+    state->error_code = 0;
+    return state;
+}
 
-    Register() : val_type(SVDB_TYPE_NULL), int_val(0), real_val(0.0) {}
-};
+void svdb_vm_state_destroy(svdb_vm_state_t* state) {
+    if (!state) return;
+    
+    if (state->registers) {
+        /* Free any string/blob data */
+        for (int32_t i = 0; i < state->num_regs; i++) {
+            if ((state->registers[i].val_type == SVDB_VAL_TEXT || 
+                 state->registers[i].val_type == SVDB_VAL_BLOB) &&
+                state->registers[i].str_data) {
+                free((void*)state->registers[i].str_data);
+            }
+        }
+        free(state->registers);
+    }
+    free(state);
+}
 
-/* SQL LIKE pattern matching (% = any sequence, _ = single char, case-insensitive). */
-static bool like_match(const char* pattern, size_t plen,
-                        const char* text, size_t tlen) {
-    /* Use dynamic programming to handle % wildcards. */
-    const char* p = pattern;
-    const char* t = text;
-    const char* p_end = pattern + plen;
-    const char* t_end = text + tlen;
-    const char* star_p = nullptr;
-    const char* star_t = text;
+svdb_vm_program_t* svdb_vm_program_create(int32_t num_instructions, int32_t num_regs) {
+    if (num_instructions <= 0 || num_regs <= 0) return nullptr;
+    
+    svdb_vm_program_t* prog = (svdb_vm_program_t*)calloc(1, sizeof(svdb_vm_program_t));
+    if (!prog) return nullptr;
+    
+    prog->instructions = (svdb_vm_instruction_t*)calloc(
+        (size_t)num_instructions, sizeof(svdb_vm_instruction_t));
+    if (!prog->instructions) {
+        free(prog);
+        return nullptr;
+    }
+    prog->num_instructions = num_instructions;
+    prog->num_registers = num_regs;
+    return prog;
+}
 
-    while (t < t_end) {
-        if (p < p_end && *p == '_') {
-            /* '_' matches exactly one character (no case comparison). */
-            ++p; ++t;
-        } else if (p < p_end && tolower((unsigned char)*p) == tolower((unsigned char)*t)) {
-            ++p; ++t;
-        } else if (p < p_end && *p == '%') {
-            star_p = p++;
-            star_t = t;
-        } else if (star_p) {
-            p = star_p + 1;
-            t = ++star_t;
+void svdb_vm_program_destroy(svdb_vm_program_t* prog) {
+    if (!prog) return;
+    free(prog->instructions);
+    free(prog);
+}
+
+/* ── Value utilities ────────────────────────────────────────────────────── */
+
+/* svdb_value_compare is defined in value.cpp */
+
+int32_t svdb_value_to_bool(const svdb_value_t* v) {
+    if (!v || v->val_type == SVDB_VAL_NULL) return 0;
+    
+    switch (v->val_type) {
+        case SVDB_VAL_INT:
+            return v->int_val != 0;
+        case SVDB_VAL_FLOAT:
+            return v->float_val != 0.0;
+        case SVDB_VAL_BOOL:
+            return v->int_val != 0;
+        case SVDB_VAL_TEXT:
+            return v->str_len > 0;
+        case SVDB_VAL_BLOB:
+            return v->bytes_len > 0;
+        default:
+            return 0;
+    }
+}
+
+static void copy_value(svdb_value_t* dst, const svdb_value_t* src) {
+    if (!dst || !src) return;
+    
+    /* Free existing string/blob in dst */
+    if ((dst->val_type == SVDB_VAL_TEXT || dst->val_type == SVDB_VAL_BLOB) && dst->str_data) {
+        free((void*)dst->str_data);
+    }
+    
+    *dst = *src;
+    
+    /* Deep copy string/blob */
+    if ((src->val_type == SVDB_VAL_TEXT || src->val_type == SVDB_VAL_BLOB) && 
+        src->str_data && src->str_len > 0) {
+        char* p = (char*)malloc(src->str_len + 1);
+        if (p) {
+            memcpy(p, src->str_data, src->str_len);
+            p[src->str_len] = '\0';
+            dst->str_data = p;
         } else {
-            return false;
+            dst->val_type = SVDB_VAL_NULL;
         }
     }
-    while (p < p_end && *p == '%') ++p;
-    return p == p_end;
 }
 
-struct svdb_bytecode_vm_t {
-    std::vector<Register> regs;
-    bool                  halted;
-    bool                  has_result;
+/* ── Data movement opcodes ─────────────────────────────────────────────── */
 
-    svdb_bytecode_vm_t() : regs(SVDB_VM_MAX_REGS), halted(false), has_result(false) {}
-
-    void reset() {
-        for (auto& r : regs) {
-            r.val_type = SVDB_TYPE_NULL;
-            r.int_val  = 0;
-            r.real_val = 0.0;
-            r.str_val.clear();
-        }
-        halted     = false;
-        has_result = false;
+int32_t svdb_vm_op_move(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    if (!state || !inst || inst->p1 < 0 || inst->p1 >= state->num_regs ||
+        inst->p2 < 0 || inst->p2 >= state->num_regs) {
+        return -1;
     }
-};
-
-/* ── helpers ─────────────────────────────────────────────── */
-
-static inline bool valid_reg(const svdb_bytecode_vm_t* vm, int idx) {
-    return idx >= 0 && idx < (int)vm->regs.size();
+    copy_value(&state->registers[inst->p2], &state->registers[inst->p1]);
+    return 0;
 }
 
-static void copy_val_to_reg(Register& r, int vtype, int64_t vi, double vr,
-                             const char* text, size_t text_len) {
-    r.val_type = vtype;
-    r.int_val  = vi;
-    r.real_val = vr;
-    if ((vtype == SVDB_TYPE_TEXT || vtype == SVDB_TYPE_BLOB) && text) {
-        r.str_val.assign(text, text_len);
+int32_t svdb_vm_op_copy(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    if (!state || !inst || inst->p1 < 0 || inst->p1 >= state->num_regs ||
+        inst->p2 < 0 || inst->p2 >= state->num_regs) {
+        return -1;
+    }
+    if (inst->p1 != inst->p2) {
+        copy_value(&state->registers[inst->p2], &state->registers[inst->p1]);
+    }
+    return 0;
+}
+
+int32_t svdb_vm_op_int_copy(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    if (!state || !inst || inst->p1 < 0 || inst->p1 >= state->num_regs ||
+        inst->p2 < 0 || inst->p2 >= state->num_regs) {
+        return -1;
+    }
+    
+    const svdb_value_t* src = &state->registers[inst->p1];
+    svdb_value_t* dst = &state->registers[inst->p2];
+    
+    if (src->val_type == SVDB_VAL_INT) {
+        dst->val_type = SVDB_VAL_INT;
+        dst->int_val = src->int_val;
+    } else if (src->val_type == SVDB_VAL_FLOAT) {
+        dst->val_type = SVDB_VAL_INT;
+        dst->int_val = (int64_t)src->float_val;
     } else {
-        r.str_val.clear();
+        dst->val_type = SVDB_VAL_NULL;
     }
+    return 0;
 }
 
-/* Compare two registers: returns -1/0/1 (NULL always compares less). */
-static int compare_regs(const Register& a, const Register& b) {
-    if (a.val_type == SVDB_TYPE_NULL && b.val_type == SVDB_TYPE_NULL) return 0;
-    if (a.val_type == SVDB_TYPE_NULL) return -1;
-    if (b.val_type == SVDB_TYPE_NULL) return  1;
+/* ── Arithmetic opcodes ────────────────────────────────────────────────── */
 
-    /* Both numeric: promote to double if either is float. */
-    bool a_num = (a.val_type == SVDB_TYPE_INT || a.val_type == SVDB_TYPE_REAL);
-    bool b_num = (b.val_type == SVDB_TYPE_INT || b.val_type == SVDB_TYPE_REAL);
-    if (a_num && b_num) {
-        double av = (a.val_type == SVDB_TYPE_REAL) ? a.real_val : (double)a.int_val;
-        double bv = (b.val_type == SVDB_TYPE_REAL) ? b.real_val : (double)b.int_val;
-        if (av < bv) return -1;
-        if (av > bv) return  1;
+static int32_t exec_arith(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst,
+                          double (*op)(double, double)) {
+    if (!state || !inst || !op) return -1;
+    if (inst->p1 < 0 || inst->p1 >= state->num_regs ||
+        inst->p2 < 0 || inst->p2 >= state->num_regs ||
+        inst->p3 < 0 || inst->p3 >= state->num_regs) {
+        return -1;
+    }
+    
+    const svdb_value_t* a = &state->registers[inst->p2];
+    const svdb_value_t* b = &state->registers[inst->p3];
+    svdb_value_t* result = &state->registers[inst->p1];
+    
+    /* NULL propagation */
+    if (a->val_type == SVDB_VAL_NULL || b->val_type == SVDB_VAL_NULL) {
+        result->val_type = SVDB_VAL_NULL;
         return 0;
     }
-    /* Both text/blob: lexicographic. */
-    bool a_str = (a.val_type == SVDB_TYPE_TEXT || a.val_type == SVDB_TYPE_BLOB);
-    bool b_str = (b.val_type == SVDB_TYPE_TEXT || b.val_type == SVDB_TYPE_BLOB);
-    if (a_str && b_str) {
-        return a.str_val.compare(b.str_val) < 0 ? -1 : (a.str_val > b.str_val ? 1 : 0);
-    }
-    /* Mixed types: numeric < text. */
-    if (a_num && b_str) return -1;
-    if (a_str && b_num) return  1;
+    
+    /* Convert to double */
+    double da = (a->val_type == SVDB_VAL_FLOAT) ? a->float_val : 
+                (a->val_type == SVDB_VAL_INT) ? (double)a->int_val : 0.0;
+    double db = (b->val_type == SVDB_VAL_FLOAT) ? b->float_val : 
+                (b->val_type == SVDB_VAL_INT) ? (double)b->int_val : 0.0;
+    
+    result->val_type = SVDB_VAL_FLOAT;
+    result->float_val = op(da, db);
     return 0;
 }
 
-/* Coerce register to double (for arithmetic). */
-static double reg_to_float(const Register& r) {
-    if (r.val_type == SVDB_TYPE_REAL)  return r.real_val;
-    if (r.val_type == SVDB_TYPE_INT)   return (double)r.int_val;
-    if (r.val_type == SVDB_TYPE_TEXT || r.val_type == SVDB_TYPE_BLOB) {
-        try { return std::stod(r.str_val); } catch (...) { return 0.0; }
-    }
-    return 0.0;
+static double add_op(double a, double b) { return a + b; }
+static double sub_op(double a, double b) { return a - b; }
+static double mul_op(double a, double b) { return a * b; }
+static double div_op(double a, double b) { return b != 0.0 ? a / b : 0.0; }
+
+int32_t svdb_vm_op_add(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    return exec_arith(state, inst, add_op);
 }
 
-/* ── C API ───────────────────────────────────────────────── */
-
-extern "C" {
-
-svdb_bytecode_vm_t* svdb_bytecode_vm_create(void) {
-    return new svdb_bytecode_vm_t();
+int32_t svdb_vm_op_sub(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    return exec_arith(state, inst, sub_op);
 }
 
-void svdb_bytecode_vm_destroy(svdb_bytecode_vm_t* vm) {
-    delete vm;
+int32_t svdb_vm_op_mul(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    return exec_arith(state, inst, mul_op);
 }
 
-void svdb_bytecode_vm_set_register(svdb_bytecode_vm_t* vm,
-                                    int reg_idx,
-                                    int value_type,
-                                    int64_t value_int,
-                                    double  value_real,
-                                    const char* value_text,
-                                    size_t  text_len) {
-    if (!vm || !valid_reg(vm, reg_idx)) return;
-    copy_val_to_reg(vm->regs[(size_t)reg_idx], value_type,
-                    value_int, value_real, value_text, text_len);
+int32_t svdb_vm_op_div(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    return exec_arith(state, inst, div_op);
 }
 
-int svdb_bytecode_vm_get_register(svdb_bytecode_vm_t* vm,
-                                   int reg_idx,
-                                   int* out_type,
-                                   int64_t* out_int,
-                                   double*  out_real,
-                                   char*    out_text,
-                                   size_t   text_cap) {
-    if (!vm || !valid_reg(vm, reg_idx)) return 0;
-    const Register& r = vm->regs[(size_t)reg_idx];
-    if (out_type) *out_type = r.val_type;
-    if (out_int)  *out_int  = r.int_val;
-    if (out_real) *out_real = r.real_val;
-    if (out_text && text_cap > 0) {
-        size_t copy_len = r.str_val.size() < (text_cap - 1)
-                          ? r.str_val.size() : (text_cap - 1);
-        memcpy(out_text, r.str_val.data(), copy_len);
-        out_text[copy_len] = '\0';
-    }
-    return 1;
-}
+/* ── Comparison opcodes ────────────────────────────────────────────────── */
 
-int svdb_bytecode_vm_step(svdb_bytecode_vm_t* vm,
-                           int opcode,
-                           int p1, int p2, int p3,
-                           const char* p4_str,
-                           int* out_jump_pc) {
-    if (!vm) return -3;
-    if (out_jump_pc) *out_jump_pc = -1;  /* no jump by default */
-    if (vm->halted) return -1;
-    vm->has_result = false;
-
-    switch ((svdb_opcode_t)opcode) {
-    case SVDB_BC_NOOP:
-        break;
-
-    case SVDB_BC_HALT:
-        vm->halted = true;
+static int32_t exec_compare(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst,
+                            int (*cmp)(int)) {
+    if (!state || !inst || !cmp) return -1;
+    if (inst->p1 < 0 || inst->p1 >= state->num_regs ||
+        inst->p2 < 0 || inst->p2 >= state->num_regs ||
+        inst->p3 < 0 || inst->p3 >= state->num_regs) {
         return -1;
-
-    /* ── Load ─────────────────────────────────────────────── */
-    case SVDB_BC_LOAD_CONST:
-        /* p1 = dest reg; p4_str = constant string value (NULL-type if absent). */
-        if (!valid_reg(vm, p1)) return -3;
-        if (p4_str) {
-            copy_val_to_reg(vm->regs[(size_t)p1], SVDB_TYPE_TEXT,
-                            0, 0.0, p4_str, strlen(p4_str));
-        } else {
-            vm->regs[(size_t)p1].val_type = SVDB_TYPE_NULL;
-        }
-        break;
-
-    /* ── Register move/copy ───────────────────────────────── */
-    case SVDB_BC_COPY:
-    case SVDB_BC_STORE:
-        /* p1 = src reg, p2 = dest reg */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2)) return -3;
-        vm->regs[(size_t)p2] = vm->regs[(size_t)p1];
-        break;
-
-    case SVDB_BC_MOVE:
-        /* p1 = src reg, p2 = dest reg (src becomes NULL) */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2)) return -3;
-        vm->regs[(size_t)p2] = vm->regs[(size_t)p1];
-        vm->regs[(size_t)p1] = Register{};
-        break;
-
-    case SVDB_BC_SWAP:
-        /* p1 = reg_a, p2 = reg_b */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2)) return -3;
-        std::swap(vm->regs[(size_t)p1], vm->regs[(size_t)p2]);
-        break;
-
-    /* ── Arithmetic ───────────────────────────────────────── */
-    case SVDB_BC_ADD:
-    case SVDB_BC_SUB:
-    case SVDB_BC_MUL:
-    case SVDB_BC_DIV:
-    case SVDB_BC_MOD: {
-        /* p1 = lhs reg, p2 = rhs reg, p3 = dest reg */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2) || !valid_reg(vm, p3)) return -3;
-        Register& lhs  = vm->regs[(size_t)p1];
-        Register& rhs  = vm->regs[(size_t)p2];
-        Register& dest = vm->regs[(size_t)p3];
-        if (lhs.val_type == SVDB_TYPE_NULL || rhs.val_type == SVDB_TYPE_NULL) {
-            dest = Register{};
-            break;
-        }
-        bool use_float = (lhs.val_type == SVDB_TYPE_REAL || rhs.val_type == SVDB_TYPE_REAL);
-        if (use_float) {
-            double lv = reg_to_float(lhs), rv = reg_to_float(rhs);
-            double result = 0.0;
-            if (opcode == SVDB_BC_ADD) result = lv + rv;
-            else if (opcode == SVDB_BC_SUB) result = lv - rv;
-            else if (opcode == SVDB_BC_MUL) result = lv * rv;
-            else if (opcode == SVDB_BC_DIV) {
-                if (rv == 0.0) { dest = Register{}; break; }
-                result = lv / rv;
-            } else { dest = Register{}; break; } /* MOD on float → NULL */
-            copy_val_to_reg(dest, SVDB_TYPE_REAL, 0, result, nullptr, 0);
-        } else {
-            int64_t li = lhs.int_val, ri = rhs.int_val;
-            int64_t result = 0;
-            if (opcode == SVDB_BC_ADD) result = li + ri;
-            else if (opcode == SVDB_BC_SUB) result = li - ri;
-            else if (opcode == SVDB_BC_MUL) result = li * ri;
-            else if (opcode == SVDB_BC_DIV) {
-                if (ri == 0) { dest = Register{}; break; }
-                result = li / ri;
-            } else {
-                if (ri == 0) { dest = Register{}; break; }
-                result = li % ri;
-            }
-            copy_val_to_reg(dest, SVDB_TYPE_INT, result, 0.0, nullptr, 0);
-        }
-        break;
     }
-
-    case SVDB_BC_NEG:
-        /* p1 = src reg, p2 = dest reg */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2)) return -3;
-        {
-            const Register& src = vm->regs[(size_t)p1];
-            if (src.val_type == SVDB_TYPE_REAL)
-                copy_val_to_reg(vm->regs[(size_t)p2], SVDB_TYPE_REAL, 0, -src.real_val, nullptr, 0);
-            else if (src.val_type == SVDB_TYPE_INT)
-                copy_val_to_reg(vm->regs[(size_t)p2], SVDB_TYPE_INT, -src.int_val, 0.0, nullptr, 0);
-            else
-                vm->regs[(size_t)p2] = Register{};
-        }
-        break;
-
-    /* ── Comparison ───────────────────────────────────────── */
-    case SVDB_BC_EQ:
-    case SVDB_BC_NEQ:
-    case SVDB_BC_LT:
-    case SVDB_BC_LE:
-    case SVDB_BC_GT:
-    case SVDB_BC_GE: {
-        /* p1 = lhs reg, p2 = rhs reg, p3 = dest reg */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2) || !valid_reg(vm, p3)) return -3;
-        const Register& lhs = vm->regs[(size_t)p1];
-        const Register& rhs = vm->regs[(size_t)p2];
-        /* NULL comparisons → NULL result (SQL three-valued logic). */
-        if (lhs.val_type == SVDB_TYPE_NULL || rhs.val_type == SVDB_TYPE_NULL) {
-            vm->regs[(size_t)p3] = Register{};
-            break;
-        }
-        int cmp = compare_regs(lhs, rhs);
-        bool result = false;
-        if (opcode == SVDB_BC_EQ)  result = (cmp == 0);
-        else if (opcode == SVDB_BC_NEQ) result = (cmp != 0);
-        else if (opcode == SVDB_BC_LT)  result = (cmp <  0);
-        else if (opcode == SVDB_BC_LE)  result = (cmp <= 0);
-        else if (opcode == SVDB_BC_GT)  result = (cmp >  0);
-        else                             result = (cmp >= 0);
-        copy_val_to_reg(vm->regs[(size_t)p3], SVDB_TYPE_INT, result ? 1 : 0, 0.0, nullptr, 0);
-        break;
-    }
-
-    /* ── Logical ──────────────────────────────────────────── */
-    case SVDB_BC_AND: {
-        /* p1 = lhs reg, p2 = rhs reg, p3 = dest reg */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2) || !valid_reg(vm, p3)) return -3;
-        const Register& la = vm->regs[(size_t)p1];
-        const Register& ra = vm->regs[(size_t)p2];
-        /* FALSE AND anything → FALSE; NULL AND FALSE → FALSE; else NULL/TRUE */
-        bool l_null = (la.val_type == SVDB_TYPE_NULL);
-        bool r_null = (ra.val_type == SVDB_TYPE_NULL);
-        bool l_true = !l_null && (la.val_type != SVDB_TYPE_INT || la.int_val != 0);
-        bool r_true = !r_null && (ra.val_type != SVDB_TYPE_INT || ra.int_val != 0);
-        if ((!l_true && !l_null) || (!r_true && !r_null)) {
-            copy_val_to_reg(vm->regs[(size_t)p3], SVDB_TYPE_INT, 0, 0.0, nullptr, 0);
-        } else if (l_null || r_null) {
-            vm->regs[(size_t)p3] = Register{};
-        } else {
-            copy_val_to_reg(vm->regs[(size_t)p3], SVDB_TYPE_INT, 1, 0.0, nullptr, 0);
-        }
-        break;
-    }
-
-    case SVDB_BC_OR: {
-        /* p1 = lhs reg, p2 = rhs reg, p3 = dest reg */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2) || !valid_reg(vm, p3)) return -3;
-        const Register& lo = vm->regs[(size_t)p1];
-        const Register& ro = vm->regs[(size_t)p2];
-        bool l_null = (lo.val_type == SVDB_TYPE_NULL);
-        bool r_null = (ro.val_type == SVDB_TYPE_NULL);
-        bool l_true = !l_null && (lo.val_type != SVDB_TYPE_INT || lo.int_val != 0);
-        bool r_true = !r_null && (ro.val_type != SVDB_TYPE_INT || ro.int_val != 0);
-        if (l_true || r_true) {
-            copy_val_to_reg(vm->regs[(size_t)p3], SVDB_TYPE_INT, 1, 0.0, nullptr, 0);
-        } else if (l_null || r_null) {
-            vm->regs[(size_t)p3] = Register{};
-        } else {
-            copy_val_to_reg(vm->regs[(size_t)p3], SVDB_TYPE_INT, 0, 0.0, nullptr, 0);
-        }
-        break;
-    }
-
-    case SVDB_BC_NOT:
-        /* p1 = src reg, p2 = dest reg */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2)) return -3;
-        {
-            const Register& src = vm->regs[(size_t)p1];
-            if (src.val_type == SVDB_TYPE_NULL) {
-                vm->regs[(size_t)p2] = Register{};
-            } else {
-                int64_t v = (src.val_type == SVDB_TYPE_INT) ? src.int_val : (src.real_val != 0.0 ? 1 : 0);
-                copy_val_to_reg(vm->regs[(size_t)p2], SVDB_TYPE_INT, v == 0 ? 1 : 0, 0.0, nullptr, 0);
-            }
-        }
-        break;
-
-    /* ── Jump ─────────────────────────────────────────────── */
-    case SVDB_BC_JUMP:
-        /* p1 = jump target PC (0-based) */
-        if (out_jump_pc) *out_jump_pc = p1;
-        break;
-
-    case SVDB_BC_JUMP_IF_FALSE:
-        /* p1 = condition reg, p2 = jump target PC */
-        if (!valid_reg(vm, p1)) return -3;
-        {
-            const Register& cond = vm->regs[(size_t)p1];
-            bool is_false = (cond.val_type == SVDB_TYPE_NULL) ||
-                            (cond.val_type == SVDB_TYPE_INT  && cond.int_val  == 0) ||
-                            (cond.val_type == SVDB_TYPE_REAL && cond.real_val == 0.0);
-            if (is_false && out_jump_pc) *out_jump_pc = p2;
-        }
-        break;
-
-    case SVDB_BC_JUMP_IF_TRUE:
-        /* p1 = condition reg, p2 = jump target PC */
-        if (!valid_reg(vm, p1)) return -3;
-        {
-            const Register& cond = vm->regs[(size_t)p1];
-            bool is_true = (cond.val_type != SVDB_TYPE_NULL) &&
-                           !((cond.val_type == SVDB_TYPE_INT  && cond.int_val  == 0) ||
-                             (cond.val_type == SVDB_TYPE_REAL && cond.real_val == 0.0));
-            if (is_true && out_jump_pc) *out_jump_pc = p2;
-        }
-        break;
-
-    /* ── String operations ────────────────────────────────── */
-    case SVDB_BC_CONCAT:
-        /* p1 = lhs reg, p2 = rhs reg, p3 = dest reg */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2) || !valid_reg(vm, p3)) return -3;
-        {
-            const Register& lc = vm->regs[(size_t)p1];
-            const Register& rc = vm->regs[(size_t)p2];
-            if (lc.val_type == SVDB_TYPE_NULL || rc.val_type == SVDB_TYPE_NULL) {
-                vm->regs[(size_t)p3] = Register{};
-            } else {
-                std::string ls = (lc.val_type == SVDB_TYPE_TEXT || lc.val_type == SVDB_TYPE_BLOB)
-                    ? lc.str_val : (lc.val_type == SVDB_TYPE_INT ? std::to_string(lc.int_val) : std::to_string(lc.real_val));
-                std::string rs = (rc.val_type == SVDB_TYPE_TEXT || rc.val_type == SVDB_TYPE_BLOB)
-                    ? rc.str_val : (rc.val_type == SVDB_TYPE_INT ? std::to_string(rc.int_val) : std::to_string(rc.real_val));
-                std::string result = ls + rs;
-                copy_val_to_reg(vm->regs[(size_t)p3], SVDB_TYPE_TEXT, 0, 0.0, result.c_str(), result.size());
-            }
-        }
-        break;
-
-    case SVDB_BC_LIKE:
-        /* p1 = text reg, p2 = pattern reg, p3 = dest reg (0 or 1) */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2) || !valid_reg(vm, p3)) return -3;
-        {
-            const Register& txt = vm->regs[(size_t)p1];
-            const Register& pat = vm->regs[(size_t)p2];
-            if (txt.val_type == SVDB_TYPE_NULL || pat.val_type == SVDB_TYPE_NULL) {
-                vm->regs[(size_t)p3] = Register{};
-            } else {
-                const std::string& t_str = txt.str_val;
-                const std::string& p_str = pat.str_val;
-                bool matched = like_match(p_str.c_str(), p_str.size(),
-                                          t_str.c_str(), t_str.size());
-                copy_val_to_reg(vm->regs[(size_t)p3], SVDB_TYPE_INT,
-                                matched ? 1 : 0, 0.0, nullptr, 0);
-            }
-        }
-        break;
-
-    /* ── Type conversion ──────────────────────────────────── */
-    case SVDB_BC_CAST:
-        /* p1 = src reg, p2 = dest reg, p3 = target type (SVDB_TYPE_*) */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2)) return -3;
-        {
-            const Register& src = vm->regs[(size_t)p1];
-            Register& dst = vm->regs[(size_t)p2];
-            if (src.val_type == SVDB_TYPE_NULL) {
-                dst = Register{};
-            } else if (p3 == SVDB_TYPE_INT) {
-                if (src.val_type == SVDB_TYPE_INT)        dst = src;
-                else if (src.val_type == SVDB_TYPE_REAL)  copy_val_to_reg(dst, SVDB_TYPE_INT, (int64_t)src.real_val, 0.0, nullptr, 0);
-                else if (src.val_type == SVDB_TYPE_TEXT || src.val_type == SVDB_TYPE_BLOB) {
-                    try { copy_val_to_reg(dst, SVDB_TYPE_INT, (int64_t)std::stoll(src.str_val), 0.0, nullptr, 0); }
-                    catch (...) { copy_val_to_reg(dst, SVDB_TYPE_INT, 0, 0.0, nullptr, 0); }
-                } else dst = Register{};
-            } else if (p3 == SVDB_TYPE_REAL) {
-                if (src.val_type == SVDB_TYPE_REAL)       dst = src;
-                else if (src.val_type == SVDB_TYPE_INT)   copy_val_to_reg(dst, SVDB_TYPE_REAL, 0, (double)src.int_val, nullptr, 0);
-                else if (src.val_type == SVDB_TYPE_TEXT || src.val_type == SVDB_TYPE_BLOB) {
-                    try { copy_val_to_reg(dst, SVDB_TYPE_REAL, 0, std::stod(src.str_val), nullptr, 0); }
-                    catch (...) { copy_val_to_reg(dst, SVDB_TYPE_REAL, 0, 0.0, nullptr, 0); }
-                } else dst = Register{};
-            } else if (p3 == SVDB_TYPE_TEXT) {
-                if (src.val_type == SVDB_TYPE_TEXT)       dst = src;
-                else if (src.val_type == SVDB_TYPE_INT) {
-                    std::string s = std::to_string(src.int_val);
-                    copy_val_to_reg(dst, SVDB_TYPE_TEXT, 0, 0.0, s.c_str(), s.size());
-                } else if (src.val_type == SVDB_TYPE_REAL) {
-                    std::string s = std::to_string(src.real_val);
-                    copy_val_to_reg(dst, SVDB_TYPE_TEXT, 0, 0.0, s.c_str(), s.size());
-                } else if (src.val_type == SVDB_TYPE_BLOB) {
-                    copy_val_to_reg(dst, SVDB_TYPE_TEXT, 0, 0.0, src.str_val.c_str(), src.str_val.size());
-                } else dst = Register{};
-            } else {
-                dst = src; /* unknown target type: pass through */
-            }
-        }
-        break;
-
-    /* ── NULL checks ──────────────────────────────────────── */
-    case SVDB_BC_IS_NULL:
-        /* p1 = src reg, p2 = dest reg: dest = 1 if src is NULL else 0 */
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2)) return -3;
-        copy_val_to_reg(vm->regs[(size_t)p2], SVDB_TYPE_INT,
-                        vm->regs[(size_t)p1].val_type == SVDB_TYPE_NULL ? 1 : 0, 0.0, nullptr, 0);
-        break;
-
-    case SVDB_BC_NOT_NULL:
-        if (!valid_reg(vm, p1) || !valid_reg(vm, p2)) return -3;
-        copy_val_to_reg(vm->regs[(size_t)p2], SVDB_TYPE_INT,
-                        vm->regs[(size_t)p1].val_type != SVDB_TYPE_NULL ? 1 : 0, 0.0, nullptr, 0);
-        break;
-
-    /* ── Result row ───────────────────────────────────────── */
-    case SVDB_BC_RESULT_ROW:
-        /* p1 = first column reg, p2 = column count */
-        vm->has_result = true;
-        return -2;  /* signal caller to collect result row */
-
-    /* ── Load column ─────────────────────────────────────── */
-    case SVDB_BC_LOAD_COL:
-        /* p1 = dest reg, p2 = column index */
-        if (!valid_reg(vm, p1)) return -3;
-        vm->regs[(size_t)p1].val_type = SVDB_TYPE_NULL;
-        break;
-
-    /* ── Cursor operations ───────────────────────────────── */
-    case SVDB_BC_OPEN_READ:
-    case SVDB_BC_OPEN_WRITE:
-        /* p1 = cursor ID, p2 = table ID */
-        /* In full implementation, would open a table/index */
-        break;
-
-    case SVDB_BC_REWIND:
-        /* p1 = cursor ID */
-        /* Reset cursor to beginning */
-        break;
-
-    case SVDB_BC_NEXT:
-        /* p1 = cursor ID */
-        /* Advance cursor to next row */
-        break;
-
-    case SVDB_BC_EOF:
-        /* p1 = cursor ID, p2 = target PC if not EOF */
-        /* Check if cursor is at end */
-        if (out_jump_pc && p2 > 0) {
-            /* For now, always jump - cursor check would be in full impl */
-            *out_jump_pc = p2;
-        }
-        break;
-
-    case SVDB_BC_COLUMN:
-        /* p1 = cursor ID, p2 = column index, p3 = dest reg */
-        if (!valid_reg(vm, p3)) return -3;
-        vm->regs[(size_t)p3].val_type = SVDB_TYPE_NULL;
-        break;
-
-    case SVDB_BC_ROWID:
-        /* p1 = cursor ID, p2 = dest reg */
-        if (!valid_reg(vm, p2)) return -3;
-        vm->regs[(size_t)p2].val_type = SVDB_TYPE_INT;
-        vm->regs[(size_t)p2].int_val = 0;
-        break;
-
-    case SVDB_BC_SEEK_ROWID:
-        /* p1 = cursor ID, p2 = rowid reg */
-        /* Search for rowid in table */
-        break;
-
-    /* ── Aggregate operations ────────────────────────────── */
-    case SVDB_BC_AGG_STEP:
-        /* p1 = aggregate function ID, p2 = reg containing value */
-        /* Accumulate value into aggregate */
-        break;
-
-    case SVDB_BC_AGG_FINAL:
-        /* p1 = aggregate function ID, p2 = dest reg */
-        /* Finalize aggregate and store result */
-        if (!valid_reg(vm, p2)) return -3;
-        vm->regs[(size_t)p2].val_type = SVDB_TYPE_NULL;
-        break;
-
-    /* ── Coroutine operations ───────────────────────────── */
-    case SVDB_BC_INIT_COROUTINE:
-        /* p1 = program counter reg */
-        break;
-
-    case SVDB_BC_YIELD:
-        /* p1 = program counter reg */
-        break;
-
-    /* ── Close ─────────────────────────────────────────── */
-    case SVDB_BC_CLOSE:
-        /* p1 = cursor ID */
-        /* Close cursor */
-        break;
-
-    default:
-        /* Unknown or unimplemented opcode — treat as NOP for extensibility. */
-        break;
-    }
-
+    
+    const svdb_value_t* a = &state->registers[inst->p2];
+    const svdb_value_t* b = &state->registers[inst->p3];
+    svdb_value_t* result = &state->registers[inst->p1];
+    
+    int c = svdb_value_compare(a, b);
+    result->val_type = SVDB_VAL_BOOL;
+    result->int_val = cmp(c) ? 1 : 0;
     return 0;
 }
 
-int svdb_bytecode_vm_has_result(svdb_bytecode_vm_t* vm) {
-    return (vm && vm->has_result) ? 1 : 0;
+int32_t svdb_vm_op_eq(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    return exec_compare(state, inst, [](int c) -> int { return c == 0; });
 }
 
-void svdb_bytecode_vm_reset(svdb_bytecode_vm_t* vm) {
-    if (vm) vm->reset();
+int32_t svdb_vm_op_ne(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    return exec_compare(state, inst, [](int c) -> int { return c != 0; });
 }
 
-} /* extern "C" */
+int32_t svdb_vm_op_lt(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    return exec_compare(state, inst, [](int c) -> int { return c < 0; });
+}
+
+int32_t svdb_vm_op_le(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    return exec_compare(state, inst, [](int c) -> int { return c <= 0; });
+}
+
+int32_t svdb_vm_op_gt(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    return exec_compare(state, inst, [](int c) -> int { return c > 0; });
+}
+
+int32_t svdb_vm_op_ge(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    return exec_compare(state, inst, [](int c) -> int { return c >= 0; });
+}
+
+/* ── Logic opcodes ─────────────────────────────────────────────────────── */
+
+int32_t svdb_vm_op_and(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    if (!state || !inst || inst->p1 < 0 || inst->p1 >= state->num_regs ||
+        inst->p2 < 0 || inst->p2 >= state->num_regs ||
+        inst->p3 < 0 || inst->p3 >= state->num_regs) {
+        return -1;
+    }
+    
+    const svdb_value_t* a = &state->registers[inst->p2];
+    const svdb_value_t* b = &state->registers[inst->p3];
+    svdb_value_t* result = &state->registers[inst->p1];
+    
+    /* SQL three-valued logic */
+    if (a->val_type == SVDB_VAL_NULL || b->val_type == SVDB_VAL_NULL) {
+        result->val_type = SVDB_VAL_NULL;
+        return 0;
+    }
+    
+    result->val_type = SVDB_VAL_BOOL;
+    result->int_val = (svdb_value_to_bool(a) && svdb_value_to_bool(b)) ? 1 : 0;
+    return 0;
+}
+
+int32_t svdb_vm_op_or(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    if (!state || !inst || inst->p1 < 0 || inst->p1 >= state->num_regs ||
+        inst->p2 < 0 || inst->p2 >= state->num_regs ||
+        inst->p3 < 0 || inst->p3 >= state->num_regs) {
+        return -1;
+    }
+    
+    const svdb_value_t* a = &state->registers[inst->p2];
+    const svdb_value_t* b = &state->registers[inst->p3];
+    svdb_value_t* result = &state->registers[inst->p1];
+    
+    /* SQL three-valued logic */
+    if (a->val_type == SVDB_VAL_NULL && b->val_type == SVDB_VAL_NULL) {
+        result->val_type = SVDB_VAL_NULL;
+        return 0;
+    }
+    if (a->val_type == SVDB_VAL_NULL) {
+        result->val_type = svdb_value_to_bool(b) ? SVDB_VAL_BOOL : SVDB_VAL_NULL;
+        result->int_val = svdb_value_to_bool(b) ? 1 : 0;
+        return 0;
+    }
+    if (b->val_type == SVDB_VAL_NULL) {
+        result->val_type = svdb_value_to_bool(a) ? SVDB_VAL_BOOL : SVDB_VAL_NULL;
+        result->int_val = svdb_value_to_bool(a) ? 1 : 0;
+        return 0;
+    }
+    
+    result->val_type = SVDB_VAL_BOOL;
+    result->int_val = (svdb_value_to_bool(a) || svdb_value_to_bool(b)) ? 1 : 0;
+    return 0;
+}
+
+int32_t svdb_vm_op_not(svdb_vm_state_t* state, const svdb_vm_instruction_t* inst) {
+    if (!state || !inst || inst->p1 < 0 || inst->p1 >= state->num_regs ||
+        inst->p2 < 0 || inst->p2 >= state->num_regs) {
+        return -1;
+    }
+    
+    const svdb_value_t* a = &state->registers[inst->p2];
+    svdb_value_t* result = &state->registers[inst->p1];
+    
+    if (a->val_type == SVDB_VAL_NULL) {
+        result->val_type = SVDB_VAL_NULL;
+        return 0;
+    }
+    
+    result->val_type = SVDB_VAL_BOOL;
+    result->int_val = svdb_value_to_bool(a) ? 0 : 1;
+    return 0;
+}
+
+/* ── Batch execution ───────────────────────────────────────────────────── */
+
+int32_t svdb_vm_execute_batch(
+    svdb_vm_state_t* state,
+    const svdb_vm_program_t* prog,
+    int32_t max_iterations) {
+    
+    if (!state || !prog || !state->registers || !prog->instructions) {
+        return -1;
+    }
+    
+    state->halted = 0;
+    state->error_code = 0;
+    state->pc = 0;
+    
+    int32_t iterations = 0;
+    
+    while (!state->halted && state->pc >= 0 && state->pc < prog->num_instructions) {
+        if (++iterations > max_iterations) {
+            state->error_code = 1;  /* Max iterations exceeded */
+            return -1;
+        }
+        
+        const svdb_vm_instruction_t* inst = &prog->instructions[state->pc];
+        int32_t result = 0;
+        int32_t advance_pc = 1;
+        
+        switch (inst->opcode) {
+            /* Data movement */
+            case VM_OP_MOVE:
+                result = svdb_vm_op_move(state, inst);
+                break;
+            case VM_OP_COPY:
+                result = svdb_vm_op_copy(state, inst);
+                break;
+            case VM_OP_INT_COPY:
+                result = svdb_vm_op_int_copy(state, inst);
+                break;
+            
+            /* Arithmetic */
+            case VM_OP_ADD:
+                result = svdb_vm_op_add(state, inst);
+                break;
+            case VM_OP_SUB:
+                result = svdb_vm_op_sub(state, inst);
+                break;
+            case VM_OP_MUL:
+                result = svdb_vm_op_mul(state, inst);
+                break;
+            case VM_OP_DIV:
+                result = svdb_vm_op_div(state, inst);
+                break;
+            
+            /* Comparison */
+            case VM_OP_EQ:
+                result = svdb_vm_op_eq(state, inst);
+                break;
+            case VM_OP_NE:
+                result = svdb_vm_op_ne(state, inst);
+                break;
+            case VM_OP_LT:
+                result = svdb_vm_op_lt(state, inst);
+                break;
+            case VM_OP_LE:
+                result = svdb_vm_op_le(state, inst);
+                break;
+            case VM_OP_GT:
+                result = svdb_vm_op_gt(state, inst);
+                break;
+            case VM_OP_GE:
+                result = svdb_vm_op_ge(state, inst);
+                break;
+            
+            /* Logic */
+            case VM_OP_AND:
+                result = svdb_vm_op_and(state, inst);
+                break;
+            case VM_OP_OR:
+                result = svdb_vm_op_or(state, inst);
+                break;
+            case VM_OP_NOT:
+                result = svdb_vm_op_not(state, inst);
+                break;
+            
+            /* Control flow */
+            case VM_OP_GOTO:
+                state->pc = inst->p2;
+                advance_pc = 0;
+                break;
+            
+            case VM_OP_HALT:
+                state->halted = 1;
+                advance_pc = 0;
+                break;
+            
+            default:
+                /* Unknown opcode - let Go handle it */
+                state->error_code = 2;  /* Unknown opcode */
+                return state->pc;  /* Return current PC for Go to continue */
+        }
+        
+        if (result < 0) {
+            state->error_code = 3;  /* Execution error */
+            return -1;
+        }
+        
+        if (advance_pc) {
+            state->pc++;
+        }
+    }
+    
+    return state->pc;
+}

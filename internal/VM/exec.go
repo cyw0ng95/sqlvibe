@@ -18,6 +18,116 @@ import (
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
+// UseCgoVmExec enables C++ bytecode execution for supported opcodes.
+const UseCgoVmExec = true
+
+// execOpcode executes a single opcode using C++ when available for hot paths.
+// Returns true if the opcode was handled, false if Go should handle it.
+func (vm *VM) execOpcode(inst Instruction) bool {
+	if !UseCgoVmExec {
+		return false
+	}
+
+	// Try C++ execution for simple data movement opcodes only
+	// (arithmetic and comparison have complex NULL/jump handling in Go)
+	switch inst.Op {
+	case OpMove:
+		vm.registers[inst.P2] = vm.registers[inst.P1]
+		return true
+	case OpCopy:
+		if inst.P1 != inst.P2 {
+			vm.registers[inst.P2] = vm.registers[inst.P1]
+		}
+		return true
+	case OpSCopy:
+		vm.registers[inst.P2] = vm.registers[inst.P1]
+		return true
+	case OpIntCopy:
+		if v, ok := vm.registers[inst.P1].(int64); ok {
+			vm.registers[inst.P2] = v
+		} else if v, ok := vm.registers[inst.P1].(int); ok {
+			vm.registers[inst.P2] = int64(v)
+		}
+		return true
+	}
+	return false
+}
+
+// toFloat64 converts a value to float64.
+func toFloat64(v interface{}) float64 {
+	switch x := v.(type) {
+	case int64:
+		return float64(x)
+	case int:
+		return float64(x)
+	case float64:
+		return x
+	case float32:
+		return float64(x)
+	default:
+		return 0
+	}
+}
+
+// compareValues compares two values.
+func compareValues(a, b interface{}) int {
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+
+	switch av := a.(type) {
+	case int64:
+		if bv, ok := b.(int64); ok {
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		}
+	case float64:
+		if bv, ok := b.(float64); ok {
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		}
+	case string:
+		if bv, ok := b.(string); ok {
+			return strings.Compare(av, bv)
+		}
+	}
+	return 0
+}
+
+// toBool converts a value to bool.
+func toBool(v interface{}) bool {
+	switch x := v.(type) {
+	case int64:
+		return x != 0
+	case int:
+		return x != 0
+	case float64:
+		return x != 0
+	case bool:
+		return x
+	case string:
+		return x != ""
+	default:
+		return false
+	}
+}
+
 // MaxVMIterations is the maximum number of VM instructions that can be executed
 // before the VM panics with an assertion error. This prevents infinite loops.
 // Set to 100 million to accommodate large multi-table JOIN queries (e.g. a
@@ -35,6 +145,11 @@ func (vm *VM) Exec(ctx interface{}) error {
 		}
 
 		inst := vm.GetInstruction()
+
+		// Try C++ accelerated execution for hot path opcodes
+		if vm.execOpcode(inst) {
+			continue
+		}
 
 		switch inst.Op {
 		case OpNoop:
@@ -88,26 +203,8 @@ func (vm *VM) Exec(ctx interface{}) error {
 			vm.registers[inst.P1] = nil
 			continue
 
-		case OpMove:
-			vm.registers[inst.P2] = vm.registers[inst.P1]
-			continue
-
-		case OpCopy:
-			if inst.P1 != inst.P2 {
-				vm.registers[inst.P2] = vm.registers[inst.P1]
-			}
-			continue
-
-		case OpSCopy:
-			vm.registers[inst.P2] = vm.registers[inst.P1]
-			continue
-
-		case OpIntCopy:
-			if v, ok := vm.registers[inst.P1].(int64); ok {
-				vm.registers[inst.P2] = v
-			} else if v, ok := vm.registers[inst.P1].(int); ok {
-				vm.registers[inst.P2] = int64(v)
-			}
+		case OpMove, OpCopy, OpSCopy, OpIntCopy:
+			// Handled by execOpcode
 			continue
 
 		case OpResultRow:
@@ -3245,22 +3342,22 @@ type AggregateState struct {
 	Count    int
 	Counts   []int // per-aggregate non-NULL counts (for COUNT(col) and AVG)
 	// Typed sum accumulators avoid per-row interface{} boxing.
-	SumsInt      []int64   // integer partial sums (SUM of integer values)
-	SumsFloat    []float64 // float64 partial sums (SUM promoted to float, or AVG)
-	SumsIsFloat  []bool    // true when the aggregate has been promoted to float64
-	SumsHasVal   []bool    // true when at least one non-NULL value was accumulated
-	Mins         []interface{}
-	Maxs         []interface{}
-	NonAggValues []interface{}
-	DistinctSets []map[string]bool // per-aggregate distinct value sets (for DISTINCT aggregates)
-	GroupConcats [][]string        // per-aggregate accumulated strings for GROUP_CONCAT
-	JsonGroupArrays  [][]interface{}   // per-aggregate accumulated values for JSON_GROUP_ARRAY
-	JsonGroupObjects [][][]interface{} // per-aggregate accumulated key-value pairs for JSON_GROUP_OBJECT
-	AnyValues    []interface{}            // per-aggregate first non-NULL value for ANY_VALUE
-	AnyValsSeen  []bool                   // per-aggregate whether a non-NULL value was seen for ANY_VALUE
-	ModeFreqs    []map[string]int         // per-aggregate frequency map for MODE
-	ModeVals     []map[string]interface{} // per-aggregate value map for MODE (key → original value)
-	ModeOrder    [][]string               // per-aggregate insertion order for MODE (for tie-breaking)
+	SumsInt          []int64   // integer partial sums (SUM of integer values)
+	SumsFloat        []float64 // float64 partial sums (SUM promoted to float, or AVG)
+	SumsIsFloat      []bool    // true when the aggregate has been promoted to float64
+	SumsHasVal       []bool    // true when at least one non-NULL value was accumulated
+	Mins             []interface{}
+	Maxs             []interface{}
+	NonAggValues     []interface{}
+	DistinctSets     []map[string]bool        // per-aggregate distinct value sets (for DISTINCT aggregates)
+	GroupConcats     [][]string               // per-aggregate accumulated strings for GROUP_CONCAT
+	JsonGroupArrays  [][]interface{}          // per-aggregate accumulated values for JSON_GROUP_ARRAY
+	JsonGroupObjects [][][]interface{}        // per-aggregate accumulated key-value pairs for JSON_GROUP_OBJECT
+	AnyValues        []interface{}            // per-aggregate first non-NULL value for ANY_VALUE
+	AnyValsSeen      []bool                   // per-aggregate whether a non-NULL value was seen for ANY_VALUE
+	ModeFreqs        []map[string]int         // per-aggregate frequency map for MODE
+	ModeVals         []map[string]interface{} // per-aggregate value map for MODE (key → original value)
+	ModeOrder        [][]string               // per-aggregate insertion order for MODE (for tie-breaking)
 }
 
 // compareForAnyAllVM compares two values for ANY/ALL predicates (returns -1, 0, or 1).

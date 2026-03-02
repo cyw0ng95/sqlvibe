@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "../SF/types.h"
 
 #ifdef __cplusplus
 #include <cstdint>
@@ -89,20 +90,12 @@ private:
 } // namespace svdb
 #endif // __cplusplus
 
-// C-compatible API for CGO (visible to both C and C++)
+/* C-compatible API for CGO (visible to both C and C++) */
+/* svdb_value_t is defined in ../SF/types.h */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef struct svdb_value_t {
-    int32_t val_type;
-    int64_t int_val;
-    double float_val;
-    const char* str_data;
-    size_t str_len;
-    const char* bytes_data;
-    size_t bytes_len;
-} svdb_value_t;
 
 void svdb_value_init_null(svdb_value_t* v);
 void svdb_value_init_int(svdb_value_t* v, int64_t val);

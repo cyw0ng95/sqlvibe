@@ -3,12 +3,28 @@
 // QueryEngine struct, making them easy to compose and test independently.
 package engine
 
+/*
+#cgo LDFLAGS: -L${SRCDIR}/../../../.build/cmake/lib -lsvdb -lstdc++
+#cgo CFLAGS: -I${SRCDIR}/../../../src/core/VM/engine
+#include "engine_api.h"
+*/
+import "C"
+
 // Row is a single database row represented as a column-name → value map.
 type Row = map[string]interface{}
 
 // FilterRows returns only those rows for which pred returns true.
 // A nil predicate returns all rows unchanged.
+// Uses C++ implementation by default for better performance.
 func FilterRows(rows []Row, pred func(Row) bool) []Row {
+	if pred == nil {
+		return rows
+	}
+	return CFilterRows(rows, pred)
+}
+
+// goFilterRows is the pure Go implementation of FilterRows (fallback).
+func goFilterRows(rows []Row, pred func(Row) bool) []Row {
 	if pred == nil {
 		return rows
 	}
@@ -43,7 +59,13 @@ func ProjectRows(rows []Row, projections map[string]func(Row) interface{}) []Row
 
 // ApplyDistinct removes duplicate rows using keyFn to compute a deduplication
 // key for each row. The first occurrence of each key is retained.
+// Uses C++ implementation by default for better performance.
 func ApplyDistinct(rows []Row, keyFn func(Row) string) []Row {
+	return CApplyDistinct(rows, keyFn)
+}
+
+// goApplyDistinct is the pure Go implementation of ApplyDistinct (fallback).
+func goApplyDistinct(rows []Row, keyFn func(Row) string) []Row {
 	seen := make(map[string]struct{}, len(rows))
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
@@ -58,7 +80,13 @@ func ApplyDistinct(rows []Row, keyFn func(Row) string) []Row {
 
 // ApplyLimitOffset returns a sub-slice of rows after skipping offset rows and
 // returning at most limit rows.  A limit of ≤ 0 means no upper bound.
+// Uses C++ implementation by default for better performance.
 func ApplyLimitOffset(rows []Row, limit, offset int) []Row {
+	return CApplyLimitOffset(rows, limit, offset)
+}
+
+// goApplyLimitOffset is the pure Go implementation of ApplyLimitOffset (fallback).
+func goApplyLimitOffset(rows []Row, limit, offset int) []Row {
 	if offset < 0 {
 		offset = 0
 	}
@@ -74,7 +102,13 @@ func ApplyLimitOffset(rows []Row, limit, offset int) []Row {
 
 // ColNames returns a deduplicated, ordered list of all column names present in
 // any row of the result set.
+// Uses C++ implementation by default for better performance.
 func ColNames(rows []Row) []string {
+	return CColNames(rows)
+}
+
+// goColNames is the pure Go implementation of ColNames (fallback).
+func goColNames(rows []Row) []string {
 	seen := make(map[string]struct{})
 	var out []string
 	for _, r := range rows {

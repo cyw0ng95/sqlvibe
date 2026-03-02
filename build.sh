@@ -125,7 +125,7 @@ if [[ $RUN_TESTS -eq 1 ]]; then
     if [[ $COVERAGE -eq 1 ]]; then
         COVER_PROF_TESTS="$BUILD_DIR/coverage_tests.out"
         COVERPKG=$(go list -tags "$EXT_TAGS" -f '{{.ImportPath}}' ./... 2>/dev/null \
-            | grep -vE "internal/TS|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata" \
+            | grep -vE "tests|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata" \
             | tr '\n' ',' | sed 's/,$//')
         TEST_COVER_ARGS+=(-coverprofile="$COVER_PROF_TESTS" -covermode=atomic -coverpkg="$COVERPKG")
         COVER_PROFILES+=("$COVER_PROF_TESTS")
@@ -154,7 +154,7 @@ if [[ $RUN_BENCH -eq 1 ]]; then
     if [[ $COVERAGE -eq 1 ]]; then
         COVER_PROF_BENCH="$BUILD_DIR/coverage_bench.out"
         COVERPKG=$(go list -tags "$EXT_TAGS" -f '{{.ImportPath}}' ./... 2>/dev/null \
-            | grep -vE "internal/TS|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata" \
+            | grep -vE "tests|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata" \
             | tr '\n' ',' | sed 's/,$//')
         BENCH_COVER_ARGS+=(-coverprofile="$COVER_PROF_BENCH" -covermode=atomic -coverpkg="$COVERPKG")
         COVER_PROFILES+=("$COVER_PROF_BENCH")
@@ -165,7 +165,7 @@ if [[ $RUN_BENCH -eq 1 ]]; then
         -benchmem \
         "${BENCH_COVER_ARGS[@]+"${BENCH_COVER_ARGS[@]}"}" \
         ${VERBOSE_FLAG} \
-        ./internal/TS/Benchmark/... 2>&1 | tee "$BUILD_DIR/bench.log"
+        ./tests/Benchmark/... 2>&1 | tee "$BUILD_DIR/bench.log"
     echo "====> Benchmarks complete. Log: $BUILD_DIR/bench.log"
 fi
 
@@ -177,8 +177,8 @@ if [[ $RUN_FUZZ -eq 1 ]]; then
     mkdir -p "$BUILD_DIR/fuzz"
 
     FUZZ_PKG=(
-        "github.com/cyw0ng95/sqlvibe/internal/TS/PlainFuzzer"
-        "github.com/cyw0ng95/sqlvibe/internal/TS/PlainFuzzer"
+        "github.com/cyw0ng95/sqlvibe/tests/PlainFuzzer"
+        "github.com/cyw0ng95/sqlvibe/tests/PlainFuzzer"
     )
     FUZZ_FUNC=(
         "FuzzSQL"

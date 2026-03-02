@@ -111,7 +111,7 @@ Benchmarks on Intel Xeon @ 2.90 GHz, in-memory database, `-benchtime=1s`.
 `db.ClearResultCache()` so actual per-query execution cost is measured.
 SQLite's `database/sql` driver reuses prepared statements across iterations.
 Both sides iterate all result rows end-to-end.
-(`go test ./internal/TS/Benchmark/... -bench=BenchmarkCompare_ -benchtime=1s`).
+(`go test ./tests/Benchmark/... -bench=BenchmarkCompare_ -benchtime=1s`).
 Results may vary on different hardware.
 
 ### SQLite vs sqlvibe (v0.11.0 — C++ Migration Complete)
@@ -230,7 +230,7 @@ Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
 ```bash
 go build ./...
 go test ./...
-go test ./internal/TS/Benchmark/... -bench . -benchmem
+go test ./tests/Benchmark/... -bench . -benchmem
 ```
 
 ## Build Config Flags

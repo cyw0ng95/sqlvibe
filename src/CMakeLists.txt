@@ -53,6 +53,7 @@ set(SVDB_CORE_SOURCES
     core/DS/row_store.cpp
     core/DS/bloom_filter.cpp
     core/DS/column_vector.cpp
+    core/DS/hybrid_store.cpp
 
     # VM - Virtual Machine
     core/VM/hash.cpp

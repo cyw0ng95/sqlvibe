@@ -6,6 +6,11 @@ package engine
 #include "engine_api.h"
 #include <stdlib.h>
 #include <string.h>
+
+// Forward declarations for Go callback exports (CGO generates these without const)
+extern int32_t goRowPredicate(svdb_engine_row_t* row, void* user_data);
+extern char* goRowKeyFn(svdb_engine_row_t* row, void* user_data);
+extern int32_t goJoinPredicate(svdb_engine_row_t* merged, void* user_data);
 */
 import "C"
 import (
@@ -464,4 +469,227 @@ func CDenseRanks(rows []Row, col string) []int64 {
 		out[i] = int64(raw[i])
 	}
 	return out
+}
+
+// CFilterRows filters rows using the C++ implementation.
+// pred is a Go closure that receives each row and returns true to keep it.
+func CFilterRows(rows []Row, pred func(Row) bool) []Row {
+	if len(rows) == 0 {
+		return nil
+	}
+	crows := goRowsToC(rows)
+	if crows == nil {
+		return nil
+	}
+	defer C.svdb_engine_rows_free(crows)
+
+	// Pass predicate via pointer (Go closure)
+	predPtr := unsafe.Pointer(&pred)
+	out := C.svdb_engine_filter_rows(crows, (*[0]byte)(unsafe.Pointer(C.goRowPredicate)), predPtr)
+	defer C.svdb_engine_rows_free(out)
+	return cRowsToGo(out)
+}
+
+// CApplyDistinct removes duplicate rows using the C++ implementation.
+// keyFn computes a deduplication key for each row.
+func CApplyDistinct(rows []Row, keyFn func(Row) string) []Row {
+	if len(rows) == 0 {
+		return nil
+	}
+	crows := goRowsToC(rows)
+	if crows == nil {
+		return nil
+	}
+	defer C.svdb_engine_rows_free(crows)
+
+	keyFnPtr := unsafe.Pointer(&keyFn)
+	out := C.svdb_engine_apply_distinct(crows, (*[0]byte)(unsafe.Pointer(C.goRowKeyFn)), keyFnPtr)
+	defer C.svdb_engine_rows_free(out)
+	return cRowsToGo(out)
+}
+
+// CInnerJoin performs inner join using the C++ implementation.
+// pred receives merged rows and returns true to include them.
+func CInnerJoin(left, right []Row, pred func(Row) bool) []Row {
+	if len(left) == 0 || len(right) == 0 {
+		return nil
+	}
+	cleft := goRowsToC(left)
+	cright := goRowsToC(right)
+	defer C.svdb_engine_rows_free(cleft)
+	defer C.svdb_engine_rows_free(cright)
+
+	predPtr := unsafe.Pointer(&pred)
+	out := C.svdb_engine_inner_join(cleft, cright, (*[0]byte)(unsafe.Pointer(C.goJoinPredicate)), predPtr)
+	defer C.svdb_engine_rows_free(out)
+	return cRowsToGo(out)
+}
+
+// CLeftOuterJoin performs left outer join using the C++ implementation.
+// pred receives merged rows and returns true to include them.
+// rightCols lists column names in right rows for NULL padding.
+func CLeftOuterJoin(left, right []Row, pred func(Row) bool, rightCols []string) []Row {
+	if len(left) == 0 {
+		return nil
+	}
+	cleft := goRowsToC(left)
+	defer C.svdb_engine_rows_free(cleft)
+
+	if len(right) == 0 {
+		// No right rows — return left with NULL right columns
+		cRightCols := make([]*C.char, len(rightCols))
+		for i, col := range rightCols {
+			cRightCols[i] = C.CString(col)
+			defer C.free(unsafe.Pointer(cRightCols[i]))
+		}
+		var cCols **C.char
+		if len(cRightCols) > 0 {
+			cCols = &cRightCols[0]
+		}
+		out := C.svdb_engine_left_outer_join(cleft, nil, nil, nil, cCols, C.int32_t(len(rightCols)))
+		defer C.svdb_engine_rows_free(out)
+		return cRowsToGo(out)
+	}
+
+	cright := goRowsToC(right)
+	defer C.svdb_engine_rows_free(cright)
+
+	cRightCols := make([]*C.char, len(rightCols))
+	for i, col := range rightCols {
+		cRightCols[i] = C.CString(col)
+		defer C.free(unsafe.Pointer(cRightCols[i]))
+	}
+	var cCols **C.char
+	if len(cRightCols) > 0 {
+		cCols = &cRightCols[0]
+	}
+
+	predPtr := unsafe.Pointer(&pred)
+	out := C.svdb_engine_left_outer_join(cleft, cright, (*[0]byte)(unsafe.Pointer(C.goJoinPredicate)), predPtr, cCols, C.int32_t(len(rightCols)))
+	defer C.svdb_engine_rows_free(out)
+	return cRowsToGo(out)
+}
+
+// CGroupRows groups rows by key using the C++ implementation.
+// keyFn computes a group key for each row.
+// Returns one row per group with "group_key" column.
+func CGroupRows(rows []Row, keyFn func(Row) string) []Row {
+	if len(rows) == 0 {
+		return nil
+	}
+	crows := goRowsToC(rows)
+	if crows == nil {
+		return nil
+	}
+	defer C.svdb_engine_rows_free(crows)
+
+	keyFnPtr := unsafe.Pointer(&keyFn)
+	out := C.svdb_engine_group_rows(crows, (*[0]byte)(unsafe.Pointer(C.goRowKeyFn)), keyFnPtr)
+	defer C.svdb_engine_rows_free(out)
+	return cRowsToGo(out)
+}
+
+// CSumRows computes SUM of a column using the C++ implementation.
+// Returns float64 for compatibility with SQLite SUM behaviour.
+func CSumRows(rows []Row, col string) interface{} {
+	if len(rows) == 0 {
+		return nil
+	}
+	crows := goRowsToC(rows)
+	if crows == nil {
+		return nil
+	}
+	defer C.svdb_engine_rows_free(crows)
+
+	cCol := C.CString(col)
+	defer C.free(unsafe.Pointer(cCol))
+
+	cv := C.svdb_engine_sum_rows(crows, cCol)
+	return cValToGo(cv)
+}
+
+// CAvgRows computes AVG of a column using the C++ implementation.
+func CAvgRows(rows []Row, col string) float64 {
+	if len(rows) == 0 {
+		return 0.0
+	}
+	crows := goRowsToC(rows)
+	if crows == nil {
+		return 0.0
+	}
+	defer C.svdb_engine_rows_free(crows)
+
+	cCol := C.CString(col)
+	defer C.free(unsafe.Pointer(cCol))
+
+	return float64(C.svdb_engine_avg_rows(crows, cCol))
+}
+
+// CMinRows finds minimum value in a column using the C++ implementation.
+// Returns nil if all values are NULL or rows is empty.
+func CMinRows(rows []Row, col string) interface{} {
+	if len(rows) == 0 {
+		return nil
+	}
+	crows := goRowsToC(rows)
+	if crows == nil {
+		return nil
+	}
+	defer C.svdb_engine_rows_free(crows)
+
+	cCol := C.CString(col)
+	defer C.free(unsafe.Pointer(cCol))
+
+	cv := C.svdb_engine_min_rows(crows, cCol)
+	return cValToGo(cv)
+}
+
+// CMaxRows finds maximum value in a column using the C++ implementation.
+// Returns nil if all values are NULL or rows is empty.
+func CMaxRows(rows []Row, col string) interface{} {
+	if len(rows) == 0 {
+		return nil
+	}
+	crows := goRowsToC(rows)
+	if crows == nil {
+		return nil
+	}
+	defer C.svdb_engine_rows_free(crows)
+
+	cCol := C.CString(col)
+	defer C.free(unsafe.Pointer(cCol))
+
+	cv := C.svdb_engine_max_rows(crows, cCol)
+	return cValToGo(cv)
+}
+
+//export goRowPredicate
+func goRowPredicate(row *C.svdb_engine_row_t, userData unsafe.Pointer) C.int32_t {
+	type predicateFunc func(Row) bool
+	pred := *(*predicateFunc)(userData)
+	r := cRowToGo(row)
+	if pred(r) {
+		return 1
+	}
+	return 0
+}
+
+//export goRowKeyFn
+func goRowKeyFn(row *C.svdb_engine_row_t, userData unsafe.Pointer) *C.char {
+	type keyFunc func(Row) string
+	keyFn := *(*keyFunc)(userData)
+	r := cRowToGo(row)
+	key := keyFn(r)
+	return C.CString(key)
+}
+
+//export goJoinPredicate
+func goJoinPredicate(merged *C.svdb_engine_row_t, userData unsafe.Pointer) C.int32_t {
+	type joinPredFunc func(Row) bool
+	pred := *(*joinPredFunc)(userData)
+	r := cRowToGo(merged)
+	if pred(r) {
+		return 1
+	}
+	return 0
 }

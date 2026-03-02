@@ -2,6 +2,13 @@ package engine
 
 import "sort"
 
+/*
+#cgo LDFLAGS: -L${SRCDIR}/../../../.build/cmake/lib -lsvdb -lstdc++
+#cgo CFLAGS: -I${SRCDIR}/../../../src/core/VM/engine
+#include "engine_api.h"
+*/
+import "C"
+
 // SortOrder controls whether rows are sorted in ascending or descending order.
 type SortOrder int
 
@@ -29,7 +36,25 @@ type SortKey struct {
 // SortRowsByKeys sorts rows stably by the ordered list of sort keys.
 // The cmp function compares two non-nil column values and must return a
 // negative number if a < b, zero if a == b, or a positive number if a > b.
+// Uses C++ implementation by default for better performance.
 func SortRowsByKeys(rows []Row, keys []SortKey, cmp func(a, b interface{}) int) []Row {
+	if len(keys) == 0 {
+		return rows
+	}
+	// Convert Go SortKey to CSortKey
+	cKeys := make([]CSortKey, len(keys))
+	for i, k := range keys {
+		cKeys[i] = CSortKey{
+			ColName:   k.ColName,
+			Order:     int32(k.Order),
+			NullOrder: int32(k.NullOrder),
+		}
+	}
+	return CSortRows(rows, cKeys)
+}
+
+// goSortRowsByKeys is the pure Go implementation of SortRowsByKeys (fallback).
+func goSortRowsByKeys(rows []Row, keys []SortKey, cmp func(a, b interface{}) int) []Row {
 	if len(keys) == 0 {
 		return rows
 	}
@@ -75,8 +100,14 @@ func TopKRows(rows []Row, k int, keys []SortKey, cmp func(a, b interface{}) int)
 	return sorted
 }
 
-// ReverseRows reverses a slice of rows in place and returns it.
+// ReverseRows reverses a slice of rows.
+// Uses C++ implementation by default for better performance.
 func ReverseRows(rows []Row) []Row {
+	return CReverseRows(rows)
+}
+
+// goReverseRows is the pure Go implementation of ReverseRows (fallback).
+func goReverseRows(rows []Row) []Row {
 	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
 		rows[i], rows[j] = rows[j], rows[i]
 	}
