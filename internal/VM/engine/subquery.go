@@ -8,14 +8,8 @@ package engine
 import "C"
 
 // ExistsRows returns true if the row slice is non-empty.
-// Uses C++ implementation by default for better performance.
 func ExistsRows(rows []Row) bool {
 	return CExistsRows(rows)
-}
-
-// goExistsRows is the pure Go implementation of ExistsRows (fallback).
-func goExistsRows(rows []Row) bool {
-	return len(rows) > 0
 }
 
 // ScalarRow extracts a single scalar value from the first row of a subquery
@@ -31,7 +25,6 @@ func ScalarRow(rows []Row, colFn func(Row) interface{}) interface{} {
 // InRows checks whether value appears in the subquery result set.
 // colFn extracts the comparison value from each result row.
 // equal tests two values for equality.
-// Uses C++ implementation by default for better performance.
 func InRows(value interface{}, rows []Row, colFn func(Row) interface{}, equal func(a, b interface{}) bool) bool {
 	if value == nil {
 		return false
@@ -50,22 +43,8 @@ func InRows(value interface{}, rows []Row, colFn func(Row) interface{}, equal fu
 	return CInRows(value, rows, col)
 }
 
-// goInRows is the pure Go implementation of InRows (fallback).
-func goInRows(value interface{}, rows []Row, colFn func(Row) interface{}, equal func(a, b interface{}) bool) bool {
-	if value == nil {
-		return false
-	}
-	for _, r := range rows {
-		if equal(value, colFn(r)) {
-			return true
-		}
-	}
-	return false
-}
-
 // NotInRows returns true when value does not appear in the subquery result set.
 // NULL value always yields false (SQL three-valued-logic).
-// Uses C++ implementation by default for better performance.
 func NotInRows(value interface{}, rows []Row, colFn func(Row) interface{}, equal func(a, b interface{}) bool) bool {
 	if value == nil {
 		return false
@@ -82,24 +61,6 @@ func NotInRows(value interface{}, rows []Row, colFn func(Row) interface{}, equal
 		return true
 	}
 	return CNotInRows(value, rows, col)
-}
-
-// goNotInRows is the pure Go implementation of NotInRows (fallback).
-func goNotInRows(value interface{}, rows []Row, colFn func(Row) interface{}, equal func(a, b interface{}) bool) bool {
-	if value == nil {
-		return false
-	}
-	for _, r := range rows {
-		v := colFn(r)
-		if v == nil {
-			// If any right-side value is NULL, NOT IN is UNKNOWN → false.
-			return false
-		}
-		if equal(value, v) {
-			return false
-		}
-	}
-	return true
 }
 
 // AllRows returns true when pred holds for every row.

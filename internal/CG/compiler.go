@@ -32,8 +32,10 @@ func NewCompiler() *Compiler {
 }
 
 // finalize runs optimization passes and returns the compiled program.
+// It first applies the Go optimizer, then the C++ optimizer for additional passes.
 func (c *Compiler) finalize() *VM.Program {
-	return c.optimizer.Optimize(c.program)
+	prog := c.optimizer.Optimize(c.program)
+	return CGOptimizeProgram(prog, nil)
 }
 
 func (c *Compiler) CompileSelect(stmt *QP.SelectStmt) *VM.Program {
