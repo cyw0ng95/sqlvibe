@@ -235,14 +235,14 @@ func NewDatabaseHeader(pageSize uint16) *DatabaseHeader {
 	return h
 }
 
+// IsValidPageSize returns true if size is a power of two in [MinPageSize, MaxPageSize].
+// Actual bounds and power-of-2 validation is performed by the C++ manager_cgo implementation;
+// this wrapper only guards against non-positive sizes before the uint32 cast.
 func IsValidPageSize(size int) bool {
-	if size < MinPageSize || size > MaxPageSize {
+	if size <= 0 {
 		return false
 	}
-	if size&(size-1) != 0 {
-		return false
-	}
-	return true
+	return ManagerIsValidPageSize(uint32(size))
 }
 
 func GetDefaultPageSize() int {

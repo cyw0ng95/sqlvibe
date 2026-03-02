@@ -2,28 +2,43 @@
 
 **Last Updated**: 2026-03-02
 **Target Version**: v0.11.0
-**Strategy**: Shift from Go→C++→Go (CGO with callbacks) to pure C++ where possible
+**Strategy**: Boundary CGO — only the outermost API layer (Go→C++) uses CGO; inner C++ modules call each other directly (C++→C++)
 
 This document tracks the migration status of Go code in `internal/` to C++ implementations in `src/core/`.
 
 ---
 
-## Executive Summary: Shift to C++ Only
+## Executive Summary: Boundary CGO Architecture
 
-**Current Problem**: Many C++ implementations still require Go callbacks (Go→C++→Go pattern), which adds significant overhead:
+**Core Principle**: Only the **outermost API boundary** between Go and C++ uses CGO.
+Inner C++ modules must call each other **directly in C++** — no CGO round-trips between
+internal modules.
+
+```
+Go code
+  │  (CGO boundary — one layer only)
+  ▼
+C++ outer API  (libsvdb.so public functions)
+  │  (pure C++ calls — no CGO, no callbacks to Go)
+  ▼
+C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
+```
+
+**Previous Problem**: Many C++ implementations used Go callbacks (Go→C++→Go), which adds:
 - Registry lookup: ~260ns per callback
-- Goal: Eliminate by moving logic entirely to C++
+- Extra CGO boundary crossings for every inner operation
 
-**Target State**: Self-contained C++ modules with thin Go wrappers:
-- No Go callbacks required
-- Direct C pointer usage
-- ~5ns per call (52x faster)
+**Target State**: Self-contained C++ modules with thin Go wrappers at the boundary only:
+- Inner C++ modules: call each other directly, zero CGO overhead
+- Outer CGO boundary: thin Go wrapper for API only
+- No Go callbacks required anywhere inside C++
+- ~5ns per call at boundary (52x faster than registry callbacks)
 
 **Migration Priorities**:
-1. B-Tree: Embed PageManager in C++
-2. Columnar/Row Store: C++ handles all storage
-3. VM: Full execution in C++
-4. Parser: Complete SQL parsing in C++
+1. B-Tree: Embed PageManager in C++, remove Go callbacks from all inner paths
+2. Overflow/Freelist/Balance: Internal-only C++ (no Go boundary needed)
+3. Cell/Varint: Already pure C++ — Go wrappers are boundary-only
+4. VM: Full execution in C++ — Go only orchestrates result retrieval
 
 ---
 
@@ -31,7 +46,7 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 
 | Subsystem | Total | C++ Only | CGO Wrapper | Go-Only | Progress |
 |-----------|-------|----------|-------------|---------|----------|
-| **DS** (Data Storage) | 36 | 15 | 12 | 9 | 75% |
+| **DS** (Data Storage) | 36 | 16 | 12 | 8 | 78% |
 | **VM** (Virtual Machine) | 30 | 15 | 9 | 6 | 80% |
 | **QP** (Query Processing) | 15 | 10 | 4 | 1 | 93% |
 | **CG** (Code Generation) | 8 | 7 | 0 | 1 | 88% |
@@ -41,14 +56,14 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | **IS** (Info Schema) | 1 | 1 | 0 | 0 | 100% |
 | **Wrapper** | 1 | 0 | 1 | 0 | 100% |
 | **CGO** (Special Cases) | 1 | 0 | 1 | 0 | 100% |
-| **TOTAL** | **97** | **51** | **27** | **18** | **80%** |
+| **TOTAL** | **97** | **52** | **27** | **17** | **82%** |
 
 **Legend**:
 - **C++ Only**: Pure C++ implementation (no Go callbacks, no CGO overhead)
 - **CGO Wrapper**: Go wrapper uses `import "C"` to call C++ (may include Go callbacks)
 - **Go-Only**: Pure Go implementation (no C++ migration yet or Go-only by design)
 
-**Strategy Shift**: Minimize CGO wrappers by moving logic into C++ where Go callbacks are not required.
+**Boundary-CGO Principle**: Only the Go→C++ API boundary uses CGO. Inner C++ modules call each other directly in C++ — no CGO overhead between internal modules.
 
 ---
 
@@ -62,7 +77,7 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | `internal/DS/compression.go` | `src/core/DS/compression.cpp` | ✅ C++ | |
 | `internal/DS/roaring_bitmap.go` | `src/core/DS/roaring.cpp` | ✅ C++ | |
 | `internal/DS/encoding.go` | `src/core/DS/varint.cpp` | ✅ C++ | varint encode/decode |
-| `internal/DS/cell.go` | `src/core/DS/cell.cpp` | ✅ C++ | Cell encode/decode |
+| `internal/DS/cell.go` | `src/core/DS/cell.cpp` | ✅ C++ | **Phase DS-9 COMPLETE**: encode/decode delegated to C++; `CellData` type + `CalculateLocalPayloadSize`/`CellSize` remain Go-side |
 | `internal/DS/overflow.go` | `src/core/DS/overflow.cpp` | ✅ CGO | Always-on CGO (no fallback); Direct C pointer for callbacks |
 | `internal/DS/cache_cgo.go` | `src/core/DS/cache.cpp` | ✅ CGO | **Always-on CGO** (no fallback); Direct C pointer, self-contained |
 | `internal/DS/skip_list.go` | `src/core/DS/skip_list.h` | ✅ CGO | Always-on; int/float→`_int` API, string/bytes→`_str` API; goKeys for Range/Pairs |
@@ -698,5 +713,5 @@ sqlvibe/
 
 ---
 
-**Last Updated**: 2026-03-02 (Phase DS-7+DS-8 complete: WAL+Manager CGO wrappers; 78% → 80%)
+**Last Updated**: 2026-03-02 (Boundary-CGO architecture; Phase DS-9 cell.go migration; 80% → 82%)
 **Next Review**: After Phase 6 architecture cleanup
