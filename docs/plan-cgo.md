@@ -31,7 +31,7 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 
 | Subsystem | Total | C++ Only | CGO Wrapper | Go-Only | Progress |
 |-----------|-------|----------|-------------|---------|----------|
-| **DS** (Data Storage) | 36 | 15 | 10 | 11 | 69% |
+| **DS** (Data Storage) | 36 | 15 | 12 | 9 | 75% |
 | **VM** (Virtual Machine) | 30 | 15 | 9 | 6 | 80% |
 | **QP** (Query Processing) | 15 | 10 | 4 | 1 | 93% |
 | **CG** (Code Generation) | 8 | 7 | 0 | 1 | 88% |
@@ -41,7 +41,7 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | **IS** (Info Schema) | 1 | 1 | 0 | 0 | 100% |
 | **Wrapper** | 1 | 0 | 1 | 0 | 100% |
 | **CGO** (Special Cases) | 1 | 0 | 1 | 0 | 100% |
-| **TOTAL** | **97** | **51** | **25** | **20** | **78%** |
+| **TOTAL** | **97** | **51** | **27** | **18** | **80%** |
 
 **Legend**:
 - **C++ Only**: Pure C++ implementation (no Go callbacks, no CGO overhead)
@@ -98,14 +98,14 @@ This document tracks the migration status of Go code in `internal/` to C++ imple
 | `internal/DS/skip_list.go` | Go skip list (C++ exists but not migrated) |
 | `internal/DS/bloom_filter.go` | Go bloom filter |
 
-### C++ Files Without Go Counterparts (New)
+### C++ Files Without Go Counterparts (New → Now Wrapped)
 
-| C++ File | Purpose |
-|----------|---------|
-| `src/core/DS/simd.cpp` | SIMD optimizations |
-| `src/core/DS/page.cpp` | Page management |
-| `src/core/DS/manager.cpp` | Page manager |
-| `src/core/DS/wal.cpp` | Write-ahead logging |
+| C++ File | Go Wrapper | Status |
+|----------|-----------|--------|
+| `src/core/DS/simd.cpp` | (none) | SIMD optimizations — Go-only equivalent not needed |
+| `src/core/DS/page.cpp` | `internal/DS/page_cgo.go` | ✅ CGO |
+| `src/core/DS/manager.cpp` | `internal/DS/manager_cgo.go` | ✅ CGO — **Phase DS-8 COMPLETE** |
+| `src/core/DS/wal.cpp` | `internal/DS/wal_cgo.go` | ✅ CGO — **Phase DS-7 COMPLETE** |
 
 ---
 
@@ -698,5 +698,5 @@ sqlvibe/
 
 ---
 
-**Last Updated**: 2026-03-02 (Phase 3.2/3.3/3.4+4.2 complete)
+**Last Updated**: 2026-03-02 (Phase DS-7+DS-8 complete: WAL+Manager CGO wrappers; 78% → 80%)
 **Next Review**: After Phase 6 architecture cleanup
