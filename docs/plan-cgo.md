@@ -47,7 +47,7 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 | Subsystem | Total | C++ Only | CGO Wrapper | Go-Only | Progress |
 |-----------|-------|----------|-------------|---------|----------|
 | **DS** (Data Storage) | 36 | 20 | 12 | 4 | 89% |
-| **VM** (Virtual Machine) | 30 | 18 | 9 | 3 | 90% |
+| **VM** (Virtual Machine) | 30 | 19 | 9 | 2 | 93% |
 | **QP** (Query Processing) | 15 | 10 | 4 | 1 | 93% |
 | **CG** (Code Generation) | 8 | 7 | 0 | 1 | 88% |
 | **TM** (Transaction Mgmt) | 1 | 1 | 0 | 0 | 100% |
@@ -56,7 +56,7 @@ C++ inner modules  (btree ↔ page_manager ↔ overflow ↔ cell ↔ varint …)
 | **IS** (Info Schema) | 1 | 1 | 0 | 0 | 100% |
 | **Wrapper** | 1 | 0 | 1 | 0 | 100% |
 | **CGO** (Special Cases) | 1 | 0 | 1 | 0 | 100% |
-| **TOTAL** | **97** | **59** | **27** | **10** | **89%** |
+| **TOTAL** | **97** | **60** | **27** | **8** | **90%** |
 
 **Legend**:
 - **C++ Only**: Pure C++ implementation (no Go callbacks, no CGO overhead)
@@ -748,13 +748,14 @@ sqlvibe/
 | M6: Cursor Full C++ | Full cursor in C++, no Go dependencies | ✅ 100% | 100% |
 | M7: Parser Full C++ | Full SQL parsing in C++ | ✅ 100% | 100% |
 
-### Final State (v0.11.0 Complete)
+### Final State (v0.11.0 Complete) ✅
 
 | Criteria | Description |
 |----------|-------------|
 | Zero Go Callbacks | C++ never calls back to Go |
 | Thin Go Wrapper | Go only wraps public API boundary |
 | libsvdb Standalone | libsvdb.so is self-contained C++ library |
+| M1-M7 Complete | All v0.11.0 milestones finished |
 
 ### Go Wrapper Removal Criteria
 
