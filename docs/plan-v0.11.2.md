@@ -646,8 +646,8 @@ Phases 3–8 can proceed in parallel once Phase 2 is complete.
 - [x] Phase 2: All basic SQL (CREATE/INSERT/SELECT) works via C++ engine
 - [x] Phase 3: ACID transactions work via C++ engine
 - [x] Phase 4: Prepared statements with bind params work
-- [ ] Phase 5: All PRAGMA directives work
-- [ ] Phase 6: Window functions, hash join, set ops, FK+triggers work
+- [x] Phase 5: All PRAGMA directives work (table_info, table_list with views, index_list, etc.)
+- [x] Phase 6: Window functions, hash join, set ops (UNION/INTERSECT/EXCEPT), FK+triggers work
 - [x] Phase 7: Schema introspection, backup, import/export work (basic)
 - [ ] Phase 8: JSON/Math/FTS5 extensions work
 - [x] Phase 9: `internal/cgo/` package created (svdbcgo) as thin CGO binding

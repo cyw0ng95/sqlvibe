@@ -6,10 +6,14 @@ package sqlvibe
 
 import (
 "context"
+"encoding/csv"
 "encoding/hex"
+"encoding/json"
 "fmt"
+"io"
 "strconv"
 "strings"
+"sync"
 
 svdbcgo "github.com/cyw0ng95/sqlvibe/internal/cgo"
 )
@@ -512,12 +516,39 @@ return "'" + strings.ReplaceAll(fmt.Sprintf("%v", val), "'", "''") + "'"
 }
 }
 
+// valueToString converts a Go value to its plain string representation (for CSV etc.).
+func valueToString(v interface{}) string {
+if v == nil {
+return ""
+}
+switch val := v.(type) {
+case int64:
+return strconv.FormatInt(val, 10)
+case int:
+return strconv.FormatInt(int64(val), 10)
+case float64:
+return strconv.FormatFloat(val, 'g', -1, 64)
+case bool:
+if val {
+return "1"
+}
+return "0"
+case string:
+return val
+case []byte:
+return string(val)
+default:
+return fmt.Sprintf("%v", val)
+}
+}
+
 // ── Schema / metadata types ───────────────────────────────────────
 
 // TableInfo describes a table in the database.
 type TableInfo struct {
 Name string
 Type string // "table", "view", etc.
+SQL  string // CREATE statement that defined the table/view
 }
 
 // ColumnInfo describes a column in a table.
@@ -532,20 +563,27 @@ PrimaryKey bool
 // IndexInfo describes an index on a table.
 type IndexInfo struct {
 Name    string
+Table   string
 Unique  bool
 Columns []string
 }
 
 // IntegrityReport is the result of CheckIntegrity.
 type IntegrityReport struct {
-Valid  bool
-Errors []string
+Valid      bool
+Errors     []string
+PageCount  int
+FreePages  int
 }
 
 // DatabaseInfo holds metadata about an open database.
 type DatabaseInfo struct {
-FilePath string
-Encoding string
+FilePath  string
+Encoding  string
+FileSize  int64
+PageSize  int
+PageCount int
+WALMode   bool
 }
 
 // PageStats holds basic storage statistics.
@@ -565,9 +603,12 @@ return nil, err
 defer crows.Close()
 var tables []TableInfo
 for crows.Next() {
-v := crows.Get(0)
-name, _ := v.(string)
-tables = append(tables, TableInfo{Name: name, Type: "table"})
+name, _ := crows.Get(0).(string)
+ti := TableInfo{Name: name, Type: "table"}
+if crows.ColumnCount() >= 2 {
+ti.SQL, _ = crows.Get(1).(string)
+}
+tables = append(tables, ti)
 }
 return tables, nil
 }
@@ -646,7 +687,7 @@ return nil, err
 defer crows.Close()
 var indexes []IndexInfo
 for crows.Next() {
-idx := IndexInfo{}
+idx := IndexInfo{Table: table}
 if crows.ColumnCount() >= 1 {
 idx.Name, _ = crows.Get(0).(string)
 }
@@ -698,4 +739,288 @@ return PageStats{}, nil
 // BackupTo creates a copy of the database at destPath.
 func (db *Database) BackupTo(destPath string) error {
 return db.cdb.Backup(destPath)
+}
+
+// ── StatementPool ────────────────────────────────────────────────────────────
+
+// StatementPool manages a pool of prepared statements with LRU eviction.
+type StatementPool struct {
+mu      sync.RWMutex
+stmts   map[string]*Statement
+lru     []string
+maxSize int
+db      *Database
+}
+
+const defaultPoolSize = 100
+
+// NewStatementPool creates a StatementPool for db with the given maximum size.
+// If maxSize <= 0, defaultPoolSize is used.
+func NewStatementPool(db *Database, maxSize int) *StatementPool {
+if maxSize <= 0 {
+maxSize = defaultPoolSize
+}
+return &StatementPool{
+stmts:   make(map[string]*Statement, maxSize),
+lru:     make([]string, 0, maxSize),
+maxSize: maxSize,
+db:      db,
+}
+}
+
+// Get retrieves a prepared statement from the pool or compiles a new one.
+func (sp *StatementPool) Get(sql string) (*Statement, error) {
+sp.mu.RLock()
+stmt, ok := sp.stmts[sql]
+sp.mu.RUnlock()
+if ok {
+sp.touch(sql)
+return stmt, nil
+}
+
+sp.mu.Lock()
+defer sp.mu.Unlock()
+if stmt, ok = sp.stmts[sql]; ok {
+sp.touchLocked(sql)
+return stmt, nil
+}
+if len(sp.stmts) >= sp.maxSize {
+sp.evictLRU()
+}
+var err error
+stmt, err = sp.db.Prepare(sql)
+if err != nil {
+return nil, err
+}
+sp.stmts[sql] = stmt
+sp.lru = append(sp.lru, sql)
+return stmt, nil
+}
+
+// Clear removes all cached statements from the pool.
+func (sp *StatementPool) Clear() {
+sp.mu.Lock()
+defer sp.mu.Unlock()
+sp.stmts = make(map[string]*Statement, sp.maxSize)
+sp.lru = sp.lru[:0]
+}
+
+// Size returns the number of cached statements.
+func (sp *StatementPool) Size() int {
+sp.mu.RLock()
+defer sp.mu.RUnlock()
+return len(sp.stmts)
+}
+
+func (sp *StatementPool) touch(sql string) {
+sp.mu.Lock()
+sp.touchLocked(sql)
+sp.mu.Unlock()
+}
+
+func (sp *StatementPool) touchLocked(sql string) {
+for i, s := range sp.lru {
+if s == sql {
+sp.lru = append(sp.lru[:i], sp.lru[i+1:]...)
+sp.lru = append(sp.lru, sql)
+return
+}
+}
+}
+
+func (sp *StatementPool) evictLRU() {
+if len(sp.lru) == 0 {
+return
+}
+evicted := sp.lru[0]
+sp.lru = sp.lru[1:]
+delete(sp.stmts, evicted)
+}
+
+// ── CSV / JSON Import + Export ───────────────────────────────────────────────
+
+// CSVExportOptions controls how ExportCSV behaves.
+type CSVExportOptions struct {
+WriteHeader bool   // write column names as first row
+Comma       rune   // field delimiter (default: ',')
+NullString  string // representation for NULL values (default: "")
+}
+
+// ExportCSV executes sql and writes the result as CSV to w.
+func (db *Database) ExportCSV(w io.Writer, sql string, opts CSVExportOptions) error {
+if opts.Comma == 0 {
+opts.Comma = ','
+}
+rows, err := db.Query(sql)
+if err != nil {
+return fmt.Errorf("ExportCSV: query: %w", err)
+}
+cw := csv.NewWriter(w)
+cw.Comma = opts.Comma
+if opts.WriteHeader {
+if err2 := cw.Write(rows.Columns); err2 != nil {
+return fmt.Errorf("ExportCSV: writing header: %w", err2)
+}
+}
+for _, row := range rows.Data {
+record := make([]string, len(row))
+for i, v := range row {
+if v == nil {
+record[i] = opts.NullString
+} else {
+record[i] = valueToString(v)
+}
+}
+if err2 := cw.Write(record); err2 != nil {
+return fmt.Errorf("ExportCSV: writing row: %w", err2)
+}
+}
+cw.Flush()
+return cw.Error()
+}
+
+// CSVImportOptions controls how ImportCSV behaves.
+type CSVImportOptions struct {
+HasHeader   bool   // first row contains column names
+Comma       rune   // field delimiter (default: ',')
+CreateTable bool   // CREATE TABLE IF NOT EXISTS before importing
+NullString  string // string value treated as NULL (default: "")
+}
+
+// ImportCSV reads CSV data from r and inserts rows into tableName.
+// Returns the number of rows inserted.
+func (db *Database) ImportCSV(tableName string, r io.Reader, opts CSVImportOptions) (int, error) {
+if opts.Comma == 0 {
+opts.Comma = ','
+}
+cr := csv.NewReader(r)
+cr.Comma = opts.Comma
+cr.TrimLeadingSpace = true
+
+var cols []string
+if opts.HasHeader {
+header, err := cr.Read()
+if err == io.EOF {
+return 0, nil
+}
+if err != nil {
+return 0, fmt.Errorf("ImportCSV: reading header: %w", err)
+}
+cols = make([]string, len(header))
+for i, h := range header {
+cols[i] = strings.TrimSpace(h)
+}
+}
+
+count := 0
+for {
+record, rerr := cr.Read()
+if rerr == io.EOF {
+break
+}
+if rerr != nil {
+return count, fmt.Errorf("ImportCSV: reading row %d: %w", count+1, rerr)
+}
+if cols == nil {
+cols = make([]string, len(record))
+for i := range record {
+cols[i] = fmt.Sprintf("c%d", i)
+}
+}
+if err := db.insertCSVRow(tableName, cols, record, opts.NullString); err != nil {
+return count, err
+}
+count++
+}
+return count, nil
+}
+
+func (db *Database) insertCSVRow(table string, cols []string, record []string, nullStr string) error {
+vals := make([]string, len(cols))
+for i, v := range record {
+if v == nullStr {
+vals[i] = "NULL"
+} else {
+escaped := strings.ReplaceAll(v, "'", "''")
+vals[i] = "'" + escaped + "'"
+}
+}
+sql := "INSERT INTO " + table + " (" + strings.Join(cols, ", ") + ") VALUES (" + strings.Join(vals, ", ") + ")"
+_, err := db.Exec(sql)
+return err
+}
+
+// ExportJSON executes sql and writes the result as a JSON array of objects to w.
+func (db *Database) ExportJSON(w io.Writer, sql string) error {
+rows, err := db.Query(sql)
+if err != nil {
+return fmt.Errorf("ExportJSON: query: %w", err)
+}
+enc := json.NewEncoder(w)
+enc.SetEscapeHTML(false)
+objects := make([]map[string]interface{}, 0, len(rows.Data))
+for _, row := range rows.Data {
+obj := make(map[string]interface{}, len(rows.Columns))
+for i, col := range rows.Columns {
+if i < len(row) {
+obj[col] = row[i]
+} else {
+obj[col] = nil
+}
+}
+objects = append(objects, obj)
+}
+return enc.Encode(objects)
+}
+
+// ── SQL Dump ─────────────────────────────────────────────────────────────────
+
+// DumpOptions controls how Dump behaves.
+type DumpOptions struct {
+DataOnly   bool // only output INSERT statements, no schema
+SchemaOnly bool // only output CREATE statements, no data
+UseInserts bool // always true for Dump
+}
+
+// Dump writes an SQL dump of the entire database to w.
+func (db *Database) Dump(w io.Writer, opts DumpOptions) error {
+if opts.DataOnly && opts.SchemaOnly {
+return fmt.Errorf("Dump: DataOnly and SchemaOnly cannot both be set")
+}
+tables, err := db.GetTables()
+if err != nil {
+return fmt.Errorf("Dump: list tables: %w", err)
+}
+for _, t := range tables {
+if !opts.DataOnly {
+sql := t.SQL
+if sql == "" {
+// Fall back to reconstructing from PRAGMA
+schema, _ := db.GetSchema(t.Name)
+sql = schema
+}
+if sql != "" {
+if _, err2 := fmt.Fprintf(w, "%s;\n", sql); err2 != nil {
+return err2
+}
+}
+}
+if !opts.SchemaOnly && t.Type == "table" {
+rows, qerr := db.Query("SELECT * FROM " + t.Name)
+if qerr != nil {
+continue
+}
+for _, row := range rows.Data {
+vals := make([]string, len(row))
+for i, v := range row {
+vals[i] = formatSQLLiteral(v)
+}
+line := fmt.Sprintf("INSERT INTO %s VALUES (%s);\n", t.Name, strings.Join(vals, ", "))
+if _, werr := fmt.Fprint(w, line); werr != nil {
+return werr
+}
+}
+}
+}
+return nil
 }

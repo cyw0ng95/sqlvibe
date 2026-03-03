@@ -50,7 +50,11 @@ static std::string first_keyword(const std::string &sql) {
  * Fills schema ColDef and col_order for the table. */
 static void parse_column_defs(const std::string &sql, size_t pos,
                                TableDef &out_td,
-                               std::vector<std::string> &out_order) {
+                               std::vector<std::string> &out_order,
+                               std::vector<std::string> *out_pk = nullptr,
+                               std::vector<std::vector<std::string>> *out_uniq = nullptr,
+                               CheckList *out_checks = nullptr,
+                               std::vector<FKDef> *out_fks = nullptr) {
     /* Find the opening '(' */
     while (pos < sql.size() && sql[pos] != '(') ++pos;
     if (pos >= sql.size()) return;
@@ -61,27 +65,147 @@ static void parse_column_defs(const std::string &sql, size_t pos,
     while (pos < sql.size() && depth > 0) {
         /* Skip whitespace */
         while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
-        if (pos >= sql.size() || sql[pos] == ')') break;
+        if (pos >= sql.size() || (sql[pos] == ')' && depth == 1)) break;
 
-        /* Ignore inline PRIMARY KEY / UNIQUE / CHECK / FOREIGN KEY constraints */
+        /* Check for table-level constraint keywords */
         size_t tmp = pos;
         std::string kw;
         while (tmp < sql.size() && isalpha((unsigned char)sql[tmp])) ++tmp;
         kw = str_upper(sql.substr(pos, tmp - pos));
-        if (kw == "PRIMARY" || kw == "UNIQUE" || kw == "CHECK" || kw == "FOREIGN") {
-            /* skip to next ',' or ')' at depth 1 */
-            while (pos < sql.size()) {
-                if (sql[pos] == '(') depth++;
-                else if (sql[pos] == ')') { depth--; if (depth < 1) break; }
-                else if (sql[pos] == ',' && depth == 1) { ++pos; break; }
+
+        if (kw == "PRIMARY") {
+            /* PRIMARY KEY (col, ...) */
+            pos = tmp;
+            while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+            /* skip KEY */
+            while (pos < sql.size() && isalpha((unsigned char)sql[pos])) ++pos;
+            while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+            if (pos < sql.size() && sql[pos] == '(') {
                 ++pos;
+                std::vector<std::string> pk_cols;
+                while (pos < sql.size() && sql[pos] != ')') {
+                    while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                    std::string cn;
+                    if (pos < sql.size() && (sql[pos] == '"' || sql[pos] == '`')) {
+                        char q = sql[pos++]; size_t s = pos;
+                        while (pos < sql.size() && sql[pos] != q) ++pos;
+                        cn = sql.substr(s, pos - s);
+                        if (pos < sql.size()) ++pos;
+                    } else {
+                        size_t s = pos;
+                        while (pos < sql.size() && (isalnum((unsigned char)sql[pos]) || sql[pos] == '_')) ++pos;
+                        cn = sql.substr(s, pos - s);
+                    }
+                    if (!cn.empty()) pk_cols.push_back(cn);
+                    while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                    if (pos < sql.size() && sql[pos] == ',') ++pos;
+                }
+                if (pos < sql.size()) ++pos; /* skip ')' */
+                if (out_pk) *out_pk = pk_cols;
+                for (auto &cn : pk_cols) {
+                    auto it = out_td.find(cn);
+                    if (it != out_td.end()) it->second.primary_key = true;
+                }
             }
+            /* skip to next comma */
+            while (pos < sql.size() && sql[pos] != ',' && sql[pos] != ')') ++pos;
+            if (pos < sql.size() && sql[pos] == ',') ++pos;
+            continue;
+        }
+        if (kw == "UNIQUE") {
+            /* UNIQUE (col, ...) */
+            pos = tmp;
+            while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+            if (pos < sql.size() && sql[pos] == '(') {
+                ++pos;
+                std::vector<std::string> ucols;
+                while (pos < sql.size() && sql[pos] != ')') {
+                    while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                    std::string cn;
+                    size_t s = pos;
+                    while (pos < sql.size() && (isalnum((unsigned char)sql[pos]) || sql[pos] == '_')) ++pos;
+                    cn = sql.substr(s, pos - s);
+                    if (!cn.empty()) ucols.push_back(cn);
+                    while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                    if (pos < sql.size() && sql[pos] == ',') ++pos;
+                }
+                if (pos < sql.size()) ++pos;
+                if (out_uniq && !ucols.empty()) out_uniq->push_back(ucols);
+            }
+            while (pos < sql.size() && sql[pos] != ',' && sql[pos] != ')') ++pos;
+            if (pos < sql.size() && sql[pos] == ',') ++pos;
+            continue;
+        }
+        if (kw == "CHECK") {
+            pos = tmp;
+            while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+            if (pos < sql.size() && sql[pos] == '(') {
+                ++pos;
+                size_t s = pos;
+                int cdepth = 1;
+                while (pos < sql.size() && cdepth > 0) {
+                    if (sql[pos] == '(') ++cdepth;
+                    else if (sql[pos] == ')') --cdepth;
+                    if (cdepth > 0) ++pos;
+                }
+                if (out_checks) out_checks->push_back(sql.substr(s, pos - s));
+                if (pos < sql.size()) ++pos; /* skip ')' */
+            }
+            while (pos < sql.size() && sql[pos] != ',' && sql[pos] != ')') ++pos;
+            if (pos < sql.size() && sql[pos] == ',') ++pos;
+            continue;
+        }
+        if (kw == "FOREIGN") {
+            /* FOREIGN KEY (col) REFERENCES tbl(col) */
+            pos = tmp;
+            while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+            /* skip KEY */
+            while (pos < sql.size() && isalpha((unsigned char)sql[pos])) ++pos;
+            while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+            std::string child_col;
+            if (pos < sql.size() && sql[pos] == '(') {
+                ++pos;
+                while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                size_t s = pos;
+                while (pos < sql.size() && (isalnum((unsigned char)sql[pos]) || sql[pos] == '_')) ++pos;
+                child_col = sql.substr(s, pos - s);
+                while (pos < sql.size() && sql[pos] != ')') ++pos;
+                if (pos < sql.size()) ++pos;
+            }
+            while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+            /* skip REFERENCES keyword */
+            while (pos < sql.size() && isalpha((unsigned char)sql[pos])) ++pos;
+            while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+            std::string parent_table;
+            size_t s2 = pos;
+            while (pos < sql.size() && (isalnum((unsigned char)sql[pos]) || sql[pos] == '_')) ++pos;
+            parent_table = sql.substr(s2, pos - s2);
+            while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+            std::string parent_col;
+            if (pos < sql.size() && sql[pos] == '(') {
+                ++pos;
+                while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                size_t s3 = pos;
+                while (pos < sql.size() && (isalnum((unsigned char)sql[pos]) || sql[pos] == '_')) ++pos;
+                parent_col = sql.substr(s3, pos - s3);
+                while (pos < sql.size() && sql[pos] != ')') ++pos;
+                if (pos < sql.size()) ++pos;
+            }
+            if (out_fks && !child_col.empty() && !parent_table.empty()) {
+                FKDef fk;
+                fk.child_col = child_col;
+                fk.parent_table = parent_table;
+                fk.parent_col = parent_col;
+                out_fks->push_back(fk);
+            }
+            while (pos < sql.size() && sql[pos] != ',' && sql[pos] != ')') ++pos;
+            if (pos < sql.size() && sql[pos] == ',') ++pos;
             continue;
         }
 
         /* Read column name */
         std::string col_name;
-        if (sql[pos] == '"' || sql[pos] == '`') {
+        if (pos < sql.size() && (sql[pos] == '"' || sql[pos] == '`')) {
             char q = sql[pos++];
             size_t start = pos;
             while (pos < sql.size() && sql[pos] != q) ++pos;
@@ -106,14 +230,19 @@ static void parse_column_defs(const std::string &sql, size_t pos,
         /* Handle type with precision e.g. VARCHAR(255) */
         while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
         if (pos < sql.size() && sql[pos] == '(') {
-            while (pos < sql.size() && sql[pos] != ')') ++pos;
-            if (pos < sql.size()) ++pos;
+            int pd = 1; ++pos;
+            while (pos < sql.size() && pd > 0) {
+                if (sql[pos] == '(') ++pd;
+                else if (sql[pos] == ')') --pd;
+                ++pos;
+            }
         }
         if (col_type.empty()) col_type = "TEXT";
 
         ColDef cd;
         cd.type = col_type;
         cd.not_null = false;
+        cd.primary_key = false;
 
         /* Consume column constraints until ',' or ')' */
         while (pos < sql.size()) {
@@ -127,20 +256,25 @@ static void parse_column_defs(const std::string &sql, size_t pos,
             while (pos < sql.size() && isalpha((unsigned char)sql[pos])) ++pos;
             std::string ckw = str_upper(sql.substr(s2, pos - s2));
             if (ckw == "NOT") {
-                /* skip "NULL" keyword — verify it is actually NULL */
                 while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
                 size_t s3 = pos;
                 while (pos < sql.size() && isalpha((unsigned char)sql[pos])) ++pos;
                 std::string next_kw = str_upper(sql.substr(s3, pos - s3));
                 if (next_kw == "NULL") cd.not_null = true;
             } else if (ckw == "DEFAULT") {
-                /* read default value */
                 while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
                 size_t ds = pos;
                 if (pos < sql.size() && sql[pos] == '\'') {
                     ++pos;
                     while (pos < sql.size() && sql[pos] != '\'') ++pos;
                     if (pos < sql.size()) ++pos;
+                } else if (pos < sql.size() && sql[pos] == '(') {
+                    int pd2 = 1; ++pos;
+                    while (pos < sql.size() && pd2 > 0) {
+                        if (sql[pos] == '(') ++pd2;
+                        else if (sql[pos] == ')') --pd2;
+                        ++pos;
+                    }
                 } else {
                     while (pos < sql.size() && sql[pos] != ',' && sql[pos] != ')' &&
                            !isspace((unsigned char)sql[pos])) ++pos;
@@ -150,9 +284,49 @@ static void parse_column_defs(const std::string &sql, size_t pos,
                 /* PRIMARY KEY — skip KEY */
                 while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
                 while (pos < sql.size() && isalpha((unsigned char)sql[pos])) ++pos;
-            } else if (ckw == "UNIQUE" || ckw == "REFERENCES" || ckw == "CHECK") {
-                /* skip until ',' or ')' */
-                while (pos < sql.size() && sql[pos] != ',' && sql[pos] != ')') ++pos;
+                cd.primary_key = true;
+                cd.not_null = true;
+                if (out_pk) out_pk->push_back(col_name);
+            } else if (ckw == "UNIQUE") {
+                /* Column-level UNIQUE */
+                if (out_uniq) out_uniq->push_back({col_name});
+            } else if (ckw == "REFERENCES") {
+                /* Inline FK: col ... REFERENCES parent(pcol) */
+                while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                size_t s3 = pos;
+                while (pos < sql.size() && (isalnum((unsigned char)sql[pos]) || sql[pos] == '_')) ++pos;
+                std::string parent_tbl = sql.substr(s3, pos - s3);
+                while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                std::string parent_c;
+                if (pos < sql.size() && sql[pos] == '(') {
+                    ++pos;
+                    while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                    size_t s4 = pos;
+                    while (pos < sql.size() && (isalnum((unsigned char)sql[pos]) || sql[pos] == '_')) ++pos;
+                    parent_c = sql.substr(s4, pos - s4);
+                    while (pos < sql.size() && sql[pos] != ')') ++pos;
+                    if (pos < sql.size()) ++pos;
+                }
+                if (out_fks && !parent_tbl.empty()) {
+                    FKDef fk;
+                    fk.child_col = col_name;
+                    fk.parent_table = parent_tbl;
+                    fk.parent_col = parent_c;
+                    out_fks->push_back(fk);
+                }
+            } else if (ckw == "CHECK") {
+                while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                if (pos < sql.size() && sql[pos] == '(') {
+                    ++pos;
+                    size_t s3 = pos; int cdepth = 1;
+                    while (pos < sql.size() && cdepth > 0) {
+                        if (sql[pos] == '(') ++cdepth;
+                        else if (sql[pos] == ')') --cdepth;
+                        if (cdepth > 0) ++pos;
+                    }
+                    if (out_checks) out_checks->push_back(sql.substr(s3, pos - s3));
+                    if (pos < sql.size()) ++pos;
+                }
             } else if (ckw.empty()) {
                 ++pos;
             }
@@ -348,12 +522,21 @@ static svdb_code_t do_create_table(svdb_db_t *db, const std::string &sql) {
 
     TableDef td;
     std::vector<std::string> order;
-    parse_column_defs(sql, 0, td, order);
+    std::vector<std::string> pks;
+    std::vector<std::vector<std::string>> uniqs;
+    CheckList checks;
+    std::vector<FKDef> fks;
+    parse_column_defs(sql, 0, td, order, &pks, &uniqs, &checks, &fks);
 
     db->schema[tname]    = td;
     db->col_order[tname] = order;
     db->data[tname]      = {};
     db->rowid_counter[tname] = 0;
+    db->create_sql[tname] = sql;
+    if (!pks.empty()) db->primary_keys[tname] = pks;
+    if (!uniqs.empty()) db->unique_constraints[tname] = uniqs;
+    if (!checks.empty()) db->check_constraints[tname] = checks;
+    if (!fks.empty()) db->fk_constraints[tname] = fks;
     return SVDB_OK;
 }
 
@@ -404,6 +587,10 @@ static svdb_code_t do_create_index(svdb_db_t *db, const std::string &sql, bool u
         }
     }
     db->indexes[iname] = idef;
+    /* If unique index, also register in unique_constraints for enforcement at INSERT */
+    if (unique && !idef.columns.empty()) {
+        db->unique_constraints[tname].push_back(idef.columns);
+    }
     return SVDB_OK;
 }
 
@@ -423,7 +610,15 @@ static svdb_code_t do_drop_index(svdb_db_t *db, const std::string &sql) {
         db->last_error = "no such index: " + iname;
         return SVDB_ERR;
     }
+    /* Remove from unique_constraints if it was a unique index */
+    auto &uconstr = db->unique_constraints;
+    std::string dt = db->indexes[iname].table;
+    std::vector<std::string> ucols = db->indexes[iname].columns;
     db->indexes.erase(iname);
+    if (!ucols.empty() && uconstr.count(dt)) {
+        auto &uc = uconstr[dt];
+        uc.erase(std::remove(uc.begin(), uc.end(), ucols), uc.end());
+    }
     return SVDB_OK;
 }
 
@@ -452,14 +647,21 @@ static svdb_code_t do_drop_table(svdb_db_t *db, const std::string &sql) {
 }
 
 static svdb_code_t do_alter_table(svdb_db_t *db, const std::string &sql) {
-    /* Very basic: ALTER TABLE t ADD COLUMN col type
-     *             ALTER TABLE t RENAME TO new_name */
+    /* Handles:
+     * ALTER TABLE t ADD [COLUMN] col type
+     * ALTER TABLE t ADD CONSTRAINT name UNIQUE(cols)
+     * ALTER TABLE t ADD CONSTRAINT name CHECK(expr)
+     * ALTER TABLE t RENAME TO new_name
+     * ALTER TABLE t RENAME [COLUMN] old TO new
+     * ALTER TABLE t RENAME INDEX old TO new
+     * ALTER TABLE t DROP [COLUMN] col
+     */
     std::string su = str_upper(sql);
     size_t p = 0;
     auto skip_kw = [&](const char *kw) {
         size_t len = strlen(kw);
         while (p < su.size() && isspace((unsigned char)su[p])) ++p;
-        if (su.substr(p, len) == kw) p += len;
+        if (p + len <= su.size() && su.substr(p, len) == kw) p += len;
     };
     skip_kw("ALTER"); skip_kw("TABLE");
     while (p < su.size() && isspace((unsigned char)su[p])) ++p;
@@ -481,72 +683,257 @@ static svdb_code_t do_alter_table(svdb_db_t *db, const std::string &sql) {
         return SVDB_ERR;
     }
 
-    /* sync p to su */
-    skip_kw("ADD");
-    bool have_column = false;
-    {
-        size_t tmp = p;
-        while (tmp < su.size() && isspace((unsigned char)su[tmp])) ++tmp;
-        if (su.substr(tmp, 6) == "COLUMN") { p = tmp + 6; have_column = true; }
-    }
-    if (!have_column && su.find("RENAME") != std::string::npos) {
-        /* RENAME TO new_name */
-        size_t to_pos = su.find("TO", p);
-        if (to_pos == std::string::npos) return SVDB_ERR;
-        size_t np = to_pos + 2;
-        while (np < sql.size() && isspace((unsigned char)sql[np])) ++np;
-        std::string new_name = sql.substr(np, sql.size() - np);
-        new_name = str_trim(new_name);
-        /* remove trailing ';' */
-        while (!new_name.empty() && (new_name.back() == ';' || isspace((unsigned char)new_name.back())))
-            new_name.pop_back();
-        db->schema[new_name]      = db->schema[tname];
-        db->col_order[new_name]   = db->col_order[tname];
-        db->data[new_name]        = db->data[tname];
-        db->rowid_counter[new_name] = db->rowid_counter[tname];
-        db->schema.erase(tname);
-        db->col_order.erase(tname);
-        db->data.erase(tname);
-        db->rowid_counter.erase(tname);
+    /* Skip whitespace and read action keyword */
+    while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+    size_t ap = p;
+    while (p < su.size() && isalpha((unsigned char)su[p])) ++p;
+    std::string action = su.substr(ap, p - ap);
+
+    if (action == "RENAME") {
+        while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+        size_t np = p;
+        while (p < su.size() && isalpha((unsigned char)su[p])) ++p;
+        std::string next = su.substr(np, p - np);
+
+        if (next == "INDEX") {
+            /* RENAME INDEX old TO new */
+            while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+            size_t s3 = p;
+            while (p < sql.size() && (isalnum((unsigned char)sql[p]) || sql[p] == '_' || sql[p] == '-')) ++p;
+            std::string old_idx = str_trim(sql.substr(s3, p - s3));
+            while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+            /* Skip "TO" keyword */
+            while (p < su.size() && isalpha((unsigned char)su[p])) ++p;
+            while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+            size_t s4 = p;
+            while (p < sql.size() && (isalnum((unsigned char)sql[p]) || sql[p] == '_' || sql[p] == '-')) ++p;
+            std::string new_idx = str_trim(sql.substr(s4, p - s4));
+            while (!new_idx.empty() && (new_idx.back() == ';' || isspace((unsigned char)new_idx.back())))
+                new_idx.pop_back();
+            /* Case-insensitive lookup */
+            std::string old_key;
+            std::string old_u = str_upper(old_idx);
+            for (auto &kv : db->indexes)
+                if (str_upper(kv.first) == old_u) { old_key = kv.first; break; }
+            if (!old_key.empty()) {
+                db->indexes[new_idx] = db->indexes[old_key];
+                db->indexes.erase(old_key);
+            } else {
+                db->last_error = "no such index: " + old_idx;
+                return SVDB_ERR;
+            }
+            return SVDB_OK;
+        } else if (next == "COLUMN") {
+            /* RENAME COLUMN old TO new */
+            while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+            std::string old_col;
+            if (p < sql.size() && (sql[p] == '"' || sql[p] == '`')) {
+                char q = sql[p++]; size_t s3 = p;
+                while (p < sql.size() && sql[p] != q) ++p;
+                old_col = sql.substr(s3, p - s3); if (p < sql.size()) ++p;
+            } else {
+                size_t s3 = p;
+                while (p < sql.size() && (isalnum((unsigned char)sql[p]) || sql[p] == '_')) ++p;
+                old_col = sql.substr(s3, p - s3);
+            }
+            while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+            while (p < su.size() && isalpha((unsigned char)su[p])) ++p; /* skip TO */
+            while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+            std::string new_col;
+            if (p < sql.size() && (sql[p] == '"' || sql[p] == '`')) {
+                char q = sql[p++]; size_t s4 = p;
+                while (p < sql.size() && sql[p] != q) ++p;
+                new_col = sql.substr(s4, p - s4); if (p < sql.size()) ++p;
+            } else {
+                size_t s4 = p;
+                while (p < sql.size() && (isalnum((unsigned char)sql[p]) || sql[p] == '_')) ++p;
+                new_col = sql.substr(s4, p - s4);
+            }
+            new_col = str_trim(new_col);
+            while (!new_col.empty() && (new_col.back() == ';' || isspace((unsigned char)new_col.back())))
+                new_col.pop_back();
+            if (!db->schema[tname].count(old_col)) {
+                db->last_error = "no such column: " + old_col; return SVDB_ERR;
+            }
+            db->schema[tname][new_col] = db->schema[tname][old_col];
+            db->schema[tname].erase(old_col);
+            for (auto &cn : db->col_order[tname]) if (cn == old_col) { cn = new_col; break; }
+            for (auto &row : db->data[tname]) {
+                auto it = row.find(old_col);
+                if (it != row.end()) { row[new_col] = it->second; row.erase(it); }
+            }
+            return SVDB_OK;
+        } else {
+            /* RENAME TO new_name */
+            std::string new_name;
+            if (next == "TO") {
+                while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+                size_t s3 = p;
+                while (p < sql.size() && (isalnum((unsigned char)sql[p]) || sql[p] == '_')) ++p;
+                new_name = sql.substr(s3, p - s3);
+            } else {
+                new_name = sql.substr(np, p - np);
+            }
+            new_name = str_trim(new_name);
+            while (!new_name.empty() && (new_name.back() == ';' || isspace((unsigned char)new_name.back())))
+                new_name.pop_back();
+            db->schema[new_name]        = db->schema[tname];
+            db->col_order[new_name]     = db->col_order[tname];
+            db->data[new_name]          = db->data[tname];
+            db->rowid_counter[new_name] = db->rowid_counter[tname];
+            db->schema.erase(tname); db->col_order.erase(tname);
+            db->data.erase(tname);   db->rowid_counter.erase(tname);
+            return SVDB_OK;
+        }
+    } else if (action == "DROP") {
+        /* DROP [COLUMN] col */
+        while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+        size_t np = p;
+        while (p < su.size() && isalpha((unsigned char)su[p])) ++p;
+        std::string next = su.substr(np, p - np);
+        if (next == "COLUMN") {
+            while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+        } else {
+            p = np; /* go back if no COLUMN keyword */
+        }
+        std::string col_name;
+        if (p < sql.size() && (sql[p] == '"' || sql[p] == '`')) {
+            char q = sql[p++]; size_t s3 = p;
+            while (p < sql.size() && sql[p] != q) ++p;
+            col_name = sql.substr(s3, p - s3); if (p < sql.size()) ++p;
+        } else {
+            size_t s3 = p;
+            while (p < sql.size() && (isalnum((unsigned char)sql[p]) || sql[p] == '_')) ++p;
+            col_name = sql.substr(s3, p - s3);
+        }
+        col_name = str_trim(col_name);
+        while (!col_name.empty() && (col_name.back() == ';' || isspace((unsigned char)col_name.back())))
+            col_name.pop_back();
+        if (!db->schema[tname].count(col_name)) {
+            db->last_error = "no such column: " + col_name; return SVDB_ERR;
+        }
+        db->schema[tname].erase(col_name);
+        auto &co = db->col_order[tname];
+        co.erase(std::remove(co.begin(), co.end(), col_name), co.end());
+        for (auto &row : db->data[tname]) row.erase(col_name);
         return SVDB_OK;
-    }
+    } else if (action == "ADD") {
+        /* ADD [COLUMN] col type  OR  ADD CONSTRAINT name ... */
+        while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+        size_t np = p;
+        while (p < su.size() && isalpha((unsigned char)su[p])) ++p;
+        std::string next = su.substr(np, p - np);
 
-    /* ADD COLUMN col type [constraints] */
-    while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
-    std::string col_name;
-    if (p < sql.size() && (sql[p] == '"' || sql[p] == '`')) {
-        char q = sql[p++]; size_t s = p;
-        while (p < sql.size() && sql[p] != q) ++p;
-        col_name = sql.substr(s, p - s);
-        if (p < sql.size()) ++p;
-    } else {
-        size_t s = p;
-        while (p < sql.size() && (isalnum((unsigned char)sql[p]) || sql[p] == '_')) ++p;
-        col_name = sql.substr(s, p - s);
-    }
-    if (col_name.empty()) { db->last_error = "ALTER TABLE ADD COLUMN: missing column name"; return SVDB_ERR; }
-    while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
-    std::string col_type;
-    while (p < sql.size() && (isalnum((unsigned char)sql[p]) || sql[p] == '_')) {
-        col_type += (char)toupper((unsigned char)sql[p]);
-        ++p;
-    }
-    if (col_type.empty()) col_type = "TEXT";
+        if (next == "CONSTRAINT") {
+            /* ADD CONSTRAINT name UNIQUE(cols) / CHECK(expr) */
+            while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+            size_t s3 = p;
+            while (p < sql.size() && (isalnum((unsigned char)sql[p]) || sql[p] == '_')) ++p;
+            /* skip whitespace after constraint name */
+            while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+            /* read constraint type */
+            size_t s4 = p;
+            while (p < sql.size() && isalpha((unsigned char)sql[p])) ++p;
+            std::string ctype2 = str_upper(sql.substr(s4, p - s4));
+            while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+            if (ctype2 == "UNIQUE") {
+                if (p < sql.size() && sql[p] == '(') {
+                    ++p;
+                    std::vector<std::string> ucols;
+                    while (p < sql.size() && sql[p] != ')') {
+                        while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+                        size_t s5 = p;
+                        while (p < sql.size() && (isalnum((unsigned char)sql[p]) || sql[p] == '_')) ++p;
+                        std::string cn = sql.substr(s5, p - s5);
+                        if (!cn.empty()) ucols.push_back(cn);
+                        while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+                        if (p < sql.size() && sql[p] == ',') ++p;
+                    }
+                    if (!ucols.empty()) db->unique_constraints[tname].push_back(ucols);
+                }
+                return SVDB_OK;
+            } else if (ctype2 == "CHECK") {
+                if (p < sql.size() && sql[p] == '(') {
+                    ++p; size_t s5 = p; int cdepth = 1;
+                    while (p < sql.size() && cdepth > 0) {
+                        if (sql[p] == '(') ++cdepth;
+                        else if (sql[p] == ')') --cdepth;
+                        if (cdepth > 0) ++p;
+                    }
+                    std::string chk = sql.substr(s5, p - s5);
+                    db->check_constraints[tname].push_back(chk);
+                }
+                return SVDB_OK;
+            }
+            return SVDB_OK;
+        } else if (next == "COLUMN") {
+            while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+        } else {
+            p = np; /* no COLUMN keyword, back up */
+        }
 
-    ColDef cd; cd.type = col_type;
-    db->schema[tname][col_name] = cd;
-    db->col_order[tname].push_back(col_name);
-    /* Add NULL to existing rows */
-    for (auto &row : db->data[tname]) {
-        row[col_name] = SvdbVal{};
+        /* ADD col type */
+        while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+        std::string col_name;
+        if (p < sql.size() && (sql[p] == '"' || sql[p] == '`')) {
+            char q = sql[p++]; size_t s3 = p;
+            while (p < sql.size() && sql[p] != q) ++p;
+            col_name = sql.substr(s3, p - s3); if (p < sql.size()) ++p;
+        } else {
+            size_t s3 = p;
+            while (p < sql.size() && (isalnum((unsigned char)sql[p]) || sql[p] == '_')) ++p;
+            col_name = sql.substr(s3, p - s3);
+        }
+        if (col_name.empty()) { db->last_error = "ADD COLUMN: missing column name"; return SVDB_ERR; }
+        while (p < sql.size() && isspace((unsigned char)sql[p])) ++p;
+        std::string col_type;
+        while (p < sql.size() && (isalnum((unsigned char)sql[p]) || sql[p] == '_')) {
+            col_type += (char)toupper((unsigned char)sql[p]); ++p;
+        }
+        if (col_type.empty()) col_type = "TEXT";
+        ColDef cd; cd.type = col_type;
+        db->schema[tname][col_name] = cd;
+        db->col_order[tname].push_back(col_name);
+        for (auto &row : db->data[tname]) row[col_name] = SvdbVal{};
+        return SVDB_OK;
     }
     return SVDB_OK;
 }
+
 
 /* ── DML handlers ───────────────────────────────────────────────── */
 
 static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
                               svdb_result_t *res) {
+    /* Handle INSERT INTO t DEFAULT VALUES */
+    std::string su_pre = str_upper(sql);
+    if (su_pre.find("DEFAULT VALUES") != std::string::npos) {
+        /* Extract table name */
+        size_t into_pos = su_pre.find("INTO");
+        if (into_pos == std::string::npos) into_pos = su_pre.find("INSERT") + 6;
+        else into_pos += 4;
+        while (into_pos < sql.size() && isspace((unsigned char)sql[into_pos])) ++into_pos;
+        size_t ts = into_pos;
+        while (into_pos < sql.size() && (isalnum((unsigned char)sql[into_pos]) || sql[into_pos] == '_')) ++into_pos;
+        std::string tname2 = sql.substr(ts, into_pos - ts);
+        if (!db->schema.count(tname2)) { db->last_error = "no such table: " + tname2; return SVDB_ERR; }
+        const auto &col_order2 = db->col_order[tname2];
+        Row row;
+        for (const auto &cn : col_order2) {
+            auto dit = db->schema[tname2].find(cn);
+            if (dit != db->schema[tname2].end() && !dit->second.default_val.empty())
+                row[cn] = parse_literal(dit->second.default_val);
+            else
+                row[cn] = SvdbVal{};
+        }
+        db->rowid_counter[tname2]++;
+        row[SVDB_ROWID_COLUMN] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[tname2], 0.0, {}};
+        db->data[tname2].push_back(row);
+        db->rows_affected = 1; db->last_insert_rowid = db->rowid_counter[tname2];
+        if (res) { res->code = SVDB_OK; res->rows_affected = 1; res->last_insert_rowid = db->last_insert_rowid; }
+        return SVDB_OK;
+    }
+
     svdb_parser_t *p = svdb_parser_create(sql.c_str(), sql.size());
     if (!p) return SVDB_NOMEM;
     svdb_ast_node_t *ast = svdb_parser_parse(p);
@@ -577,6 +964,30 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         ins_cols = col_order;
     }
 
+    /* Detect ON CONFLICT clause: DO NOTHING or DO UPDATE SET ... */
+    std::string su_sql = str_upper(sql);
+    bool on_conflict_nothing = (su_sql.find("ON CONFLICT") != std::string::npos &&
+                                 su_sql.find("DO NOTHING") != std::string::npos) ||
+                                su_sql.find("INSERT OR IGNORE") != std::string::npos;
+    bool on_conflict_update  = su_sql.find("ON CONFLICT") != std::string::npos &&
+                                su_sql.find("DO UPDATE") != std::string::npos;
+    /* For DO UPDATE: extract SET clause after DO UPDATE */
+    std::string do_update_set;
+    if (on_conflict_update) {
+        size_t du_pos = su_sql.find("DO UPDATE SET");
+        if (du_pos != std::string::npos) {
+            do_update_set = str_trim(sql.substr(du_pos + 13));
+            /* strip trailing ; */
+            while (!do_update_set.empty() && (do_update_set.back() == ';' || isspace((unsigned char)do_update_set.back())))
+                do_update_set.pop_back();
+        }
+    }
+    /* INSERT OR REPLACE behaves like DO UPDATE with excluded.col = incoming col */
+    if (su_sql.find("INSERT OR REPLACE") != std::string::npos ||
+        su_sql.find("REPLACE INTO") != std::string::npos) {
+        on_conflict_update = true;
+    }
+
     int64_t inserted = 0;
     for (int ri = 0; ri < nrows; ++ri) {
         Row row;
@@ -594,6 +1005,125 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
             std::string vstr = svdb_ast_get_value(ast, ri, ci);
             row[ins_cols[ci]] = parse_literal(vstr);
         }
+
+        /* ── Constraint checks ───────────────────────────────── */
+
+        /* NOT NULL check */
+        for (const auto &cn : col_order) {
+            auto cdit = db->schema[tname].find(cn);
+            if (cdit != db->schema[tname].end() && cdit->second.not_null) {
+                auto rit = row.find(cn);
+                if (rit == row.end() || rit->second.type == SVDB_TYPE_NULL) {
+                    if (on_conflict_nothing) { continue; }
+                    db->last_error = "NOT NULL constraint failed: " + tname + "." + cn;
+                    svdb_ast_node_free(ast); svdb_parser_destroy(p);
+                    return SVDB_ERR;
+                }
+            }
+        }
+
+        /* UNIQUE constraint check */
+        auto check_unique = [&](const std::vector<std::string> &ucols) -> int {
+            /* Returns -1 if no conflict, or index of conflicting row */
+            for (int ei2 = 0; ei2 < (int)db->data[tname].size(); ++ei2) {
+                const auto &existing = db->data[tname][ei2];
+                bool match = true;
+                for (const auto &uc : ucols) {
+                    auto ri2 = row.find(uc);
+                    auto eit = existing.find(uc);
+                    if (ri2 == row.end() || eit == existing.end()) { match = false; break; }
+                    if (ri2->second.type == SVDB_TYPE_NULL) { match = false; break; }
+                    if (eit->second.type  == SVDB_TYPE_NULL) { match = false; break; }
+                    if (ri2->second.type != eit->second.type) { match = false; break; }
+                    if (ri2->second.type == SVDB_TYPE_INT  && ri2->second.ival != eit->second.ival) { match = false; break; }
+                    if (ri2->second.type == SVDB_TYPE_REAL && ri2->second.rval != eit->second.rval) { match = false; break; }
+                    if (ri2->second.type == SVDB_TYPE_TEXT && ri2->second.sval != eit->second.sval) { match = false; break; }
+                }
+                if (match) return ei2;
+            }
+            return -1;
+        };
+
+        /* Check primary key / column-level UNIQUE */
+        bool conflict_handled = false;
+        for (const auto &cn : col_order) {
+            auto cdit = db->schema[tname].find(cn);
+            if (cdit != db->schema[tname].end() && cdit->second.primary_key) {
+                int ci = check_unique({cn});
+                if (ci >= 0) {
+                    if (on_conflict_nothing) { conflict_handled = true; break; }
+                    if (on_conflict_update) {
+                        /* Replace the conflicting row */
+                        db->data[tname][ci] = row;
+                        ++inserted; conflict_handled = true; break;
+                    }
+                    db->last_error = "UNIQUE constraint failed: " + tname + "." + cn;
+                    svdb_ast_node_free(ast); svdb_parser_destroy(p);
+                    return SVDB_ERR;
+                }
+            }
+        }
+        if (conflict_handled) continue; /* skip or already updated */
+
+        /* Check table UNIQUE constraints */
+        if (db->unique_constraints.count(tname)) {
+            for (const auto &ucols : db->unique_constraints.at(tname)) {
+                int ci = check_unique(ucols);
+                if (ci >= 0) {
+                    if (on_conflict_nothing) { conflict_handled = true; break; }
+                    if (on_conflict_update) {
+                        db->data[tname][ci] = row;
+                        ++inserted; conflict_handled = true; break;
+                    }
+                    db->last_error = "UNIQUE constraint failed: " + tname;
+                    svdb_ast_node_free(ast); svdb_parser_destroy(p);
+                    return SVDB_ERR;
+                }
+            }
+            if (conflict_handled) continue; /* skip or already updated */
+        }
+
+        /* CHECK constraint evaluation (simple: skip for now, basic eval) */
+        if (db->check_constraints.count(tname)) {
+            for (const auto &chk : db->check_constraints.at(tname)) {
+                /* Very basic: evaluate simple comparison like "score >= 0" */
+                std::string chk_upper = str_upper(chk);
+                /* Try to evaluate numerically */
+                bool ok = true;
+                /* Find operator */
+                for (const char *op : {">=", "<=", "!=", "<>", ">", "<", "="}) {
+                    size_t op_pos = chk.find(op);
+                    if (op_pos == std::string::npos) continue;
+                    std::string lhs = str_trim(chk.substr(0, op_pos));
+                    std::string rhs = str_trim(chk.substr(op_pos + strlen(op)));
+                    /* Look up lhs in row */
+                    auto it2 = row.find(lhs);
+                    if (it2 == row.end()) break;
+                    const SvdbVal &sv2 = it2->second;
+                    if (sv2.type == SVDB_TYPE_NULL) { ok = true; break; } /* NULLs pass */
+                    try {
+                        double rv = std::stod(rhs);
+                        double lv = (sv2.type == SVDB_TYPE_INT) ? (double)sv2.ival : sv2.rval;
+                        if (std::string(op) == ">=")      ok = lv >= rv;
+                        else if (std::string(op) == "<=") ok = lv <= rv;
+                        else if (std::string(op) == ">")  ok = lv > rv;
+                        else if (std::string(op) == "<")  ok = lv < rv;
+                        else if (std::string(op) == "=" || std::string(op) == "==") ok = lv == rv;
+                        else if (std::string(op) == "!=" || std::string(op) == "<>") ok = lv != rv;
+                    } catch (...) { ok = true; }
+                    break;
+                }
+                if (!ok) {
+                    db->last_error = "CHECK constraint failed: " + tname;
+                    svdb_ast_node_free(ast); svdb_parser_destroy(p);
+                    return SVDB_ERR;
+                }
+            }
+        }
+
+        /* FK constraint check */
+        /* FK enforcement is disabled at insert-time (like SQLite default).
+         * Use PRAGMA foreign_key_check to detect violations. */
 
         /* Auto-increment rowid */
         db->rowid_counter[tname]++;
@@ -775,7 +1305,42 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
             rc = do_create_index(db, s, true);
         }
         else if (what == "INDEX") rc = do_create_index(db, s, false);
-        else if (what == "VIEW")  rc = SVDB_OK; /* ignore */
+        else if (what == "VIEW")  {
+            /* Store view metadata so table_list can include it */
+            std::string su2 = str_upper(s);
+            bool if_not_exists2 = su2.find("IF NOT EXISTS") != std::string::npos;
+            /* Extract view name after CREATE [TEMP] VIEW [IF NOT EXISTS] */
+            size_t vp = su2.find("VIEW");
+            if (vp != std::string::npos) {
+                vp += 4;
+                while (vp < su2.size() && isspace((unsigned char)su2[vp])) ++vp;
+                if (su2.substr(vp, 13) == "IF NOT EXISTS") {
+                    vp += 13;
+                    while (vp < su2.size() && isspace((unsigned char)su2[vp])) ++vp;
+                }
+                std::string vname;
+                if (vp < s.size() && (s[vp] == '"' || s[vp] == '`')) {
+                    char q = s[vp++]; size_t vs = vp;
+                    while (vp < s.size() && s[vp] != q) ++vp;
+                    vname = s.substr(vs, vp - vs);
+                } else {
+                    size_t vs = vp;
+                    while (vp < s.size() && (isalnum((unsigned char)s[vp]) || s[vp] == '_')) ++vp;
+                    vname = s.substr(vs, vp - vs);
+                }
+                if (!vname.empty() && !(if_not_exists2 && db->schema.count(vname))) {
+                    /* Register view with empty schema so it shows in table_list */
+                    if (!db->schema.count(vname)) {
+                        db->schema[vname] = {};
+                        db->col_order[vname] = {};
+                        db->create_sql[vname] = s;
+                        /* Mark as view using special key in create_sql prefix */
+                        db->create_sql[vname] = s; /* full CREATE VIEW sql */
+                    }
+                }
+            }
+            rc = SVDB_OK;
+        }
         else                      rc = SVDB_OK;
     } else if (kw == "DROP") {
         std::string su = str_upper(s);
@@ -795,12 +1360,102 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
         rc = do_update(db, s, res);
     } else if (kw == "DELETE") {
         rc = do_delete(db, s, res);
-    } else if (kw == "BEGIN" || kw == "COMMIT" || kw == "ROLLBACK" ||
-               kw == "SAVEPOINT" || kw == "RELEASE") {
-        /* Transaction stubs — accepted, no-op */
+    } else if (kw == "BEGIN") {
+        /* SQL-level transaction: create snapshot */
+        if (!db->in_transaction) {
+            svdb_tx_t *t = new (std::nothrow) svdb_tx_t();
+            if (t) {
+                t->db = db;
+                t->data_snapshot  = db->data;
+                t->rowid_snapshot = db->rowid_counter;
+                db->sql_tx = t;
+                db->in_transaction = true;
+            }
+        }
         rc = SVDB_OK;
-    } else if (kw == "PRAGMA" || kw == "VACUUM" || kw == "ANALYZE") {
+    } else if (kw == "COMMIT") {
+        if (db->in_transaction && db->sql_tx) {
+            delete db->sql_tx;
+            db->sql_tx = nullptr;
+            db->in_transaction = false;
+        }
         rc = SVDB_OK;
+    } else if (kw == "ROLLBACK") {
+        /* Could be ROLLBACK or ROLLBACK TO SAVEPOINT name */
+        std::string su2 = str_upper(s);
+        size_t to_pos = su2.find(" TO ");
+        if (to_pos != std::string::npos && db->in_transaction && db->sql_tx) {
+            /* ROLLBACK TO [SAVEPOINT] name */
+            std::string rest2 = str_trim(s.substr(to_pos + 4));
+            /* skip optional SAVEPOINT keyword */
+            std::string rest2u = str_upper(rest2);
+            if (rest2u.substr(0, 9) == "SAVEPOINT") rest2 = str_trim(rest2.substr(9));
+            /* remove trailing ; */
+            while (!rest2.empty() && (rest2.back() == ';' || isspace((unsigned char)rest2.back())))
+                rest2.pop_back();
+            /* Find savepoint */
+            const std::string &n = rest2;
+            auto &sp_names = db->sql_tx->savepoints;
+            auto &sp_data  = db->sql_tx->sp_data;
+            auto &sp_rowid = db->sql_tx->sp_rowid;
+            for (int i = (int)sp_names.size() - 1; i >= 0; --i) {
+                if (sp_names[i] == n) {
+                    if (i < (int)sp_data.size()) {
+                        db->data          = sp_data[i];
+                        db->rowid_counter = sp_rowid[i];
+                        sp_names.resize(i + 1);
+                        sp_data.resize(i + 1);
+                        sp_rowid.resize(i + 1);
+                    }
+                    break;
+                }
+            }
+        } else if (db->in_transaction && db->sql_tx) {
+            /* Full rollback */
+            db->data          = db->sql_tx->data_snapshot;
+            db->rowid_counter = db->sql_tx->rowid_snapshot;
+            delete db->sql_tx;
+            db->sql_tx = nullptr;
+            db->in_transaction = false;
+        }
+        rc = SVDB_OK;
+    } else if (kw == "SAVEPOINT") {
+        if (db->in_transaction && db->sql_tx) {
+            std::string sp_name = str_trim(s.substr(9));
+            while (!sp_name.empty() && (sp_name.back() == ';' || isspace((unsigned char)sp_name.back())))
+                sp_name.pop_back();
+            db->sql_tx->savepoints.push_back(sp_name);
+            db->sql_tx->sp_data.push_back(db->data);
+            db->sql_tx->sp_rowid.push_back(db->rowid_counter);
+        }
+        rc = SVDB_OK;
+    } else if (kw == "RELEASE") {
+        if (db->in_transaction && db->sql_tx) {
+            std::string sp_name = str_trim(s.substr(7));
+            /* skip optional SAVEPOINT keyword */
+            if (str_upper(sp_name).substr(0, 9) == "SAVEPOINT") sp_name = str_trim(sp_name.substr(9));
+            while (!sp_name.empty() && (sp_name.back() == ';' || isspace((unsigned char)sp_name.back())))
+                sp_name.pop_back();
+            auto &sp_names = db->sql_tx->savepoints;
+            auto &sp_data  = db->sql_tx->sp_data;
+            auto &sp_rowid = db->sql_tx->sp_rowid;
+            for (int i = (int)sp_names.size() - 1; i >= 0; --i) {
+                if (sp_names[i] == sp_name) {
+                    sp_names.erase(sp_names.begin() + i);
+                    if (i < (int)sp_data.size()) {
+                        sp_data.erase(sp_data.begin() + i);
+                        sp_rowid.erase(sp_rowid.begin() + i);
+                    }
+                    break;
+                }
+            }
+        }
+        rc = SVDB_OK;
+    } else if (kw == "PRAGMA") {
+        /* Route PRAGMA queries through svdb_query_internal for results */
+        svdb_rows_t *rows = nullptr;
+        rc = svdb_query_internal(db, s, &rows);
+        if (rows) svdb_rows_close(rows);
     } else if (kw == "SELECT") {
         /* svdb_exec on SELECT: run and discard result */
         svdb_rows_t *rows = nullptr;
@@ -822,6 +1477,13 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
 
 svdb_code_t svdb_prepare(svdb_db_t *db, const char *sql, svdb_stmt_t **stmt) {
     if (!db || !sql || !stmt) return SVDB_ERR;
+    /* Empty SQL is an error */
+    const char *p = sql;
+    while (*p && isspace((unsigned char)*p)) ++p;
+    if (*p == '\0') {
+        db->last_error = "empty SQL statement";
+        return SVDB_ERR;
+    }
     svdb_stmt_t *s = new (std::nothrow) svdb_stmt_t();
     if (!s) return SVDB_NOMEM;
     s->db  = db;
@@ -884,36 +1546,84 @@ svdb_code_t svdb_stmt_close(svdb_stmt_t *stmt) {
 
 svdb_code_t svdb_begin(svdb_db_t *db, svdb_tx_t **tx) {
     if (!db || !tx) return SVDB_ERR;
+    if (db->in_transaction) {
+        db->last_error = "cannot start a transaction within a transaction";
+        return SVDB_ERR;
+    }
     svdb_tx_t *t = new (std::nothrow) svdb_tx_t();
     if (!t) return SVDB_NOMEM;
     t->db = db;
+    /* Take snapshot of current data for rollback */
+    t->data_snapshot  = db->data;
+    t->rowid_snapshot = db->rowid_counter;
+    db->in_transaction = true;
     *tx = t;
     return SVDB_OK;
 }
 
 svdb_code_t svdb_commit(svdb_tx_t *tx) {
+    if (!tx) return SVDB_ERR;
+    if (tx->db) tx->db->in_transaction = false;
     delete tx;
     return SVDB_OK;
 }
 
 svdb_code_t svdb_rollback(svdb_tx_t *tx) {
+    if (!tx) return SVDB_ERR;
+    if (tx->db) {
+        /* Restore snapshot */
+        tx->db->data          = tx->data_snapshot;
+        tx->db->rowid_counter = tx->rowid_snapshot;
+        tx->db->in_transaction = false;
+    }
     delete tx;
     return SVDB_OK;
 }
 
 svdb_code_t svdb_savepoint(svdb_tx_t *tx, const char *name) {
-    (void)tx; (void)name;
+    if (!tx || !name) return SVDB_ERR;
+    tx->savepoints.push_back(name);
+    /* Save current data as savepoint snapshot */
+    tx->sp_data.push_back(tx->db->data);
+    tx->sp_rowid.push_back(tx->db->rowid_counter);
     return SVDB_OK;
 }
 
 svdb_code_t svdb_release(svdb_tx_t *tx, const char *name) {
-    (void)tx; (void)name;
-    return SVDB_OK;
+    if (!tx || !name) return SVDB_ERR;
+    std::string n(name);
+    for (int i = (int)tx->savepoints.size() - 1; i >= 0; --i) {
+        if (tx->savepoints[i] == n) {
+            tx->savepoints.erase(tx->savepoints.begin() + i);
+            if (i < (int)tx->sp_data.size()) {
+                tx->sp_data.erase(tx->sp_data.begin() + i);
+                tx->sp_rowid.erase(tx->sp_rowid.begin() + i);
+            }
+            return SVDB_OK;
+        }
+    }
+    return SVDB_OK; /* ignore unknown savepoint name */
 }
 
 svdb_code_t svdb_rollback_to(svdb_tx_t *tx, const char *name) {
-    (void)tx; (void)name;
-    return SVDB_OK;
+    if (!tx || !name || !tx->db) return SVDB_ERR;
+    std::string n(name);
+    for (int i = (int)tx->savepoints.size() - 1; i >= 0; --i) {
+        if (tx->savepoints[i] == n) {
+            /* Restore to savepoint snapshot */
+            if (i < (int)tx->sp_data.size()) {
+                tx->db->data          = tx->sp_data[i];
+                tx->db->rowid_counter = tx->sp_rowid[i];
+                /* Remove all savepoints after this one */
+                tx->savepoints.resize(i + 1);
+                tx->sp_data.resize(i + 1);
+                tx->sp_rowid.resize(i + 1);
+            }
+            return SVDB_OK;
+        }
+    }
+    tx->db->last_error = "no such savepoint: " + n;
+    return SVDB_ERR;
 }
 
 /* Schema introspection */
@@ -922,10 +1632,13 @@ svdb_code_t svdb_tables(svdb_db_t *db, svdb_rows_t **rows) {
     if (!db || !rows) return SVDB_ERR;
     svdb_rows_t *r = new (std::nothrow) svdb_rows_t();
     if (!r) return SVDB_NOMEM;
-    r->col_names = {"name"};
+    r->col_names = {"name", "sql"};
     for (const auto &kv : db->schema) {
-        SvdbVal sv; sv.type = SVDB_TYPE_TEXT; sv.sval = kv.first;
-        r->rows.push_back({sv});
+        SvdbVal sv_name; sv_name.type = SVDB_TYPE_TEXT; sv_name.sval = kv.first;
+        SvdbVal sv_sql;
+        auto it = db->create_sql.find(kv.first);
+        if (it != db->create_sql.end()) { sv_sql.type = SVDB_TYPE_TEXT; sv_sql.sval = it->second; }
+        r->rows.push_back({sv_name, sv_sql});
     }
     *rows = r;
     return SVDB_OK;
