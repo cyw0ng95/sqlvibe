@@ -13,7 +13,18 @@ using ColType = std::string;
 struct ColDef {
     ColType     type;
     std::string default_val;
-    bool        not_null = false;
+    bool        not_null   = false;
+    bool        primary_key = false;
+};
+
+/* Table-level check constraint expression */
+using CheckList = std::vector<std::string>;
+
+/* Foreign key definition: child col -> (parent table, parent col) */
+struct FKDef {
+    std::string child_col;
+    std::string parent_table;
+    std::string parent_col;
 };
 
 /* Table schema: column name -> ColDef */
@@ -45,6 +56,14 @@ struct svdb_db_s {
     std::unordered_map<std::string, TableDef>                          schema;
     std::unordered_map<std::string, std::vector<std::string>>          primary_keys;
     std::unordered_map<std::string, std::vector<std::string>>          col_order;
+    /* Unique column sets per table (each entry = set of column names) */
+    std::unordered_map<std::string, std::vector<std::vector<std::string>>> unique_constraints;
+    /* CHECK constraints per table */
+    std::unordered_map<std::string, CheckList>                         check_constraints;
+    /* Foreign key constraints per table */
+    std::unordered_map<std::string, std::vector<FKDef>>                fk_constraints;
+    /* CREATE TABLE original SQL for each table/view */
+    std::unordered_map<std::string, std::string>                       create_sql;
 
     /* In-memory row storage: table_name -> rows */
     std::unordered_map<std::string, std::vector<Row>>                  data;
@@ -61,6 +80,10 @@ struct svdb_db_s {
 
     /* Last error */
     std::string last_error;
+
+    /* Transaction state */
+    bool         in_transaction = false;
+    svdb_tx_t   *sql_tx         = nullptr;  /* active SQL-level transaction */
 
     /* Thread safety */
     std::mutex mu;
@@ -88,4 +111,11 @@ struct svdb_tx_s {
     svdb_db_t               *db          = nullptr;
     bool                     committed   = false;
     std::vector<std::string> savepoints;
+
+    /* Snapshot for rollback: table data at BEGIN time */
+    std::unordered_map<std::string, std::vector<Row>> data_snapshot;
+    std::unordered_map<std::string, int64_t>          rowid_snapshot;
+    /* Savepoint stacks */
+    std::vector<std::unordered_map<std::string, std::vector<Row>>> sp_data;
+    std::vector<std::unordered_map<std::string, int64_t>>          sp_rowid;
 };
