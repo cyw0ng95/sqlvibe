@@ -21,36 +21,15 @@ import (
 // UseCgoVmExec enables C++ bytecode execution for supported opcodes.
 const UseCgoVmExec = true
 
-// execOpcode executes a single opcode using C++ when available for hot paths.
-// Returns true if the opcode was handled, false if Go should handle it.
+// execOpcode executes a single opcode via the C++ pure-opcode dispatcher.
+// Returns true if the opcode was handled by C++, false if Go should handle it.
+// All pure register-to-register computations (arithmetic, comparison, string,
+// math, type-conversion, etc.) are routed through svdb_vm_dispatch_pure.
 func (vm *VM) execOpcode(inst Instruction) bool {
 	if !UseCgoVmExec {
 		return false
 	}
-
-	// Try C++ execution for simple data movement opcodes only
-	// (arithmetic and comparison have complex NULL/jump handling in Go)
-	switch inst.Op {
-	case OpMove:
-		vm.registers[inst.P2] = vm.registers[inst.P1]
-		return true
-	case OpCopy:
-		if inst.P1 != inst.P2 {
-			vm.registers[inst.P2] = vm.registers[inst.P1]
-		}
-		return true
-	case OpSCopy:
-		vm.registers[inst.P2] = vm.registers[inst.P1]
-		return true
-	case OpIntCopy:
-		if v, ok := vm.registers[inst.P1].(int64); ok {
-			vm.registers[inst.P2] = v
-		} else if v, ok := vm.registers[inst.P1].(int); ok {
-			vm.registers[inst.P2] = int64(v)
-		}
-		return true
-	}
-	return false
+	return vm.execPureOpcode(inst)
 }
 
 // toFloat64 converts a value to float64.
