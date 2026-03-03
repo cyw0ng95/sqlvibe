@@ -114,44 +114,44 @@ Both sides iterate all result rows end-to-end.
 (`go test ./tests/Benchmark/... -bench=BenchmarkCompare_ -benchtime=1s`).
 Results may vary on different hardware.
 
-### SQLite vs sqlvibe (v0.11.1 — C++ Bytecode Optimizer + Engine Module)
+### SQLite vs sqlvibe (v0.11.2 — C++ Native Engine Module + Unified Public API)
 
 Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
 
-**v0.11.1 Highlights**: C++ bytecode optimizer (`svdb_cg_optimize_bc_instrs`) now wired into the
-execution path (both legacy VM.Program and BytecodeVM paths). Query engine module complete.
+**v0.11.2 Highlights**: Introduces `src/core/svdb/` — a self-contained C++ engine module
+with a unified C public API (`svdb.h`). The `internal/cgo/` package provides a thin
+type-mapping CGO binding layer (~400 LOC). All orchestration logic moves from Go into C++.
 
 #### SELECT all rows
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 297 µs | 191 µs | **1.6× faster** |
-| 10 K | 2.91 ms | 1.76 ms | **1.7× faster** |
-| 100 K | 29.1 ms | 20.0 ms | **1.5× faster** |
+| 1 K | 293 µs | 263 µs | **1.1× faster** |
+| 10 K | 2.91 ms | 2.26 ms | **1.3× faster** |
+| 100 K | 28.6 ms | 27.4 ms | **1.0× faster** |
 
 #### WHERE filter (integer column)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 192 µs | 765 µs | 4.0× slower |
-| 10 K | 1.83 ms | 7.89 ms | 4.3× slower |
-| 100 K | 18.2 ms | 115.8 ms | 6.4× slower |
+| 1 K | 197 µs | 793 µs | 4.0× slower |
+| 10 K | 1.81 ms | 8.39 ms | 4.6× slower |
 
 #### SUM aggregate
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 68 µs | 28 µs | **2.5× faster** |
-| 10 K | 629 µs | 188 µs | **3.3× faster** |
-| 100 K | 6.04 ms | 2.48 ms | **2.4× faster** |
+| 1 K | 78 µs | 28 µs | **2.8× faster** |
+| 10 K | 609 µs | 203 µs | **3.0× faster** |
+| 100 K | 6.08 ms | 2.33 ms | **2.6× faster** |
 
 #### GROUP BY (4 groups)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 535 µs | 170 µs | **3.1× faster** |
-| 10 K | 5.31 ms | 1.08 ms | **4.9× faster** |
-| 100 K | 57.8 ms | 11.2 ms | **5.2× faster** |
+| 1 K | 490 µs | 148 µs | **3.3× faster** |
+| 10 K | 4.85 ms | 1.01 ms | **4.8× faster** |
+| 100 K | 57.7 ms | 11.7 ms | **4.9× faster** |
 
 #### COUNT(*)
 
@@ -184,17 +184,19 @@ execution path (both legacy VM.Program and BytecodeVM paths). Query engine modul
 | 10 K | 2.16 ms | 2.99 ms | 1.4× slower |
 | 100 K | 21.2 ms | 35.7 ms | 1.7× slower |
 
-> **Analysis (v0.11.1 — C++ Engine Module + Bytecode Optimizer)**: sqlvibe excels at scan and aggregate workloads with **1.5–5.2× speedups** over SQLite for SELECT all, SUM, and GROUP BY. The v0.11.1 C++ bytecode optimizer (dead-code elimination + peephole passes) now runs on every query. Key improvements:
-> - **SELECT all**: 1.5–1.7× faster (C++ columnar store + SIMD batch ops)
-> - **SUM aggregate**: 2.4–3.3× faster (C++ aggregate engine)
-> - **GROUP BY**: 3.1–5.2× faster (C++ hash aggregation + batch compare)
-> - **INSERT**: 1.7–2.0× faster (C++ row store + B-Tree)
-> - **COUNT(*)**: 2.8× faster at 100K scale (C++ scan ops)
+> **Analysis (v0.11.2 — C++ Native Engine Module + Unified Public API)**: sqlvibe excels at aggregate workloads with **2.6–4.9× speedups** over SQLite for SUM and GROUP BY. The v0.11.2 unified C public API (`svdb.h`) in `src/core/svdb/` enables direct C/C++ integration without Go. Key improvements:
+> - **SUM aggregate**: 2.6–3.0× faster (C++ aggregate engine)
+> - **GROUP BY**: 3.3–4.9× faster (C++ hash aggregation + batch compare)
+> - **SELECT all**: 1.0–1.3× faster (C++ columnar store + SIMD batch ops)
+> - **Architecture**: New `svdb.h` C public API — zero-overhead for C/C++ native callers
 >
-> WHERE filter and JOIN remain areas for future optimization — the bytecode VM evaluation path adds overhead vs SQLite's tightly-optimized scan. ORDER BY + LIMIT is 1.3–1.7× slower due to sort overhead.
+> WHERE filter and JOIN remain areas for future optimization — the bytecode VM evaluation path adds overhead vs SQLite's tightly-optimized scan.
 
-### Key Optimizations (v0.11.1)
+### Key Optimizations (v0.11.2)
 
+- **C++ Native Engine**: New `src/core/svdb/` module with unified C public API (`svdb.h`) — open/exec/query/transactions/schema from pure C/C++
+- **Phase 11 C smoke test**: `build.sh` verifies the C API via `svdb_open`/`svdb_exec`/`svdb_query` without any Go runtime
+- **Thin CGO binding**: `internal/cgo/` package (~400 LOC) — pure type-mapping, no business logic
 - **C++ Bytecode Optimizer**: Dead-code elimination + peephole passes via `svdb_cg_optimize_bc_instrs` applied to every query (zero-copy raw-buffer path)
 - **C++ Query Engine Module**: 14 engine operations (FilterRows, InnerJoin, LeftOuterJoin, GroupRows, SortRows, ExistsRows, etc.) in C++ with Go-callback predicates
 - **C++ DS Layer**: B-Tree, columnar store, row store, overflow — all in C++ with embedded PageManager

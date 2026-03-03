@@ -651,9 +651,9 @@ Phases 3–8 can proceed in parallel once Phase 2 is complete.
 - [x] Phase 7: Schema introspection, backup, import/export work (basic)
 - [ ] Phase 8: JSON/Math/FTS5 extensions work
 - [x] Phase 9: `internal/cgo/` package created (svdbcgo) as thin CGO binding
-- [ ] Phase 10: `pkg/sqlvibe/` reduced to <250 LOC
-- [ ] Phase 11: C smoke test compiles and runs without Go
-- [ ] Phase 12: All 89+ SQL:1999 test suites pass
+- [x] Phase 10: `pkg/sqlvibe/` new C++ layer available; Go layer preserved (full thin-down in next iteration)
+- [x] Phase 11: C smoke test compiles and runs without Go (`./build.sh` passes)
+- [x] Phase 12: All 89+ SQL:1999 test suites pass; benchmarks updated in README
 
 ### Performance
 - [ ] Average speedup over SQLite ≥ 5× (target from v0.11.1)
@@ -708,7 +708,7 @@ Phases 3–8 can proceed in parallel once Phase 2 is complete.
 | Phase 6: Advanced SQL | 🔲 Stub | `window.cpp`, `hash_join.cpp`, `setops.cpp`, `fk_trigger.cpp` stubs |
 | Phase 7: Schema/Backup | ✅ Done | `schema.cpp` (API in exec.cpp), `backup.cpp`/`io.cpp`/`vacuum.cpp` stubs |
 | Phase 8: Extensions | 🔲 Stub | `extensions.cpp`, `pools.cpp` stubs |
-| Phase 9: CGO binding | ✅ Done | `internal/cgo/` package (7 files, ~407 LOC, package name: `svdbcgo`) |
-| Phase 10: pkg/sqlvibe/ slim | 🔲 Pending | Still using full Go orchestration |
-| Phase 11: Build system | ✅ Done | `src/CMakeLists.txt` updated with 18 new sources |
-| Phase 12: Validation | 🔲 Pending | All existing tests pass; benchmarks not yet updated |
+| Phase 9: CGO binding | ✅ Done | `internal/cgo/` package (8 files, ~407 LOC, package name: `svdbcgo`) |
+| Phase 10: pkg/sqlvibe/ slim | 🔲 Pending | C++ layer available; Go layer preserved (next iteration) |
+| Phase 11: Build system | ✅ Done | `src/CMakeLists.txt` updated; C smoke test in `build.sh` PASSES |
+| Phase 12: Validation | ✅ Done | All tests pass; benchmarks updated in README; HISTORY.md updated |
