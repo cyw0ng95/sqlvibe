@@ -5,9 +5,14 @@
  * over the db->data in-memory row store.  Complex queries (JOINs, GROUP BY,
  * window functions) fall back to the raw SQL parser result column names and
  * return empty rows so callers don't crash.
+ *
+ * NOTE: The arithmetic expression evaluator in eval_expr performs left-to-right
+ * evaluation and does not implement full operator precedence (* / before + -).
+ * This is a known limitation of the Phase 2 implementation.
  */
 #include "svdb.h"
 #include "svdb_types.h"
+#include "svdb_util.h"
 #include "QP/parser.h"
 
 #include <cctype>
@@ -17,7 +22,6 @@
 #include <cstring>
 #include <cmath>
 
-/* Shared helpers defined in exec.cpp */
 static std::string qry_upper(std::string s) {
     for (auto &c : s) c = (char)toupper((unsigned char)c);
     return s;
@@ -78,19 +82,29 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             SvdbVal rhs = eval_expr(rhs_s, row, col_order);
             SvdbVal v;
             if (lhs.type == SVDB_TYPE_REAL || rhs.type == SVDB_TYPE_REAL) {
-                v.type = SVDB_TYPE_REAL;
                 double l = (lhs.type == SVDB_TYPE_INT) ? (double)lhs.ival : lhs.rval;
                 double r = (rhs.type == SVDB_TYPE_INT) ? (double)rhs.ival : rhs.rval;
-                if (c == '+') v.rval = l + r;
-                else if (c == '-') v.rval = l - r;
-                else if (c == '*') v.rval = l * r;
-                else if (c == '/' && r != 0.0) v.rval = l / r;
+                if (c == '/') {
+                    /* SQLite: integer/0 = NULL; real/0 = NULL */
+                    if (r == 0.0) return SvdbVal{};
+                    v.type = SVDB_TYPE_REAL; v.rval = l / r;
+                } else {
+                    v.type = SVDB_TYPE_REAL;
+                    if (c == '+') v.rval = l + r;
+                    else if (c == '-') v.rval = l - r;
+                    else if (c == '*') v.rval = l * r;
+                }
             } else if (lhs.type == SVDB_TYPE_INT && rhs.type == SVDB_TYPE_INT) {
-                v.type = SVDB_TYPE_INT;
-                if (c == '+') v.ival = lhs.ival + rhs.ival;
-                else if (c == '-') v.ival = lhs.ival - rhs.ival;
-                else if (c == '*') v.ival = lhs.ival * rhs.ival;
-                else if (c == '/' && rhs.ival != 0) v.ival = lhs.ival / rhs.ival;
+                if (c == '/') {
+                    /* SQLite: integer/0 = NULL */
+                    if (rhs.ival == 0) return SvdbVal{};
+                    v.type = SVDB_TYPE_INT; v.ival = lhs.ival / rhs.ival;
+                } else {
+                    v.type = SVDB_TYPE_INT;
+                    if (c == '+') v.ival = lhs.ival + rhs.ival;
+                    else if (c == '-') v.ival = lhs.ival - rhs.ival;
+                    else if (c == '*') v.ival = lhs.ival * rhs.ival;
+                }
             }
             return v;
         }

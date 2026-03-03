@@ -8,6 +8,7 @@
  */
 #include "svdb.h"
 #include "svdb_types.h"
+#include "svdb_util.h"
 #include "QP/parser.h"
 
 #include <cctype>
@@ -506,7 +507,7 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         for (const auto &cn : col_order) {
             auto dit = db->schema[tname].find(cn);
             if (dit != db->schema[tname].end() && !dit->second.default_val.empty())
-                row[cn] = parse_literal("'" + dit->second.default_val + "'");
+                row[cn] = parse_literal(dit->second.default_val);
             else
                 row[cn] = SvdbVal{};
         }
@@ -519,7 +520,7 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
 
         /* Auto-increment rowid */
         db->rowid_counter[tname]++;
-        row["_rowid_"] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[tname], 0.0, {}};
+        row[SVDB_ROWID_COLUMN] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[tname], 0.0, {}};
 
         db->data[tname].push_back(row);
         ++inserted;
