@@ -123,6 +123,26 @@ set(SVDB_CORE_SOURCES
 
     # VM Engine - Query orchestration
     core/VM/engine/engine.cpp
+
+    # SVDB — Unified C Public API
+    core/svdb/database.cpp
+    core/svdb/exec.cpp
+    core/svdb/query.cpp
+    core/svdb/result.cpp
+    core/svdb/transaction.cpp
+    core/svdb/statement.cpp
+    core/svdb/pragma.cpp
+    core/svdb/window.cpp
+    core/svdb/hash_join.cpp
+    core/svdb/setops.cpp
+    core/svdb/fk_trigger.cpp
+    core/svdb/schema.cpp
+    core/svdb/explain.cpp
+    core/svdb/backup.cpp
+    core/svdb/io.cpp
+    core/svdb/vacuum.cpp
+    core/svdb/extensions.cpp
+    core/svdb/pools.cpp
 )
 
 # Build libsvdb
@@ -141,6 +161,7 @@ target_include_directories(svdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/wrapper
     ${CMAKE_CURRENT_SOURCE_DIR}/core/cgo
     ${CMAKE_CURRENT_SOURCE_DIR}/core/VM/engine
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/svdb
 )
 
 if(SVDB_COMPILE_OPTS)

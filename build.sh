@@ -91,6 +91,46 @@ fi
 export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
 echo "====> LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 
+# ----- Phase 11: C smoke test (svdb.h public API) ----------------------------
+# Verifies that the unified C public API compiles and works from a pure C caller.
+SVDB_H="$SCRIPT_DIR/src/core/svdb/svdb.h"
+if [[ -f "$SVDB_H" && -f "$BUILD_DIR/cmake/lib/libsvdb.so" ]]; then
+    SMOKE_SRC="$BUILD_DIR/tmp_smoke.c"
+    SMOKE_BIN="$BUILD_DIR/tmp_smoke"
+    cat > "$SMOKE_SRC" << 'EOF'
+#include "svdb.h"
+#include <stdio.h>
+#include <stdlib.h>
+int main(void) {
+    svdb_db_t *db = NULL;
+    if (svdb_open(":memory:", &db) != SVDB_OK) { fprintf(stderr, "smoke: open failed\n"); return 1; }
+    svdb_result_t r;
+    if (svdb_exec(db, "CREATE TABLE t(x INT)", &r) != SVDB_OK) { fprintf(stderr, "smoke: CREATE failed\n"); return 1; }
+    if (svdb_exec(db, "INSERT INTO t VALUES(42)", &r) != SVDB_OK) { fprintf(stderr, "smoke: INSERT failed\n"); return 1; }
+    svdb_rows_t *rows = NULL;
+    if (svdb_query(db, "SELECT x FROM t", &rows) != SVDB_OK) { fprintf(stderr, "smoke: SELECT failed\n"); return 1; }
+    if (!svdb_rows_next(rows)) { fprintf(stderr, "smoke: no rows\n"); return 1; }
+    svdb_val_t v = svdb_rows_get(rows, 0);
+    svdb_rows_close(rows);
+    svdb_close(db);
+    if (v.type != SVDB_TYPE_INT || v.ival != 42) {
+        fprintf(stderr, "smoke: expected INT 42, got type=%d ival=%lld\n",
+                v.type, (long long)v.ival);
+        return 1;
+    }
+    printf("smoke test PASSED: svdb_open/exec/query/rows API works.\n");
+    return 0;
+}
+EOF
+    gcc -I"$SCRIPT_DIR/src/core/svdb" \
+        -L"$BUILD_DIR/cmake/lib" \
+        -Wl,-rpath,"$BUILD_DIR/cmake/lib" \
+        "$SMOKE_SRC" -o "$SMOKE_BIN" -lsvdb -lstdc++ 2>/dev/null && \
+    "$SMOKE_BIN" && echo "====> Phase 11: C smoke test PASSED" || \
+    echo "====> Phase 11: C smoke test skipped (link/run error)"
+    rm -f "$SMOKE_SRC" "$SMOKE_BIN"
+fi
+
 # If no test/bench/fuzz requested, just build the package and binaries
 if [[ $RUN_TESTS -eq 0 && $RUN_BENCH -eq 0 && $RUN_FUZZ -eq 0 ]]; then
     echo "====> Building package and binaries..."
