@@ -77,6 +77,7 @@ set(SVDB_CORE_SOURCES
     core/VM/query_engine.cpp
     core/VM/exec.cpp
     core/VM/bytecode_vm.cpp
+    core/VM/vm_opcode.cpp
 
     # QP - Query Processing
     core/QP/tokenizer.cpp
