@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <map>
 #include <unordered_map>
 #include <mutex>
 #include "svdb.h"
@@ -65,14 +66,16 @@ struct svdb_rows_s {
     std::vector<std::string> str_store;
 };
 
-/* Prepared statement (minimal stub for Phase 1/2) */
+/* Prepared statement */
 struct svdb_stmt_s {
-    svdb_db_t*  db  = nullptr;
+    svdb_db_t  *db = nullptr;
     std::string sql;
-    std::unordered_map<int, SvdbVal> bindings;
+    std::map<int, SvdbVal> bindings;  /* idx (1-based) -> value */
 };
 
-/* Transaction (minimal stub for Phase 1/2) */
+/* Transaction */
 struct svdb_tx_s {
-    svdb_db_t* db = nullptr;
+    svdb_db_t               *db          = nullptr;
+    bool                     committed   = false;
+    std::vector<std::string> savepoints;
 };

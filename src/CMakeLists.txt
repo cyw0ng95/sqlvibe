@@ -129,6 +129,20 @@ set(SVDB_CORE_SOURCES
     core/svdb/exec.cpp
     core/svdb/query.cpp
     core/svdb/result.cpp
+    core/svdb/transaction.cpp
+    core/svdb/statement.cpp
+    core/svdb/pragma.cpp
+    core/svdb/window.cpp
+    core/svdb/hash_join.cpp
+    core/svdb/setops.cpp
+    core/svdb/fk_trigger.cpp
+    core/svdb/schema.cpp
+    core/svdb/explain.cpp
+    core/svdb/backup.cpp
+    core/svdb/io.cpp
+    core/svdb/vacuum.cpp
+    core/svdb/extensions.cpp
+    core/svdb/pools.cpp
 )
 
 # Build libsvdb
