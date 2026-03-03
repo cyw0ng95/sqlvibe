@@ -386,17 +386,32 @@ static bool qry_eval_where(const Row &row,
     /* Find lowest-precedence operator outside parens: first OR, then AND */
     auto find_kw_outside = [&](const std::string &kw) -> size_t {
         int depth = 0; bool in_str = false;
+        int between_depth = 0; /* track BETWEEN..AND scope */
         for (size_t i = 0; i < wu.size(); ++i) {
             char c = wu[i];
             if (c == '\'') { in_str = !in_str; continue; }
             if (in_str) continue;
             if (c == '(') ++depth;
             else if (c == ')') { if (depth > 0) --depth; }
-            else if (depth == 0 && i + kw.size() <= wu.size() &&
-                     wu.substr(i, kw.size()) == kw &&
-                     (i == 0 || wu[i-1] == ' ') &&
-                     (i + kw.size() >= wu.size() || wu[i + kw.size()] == ' ')) {
-                return i;
+            else if (depth == 0) {
+                /* Check for BETWEEN keyword to enter between-scope */
+                if (i + 7 <= wu.size() && wu.substr(i, 7) == "BETWEEN" &&
+                    (i == 0 || wu[i-1] == ' ') &&
+                    (i + 7 >= wu.size() || wu[i + 7] == ' '))
+                    between_depth++;
+                /* Check for target keyword */
+                if (i + kw.size() <= wu.size() &&
+                    wu.substr(i, kw.size()) == kw &&
+                    (i == 0 || wu[i-1] == ' ') &&
+                    (i + kw.size() >= wu.size() || wu[i + kw.size()] == ' ')) {
+                    /* If this AND closes a BETWEEN, consume it and continue */
+                    if (kw == "AND" && between_depth > 0) {
+                        --between_depth;
+                        i += kw.size() - 1; /* skip AND, loop increments i */
+                        continue;
+                    }
+                    return i;
+                }
             }
         }
         return std::string::npos;
