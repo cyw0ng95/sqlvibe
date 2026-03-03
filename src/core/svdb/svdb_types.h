@@ -30,6 +30,13 @@ struct SvdbVal {
 /* A row: column name -> value */
 using Row = std::unordered_map<std::string, SvdbVal>;
 
+/* Index definition */
+struct IndexDef {
+    std::string table;
+    std::vector<std::string> columns;
+    bool unique = false;
+};
+
 /* Database state */
 struct svdb_db_s {
     std::string path;
@@ -41,6 +48,9 @@ struct svdb_db_s {
 
     /* In-memory row storage: table_name -> rows */
     std::unordered_map<std::string, std::vector<Row>>                  data;
+
+    /* Index metadata: index_name -> IndexDef */
+    std::map<std::string, IndexDef>                                    indexes;
 
     /* Auto-increment counters: table_name -> last rowid */
     std::unordered_map<std::string, int64_t>                           rowid_counter;

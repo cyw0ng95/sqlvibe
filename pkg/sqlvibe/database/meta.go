@@ -41,5 +41,5 @@ func (m *Meta) ForeignKeyList(table string) (*sqlvibe.Rows, error) {
 
 // Schema returns the DDL schema string for a table.
 func (m *Meta) Schema(table string) (string, error) {
-	return m.db.Schema(table)
+	return m.db.GetSchema(table)
 }

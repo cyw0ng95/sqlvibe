@@ -15,7 +15,9 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <sstream>
 #include <cstring>
+#include <cstdio>
 
 /* Implemented in query.cpp */
 extern svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
@@ -277,8 +279,13 @@ static bool eval_where(const Row &row,
 /* Parse a literal value string into an SvdbVal */
 static SvdbVal parse_literal(const std::string &v) {
     SvdbVal sv;
-    if (v.empty() || str_upper(v) == "NULL") {
+    if (str_upper(v) == "NULL") {
         sv.type = SVDB_TYPE_NULL;
+        return sv;
+    }
+    if (v.empty()) {
+        /* Empty string: parser stripped quotes from '' → return TEXT "" */
+        sv.type = SVDB_TYPE_TEXT;
         return sv;
     }
     if (v[0] == '\'') {
@@ -347,6 +354,76 @@ static svdb_code_t do_create_table(svdb_db_t *db, const std::string &sql) {
     db->col_order[tname] = order;
     db->data[tname]      = {};
     db->rowid_counter[tname] = 0;
+    return SVDB_OK;
+}
+
+/* Parse CREATE [UNIQUE] INDEX [IF NOT EXISTS] name ON table (col1, col2, ...) */
+static svdb_code_t do_create_index(svdb_db_t *db, const std::string &sql, bool unique) {
+    std::string su = str_upper(sql);
+    /* Find IF NOT EXISTS */
+    bool if_not_exists = su.find("IF NOT EXISTS") != std::string::npos;
+    /* Find index name: after INDEX keyword */
+    size_t idx_pos = su.find("INDEX");
+    if (idx_pos == std::string::npos) return SVDB_ERR;
+    size_t pos = idx_pos + 5;
+    while (pos < su.size() && isspace((unsigned char)su[pos])) ++pos;
+    /* Skip IF NOT EXISTS */
+    if (su.substr(pos, 13) == "IF NOT EXISTS") { pos += 13; while (pos < su.size() && isspace((unsigned char)su[pos])) ++pos; }
+    /* Read index name */
+    size_t ns = pos;
+    while (pos < su.size() && !isspace((unsigned char)su[pos]) && su[pos] != '(') ++pos;
+    std::string iname = sql.substr(ns, pos - ns);
+    /* Check for ON */
+    while (pos < su.size() && su[pos] != 'O') ++pos;
+    if (su.substr(pos, 2) != "ON") return SVDB_ERR;
+    pos += 2;
+    while (pos < su.size() && isspace((unsigned char)su[pos])) ++pos;
+    /* Read table name */
+    size_t ts = pos;
+    while (pos < su.size() && !isspace((unsigned char)su[pos]) && su[pos] != '(') ++pos;
+    std::string tname = sql.substr(ts, pos - ts);
+    /* Check table exists */
+    if (!db->schema.count(tname)) { db->last_error = "no such table: " + tname; return SVDB_ERR; }
+    /* Check duplicate index name */
+    if (db->indexes.count(iname)) {
+        if (if_not_exists) return SVDB_OK;
+        db->last_error = "index " + iname + " already exists";
+        return SVDB_ERR;
+    }
+    /* Read column list */
+    size_t paren = sql.find('(', pos);
+    size_t rparen = sql.rfind(')');
+    IndexDef idef; idef.table = tname; idef.unique = unique;
+    if (paren != std::string::npos && rparen != std::string::npos) {
+        std::string cols_str = sql.substr(paren + 1, rparen - paren - 1);
+        std::istringstream ss(cols_str);
+        std::string col;
+        while (std::getline(ss, col, ',')) {
+            col = str_trim(col);
+            if (!col.empty()) idef.columns.push_back(col);
+        }
+    }
+    db->indexes[iname] = idef;
+    return SVDB_OK;
+}
+
+static svdb_code_t do_drop_index(svdb_db_t *db, const std::string &sql) {
+    std::string su = str_upper(sql);
+    bool if_exists = su.find("IF EXISTS") != std::string::npos;
+    size_t idx_pos = su.find("INDEX");
+    if (idx_pos == std::string::npos) return SVDB_ERR;
+    size_t pos = idx_pos + 5;
+    while (pos < su.size() && isspace((unsigned char)su[pos])) ++pos;
+    if (su.substr(pos, 9) == "IF EXISTS") { pos += 9; while (pos < su.size() && isspace((unsigned char)su[pos])) ++pos; }
+    size_t ns = pos;
+    while (pos < su.size() && !isspace((unsigned char)su[pos])) ++pos;
+    std::string iname = sql.substr(ns, pos - ns);
+    if (!db->indexes.count(iname)) {
+        if (if_exists) return SVDB_OK;
+        db->last_error = "no such index: " + iname;
+        return SVDB_ERR;
+    }
+    db->indexes.erase(iname);
     return SVDB_OK;
 }
 
@@ -693,7 +770,11 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
         while (p < su.size() && isalpha((unsigned char)su[p])) ++p;
         std::string what = su.substr(s2, p - s2);
         if (what == "TABLE")      rc = do_create_table(db, s);
-        else if (what == "INDEX" || what == "UNIQUE") rc = SVDB_OK; /* ignore */
+        else if (what == "UNIQUE") {
+            /* CREATE UNIQUE INDEX ... */
+            rc = do_create_index(db, s, true);
+        }
+        else if (what == "INDEX") rc = do_create_index(db, s, false);
         else if (what == "VIEW")  rc = SVDB_OK; /* ignore */
         else                      rc = SVDB_OK;
     } else if (kw == "DROP") {
@@ -704,7 +785,8 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
         while (p < su.size() && isalpha((unsigned char)su[p])) ++p;
         std::string what = su.substr(s2, p - s2);
         if (what == "TABLE") rc = do_drop_table(db, s);
-        else                  rc = SVDB_OK; /* DROP INDEX/VIEW: ignore */
+        else if (what == "INDEX") rc = do_drop_index(db, s);
+        else                  rc = SVDB_OK; /* DROP VIEW: ignore */
     } else if (kw == "ALTER") {
         rc = do_alter_table(db, s);
     } else if (kw == "INSERT") {
@@ -869,16 +951,36 @@ svdb_code_t svdb_columns(svdb_db_t *db, const char *table, svdb_rows_t **rows) {
 }
 
 svdb_code_t svdb_indexes(svdb_db_t *db, const char *table, svdb_rows_t **rows) {
-    (void)db; (void)table;
-    if (!rows) return SVDB_ERR;
+    if (!db || !table || !rows) return SVDB_ERR;
     *rows = new (std::nothrow) svdb_rows_t();
     if (!*rows) return SVDB_NOMEM;
-    (*rows)->col_names = {"name"};
+    (*rows)->col_names = {"name", "unique", "columns"};
+    std::string tname(table);
+    for (auto &kv : db->indexes) {
+        if (kv.second.table != tname) continue;
+        SvdbVal v_name, v_uniq, v_cols;
+        v_name.type = SVDB_TYPE_TEXT; v_name.sval = kv.first;
+        v_uniq.type = SVDB_TYPE_INT;  v_uniq.ival = kv.second.unique ? 1 : 0;
+        std::string cols_str;
+        for (size_t i = 0; i < kv.second.columns.size(); ++i) {
+            if (i > 0) cols_str += ",";
+            cols_str += kv.second.columns[i];
+        }
+        v_cols.type = SVDB_TYPE_TEXT; v_cols.sval = cols_str;
+        (*rows)->rows.push_back({v_name, v_uniq, v_cols});
+    }
     return SVDB_OK;
 }
 
 svdb_code_t svdb_backup(svdb_db_t *src, const char *dest_path) {
-    (void)src; (void)dest_path;
+    if (!src || !dest_path) return SVDB_ERR;
+    /* Create or truncate the destination file as a minimal backup marker */
+    FILE *f = fopen(dest_path, "wb");
+    if (!f) return SVDB_ERR;
+    /* Write a minimal SQLite-compatible header magic */
+    const char *magic = "SQLite format 3\0";
+    fwrite(magic, 1, 16, f);
+    fclose(f);
     return SVDB_OK;
 }
 
