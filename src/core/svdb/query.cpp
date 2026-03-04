@@ -2704,8 +2704,8 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
 
 /* ── PRAGMA query handler ───────────────────────────────────────── */
 
-static svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
-                                       svdb_rows_t **rows_out) {
+svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
+                               svdb_rows_t **rows_out) {
     svdb_rows_t *r = new (std::nothrow) svdb_rows_t();
     if (!r) return SVDB_NOMEM;
     *rows_out = r;
@@ -3172,16 +3172,22 @@ static svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
 
     /* PRAGMA query_timeout [= val] */
     if (pname == "QUERY_TIMEOUT") {
+        if (!parg.empty()) {
+            try { db->query_timeout_ms = std::stoll(parg); } catch (...) {}
+        }
         r->col_names = {"query_timeout"};
-        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0;
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->query_timeout_ms;
         r->rows.push_back({v});
         return SVDB_OK;
     }
 
     /* PRAGMA max_memory [= val] */
     if (pname == "MAX_MEMORY") {
+        if (!parg.empty()) {
+            try { db->max_memory = std::stoll(parg); } catch (...) {}
+        }
         r->col_names = {"max_memory"};
-        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0;
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->max_memory;
         r->rows.push_back({v});
         return SVDB_OK;
     }

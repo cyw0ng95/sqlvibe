@@ -22,6 +22,8 @@
 /* Implemented in query.cpp */
 extern svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                                         svdb_rows_t **rows_out);
+extern svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
+                                      svdb_rows_t **rows_out);
 
 /* ── helpers ────────────────────────────────────────────────────── */
 
@@ -1491,9 +1493,9 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
         }
         rc = SVDB_OK;
     } else if (kw == "PRAGMA") {
-        /* Route PRAGMA queries through svdb_query_internal for results */
+        /* Route PRAGMA through svdb_query_pragma so SET values are stored */
         svdb_rows_t *rows = nullptr;
-        rc = svdb_query_internal(db, s, &rows);
+        rc = svdb_query_pragma(db, s, &rows);
         if (rows) svdb_rows_close(rows);
     } else if (kw == "SELECT") {
         /* svdb_exec on SELECT: run and discard result */

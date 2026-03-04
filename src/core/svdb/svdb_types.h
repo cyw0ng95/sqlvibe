@@ -90,6 +90,8 @@ struct svdb_db_s {
     int64_t     max_rows         = 0;       /* 0 = unlimited */
     int64_t     cache_memory     = 2097152; /* 2 MB default */
     std::string synchronous      = "NORMAL";
+    int64_t     query_timeout_ms = 0;       /* 0 = no timeout */
+    int64_t     max_memory       = 0;       /* 0 = unlimited */
 
     /* Transaction state */
     bool         in_transaction = false;
