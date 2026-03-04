@@ -33,8 +33,8 @@ struct StoredValue {
 
     svdb_value_t get() const {
         svdb_value_t out = val;
-        if (val.val_type == 3) { out.str_data = backing.data(); out.str_len = backing.size(); }
-        else if (val.val_type == 4) { out.bytes_data = backing.data(); out.bytes_len = backing.size(); }
+        if (val.val_type == 3) { out.str_data = const_cast<char*>(backing.data()); out.str_len = backing.size(); }
+        else if (val.val_type == 4) { out.bytes_data = const_cast<char*>(backing.data()); out.bytes_len = backing.size(); }
         return out;
     }
 };

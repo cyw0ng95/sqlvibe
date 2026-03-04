@@ -129,7 +129,7 @@ void svdb_value_init_string(svdb_value_t* v, const char* str, size_t len) {
     v->val_type = static_cast<int32_t>(ValueType::String);
     v->int_val = 0;
     v->float_val = 0.0;
-    v->str_data = str;
+    v->str_data = const_cast<char*>(str);
     v->str_len = len;
     v->bytes_data = nullptr;
     v->bytes_len = 0;
@@ -151,7 +151,7 @@ void svdb_value_init_bytes(svdb_value_t* v, const char* data, size_t len) {
     v->float_val = 0.0;
     v->str_data = nullptr;
     v->str_len = 0;
-    v->bytes_data = data;
+    v->bytes_data = const_cast<char*>(data);
     v->bytes_len = len;
 }
 

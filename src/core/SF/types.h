@@ -20,9 +20,9 @@ typedef struct {
     int32_t     val_type;
     int64_t     int_val;
     double      float_val;
-    const char* str_data;
+    char*       str_data;  /* writable for internal use */
     size_t      str_len;
-    const char* bytes_data;
+    char*       bytes_data;  /* writable for internal use */
     size_t      bytes_len;
 } svdb_value_t;
 

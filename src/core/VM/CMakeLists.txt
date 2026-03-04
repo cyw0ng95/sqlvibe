@@ -34,6 +34,7 @@ add_library(svdb_vm SHARED
     string_funcs.cpp
     datetime.cpp
     aggregate.cpp
+    vm_execute.cpp
 )
 
 target_include_directories(svdb_vm PUBLIC
@@ -51,3 +52,18 @@ install(TARGETS svdb_vm
     LIBRARY DESTINATION ${CMAKE_SOURCE_DIR}/.build/cmake/lib
     COMPONENT Runtime
 )
+
+# Tests (optional, requires GoogleTest)
+option(BUILD_VM_TESTS "Build VM unit tests" OFF)
+if(BUILD_VM_TESTS)
+    find_package(GTest QUIET)
+    if(GTest_FOUND)
+        add_executable(test_vm_execute test_vm_execute.cpp)
+        target_link_libraries(test_vm_execute svdb_vm GTest::gtest GTest::gtest_main)
+        target_include_directories(test_vm_execute PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        add_test(NAME VMExecuteTests COMMAND test_vm_execute)
+        message(STATUS "VM tests enabled")
+    else()
+        message(STATUS "GoogleTest not found - VM tests disabled")
+    endif()
+endif()
