@@ -1030,6 +1030,10 @@ static bool qry_eval_where(const Row &row,
                              const std::vector<std::string> &col_order,
                              const std::string &where_text);
 
+/* Thread-local flag: set to true when a comparison returns false due to NULL operands.
+ * Used by NOT handler to propagate three-valued logic (NOT NULL = NULL = false). */
+static thread_local bool g_last_null_comparison = false;
+
 static bool qry_eval_where(const Row &row,
                              const std::vector<std::string> &col_order,
                              const std::string &where_text) {
@@ -1093,9 +1097,12 @@ static bool qry_eval_where(const Row &row,
         return qry_eval_where(row, col_order, wt.substr(0, and_pos)) &&
                qry_eval_where(row, col_order, wt.substr(and_pos + 3));
 
-    /* NOT expr */
+    /* NOT expr: three-valued logic — NOT NULL = NULL = false */
     if (wu.substr(0, 4) == "NOT ") {
-        return !qry_eval_where(row, col_order, wt.substr(4));
+        g_last_null_comparison = false;
+        bool inner = qry_eval_where(row, col_order, wt.substr(4));
+        if (g_last_null_comparison) return false; /* NOT NULL = null = false */
+        return !inner;
     }
 
     /* EXISTS / NOT EXISTS (subquery) */
@@ -1349,8 +1356,11 @@ static bool qry_eval_where(const Row &row,
             std::string rhs_s = qry_trim(wt.substr(op_start + op_len));
             SvdbVal lhs = eval_expr(lhs_s, row, col_order);
             SvdbVal rhs = eval_expr(rhs_s, row, col_order);
-            /* NULL comparisons: any comparison with NULL is false */
-            if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) return false;
+            /* NULL comparisons: any comparison with NULL is null (treated as false) */
+            if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) {
+                g_last_null_comparison = true;
+                return false;
+            }
             int c = val_cmp(lhs, rhs);
             if (op == "=" || op == "==") return c == 0;
             if (op == "!=" || op == "<>") return c != 0;
@@ -1747,16 +1757,30 @@ static AggState make_agg(const std::string &expr) {
     const char *funcs[] = {"COUNT", "SUM", "AVG", "MIN", "MAX", nullptr};
     for (int i = 0; funcs[i]; ++i) {
         std::string prefix = std::string(funcs[i]) + "(";
-        if (eu.substr(0, prefix.size()) == prefix && eu.back() == ')') {
-            a.func = funcs[i];
-            a.arg = qry_trim(e_orig.substr(prefix.size(), e_orig.size() - prefix.size() - 1));
-            /* Strip DISTINCT prefix */
-            std::string arg_upper = qry_upper(a.arg);
-            if (arg_upper.size() > 9 && arg_upper.substr(0, 9) == "DISTINCT ") {
-                a.distinct = true;
-                a.arg = qry_trim(a.arg.substr(9));
+        if (eu.substr(0, prefix.size()) == prefix) {
+            /* Verify the opening '(' at prefix.back() has its closing ')' at eu.back() */
+            size_t open_at = prefix.size() - 1; /* index of '(' */
+            size_t d = 1, j = open_at + 1;
+            bool in_s = false;
+            for (; j < eu.size() && d > 0; ++j) {
+                char cc = eu[j];
+                if (cc == '\'') { in_s = !in_s; continue; }
+                if (in_s) continue;
+                if (cc == '(') ++d;
+                else if (cc == ')') --d;
             }
-            break;
+            /* j is now one past the closing ')'; it must be at end of string */
+            if (d == 0 && j == eu.size()) {
+                a.func = funcs[i];
+                a.arg = qry_trim(e_orig.substr(prefix.size(), e_orig.size() - prefix.size() - 1));
+                /* Strip DISTINCT prefix */
+                std::string arg_upper = qry_upper(a.arg);
+                if (arg_upper.size() > 9 && arg_upper.substr(0, 9) == "DISTINCT ") {
+                    a.distinct = true;
+                    a.arg = qry_trim(a.arg.substr(9));
+                }
+                break;
+            }
         }
     }
     /* GROUP_CONCAT(expr) or GROUP_CONCAT(expr, sep) */
@@ -1784,6 +1808,36 @@ static AggState make_agg(const std::string &expr) {
         }
     }
     return a;
+}
+
+/* Extract top-level aggregate sub-expressions from a compound expression.
+ * E.g. "SUM(i) + SUM(r)" → ["SUM(i)", "SUM(r)"] */
+static std::vector<std::string> extract_agg_subexprs(const std::string &expr) {
+    std::vector<std::string> result;
+    std::string eu = qry_upper(expr);
+    static const char *agg_names[] = {"COUNT", "SUM", "AVG", "MIN", "MAX", "GROUP_CONCAT", nullptr};
+    bool in_str = false;
+    for (size_t i = 0; i < eu.size(); ++i) {
+        char c = eu[i];
+        if (c == '\'') { in_str = !in_str; continue; }
+        if (in_str || !isalpha((unsigned char)c)) continue;
+        for (const char **fn = agg_names; *fn; ++fn) {
+            size_t fnlen = strlen(*fn);
+            if (i + fnlen + 1 <= eu.size() && eu.substr(i, fnlen) == std::string(*fn) && eu[i+fnlen] == '(') {
+                size_t j = i + fnlen + 1; /* skip past '(' */
+                int d = 1;
+                while (j < eu.size() && d > 0) {
+                    if (eu[j] == '(') ++d;
+                    else if (eu[j] == ')') --d;
+                    ++j;
+                }
+                result.push_back(expr.substr(i, j - i));
+                i = j - 1;
+                break;
+            }
+        }
+    }
+    return result;
 }
 
 static void agg_accumulate(AggState &a, const Row &row,
@@ -2439,16 +2493,44 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     }
 
     if (has_agg && group_cols.empty()) {
-        /* Single-group aggregate (e.g. SELECT COUNT(*), SUM(x)) */
+        /* Single-group aggregate (e.g. SELECT COUNT(*), SUM(x), SUM(i)+SUM(r)) */
         std::vector<AggState> aggs;
-        for (const auto &c : (star ? std::vector<std::string>{"*"} : sel_cols))
+        const std::vector<std::string> &agg_src = star ? std::vector<std::string>{"*"} : sel_cols;
+        for (const auto &c : agg_src)
             aggs.push_back(make_agg(c));
+        /* Also collect sub-aggregates for compound expressions */
+        std::vector<std::string> extra_agg_exprs; /* sub-expr strings */
+        std::vector<AggState>   extra_aggs;
+        if (!star) {
+            for (size_t i = 0; i < sel_cols.size(); ++i) {
+                if (aggs[i].func.empty() && is_agg_expr(sel_cols[i])) {
+                    for (const auto &s : extract_agg_subexprs(sel_cols[i])) {
+                        extra_agg_exprs.push_back(s);
+                        extra_aggs.push_back(make_agg(s));
+                    }
+                }
+            }
+        }
         for (const auto &row : all_rows) {
             if (!qry_eval_where(row, merged_col_order, where_txt)) continue;
             for (auto &a : aggs) agg_accumulate(a, row, merged_col_order);
+            for (auto &a : extra_aggs) agg_accumulate(a, row, merged_col_order);
         }
+        /* Build virtual row for sub-agg results used by compound expressions */
+        Row agg_virtual_row;
+        for (size_t j = 0; j < extra_agg_exprs.size(); ++j)
+            agg_virtual_row[extra_agg_exprs[j]] = agg_result(extra_aggs[j]);
         std::vector<SvdbVal> res_row;
-        for (auto &a : aggs) res_row.push_back(agg_result(a));
+        for (size_t i = 0; i < aggs.size(); ++i) {
+            if (!aggs[i].func.empty()) {
+                res_row.push_back(agg_result(aggs[i]));
+            } else if (!star && is_agg_expr(sel_cols[i])) {
+                /* Compound aggregate expression: evaluate against virtual row */
+                res_row.push_back(eval_expr(sel_cols[i], agg_virtual_row, {}));
+            } else {
+                res_row.push_back(agg_result(aggs[i]));
+            }
+        }
         r->rows.push_back(res_row);
         *rows_out = r; return SVDB_OK;
     }
@@ -3152,6 +3234,24 @@ svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
             }
         }
         return SVDB_OK;
+    }
+    /* Only SELECT and WITH (CTE) statements produce rows; for DML/DDL,
+     * execute via svdb_exec and return an empty result (matching SQLite behavior
+     * when Query() is called with a non-SELECT statement). */
+    {
+        const char *non_select[] = {"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", nullptr};
+        std::string s_upper = qry_upper(s.size() >= 7 ? s.substr(0, 7) : s);
+        for (const char **ns = non_select; *ns; ++ns) {
+            size_t klen = strlen(*ns);
+            if (s.size() >= klen && qry_upper(s.substr(0, klen)) == std::string(*ns)) {
+                /* Execute via exec path and return empty rows */
+                svdb_result_t res{};
+                svdb_exec(db, s.c_str(), &res);
+                *rows = new (std::nothrow) svdb_rows_t();
+                return (*rows) ? SVDB_OK : SVDB_NOMEM;
+            }
+        }
+        (void)s_upper;
     }
     return svdb_query_internal(db, s, rows);
 }
