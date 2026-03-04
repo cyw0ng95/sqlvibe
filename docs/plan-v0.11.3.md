@@ -1,111 +1,105 @@
-# sqlvibe v0.11.3 — Complete C++ Migration Plan
+# sqlvibe v0.11.3 — Aggressive C++ Migration Plan
 
 **Date**: 2026-03-22
 **Target Version**: v0.11.3
-**Status**: Planning
+**Status**: Architectural Redesign
 
 ---
 
 ## Executive Summary
 
-This plan outlines the aggressive migration to achieve **C++-only core** with minimal Go wrappers (~500 LOC target) for v0.11.3. Building on v0.11.2's 89% Go reduction (21,900 → 2,500 LOC), v0.11.3 targets an additional 80% reduction (2,500 → 500 LOC).
+This plan proposes **fundamental architectural changes** to enable true C++-only core with ~500 LOC Go wrappers. The current v0.11.2 architecture has inherent limitations (callbacks, Go-owned I/O, bidirectional CGO) that prevent further reduction.
 
-### Goals
-
-1. **C++-Only Core**: All business logic in C++, Go is pure type mapping
-2. **Eliminate Callbacks**: Remove Go→C++→Go callback pattern
-3. **Pure C++ Components**: Self-contained C++ with no Go dependencies
-4. **Thin Go Wrappers**: ~500 LOC of pure type conversion (no logic)
-5. **Zero Performance Regression**: Maintain or improve v0.11.2 benchmarks
-
-### Current State (v0.11.2)
-
-| Component | Go LOC | C++ LOC | Can Migrate? | Blocker |
-|-----------|--------|---------|--------------|---------|
-| **VM** | 500 | 2,000 | ✅ Already thin | None |
-| **DS** | 1,000 | 5,000 | ⚠️ Partially | Callbacks |
-| **QP** | 400 | 2,300 | ⚠️ Partially | AST types |
-| **CG** | 400 | 1,600 | ⚠️ Partially | Orchestration |
-| **TM** | 250 | 800 | ⚠️ Partially | Lock integration |
-| **IS** | 200 | 500 | ✅ Already thin | None |
-| **PB** | 200 | 500 | ⚠️ Partially | VFS interface |
-| **SF** | 200 | 500 | ✅ Already thin | None |
-| **Total** | **~2,500** | **~15,000** | **~1,500 LOC** | **Callbacks** |
-
-**Target for v0.11.3**: ~500 LOC Go wrappers (80% additional reduction)
-
----
-
-## Architecture
-
-### Target Architecture v0.11.3
+### The Problem: v0.11.2 Architecture Limitations
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │              Go Application (pkg/sqlvibe)               │
-│  - Database.Open(), Query(), Exec()                    │
-│  - Rows.Next(), Scan()                                  │
-│  - Stmt.Prepare(), Exec(), Query()                      │
-│  (~800 LOC - Public API only)                           │
 └─────────────────────────────────────────────────────────┘
                           ↓
 ┌─────────────────────────────────────────────────────────┐
-│          Go CGO Wrappers (internal/)                    │
-│  - Type conversions ONLY (no logic)                     │
-│  - Pure data structures                                 │
-│  - No callbacks, no business logic                      │
-│  (~500 LOC total)                                       │
+│          Go CGO Wrappers (internal/) ~2,500 LOC         │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │  Go Business Logic (BTree, HybridStore, etc.)   │    │
+│  │  ↓ CGO callback (Go→C++)                         │    │
+│  │  C++ Component (PageManager, etc.)              │    │
+│  │  ↓ CGO callback (C++→Go) ← PROBLEM              │    │
+│  │  Go callback (page I/O, etc.)                   │    │
+│  └─────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────┘
-                          ↓ CGO (one-way, ~5ns)
+```
+
+**Issues**:
+1. **Bidirectional CGO**: Go→C++→Go round-trips (high overhead)
+2. **Go owns I/O**: C++ can't do direct file I/O
+3. **Go business logic**: BTree, HybridStore logic in Go
+4. **Memory management**: Go GC manages C++ memory
+
+**Result**: Cannot reduce below ~2,500 LOC Go
+
+---
+
+## Proposed Architecture: v0.11.3
+
+### Core Principle: C++ Owns Everything
+
+```
 ┌─────────────────────────────────────────────────────────┐
-│           C++ Core Engine (src/core/)                   │
-│  ┌──────────┬──────────┬──────────┬──────────┐         │
-│  │    DS    │    VM    │    QP    │    CG    │         │
-│  │  6000    │  2000    │  3000    │  2000    │         │
-│  │   LOC    │   LOC    │   LOC    │   LOC    │         │
-│  └──────────┴──────────┴──────────┴──────────┘         │
-│  ┌──────────┬──────────┬──────────┬──────────┐         │
-│  │    TM    │    PB    │    IS    │    SF    │         │
-│  │  1500    │  800     │   500    │   500    │         │
-│  │   LOC    │   LOC    │   LOC    │   LOC    │         │
-│  └──────────┴──────────┴──────────┴──────────┘         │
+│              Go Application (pkg/sqlvibe)               │
+│  - Pure API layer (Open, Query, Exec, etc.)            │
+│  - NO business logic                                    │
+│  - NO callbacks                                         │
+│  (~800 LOC)                                             │
+└─────────────────────────────────────────────────────────┘
+                          ↓ One-way CGO (~5ns)
+┌─────────────────────────────────────────────────────────┐
+│          Go Type Wrappers (internal/) ~500 LOC          │
+│  - Pure type conversions (Go Value ↔ C++ Value)        │
+│  - NO business logic                                    │
+│  - NO callbacks                                         │
+└─────────────────────────────────────────────────────────┘
+                          ↓ One-way CGO (~5ns)
+┌─────────────────────────────────────────────────────────┐
+│           C++ Core Engine (src/core/) ~20,000 LOC       │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │  C++ Storage Layer (owns ALL I/O)               │   │
+│  │  - PageManager (direct file I/O)                │   │
+│  │  - BTree (uses C++ PageManager)                 │   │
+│  │  - HybridStore (orchestrates C++ components)    │   │
+│  │  - Cache, WAL, Compression (all C++)            │   │
+│  └─────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │  C++ Query Layer (owns ALL execution)           │   │
+│  │  - Tokenizer, Parser (pure C++)                 │   │
+│  │  - Compiler (pure C++)                          │   │
+│  │  - VM (pure C++)                                │   │
+│  │  - Optimizer (pure C++)                         │   │
+│  └─────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │  C++ Transaction Layer (owns ALL txn logic)     │   │
+│  │  - TransactionManager (pure C++)                │   │
+│  │  - LockManager (pure C++)                       │   │
+│  │  - MVCC (pure C++)                              │   │
+│  └─────────────────────────────────────────────────┘   │
 │                                                         │
-│  Total: ~17,000 LOC C++ (self-contained, no callbacks) │
+│  Total: ~20,000 LOC C++ (self-contained, NO callbacks) │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ### Key Architectural Changes
 
-1. **Eliminate Callbacks**: C++ components own their I/O
-   - C++ PageManager with direct file I/O (no Go callbacks)
-   - C++ BTree uses C++ PageManager directly
-   - No Go→C++→Go round-trips
+#### 1. C++ Owns File I/O
 
-2. **Pure C++ Business Logic**: All logic in C++
-   - Go wrappers do type conversion ONLY
-   - No business logic in Go
-   - No decision-making in Go
+**Current**: Go PageManager does file I/O, C++ calls back to Go
 
-3. **One-Way CGO Calls**: Go calls C++, never vice versa
-   - Simplifies memory management
-   - Reduces CGO overhead
-   - Enables better optimization
-
----
-
-## Phase 1: Eliminate Callbacks (Week 1-2)
-
-### 1.1 C++ PageManager with Direct I/O
-
-**Current Issue**: C++ BTree uses Go PageManager via callbacks
-
-**Solution**: Create self-contained C++ PageManager
+**New**: C++ PageManager does direct file I/O
 
 ```cpp
 // src/core/DS/page_manager_v2.h
 class PageManagerV2 {
 public:
-    PageManagerV2(const std::string& db_path, uint32_t page_size);
+    // Constructor opens file directly
+    explicit PageManagerV2(const std::string& db_path, uint32_t page_size);
     
     // Direct I/O - no callbacks
     Page ReadPage(uint32_t page_num);
@@ -113,269 +107,403 @@ public:
     uint32_t AllocatePage();
     void FreePage(uint32_t page_num);
     
+    // Direct file sync
+    void Sync();
+    
 private:
     std::string db_path_;
-    std::fstream file_;
+    std::fstream file_;  // C++ owns file handle
     LRUCache page_cache_;
     FreeList free_list_;
+    std::mutex mutex_;
 };
 ```
 
-**Go Wrapper** (thin, no callbacks):
+**Go Wrapper** (no callbacks, pure type conversion):
 ```go
 // internal/DS/page_manager_v2_cgo.go
 type CppPageManager struct {
-    ptr unsafe.Pointer
+    ptr unsafe.Pointer  // *C.svdb_page_manager_v2_t
 }
 
 func NewCppPageManager(path string, pageSize uint32) *CppPageManager {
-    // Direct C++ call, no callbacks
+    cPath := C.CString(path)
+    defer C.free(unsafe.Pointer(cPath))
+    ptr := C.svdb_page_manager_v2_create(cPath, C.uint32_t(pageSize))
+    return &CppPageManager{ptr: unsafe.Pointer(ptr)}
 }
 
 func (pm *CppPageManager) ReadPage(pageNum uint32) *Page {
     // Direct C++ call, returns Page struct
+    cPage := C.svdb_page_manager_v2_read_page(
+        (*C.svdb_page_manager_v2_t)(pm.ptr),
+        C.uint32_t(pageNum),
+    )
+    return cPageToGo(cPage)  // Pure type conversion
 }
 ```
 
-**Files to Create**:
-- `src/core/DS/page_manager_v2.cpp/h` (500 LOC)
-- `internal/DS/page_manager_v2_cgo.go` (50 LOC)
+#### 2. C++ BTree Uses C++ PageManager
 
-**Files to Remove**:
-- `internal/DS/overflow_cgo.go` (callback exports)
-- `internal/DS/btree_cgo.go` (callback-based)
+**Current**: Go BTree + C++ CBTree (dual implementation with callbacks)
 
-### 1.2 C++ BTree with C++ PageManager
-
-**Current Issue**: Go BTree + C++ CBTree dual implementation
-
-**Solution**: Pure C++ BTree with C++ PageManager
+**New**: Pure C++ BTree with C++ PageManager
 
 ```cpp
 // src/core/DS/btree_v2.h
 class BTreeV2 {
 public:
-    BTreeV2(PageManagerV2* pm, uint32_t root_page, bool is_table);
+    // Takes ownership of PageManager (or reference)
+    BTreeV2(std::shared_ptr<PageManagerV2> pm, 
+            uint32_t root_page, 
+            bool is_table);
     
     std::optional<Value> Search(const Key& key);
     void Insert(const Key& key, const Value& value);
     void Delete(const Key& key);
     
+    uint32_t Depth() const;
+    uint32_t LeafCount() const;
+    
 private:
-    PageManagerV2* pm_;
+    std::shared_ptr<PageManagerV2> pm_;
     uint32_t root_page_;
     bool is_table_;
 };
 ```
 
-**Files to Create**:
-- `src/core/DS/btree_v2.cpp/h` (800 LOC)
-
-**Files to Remove**:
-- `internal/DS/btree.go` (843 LOC) - Go BTree implementation
-- `internal/DS/btree_cgo.go` (200 LOC) - CGO wrapper with callbacks
-
-### 1.3 C++ OverflowManager
-
-**Current Issue**: Go OverflowManager with C++ helpers
-
-**Solution**: Pure C++ OverflowManager
-
-**Files to Create**:
-- `src/core/DS/overflow_manager_v2.cpp/h` (300 LOC)
-
-**Files to Remove**:
-- `internal/DS/overflow.go` (250 LOC)
-- `internal/DS/overflow_cgo.go` (280 LOC)
-
----
-
-## Phase 2: Migrate Remaining Business Logic (Week 3-4)
-
-### 2.1 C++ IndexEngine (Complete)
-
-**Current State**: Go IndexEngine with C++ helpers
-
-**Solution**: Pure C++ IndexEngine
-
-**Files to Create**:
-- `src/core/DS/index_engine_v2.cpp/h` (400 LOC)
-
-**Files to Remove**:
-- `internal/DS/index_engine.go` (200 LOC)
-- `internal/DS/hybrid_store_cgo.go` (IndexEngine parts)
-
-### 2.2 C++ HybridStore (Complete)
-
-**Current State**: Go HybridStore orchestrating C++ components
-
-**Solution**: Pure C++ HybridStore
-
-**Files to Create**:
-- `src/core/DS/hybrid_store_v2.cpp/h` (600 LOC)
-
-**Files to Remove**:
-- `internal/DS/hybrid_store.go` (468 LOC)
-- `internal/DS/row_store_cgo.go` (350 LOC)
-- `internal/DS/column_store_cgo.go` (400 LOC)
-
-### 2.3 C++ Parallel Query Engine
-
-**Current State**: Go parallel query (parallel.go)
-
-**Solution**: C++ parallel query with OpenMP/TBB
-
-**Files to Create**:
-- `src/core/VM/parallel_query.cpp/h` (400 LOC)
-
-**Files to Remove**:
-- `internal/DS/parallel.go` (330 LOC)
-
-### 2.4 C++ MMap Reader
-
-**Current State**: Go mmap (mmap.go)
-
-**Solution**: C++ mmap with platform abstraction
-
-**Files to Create**:
-- `src/core/PB/mmap_reader.cpp/h` (200 LOC)
-
-**Files to Remove**:
-- `internal/DS/mmap.go` (150 LOC)
-
----
-
-## Phase 3: QP/CG/TM Deep Migration (Week 5-6)
-
-### 3.1 QP: Pure C++ Parser/Tokenizer
-
-**Current State**: Go parser with C++ tokenizer
-
-**Solution**: Pure C++ parser with Go type wrapper
-
-**Files to Create**:
-- `src/core/QP/parser_v2.cpp/h` (1000 LOC)
-- `src/core/QP/ast_v2.cpp/h` (500 LOC)
-
-**Files to Remove**:
-- `internal/QP/parser.go` (584 LOC)
-- `internal/QP/parser_*.go` (~1500 LOC total)
-- `internal/QP/tokenizer.go` (795 LOC)
-
-**Go Wrapper** (50 LOC):
+**Go Wrapper** (no callbacks):
 ```go
-// internal/QP/qp_v2_cgo.go
-type ParsedStatement struct {
-    Type StmtType
-    // Pure data, no methods
+// internal/DS/btree_v2_cgo.go
+type CppBTree struct {
+    ptr unsafe.Pointer  // *C.svdb_btree_v2_t
+    pm  *CppPageManager // Keep PageManager alive
 }
 
-func ParseC(sql string) (*ParsedStatement, error) {
-    // Direct C++ call
+func NewCppBTree(pm *CppPageManager, rootPage uint32, isTable bool) *CppBTree {
+    ptr := C.svdb_btree_v2_create(
+        (*C.svdb_page_manager_v2_t)(pm.ptr),
+        C.uint32_t(rootPage),
+        C.int(boolToCInt(isTable)),
+    )
+    return &CppBTree{ptr: unsafe.Pointer(ptr), pm: pm}
+}
+
+func (bt *CppBTree) Search(key []byte) ([]byte, error) {
+    // Direct C++ call, no callbacks
+    var result C.svdb_value_t
+    found := C.svdb_btree_v2_search(
+        (*C.svdb_btree_v2_t)(bt.ptr),
+        (*C.uint8_t)(unsafe.Pointer(&key[0])),
+        C.size_t(len(key)),
+        &result,
+    )
+    if found == 0 {
+        return nil, nil
+    }
+    return cValueToGoBytes(result), nil  // Pure type conversion
 }
 ```
 
-### 3.2 CG: Pure C++ Compiler
+#### 3. C++ Memory Management
 
-**Current State**: Go compiler with C++ optimizer
+**Current**: Go GC manages memory, C++ allocates via Go
 
-**Solution**: Pure C++ compiler
+**New**: C++ arena allocators, Go just holds references
 
-**Files to Create**:
+```cpp
+// src/core/DS/arena_v2.h
+class ArenaV2 {
+public:
+    explicit ArenaV2(size_t chunk_size = 256 * 1024);
+    ~ArenaV2();
+    
+    void* Alloc(size_t size);
+    void Reset();
+    size_t BytesUsed() const;
+    
+private:
+    std::vector<std::unique_ptr<char[]>> chunks_;
+    char* current_;
+    size_t offset_;
+    size_t used_;
+};
+```
+
+**Go Wrapper** (no GC pressure):
+```go
+// internal/DS/arena_v2_cgo.go
+type CppArena struct {
+    ptr unsafe.Pointer  // *C.svdb_arena_v2_t
+}
+
+func NewCppArena(size int) *CppArena {
+    ptr := C.svdb_arena_v2_create(C.size_t(size))
+    return &CppArena{ptr: unsafe.Pointer(ptr)}
+}
+
+func (a *CppArena) Alloc(size int) []byte {
+    // C++ allocates, Go gets slice (no GC)
+    ptr := C.svdb_arena_v2_alloc(
+        (*C.svdb_arena_v2_t)(a.ptr),
+        C.size_t(size),
+    )
+    // Go slice points to C++ memory (valid until Reset/Free)
+    return unsafe.Slice((*byte)(ptr), size)
+}
+
+func (a *CppArena) Reset() {
+    C.svdb_arena_v2_reset((*C.svdb_arena_v2_t)(a.ptr))
+}
+```
+
+#### 4. C++ Query Execution
+
+**Current**: Go QueryEngine orchestrates C++ VM
+
+**New**: Pure C++ query execution
+
+```cpp
+// src/core/VM/query_engine_v2.h
+class QueryEngineV2 {
+public:
+    explicit QueryEngineV2(std::shared_ptr<PageManagerV2> pm);
+    
+    // Execute SQL directly, return results
+    QueryResult Execute(const std::string& sql);
+    
+    // Prepare statement for repeated execution
+    std::shared_ptr<PreparedStatement> Prepare(const std::string& sql);
+    
+private:
+    std::shared_ptr<PageManagerV2> pm_;
+    Tokenizer tokenizer_;
+    Parser parser_;
+    Compiler compiler_;
+    VM vm_;
+};
+
+class QueryResult {
+public:
+    std::vector<std::string> ColumnNames;
+    std::vector<Value> Rows;  // Flat: [row0_col0, row0_col1, row1_col0, ...]
+    int64_t RowsAffected;
+    std::string Error;
+};
+```
+
+**Go Wrapper** (pure API):
+```go
+// internal/VM/query_engine_v2_cgo.go
+type CppQueryEngine struct {
+    ptr unsafe.Pointer  // *C.svdb_query_engine_v2_t
+}
+
+func NewCppQueryEngine(pm *CppPageManager) *CppQueryEngine {
+    ptr := C.svdb_query_engine_v2_create(
+        (*C.svdb_page_manager_v2_t)(pm.ptr),
+    )
+    return &CppQueryEngine{ptr: unsafe.Pointer(ptr)}
+}
+
+func (qe *CppQueryEngine) Execute(sql string) *QueryResult {
+    cSQL := C.CString(sql)
+    defer C.free(unsafe.Pointer(cSQL))
+    
+    cResult := C.svdb_query_engine_v2_execute(
+        (*C.svdb_query_engine_v2_t)(qe.ptr),
+        cSQL,
+    )
+    
+    return cQueryResultToGo(cResult)  // Pure type conversion
+}
+```
+
+#### 5. C++ Transaction Management
+
+**Current**: Go TransactionManager with C++ MVCC helper
+
+**New**: Pure C++ TransactionManager
+
+```cpp
+// src/core/TM/transaction_manager_v2.h
+class TransactionManagerV2 {
+public:
+    explicit TransactionManagerV2(std::shared_ptr<PageManagerV2> pm);
+    
+    std::shared_ptr<Transaction> Begin(TransactionType type);
+    void Commit(std::shared_ptr<Transaction> txn);
+    void Rollback(std::shared_ptr<Transaction> txn);
+    
+    MVCCStore* GetMVCCStore() { return &mvcc_store_; }
+    LockManager* GetLockManager() { return &lock_manager_; }
+    
+private:
+    std::shared_ptr<PageManagerV2> pm_;
+    MVCCStore mvcc_store_;
+    LockManager lock_manager_;
+    std::atomic<uint64_t> next_txn_id_;
+};
+```
+
+**Go Wrapper** (pure API):
+```go
+// internal/TM/transaction_manager_v2_cgo.go
+type CppTransactionManager struct {
+    ptr unsafe.Pointer  // *C.svdb_transaction_manager_v2_t
+}
+
+func NewCppTransactionManager(pm *CppPageManager) *CppTransactionManager {
+    ptr := C.svdb_transaction_manager_v2_create(
+        (*C.svdb_page_manager_v2_t)(pm.ptr),
+    )
+    return &CppTransactionManager{ptr: unsafe.Pointer(ptr)}
+}
+
+func (tm *CppTransactionManager) Begin(txType TransactionType) *CppTransaction {
+    cTxn := C.svdb_transaction_manager_v2_begin(
+        (*C.svdb_transaction_manager_v2_t)(tm.ptr),
+        C.int(txType),
+    )
+    return &CppTransaction{ptr: unsafe.Pointer(cTxn)}
+}
+```
+
+---
+
+## Migration Strategy
+
+### Phase 0: Foundation (Week 0-1)
+
+**Goal**: Create C++ foundation classes
+
+**Deliverables**:
+- `src/core/DS/page_manager_v2.cpp/h` (500 LOC)
+- `src/core/DS/arena_v2.cpp/h` (200 LOC)
+- `src/core/DS/cache_v2.cpp/h` (300 LOC)
+- `src/core/DS/free_list_v2.cpp/h` (200 LOC)
+
+**Tests**: C++ unit tests (GoogleTest)
+
+### Phase 1: Storage Layer (Week 1-3)
+
+**Goal**: Migrate storage layer to C++
+
+**Deliverables**:
+- `src/core/DS/btree_v2.cpp/h` (800 LOC)
+- `src/core/DS/overflow_manager_v2.cpp/h` (300 LOC)
+- `src/core/DS/row_store_v2.cpp/h` (400 LOC)
+- `src/core/DS/column_store_v2.cpp/h` (400 LOC)
+- `src/core/DS/hybrid_store_v2.cpp/h` (600 LOC)
+- `src/core/DS/index_engine_v2.cpp/h` (400 LOC)
+
+**Go Wrappers** (~200 LOC):
+- `internal/DS/page_manager_v2_cgo.go`
+- `internal/DS/btree_v2_cgo.go`
+- `internal/DS/hybrid_store_v2_cgo.go`
+
+**Files to Remove** (~2,500 LOC):
+- `internal/DS/btree.go` (843 LOC)
+- `internal/DS/manager.go` (182 LOC)
+- `internal/DS/hybrid_store.go` (468 LOC)
+- `internal/DS/overflow.go` (250 LOC)
+- `internal/DS/overflow_cgo.go` (280 LOC)
+- `internal/DS/btree_cgo.go` (200 LOC)
+- `internal/DS/row_store_cgo.go` (350 LOC)
+- `internal/DS/column_store_cgo.go` (400 LOC)
+
+### Phase 2: Query Layer (Week 3-5)
+
+**Goal**: Migrate query layer to C++
+
+**Deliverables**:
+- `src/core/QP/tokenizer_v2.cpp/h` (400 LOC)
+- `src/core/QP/parser_v2.cpp/h` (1000 LOC)
+- `src/core/QP/ast_v2.cpp/h` (500 LOC)
 - `src/core/CG/compiler_v2.cpp/h` (800 LOC)
+- `src/core/VM/query_engine_v2.cpp/h` (600 LOC)
 
-**Files to Remove**:
+**Go Wrappers** (~100 LOC):
+- `internal/QP/qp_v2_cgo.go`
+- `internal/CG/cg_v2_cgo.go`
+- `internal/VM/query_engine_v2_cgo.go`
+
+**Files to Remove** (~3,000 LOC):
+- `internal/QP/tokenizer.go` (795 LOC)
+- `internal/QP/parser.go` (584 LOC)
+- `internal/QP/parser_*.go` (~1,000 LOC)
 - `internal/CG/compiler.go` (1315 LOC)
 - `internal/CG/bytecode_compiler.go` (340 LOC)
-- `internal/CG/expr_compiler.go` (300 LOC)
 
-### 3.3 TM: Pure C++ Transaction Manager
+### Phase 3: Transaction Layer (Week 5-6)
 
-**Current State**: Go TransactionManager with C++ MVCC
+**Goal**: Migrate transaction layer to C++
 
-**Solution**: Pure C++ TransactionManager
-
-**Files to Create**:
+**Deliverables**:
 - `src/core/TM/transaction_manager_v2.cpp/h` (600 LOC)
 - `src/core/TM/lock_manager_v2.cpp/h` (400 LOC)
+- `src/core/TM/mvcc_v2.cpp/h` (500 LOC)
 
-**Files to Remove**:
+**Go Wrappers** (~50 LOC):
+- `internal/TM/tm_v2_cgo.go`
+
+**Files to Remove** (~900 LOC):
 - `internal/TM/transaction.go` (404 LOC)
 - `internal/TM/lock.go` (350 LOC)
-- `internal/TM/mvcc.go` (130 LOC) - Go version for tests
+- `internal/TM/mvcc.go` (130 LOC)
+
+### Phase 4: Utilities (Week 6-7)
+
+**Goal**: Migrate utilities to C++
+
+**Deliverables**:
+- `src/core/VM/parallel_query_v2.cpp/h` (400 LOC)
+- `src/core/PB/mmap_reader_v2.cpp/h` (200 LOC)
+- `src/core/DS/compression_v2.cpp/h` (300 LOC)
+
+**Go Wrappers** (~50 LOC):
+- `internal/DS/parallel_v2_cgo.go`
+- `internal/DS/mmap_v2_cgo.go`
+
+**Files to Remove** (~500 LOC):
+- `internal/DS/parallel.go` (330 LOC)
+- `internal/DS/mmap.go` (150 LOC)
+- `internal/DS/compression.go` (partial)
+
+### Phase 5: Cleanup (Week 7-8)
+
+**Goal**: Remove all legacy code, optimize
+
+**Tasks**:
+- Remove all files from Phases 1-4
+- Optimize CGO boundary (batching, zero-copy)
+- Performance validation
+- Documentation update
+
+**Files to Remove** (remaining ~500 LOC):
+- Various utility files
+- Test utilities
+- Deprecated wrappers
 
 ---
 
-## Phase 4: Cleanup & Optimization (Week 7-8)
+## Risk Analysis
 
-### 4.1 Remove Legacy Files
+### Critical Risks
 
-**Files to Remove** (estimated 1,500 LOC):
+| Risk | Probability | Impact | Mitigation |
+|------|-------------|--------|------------|
+| C++ file I/O bugs | Medium | High | Extensive unit tests, fuzzing, integration tests |
+| Memory leaks in C++ | Medium | High | RAII, smart pointers, valgrind, ASan |
+| Callback elimination breaks BTree | High | High | Keep Go BTree as fallback for 2 weeks |
+| CGO overhead increases | Low | Medium | Profile hot paths, batch operations |
 
-| File | LOC | Reason |
-|------|-----|--------|
-| `internal/DS/btree.go` | 843 | Replaced by C++ BTreeV2 |
-| `internal/DS/manager.go` | 182 | Replaced by C++ PageManagerV2 |
-| `internal/DS/hybrid_store.go` | 468 | Replaced by C++ HybridStoreV2 |
-| `internal/DS/overflow.go` | 250 | Replaced by C++ OverflowManagerV2 |
-| `internal/DS/overflow_cgo.go` | 280 | Callbacks eliminated |
-| `internal/DS/btree_cgo.go` | 200 | Callbacks eliminated |
-| `internal/QP/parser.go` | 584 | Replaced by C++ parser |
-| `internal/QP/tokenizer.go` | 795 | Replaced by C++ tokenizer |
-| `internal/CG/compiler.go` | 1315 | Replaced by C++ compiler |
-| `internal/TM/transaction.go` | 404 | Replaced by C++ TM |
-| **Total** | **~5,000** | |
+### Mitigation Strategy
 
-### 4.2 Optimize CGO Boundary
-
-**Goals**:
-- Batch operations to reduce CGO calls
-- Zero-copy where possible
-- <5ns CGO overhead
-
-**Techniques**:
-- Use `runtime.Pinner` for zero-copy
-- Batch multiple operations per CGO call
-- Pre-allocate C++ objects
-
-### 4.3 Performance Validation
-
-**Benchmarks to Run**:
-- All v0.11.2 benchmarks (must not regress)
-- New CGO overhead benchmarks
-- Memory allocation benchmarks
-
-**Targets**:
-- No benchmark regression >5%
-- CGO overhead <10ns per call
-- Zero-GC for simple queries
-
----
-
-## Risk Mitigation
-
-### High Risk
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Callback elimination breaks BTree | High | Keep Go BTree as fallback initially |
-| C++ PageManager I/O bugs | High | Extensive unit tests, fuzzing |
-| Memory management issues | High | RAII, smart pointers, valgrind |
-
-### Medium Risk
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| AST type mismatches | Medium | Keep Go AST as pure data structs |
-| CGO call overhead increase | Medium | Batch operations, profile hot paths |
-| Test coverage gaps | Medium | Port critical tests to C++ GoogleTest |
-
-### Low Risk
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Build complexity | Low | CMake already working, document well |
-| Documentation gaps | Low | Update docs as we migrate |
+1. **Parallel Implementation**: Keep v0.11.2 code as fallback during migration
+2. **Gradual Rollout**: Migrate one component at a time
+3. **Extensive Testing**: C++ unit tests + Go integration tests
+4. **Performance Monitoring**: Benchmark after each phase
 
 ---
 
@@ -385,15 +513,15 @@ func ParseC(sql string) (*ParsedStatement, error) {
 
 - [ ] All v0.11.2 tests passing
 - [ ] All SQL:1999 test suites passing
-- [ ] No callback-based code in C++
+- [ ] Zero callback-based code
 - [ ] All Go wrappers <500 LOC total
 
 ### Performance
 
 - [ ] No benchmark regression >5%
-- [ ] CGO overhead <10ns per call
+- [ ] CGO overhead <5ns per call (down from ~10ns)
 - [ ] Zero-GC for simple queries
-- [ ] 10% improvement on 5+ key benchmarks
+- [ ] 20% improvement on 5+ key benchmarks
 
 ### Code Quality
 
@@ -401,20 +529,6 @@ func ParseC(sql string) (*ParsedStatement, error) {
 - [ ] All C++ code follows style guide
 - [ ] Go wrappers <500 LOC total
 - [ ] Documentation updated
-
----
-
-## Timeline Summary
-
-| Phase | Component | Start | End | Duration |
-|-------|-----------|-------|-----|----------|
-| **Phase 1** | Eliminate Callbacks | 2026-03-25 | 2026-04-07 | 2 weeks |
-| **Phase 2** | Business Logic | 2026-04-08 | 2026-04-21 | 2 weeks |
-| **Phase 3** | QP/CG/TM Deep | 2026-04-22 | 2026-05-05 | 2 weeks |
-| **Phase 4** | Cleanup | 2026-05-06 | 2026-05-19 | 2 weeks |
-
-**Total Duration**: 8 weeks
-**Completion Target**: 2026-05-19
 
 ---
 
@@ -438,19 +552,35 @@ func ParseC(sql string) (*ParsedStatement, error) {
 
 | Layer | Go LOC | C++ LOC | Total | Reduction |
 |-------|--------|---------|-------|-----------|
-| VM | 50 | 2,000 | 2,050 | 90% |
-| DS | 100 | 6,000 | 6,100 | 90% |
-| QP | 50 | 3,000 | 3,050 | 87% |
+| VM | 50 | 2,500 | 2,550 | 90% |
+| DS | 100 | 7,000 | 7,100 | 90% |
+| QP | 50 | 3,500 | 3,550 | 87% |
 | CG | 50 | 2,500 | 2,550 | 87% |
 | TM | 50 | 1,500 | 1,550 | 80% |
 | IS | 50 | 500 | 550 | 75% |
 | PB | 50 | 800 | 850 | 75% |
 | SF | 50 | 500 | 550 | 75% |
-| **Total** | **~500** | **~17,000** | **~17,500** | **80%** |
+| **Total** | **~500** | **~20,000** | **~20,500** | **80%** |
 
 **Go Code Reduction**: 2,500 LOC → 500 LOC (**80% additional reduction**)
 
 **Cumulative Reduction** (v0.10.x → v0.11.3): 21,900 LOC → 500 LOC (**98% reduction**)
+
+---
+
+## Timeline Summary
+
+| Phase | Component | Start | End | Duration |
+|-------|-----------|-------|-----|----------|
+| **Phase 0** | Foundation | 2026-03-25 | 2026-04-01 | 1 week |
+| **Phase 1** | Storage Layer | 2026-04-02 | 2026-04-15 | 2 weeks |
+| **Phase 2** | Query Layer | 2026-04-16 | 2026-04-29 | 2 weeks |
+| **Phase 3** | Transaction Layer | 2026-04-30 | 2026-05-13 | 2 weeks |
+| **Phase 4** | Utilities | 2026-05-14 | 2026-05-20 | 1 week |
+| **Phase 5** | Cleanup | 2026-05-21 | 2026-05-27 | 1 week |
+
+**Total Duration**: 9 weeks
+**Completion Target**: 2026-05-27
 
 ---
 
@@ -459,28 +589,22 @@ func ParseC(sql string) (*ParsedStatement, error) {
 ### Immediate (Week of 2026-03-25)
 
 1. [ ] Create `src/core/DS/page_manager_v2.cpp/h`
-2. [ ] Create `src/core/DS/btree_v2.cpp/h`
-3. [ ] Create `internal/DS/page_manager_v2_cgo.go`
-4. [ ] Write C++ unit tests for PageManagerV2
-5. [ ] Write C++ unit tests for BTreeV2
+2. [ ] Create `src/core/DS/arena_v2.cpp/h`
+3. [ ] Create `src/core/DS/cache_v2.cpp/h`
+4. [ ] Create `src/core/DS/free_list_v2.cpp/h`
+5. [ ] Write C++ unit tests for all foundation classes
+6. [ ] Set up GoogleTest framework
 
 ### Week of 2026-04-01
 
-1. [ ] Migrate HybridStore to C++
-2. [ ] Migrate OverflowManager to C++
-3. [ ] Eliminate callback exports
-4. [ ] Update all DS imports
-
-### Week of 2026-04-08
-
-1. [ ] Start QP parser migration
-2. [ ] Start CG compiler migration
-3. [ ] Start TM migration
-4. [ ] Write migration tests
+1. [ ] Create `src/core/DS/btree_v2.cpp/h`
+2. [ ] Create `internal/DS/btree_v2_cgo.go`
+3. [ ] Migrate BTree tests to C++
+4. [ ] Keep Go BTree as fallback
 
 ---
 
-**Document Version**: 1.0
+**Document Version**: 2.0 (Architectural Redesign)
 **Created**: 2026-03-22
 **Maintainer**: sqlvibe team
-**Next Review**: 2026-03-29
+**Next Review**: 2026-03-25
