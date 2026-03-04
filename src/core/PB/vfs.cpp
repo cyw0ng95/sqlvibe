@@ -74,7 +74,8 @@ int64_t VFSFile::WriteAt(const uint8_t* data, int64_t len, int64_t offset) {
     if (!stream_.good()) {
         return -1;
     }
-    
+    stream_.flush();
+
     int64_t new_pos = offset + len;
     if (new_pos > cached_size_) {
         cached_size_ = new_pos;

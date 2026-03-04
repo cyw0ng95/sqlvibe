@@ -3194,7 +3194,7 @@ extern "C" {
 
 svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
     if (!db || !sql || !rows) return SVDB_ERR;
-    std::lock_guard<std::mutex> lk(db->mu);
+    std::unique_lock<std::mutex> lk(db->mu);
     db->last_error.clear();
     /* Dispatch PRAGMA to dedicated handler */
     std::string s = qry_trim(std::string(sql));
@@ -3237,21 +3237,22 @@ svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
     }
     /* Only SELECT and WITH (CTE) statements produce rows; for DML/DDL,
      * execute via svdb_exec and return an empty result (matching SQLite behavior
-     * when Query() is called with a non-SELECT statement). */
+     * when Query() is called with a non-SELECT statement).
+     * IMPORTANT: Release our lock before calling svdb_exec which acquires the
+     * same mutex (std::mutex is non-recursive; holding it here would deadlock). */
     {
         const char *non_select[] = {"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", nullptr};
-        std::string s_upper = qry_upper(s.size() >= 7 ? s.substr(0, 7) : s);
         for (const char **ns = non_select; *ns; ++ns) {
             size_t klen = strlen(*ns);
             if (s.size() >= klen && qry_upper(s.substr(0, klen)) == std::string(*ns)) {
-                /* Execute via exec path and return empty rows */
+                /* Release lock before calling svdb_exec to avoid re-entrant deadlock */
+                lk.unlock();
                 svdb_result_t res{};
                 svdb_exec(db, s.c_str(), &res);
                 *rows = new (std::nothrow) svdb_rows_t();
                 return (*rows) ? SVDB_OK : SVDB_NOMEM;
             }
         }
-        (void)s_upper;
     }
     return svdb_query_internal(db, s, rows);
 }

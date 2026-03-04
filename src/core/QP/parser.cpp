@@ -167,7 +167,7 @@ static std::string read_value(const std::string& sql, size_t& pos) {
             return kw;
         }
     }
-    /* Expression: read until ',' or ')' or end */
+    /* Expression: read until ',' or ')' or top-level SQL keyword or end */
     size_t start = pos;
     int depth = 0;
     while (pos < sql.size()) {
@@ -176,7 +176,17 @@ static std::string read_value(const std::string& sql, size_t& pos) {
             if (depth == 0) break;
             --depth; ++pos;
         } else if (sql[pos] == ',' && depth == 0) break;
-        else ++pos;
+        else if (depth == 0 && isalpha((unsigned char)sql[pos])) {
+            /* Stop at top-level SQL clause keywords */
+            size_t tmp = pos;
+            std::string kw2 = read_keyword(sql, tmp);
+            if (kw2 == "WHERE" || kw2 == "ORDER" || kw2 == "GROUP" ||
+                kw2 == "LIMIT" || kw2 == "HAVING" || kw2 == "UNION" ||
+                kw2 == "INTERSECT" || kw2 == "EXCEPT" || kw2 == "RETURNING") {
+                break;
+            }
+            pos = tmp; /* advance past the non-keyword identifier */
+        } else ++pos;
     }
     std::string v = sql.substr(start, pos - start);
     /* Trim trailing whitespace */
