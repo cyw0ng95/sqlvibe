@@ -1,24 +1,14 @@
+// Package DS - minimal OverflowManager for C++ wrapper compatibility
 package DS
 
-import (
-	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
-)
-
-// Overflow page format:
-// - First 4 bytes: Next overflow page number (0 if last)
-// - Remaining bytes: Payload data
-
-const (
-	OverflowPageHeaderSize = 4
-)
-
-// OverflowManager handles overflow page operations
+// OverflowManager handles overflow page operations.
+// This is a minimal stub for C++ wrapper compatibility.
+// The actual overflow handling is done in C++.
 type OverflowManager struct {
 	pm PageManagerInterface
 }
 
-// NewOverflowManager creates a new overflow manager
+// NewOverflowManager creates a new overflow manager.
 func NewOverflowManager(pm PageManagerInterface) *OverflowManager {
-	util.AssertNotNil(pm, "PageManager")
 	return &OverflowManager{pm: pm}
 }

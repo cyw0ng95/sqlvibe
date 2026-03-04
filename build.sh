@@ -5,7 +5,7 @@
 #   ./build.sh [options]
 #
 # Options:
-#   -t              Run unit tests
+#   -t              Run unit tests + SQL:1999 + SQL Logic + SQL Validator + Regression
 #   -b              Run benchmarks
 #   -f              Run fuzz testing (seed-corpus run, not continuous fuzzing)
 #   -c              Collect coverage — works with -t and/or -b; generates
@@ -15,7 +15,7 @@
 #   -h              Print this help message
 #
 # Output directory:  <project-root>/.build/
-#   .build/test.log          — unit-test output
+#   .build/test.log          — unit-test output (includes SQL:1999/Logic/Validator/Regression)
 #   .build/bench.log         — benchmark output
 #   .build/fuzz/<name>.log   — per-target fuzz output
 #   .build/coverage.out      — merged coverage profile (when -c is used)
@@ -23,7 +23,7 @@
 #
 # Examples:
 #   ./build.sh                # build with CGO (default)
-#   ./build.sh -t             # run all unit tests
+#   ./build.sh -t             # run all unit tests + SQL compliance tests + Regression
 #   ./build.sh -t -c          # run tests and generate coverage report
 #   ./build.sh -b             # run all benchmarks
 #   ./build.sh -t -b -c       # tests + benchmarks + merged coverage
@@ -32,6 +32,12 @@
 #   ./build.sh -t -b -f -c    # everything
 #
 # Note: CGO is always enabled. C++ libraries are built automatically.
+# Test suites included with -t:
+#   - Unit tests (internal packages)
+#   - SQL:1999 compliance tests (tests/SQL1999/)
+#   - SQL Logic tests (tests/SQLLogic/)
+#   - SQL Validator tests (tests/SQLValidator/)
+#   - Regression tests (tests/Regression/)
 
 set -euo pipefail
 
@@ -185,6 +191,42 @@ if [[ $RUN_TESTS -eq 1 ]]; then
             $TEST_PKGS 2>&1 | tee "$BUILD_DIR/test.log" || true
     fi
     echo "====> Unit tests complete. Log: $BUILD_DIR/test.log"
+    
+    # ----- SQL:1999 Compliance Tests ------------------------------------------
+    echo ""
+    echo "====> Running SQL:1999 compliance tests..."
+    export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
+    env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
+        ${VERBOSE_FLAG} \
+        ./tests/SQL1999/... 2>&1 | tee -a "$BUILD_DIR/test.log" || true
+    echo "====> SQL:1999 tests complete."
+    
+    # ----- SQL Logic Tests ----------------------------------------------------
+    echo ""
+    echo "====> Running SQL Logic tests..."
+    export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
+    env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
+        ${VERBOSE_FLAG} \
+        ./tests/SQLLogic/... 2>&1 | tee -a "$BUILD_DIR/test.log" || true
+    echo "====> SQL Logic tests complete."
+    
+    # ----- SQL Validator Tests ------------------------------------------------
+    echo ""
+    echo "====> Running SQL Validator tests..."
+    export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
+    env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
+        ${VERBOSE_FLAG} \
+        ./tests/SQLValidator/... 2>&1 | tee -a "$BUILD_DIR/test.log" || true
+    echo "====> SQL Validator tests complete."
+    
+    # ----- Regression Tests ---------------------------------------------------
+    echo ""
+    echo "====> Running Regression tests..."
+    export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
+    env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
+        ${VERBOSE_FLAG} \
+        ./tests/Regression/... 2>&1 | tee -a "$BUILD_DIR/test.log" || true
+    echo "====> Regression tests complete."
 fi
 
 # ----- benchmarks -------------------------------------------------------------
@@ -268,4 +310,10 @@ if [[ $COVERAGE -eq 1 && ${#COVER_PROFILES[@]} -gt 0 ]]; then
 fi
 
 echo ""
+echo "====> Test Summary:"
+echo "     - Unit tests: internal packages"
+echo "     - SQL:1999:   tests/SQL1999/"
+echo "     - SQL Logic:  tests/SQLLogic/"
+echo "     - Validator:  tests/SQLValidator/"
+echo "     - Regression: tests/Regression/"
 echo "====> Done. All output under: $BUILD_DIR/"

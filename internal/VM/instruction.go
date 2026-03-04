@@ -1,68 +1,114 @@
+// Package VM - minimal Instruction and VM types for C++ wrapper compatibility
 package VM
 
-/*
-#cgo LDFLAGS: -L${SRCDIR}/../../.build/cmake/lib -lsvdb -lstdc++
-#cgo CFLAGS: -I${SRCDIR}/../../src/core/VM
-#include "instruction.h"
-*/
-import "C"
-
+// Instruction represents a VM instruction.
+// This is a minimal type definition for C++ wrapper compatibility.
+// The actual instruction handling is done in C++.
 type Instruction struct {
-	Op     OpCode
-	P1     int32
-	P2     int32
-	P3     string
-	P4     interface{}
-	DstReg int  // pre-extracted destination register (valid when HasDst is true)
-	HasDst bool // true when P4 is an int destination register, cached to avoid type assertion
+	Op     uint16      // Opcode
+	Fl     uint16      // Flags
+	A      int32       // Operand A (alias for P1)
+	B      int32       // Operand B (alias for P2)
+	C      int32       // Operand C (alias for P3)
+	P1     int32       // Operand P1
+	P2     int32       // Operand P2
+	P3     int32       // Operand P3
+	P4     interface{} // Operand P4 (can be int, string, etc.)
+	P5     int32       // Operand P5
+	HasDst bool        // Whether instruction has destination register
+	DstReg int         // Destination register index
 }
 
-func NewInstruction(op OpCode) Instruction {
-	return Instruction{Op: op}
+// VM opcodes (minimal set for wrapper compatibility)
+const (
+	OpNull uint16 = iota
+	OpConstNull
+	OpMove
+	OpCopy
+	OpSCopy
+	OpIntCopy
+	OpIfNull
+	OpIfNull2
+	OpNotNull
+	OpIsNull
+	OpEq
+	OpNe
+	OpLt
+	OpLe
+	OpGt
+	OpGe
+	OpIs
+	OpIsNot
+	OpAdd
+	OpSubtract
+	OpMultiply
+	OpDivide
+	OpRemainder
+	OpMod
+	OpAddImm
+	OpBitAnd
+	OpBitOr
+	OpShiftLeft
+	OpShiftRight
+	OpConcat
+	OpLength
+	OpUpper
+	OpLower
+	OpTrim
+	OpLTrim
+	OpRTrim
+	OpInstr
+	OpLike
+	OpNotLike
+	OpGlob
+	OpMatch
+	OpAbs
+	OpRound
+	OpCeil
+	OpCeiling
+	OpFloor
+	OpSqrt
+	OpPow
+	OpExp
+	OpLog
+	OpLog10
+	OpLn
+	OpSin
+	OpCos
+	OpTan
+	OpAsin
+	OpAcos
+	OpAtan
+	OpAtan2
+	OpSinh
+	OpCosh
+	OpTanh
+	OpDegToRad
+	OpRadToDeg
+	OpToText
+	OpToNumeric
+	OpToInt
+	OpToReal
+	OpRealToInt
+	OpTypeof
+	OpGoto
+	OpGosub
+	OpReturn
+	OpInit
+	OpHalt
+	OpNoop
+	OpIf
+	OpIfNot
+)
+
+// VM represents the virtual machine.
+// This is a minimal type definition for C++ wrapper compatibility.
+// The actual VM implementation is in C++.
+type VM struct {
+	registers []interface{}
+	program   *Program // Program pointer
+	pc        int      // Program counter
 }
 
-func (i *Instruction) SetP1(p1 int32) *Instruction {
-	i.P1 = p1
-	return i
-}
-
-func (i *Instruction) SetP2(p2 int32) *Instruction {
-	i.P2 = p2
-	return i
-}
-
-func (i *Instruction) SetP3(p3 string) *Instruction {
-	i.P3 = p3
-	return i
-}
-
-func (i *Instruction) SetP4(p4 interface{}) *Instruction {
-	i.P4 = p4
-	return i
-}
-
-// toSvdbInstr converts an Instruction to the C svdb_instr_t type.
-// IsJump and IsTerminal only inspect the opcode field (op), so zeroing the
-// remaining fields (fl, a, b, c) is safe for those callers. The Go Instruction
-// type does not carry a C-style flag bitmask, so HasFlag is not exposed.
-func (i Instruction) toSvdbInstr() C.svdb_instr_t {
-	return C.svdb_instr_t{
-		op: C.uint16_t(i.Op),
-		fl: 0,
-		a:  C.int32_t(i.P1),
-		b:  C.int32_t(i.P2),
-		c:  0,
-	}
-}
-
-// IsJump returns true if this instruction is a control-flow jump.
-// Delegates to the C++ svdb_instr_is_jump which checks the opcode value only.
-func (i Instruction) IsJump() bool {
-	return C.svdb_instr_is_jump(i.toSvdbInstr()) != 0
-}
-
-// IsTerminal returns true if this instruction terminates execution (e.g. Halt).
-// Delegates to the C++ svdb_instr_is_terminal which checks the opcode value only.
-func (i Instruction) IsTerminal() bool {
-	return C.svdb_instr_is_terminal(i.toSvdbInstr()) != 0
-}
+// Instr is an alias for Instruction.
+type Instr = Instruction
