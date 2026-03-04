@@ -128,6 +128,10 @@ set(SVDB_CORE_SOURCES
     # IS - Information Schema
     core/IS/schema.cpp
     core/IS/is_registry.cpp
+    core/IS/vtab_registry.cpp
+    core/IS/vtab_api.cpp
+    core/IS/vtab_series.cpp
+    core/IS/vtab_fts5.cpp
 
     # Wrapper - Invoke chain
     core/wrapper/invoke_chain_wrapper.cpp

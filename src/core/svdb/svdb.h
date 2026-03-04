@@ -98,6 +98,41 @@ svdb_code_t   svdb_backup(svdb_db_t *src, const char *dest_path);
 const char   *svdb_version(void);
 int           svdb_version_number(void);
 
+/* ── Virtual Tables ──────────────────────────────────────────── */
+/* Forward declare vtab types from IS/vtab_api.h */
+typedef struct svdb_vtab_module_s   svdb_vtab_module_t;
+typedef struct svdb_vtab_s          svdb_vtab_t;
+typedef struct svdb_vtab_cursor_s   svdb_vtab_cursor_t;
+
+/* Virtual table module registration */
+svdb_code_t   svdb_register_vtab_module(const char *name, svdb_vtab_module_t *module);
+int           svdb_has_vtab_module(const char *name);
+int           svdb_get_vtab_module_count(void);
+svdb_code_t   svdb_get_vtab_module_name(int index, char *buffer, size_t buffer_size);
+
+/* Virtual table operations */
+svdb_vtab_t*  svdb_vtab_create(svdb_vtab_module_t *module,
+                               const char **args, int arg_count);
+svdb_vtab_t*  svdb_vtab_connect(svdb_vtab_module_t *module,
+                                const char **args, int arg_count);
+int           svdb_vtab_column_count(svdb_vtab_t *vtab);
+const char*   svdb_vtab_column_name(svdb_vtab_t *vtab, int col);
+svdb_vtab_cursor_t* svdb_vtab_cursor_open(svdb_vtab_t *vtab);
+svdb_code_t   svdb_vtab_close(svdb_vtab_t *vtab, int destroy);
+
+/* Cursor operations */
+svdb_code_t   svdb_vtab_cursor_filter(svdb_vtab_cursor_t *cursor, int idx_num,
+                                      const char *idx_str,
+                                      const char **args, int arg_count);
+svdb_code_t   svdb_vtab_cursor_next(svdb_vtab_cursor_t *cursor);
+int           svdb_vtab_cursor_eof(svdb_vtab_cursor_t *cursor);
+svdb_code_t   svdb_vtab_cursor_column(svdb_vtab_cursor_t *cursor, int col,
+                                      int *out_type, int64_t *out_ival,
+                                      double *out_rval, const char **out_sval,
+                                      size_t *out_slen);
+svdb_code_t   svdb_vtab_cursor_rowid(svdb_vtab_cursor_t *cursor, int64_t *out_rowid);
+svdb_code_t   svdb_vtab_cursor_close(svdb_vtab_cursor_t *cursor);
+
 #ifdef __cplusplus
 }
 #endif

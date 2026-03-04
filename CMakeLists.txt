@@ -58,6 +58,7 @@ enable_testing()
 # Foundation classes test
 add_executable(tests_cpp_unit
     tests/CppUnit/page_manager_v2_test.cpp
+    tests/CppUnit/test_vtab_registry.cpp
 )
 target_link_libraries(tests_cpp_unit
     PRIVATE
@@ -67,6 +68,7 @@ target_link_libraries(tests_cpp_unit
 target_include_directories(tests_cpp_unit PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/core/DS
+    ${CMAKE_SOURCE_DIR}/src/core/IS
 )
 
 add_test(NAME CppUnitTests COMMAND tests_cpp_unit)
