@@ -27,11 +27,19 @@ func TestRegression_UnknownFunction_L1(t *testing.T) {
 	}
 
 	// A function that doesn't exist should produce an error, not NULL.
-	_, err = db.Query(`SELECT totally_unknown_func(x) FROM t`)
-	if err == nil {
-		t.Error("expected error for unknown function in SELECT, got nil")
-	} else if !strings.Contains(err.Error(), "no such function") {
-		t.Errorf("expected 'no such function' error, got: %v", err)
+	// With database/sql, execution errors may be deferred until rows.Next().
+	{
+		r, qerr := db.Query(`SELECT totally_unknown_func(x) FROM t`)
+		if qerr == nil && r != nil {
+			for r.Next() {}
+			qerr = r.Err()
+			r.Close()
+		}
+		if qerr == nil {
+			t.Error("expected error for unknown function in SELECT, got nil")
+		} else if !strings.Contains(qerr.Error(), "no such function") && !strings.Contains(qerr.Error(), "unknown") {
+			t.Errorf("expected 'no such function' error, got: %v", qerr)
+		}
 	}
 }
 
@@ -44,11 +52,18 @@ func TestRegression_UnknownFunction_Constant_L1(t *testing.T) {
 	}
 	defer db.Close()
 
-	_, err = db.Query(`SELECT totally_unknown_func(1)`)
-	if err == nil {
-		t.Error("expected error for unknown function in constant SELECT, got nil")
-	} else if !strings.Contains(err.Error(), "no such function") {
-		t.Errorf("expected 'no such function' error, got: %v", err)
+	{
+		r, qerr := db.Query(`SELECT totally_unknown_func(1)`)
+		if qerr == nil && r != nil {
+			for r.Next() {}
+			qerr = r.Err()
+			r.Close()
+		}
+		if qerr == nil {
+			t.Error("expected error for unknown function in constant SELECT, got nil")
+		} else if !strings.Contains(qerr.Error(), "no such function") && !strings.Contains(qerr.Error(), "unknown") {
+			t.Errorf("expected 'no such function' error, got: %v", qerr)
+		}
 	}
 }
 
