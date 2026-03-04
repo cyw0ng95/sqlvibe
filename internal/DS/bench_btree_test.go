@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/internal/PB"
+	pb2 "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/pb"
 )
 
 // newBenchPageManager creates a temp-file-backed PageManager for benchmarks.
@@ -16,7 +16,7 @@ func newBenchPageManager(b *testing.B) (*PageManager, func()) {
 		b.Fatal(err)
 	}
 	path := filepath.Join(dir, "bench.db")
-	file, err := PB.OpenFile(path, PB.O_CREATE|PB.O_RDWR)
+	file, err := pb2.OpenFile(path, pb2.O_CREATE|pb2.O_RDWR)
 	if err != nil {
 		os.RemoveAll(dir)
 		b.Fatal(err)

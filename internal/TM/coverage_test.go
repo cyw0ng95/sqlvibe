@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
-	"github.com/cyw0ng95/sqlvibe/internal/PB"
+	pb2 "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/pb"
 )
 
 func newTestTM(t *testing.T) *TransactionManager {
 	t.Helper()
-	file, err := PB.OpenFile(":memory:", PB.O_RDWR|PB.O_CREATE)
+	file, err := pb2.OpenFile(":memory:", pb2.O_RDWR|pb2.O_CREATE)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestTransactionManager_EnableDisableWAL(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, "tm.wal")
 
-	file, err := PB.OpenFile(":memory:", PB.O_RDWR|PB.O_CREATE)
+	file, err := pb2.OpenFile(":memory:", pb2.O_RDWR|pb2.O_CREATE)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

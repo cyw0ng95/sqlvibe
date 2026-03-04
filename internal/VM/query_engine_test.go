@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
-	"github.com/cyw0ng95/sqlvibe/internal/PB"
+	pb2 "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/pb"
 )
 
 func TestVMCreate(t *testing.T) {
@@ -94,7 +94,7 @@ func TestResultSet(t *testing.T) {
 }
 
 func TestQueryEngine(t *testing.T) {
-	file, err := PB.OpenFile(":memory:", PB.O_CREATE|PB.O_RDWR)
+	file, err := pb2.OpenFile(":memory:", pb2.O_CREATE|pb2.O_RDWR)
 	if err != nil {
 		t.Fatalf("failed to open file: %v", err)
 	}

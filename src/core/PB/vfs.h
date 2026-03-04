@@ -67,6 +67,15 @@ private:
 // C-compatible wrapper functions (outside namespace)
 extern "C" {
 
+/* Open flags for C API */
+#define SVDB_PB_OPEN_READONLY   0x00000001
+#define SVDB_PB_OPEN_WRITEONLY  0x00000002
+#define SVDB_PB_OPEN_READWRITE  0x00000003
+#define SVDB_PB_OPEN_CREATE     0x00000004
+#define SVDB_PB_OPEN_EXCLUSIVE  0x00000008
+#define SVDB_PB_OPEN_TRUNC      0x00000010
+#define SVDB_PB_OPEN_APPEND     0x00000020
+
 void* SVDB_PB_VFS_Create();
 void SVDB_PB_VFS_Destroy(void* vfs);
 
