@@ -43,3 +43,30 @@ endif()
 add_custom_target(cpp-build
     COMMENT "Building C++ targets in .build/cmake/"
 )
+
+# v0.11.3: C++ Unit Tests (GoogleTest)
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(googletest)
+
+enable_testing()
+
+# Foundation classes test
+add_executable(tests_cpp_unit
+    tests/CppUnit/page_manager_v2_test.cpp
+)
+target_link_libraries(tests_cpp_unit
+    PRIVATE
+    svdb
+    GTest::gtest_main
+)
+target_include_directories(tests_cpp_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/core/DS
+)
+
+add_test(NAME CppUnitTests COMMAND tests_cpp_unit)

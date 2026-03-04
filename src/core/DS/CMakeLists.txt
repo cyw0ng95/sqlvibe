@@ -23,7 +23,7 @@ else()
     message(STATUS "No SIMD extensions available for DS extension")
 endif()
 
-# DS library sources
+# DS.library sources (legacy - v0.11.3 v2 files moved to main libsvdb)
 add_library(svdb_ds SHARED
     varint.cpp
     cell.cpp

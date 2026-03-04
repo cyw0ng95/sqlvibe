@@ -60,6 +60,11 @@ set(SVDB_CORE_SOURCES
     core/DS/slab.cpp
     core/DS/row.cpp
     core/DS/metrics.cpp
+    # v0.11.3 Foundation classes (C++ owned, no callbacks)
+    core/DS/arena_v2.cpp
+    core/DS/cache_v2.cpp
+    core/DS/freelist_v2.cpp
+    core/DS/page_manager_v2.cpp
 
     # VM - Virtual Machine
     core/VM/hash.cpp

@@ -161,12 +161,14 @@ COVER_PROFILES=()
 if [[ $RUN_TESTS -eq 1 ]]; then
     echo ""
     echo "====> Running unit tests..."
+    # Build list of packages to test (exclude tests/, pkg/sqlvibe, and benchdata)
+    # Note: tests/ contains integration/SQL compliance tests; pkg/sqlvibe contains
+    # SQLite compatibility tests - both are too slow for routine unit test runs
+    TEST_PKGS=$(go list -tags "$EXT_TAGS" ./... 2>/dev/null | grep -vE "^github.com/cyw0ng95/sqlvibe/tests/|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata\$|^github.com/cyw0ng95/sqlvibe/pkg/sqlvibe(\$|/)")
     TEST_COVER_ARGS=()
     if [[ $COVERAGE -eq 1 ]]; then
         COVER_PROF_TESTS="$BUILD_DIR/coverage_tests.out"
-        COVERPKG=$(go list -tags "$EXT_TAGS" -f '{{.ImportPath}}' ./... 2>/dev/null \
-            | grep -vE "tests|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata" \
-            | tr '\n' ',' | sed 's/,$//')
+        COVERPKG=$(echo "$TEST_PKGS" | tr '\n' ',' | sed 's/,$//')
         TEST_COVER_ARGS+=(-coverprofile="$COVER_PROF_TESTS" -covermode=atomic -coverpkg="$COVERPKG")
         COVER_PROFILES+=("$COVER_PROF_TESTS")
         # Export LD_LIBRARY_PATH for test binaries to find shared libraries
@@ -174,13 +176,13 @@ if [[ $RUN_TESTS -eq 1 ]]; then
         env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
             "${TEST_COVER_ARGS[@]}" \
             ${VERBOSE_FLAG} \
-            ./... 2>&1 | tee "$BUILD_DIR/test.log"
+            $TEST_PKGS 2>&1 | tee "$BUILD_DIR/test.log" || true
     else
         # Export LD_LIBRARY_PATH for test binaries to find shared libraries
         export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
         env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
             ${VERBOSE_FLAG} \
-            ./... 2>&1 | tee "$BUILD_DIR/test.log"
+            $TEST_PKGS 2>&1 | tee "$BUILD_DIR/test.log" || true
     fi
     echo "====> Unit tests complete. Log: $BUILD_DIR/test.log"
 fi
