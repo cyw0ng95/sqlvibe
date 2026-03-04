@@ -620,18 +620,22 @@ static SvdbVal eval_expr(const std::string &expr,
         return sv;
     }
 
-    /* Column reference: check if expression is a bare identifier */
+    /* Column reference: check if expression is a bare identifier (optionally qualified: tbl.col) */
     bool is_ident = !e.empty() && (isalpha((unsigned char)e[0]) || e[0] == '_');
     if (is_ident) {
         for (char c : e) {
-            if (!isalnum((unsigned char)c) && c != '_') { is_ident = false; break; }
+            if (!isalnum((unsigned char)c) && c != '_' && c != '.') { is_ident = false; break; }
         }
     }
     if (is_ident) {
-        auto it = row.find(e);
+        /* Strip optional table qualifier */
+        std::string col_name = e;
+        auto dot = col_name.find('.');
+        if (dot != std::string::npos) col_name = col_name.substr(dot + 1);
+        auto it = row.find(col_name);
         if (it != row.end()) return it->second;
         /* Also try case-insensitive */
-        std::string eu = str_upper(e);
+        std::string eu = str_upper(col_name);
         for (auto &kv : row) {
             if (str_upper(kv.first) == eu) return kv.second;
         }

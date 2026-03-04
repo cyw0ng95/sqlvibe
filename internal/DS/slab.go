@@ -64,7 +64,8 @@ func (sa *SlabAllocator) AllocIntSlice(n int) []int {
 	if ptr == nil {
 		return make([]int, n)
 	}
-	// Copy int64 values into a Go int slice.
+	// 1<<28 is a safe upper bound for a CGO slice header (2^28 × 8 bytes = 2 GiB,
+	// well within the addressable range on 64-bit systems and matching Go's max-slice convention).
 	src := (*[1 << 28]C.int64_t)(unsafe.Pointer(ptr))[:n:n]
 	dst := make([]int, n)
 	for i := range dst {
