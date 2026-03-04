@@ -1,6 +1,7 @@
 package Regression
 
 import (
+	"database/sql"
 	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 	"time"

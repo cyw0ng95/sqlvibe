@@ -1,6 +1,7 @@
 package Regression
 
 import (
+	"database/sql"
 	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"strings"
 	"testing"
@@ -62,10 +63,7 @@ func TestRegression_JulianDayNULL_L1(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows, err := db.Query(`SELECT julianday(NULL)`)
-	if err != nil {
-		t.Fatalf("query error: %v", err)
-	}
+	rows := qDB(t, db, `SELECT julianday(NULL)`)
 	if len(rows.Data) != 1 || len(rows.Data[0]) != 1 {
 		t.Fatalf("expected 1 row with 1 col, got %v", rows.Data)
 	}
@@ -85,10 +83,7 @@ func TestRegression_RoundFloat_L1(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows, err := db.Query(`SELECT ROUND(2.7)`)
-	if err != nil {
-		t.Fatalf("query error: %v", err)
-	}
+	rows := qDB(t, db, `SELECT ROUND(2.7)`)
 	if len(rows.Data) != 1 || len(rows.Data[0]) != 1 {
 		t.Fatalf("expected 1 row with 1 col, got %v", rows.Data)
 	}
@@ -110,10 +105,7 @@ func TestRegression_RoundJulianDay_L1(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows, err := db.Query(`SELECT ROUND(julianday('2024-01-01'), 5)`)
-	if err != nil {
-		t.Fatalf("query error: %v", err)
-	}
+	rows := qDB(t, db, `SELECT ROUND(julianday('2024-01-01'), 5)`)
 	if len(rows.Data) != 1 || len(rows.Data[0]) != 1 {
 		t.Fatalf("expected 1 row with 1 col, got %v", rows.Data)
 	}

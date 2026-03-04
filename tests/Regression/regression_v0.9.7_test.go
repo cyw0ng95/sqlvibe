@@ -10,11 +10,11 @@ package Regression
 //   E6 – Transaction / Savepoint edge cases
 
 import (
+	"database/sql"
 	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"strings"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -30,22 +30,6 @@ func mustOpen(t *testing.T) *sql.DB {
 	return db
 }
 
-func mustExec(t *testing.T, db *sql.DB, sql string) {
-	t.Helper()
-	if _, err := db.Exec(sql); err != nil {
-		t.Fatalf("exec %q: %v", sql, err)
-	}
-}
-
-func mustQuery(t *testing.T, db *sql.DB, sql string) *sqlvibe.Rows {
-	t.Helper()
-	rows, err := db.Query(sql)
-	if err != nil {
-		t.Fatalf("query %q: %v", sql, err)
-	}
-	return rows
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // E1: INSERT OR REPLACE / IGNORE edge cases
 // ────────────────────────────────────────────────────────────────────────────
@@ -59,7 +43,7 @@ func TestRegression_E1_InsertOrReplaceEmptyTable_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)`)
 	mustExec(t, db, `INSERT OR REPLACE INTO t VALUES (1, 'hello')`)
 
-	rows := mustQuery(t, db, `SELECT id, v FROM t`)
+	rows := qDB(t, db, `SELECT id, v FROM t`)
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows.Data))
 	}
@@ -78,7 +62,7 @@ func TestRegression_E1_InsertOrReplacePKConflict_L1(t *testing.T) {
 	mustExec(t, db, `INSERT INTO t VALUES (1, 'old')`)
 	mustExec(t, db, `INSERT OR REPLACE INTO t VALUES (1, 'new')`)
 
-	rows := mustQuery(t, db, `SELECT v FROM t WHERE id = 1`)
+	rows := qDB(t, db, `SELECT v FROM t WHERE id = 1`)
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows.Data))
 	}
@@ -98,7 +82,7 @@ func TestRegression_E1_InsertOrReplaceUniqueConflict_L1(t *testing.T) {
 	// New row has a different PK but the same email → unique conflict on email
 	mustExec(t, db, `INSERT OR REPLACE INTO t VALUES (2, 'a@b.com')`)
 
-	rows := mustQuery(t, db, `SELECT id, email FROM t`)
+	rows := qDB(t, db, `SELECT id, email FROM t`)
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected exactly 1 row after REPLACE, got %d", len(rows.Data))
 	}
@@ -119,7 +103,7 @@ func TestRegression_E1_NullInUniqueColumn_L1(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO t VALUES (2, NULL)`); err != nil {
 		t.Errorf("inserting second NULL into UNIQUE column should succeed, got: %v", err)
 	}
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t`)
 	if rows.Data[0][0] != int64(2) {
 		t.Errorf("expected 2 rows, got %v", rows.Data[0][0])
 	}
@@ -147,7 +131,7 @@ func TestRegression_E1_AllColumnsNullReplace_L1(t *testing.T) {
 
 	mustExec(t, db, `CREATE TABLE t (a INTEGER, b TEXT)`)
 	mustExec(t, db, `INSERT OR REPLACE INTO t VALUES (NULL, NULL)`)
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t`)
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("expected 1 row, got %v", rows.Data[0][0])
 	}
@@ -163,7 +147,7 @@ func TestRegression_E1_InsertOrIgnoreDuplicatePK_L1(t *testing.T) {
 	mustExec(t, db, `INSERT INTO t VALUES (1, 'first')`)
 	mustExec(t, db, `INSERT OR IGNORE INTO t VALUES (1, 'second')`)
 
-	rows := mustQuery(t, db, `SELECT v FROM t WHERE id = 1`)
+	rows := qDB(t, db, `SELECT v FROM t WHERE id = 1`)
 	if len(rows.Data) != 1 || rows.Data[0][0] != "first" {
 		t.Errorf("expected row to remain unchanged, got %v", rows.Data)
 	}
@@ -179,7 +163,7 @@ func TestRegression_E1_InsertOrIgnoreDuplicateUniqueCol_L1(t *testing.T) {
 	mustExec(t, db, `INSERT INTO t VALUES (1, 'a@b.com')`)
 	mustExec(t, db, `INSERT OR IGNORE INTO t VALUES (2, 'a@b.com')`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t`)
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("expected 1 row (second INSERT ignored), got %v", rows.Data[0][0])
 	}
@@ -195,7 +179,7 @@ func TestRegression_E1_InsertOrReplaceMultipleRows_L1(t *testing.T) {
 	mustExec(t, db, `INSERT INTO t VALUES (1, 'old1'), (2, 'old2')`)
 	mustExec(t, db, `INSERT OR REPLACE INTO t VALUES (1, 'new1'), (3, 'new3')`)
 
-	rows := mustQuery(t, db, `SELECT id, v FROM t ORDER BY id`)
+	rows := qDB(t, db, `SELECT id, v FROM t ORDER BY id`)
 	// Should have rows: (1, 'new1'), (2, 'old2'), (3, 'new3')
 	if len(rows.Data) != 3 {
 		t.Fatalf("expected 3 rows, got %d: %v", len(rows.Data), rows.Data)
@@ -231,7 +215,7 @@ func TestRegression_E1_InsertOrReplaceCompositeUnique_L1(t *testing.T) {
 	mustExec(t, db, `INSERT INTO t VALUES (1, 'x', 10)`)
 	mustExec(t, db, `INSERT OR REPLACE INTO t VALUES (1, 'x', 20)`)
 
-	rows := mustQuery(t, db, `SELECT c FROM t WHERE a=1 AND b='x'`)
+	rows := qDB(t, db, `SELECT c FROM t WHERE a=1 AND b='x'`)
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows.Data))
 	}
@@ -250,10 +234,7 @@ func TestRegression_E2_InsertReturning_L1(t *testing.T) {
 	defer db.Close()
 
 	mustExec(t, db, `CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)`)
-	rows, err := db.Query(`INSERT INTO t VALUES (1, 'hello') RETURNING id, v`)
-	if err != nil {
-		t.Fatalf("INSERT RETURNING: %v", err)
-	}
+	rows := qDB(t, db, `INSERT INTO t VALUES (1, 'hello') RETURNING id, v`)
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows.Data))
 	}
@@ -268,10 +249,7 @@ func TestRegression_E2_InsertReturningExpression_L1(t *testing.T) {
 	defer db.Close()
 
 	mustExec(t, db, `CREATE TABLE t (id INTEGER, v INTEGER)`)
-	rows, err := db.Query(`INSERT INTO t VALUES (3, 7) RETURNING v * 2`)
-	if err != nil {
-		t.Fatalf("INSERT RETURNING expr: %v", err)
-	}
+	rows := qDB(t, db, `INSERT INTO t VALUES (3, 7) RETURNING v * 2`)
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows.Data))
 	}
@@ -286,10 +264,7 @@ func TestRegression_E2_InsertReturningUpper_L1(t *testing.T) {
 	defer db.Close()
 
 	mustExec(t, db, `CREATE TABLE t (id INTEGER, name TEXT)`)
-	rows, err := db.Query(`INSERT INTO t VALUES (1, 'alice') RETURNING UPPER(name)`)
-	if err != nil {
-		t.Fatalf("INSERT RETURNING UPPER: %v", err)
-	}
+	rows := qDB(t, db, `INSERT INTO t VALUES (1, 'alice') RETURNING UPPER(name)`)
 	if len(rows.Data) != 1 || rows.Data[0][0] != "ALICE" {
 		t.Errorf("expected 'ALICE', got %v", rows.Data)
 	}
@@ -301,10 +276,7 @@ func TestRegression_E2_MultiRowInsertReturning_L1(t *testing.T) {
 	defer db.Close()
 
 	mustExec(t, db, `CREATE TABLE t (id INTEGER, v TEXT)`)
-	rows, err := db.Query(`INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c') RETURNING id`)
-	if err != nil {
-		t.Fatalf("multi-row INSERT RETURNING: %v", err)
-	}
+	rows := qDB(t, db, `INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c') RETURNING id`)
 	if len(rows.Data) != 3 {
 		t.Fatalf("expected 3 RETURNING rows, got %d", len(rows.Data))
 	}
@@ -317,10 +289,7 @@ func TestRegression_E2_UpdateReturning_L1(t *testing.T) {
 
 	mustExec(t, db, `CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER)`)
 	mustExec(t, db, `INSERT INTO t VALUES (1, 10), (2, 20)`)
-	rows, err := db.Query(`UPDATE t SET v = v + 1 WHERE id = 1 RETURNING id, v`)
-	if err != nil {
-		t.Fatalf("UPDATE RETURNING: %v", err)
-	}
+	rows := qDB(t, db, `UPDATE t SET v = v + 1 WHERE id = 1 RETURNING id, v`)
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows.Data))
 	}
@@ -336,10 +305,7 @@ func TestRegression_E2_DeleteReturning_L1(t *testing.T) {
 
 	mustExec(t, db, `CREATE TABLE t (id INTEGER, v TEXT)`)
 	mustExec(t, db, `INSERT INTO t VALUES (1, 'a'), (2, 'b')`)
-	rows, err := db.Query(`DELETE FROM t WHERE id = 2 RETURNING id, v`)
-	if err != nil {
-		t.Fatalf("DELETE RETURNING: %v", err)
-	}
+	rows := qDB(t, db, `DELETE FROM t WHERE id = 2 RETURNING id, v`)
 	if len(rows.Data) != 1 || rows.Data[0][0] != int64(2) {
 		t.Errorf("expected deleted row (2,'b'), got %v", rows.Data)
 	}
@@ -352,10 +318,7 @@ func TestRegression_E2_InsertReturningInTransaction_L1(t *testing.T) {
 
 	mustExec(t, db, `CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)`)
 	mustExec(t, db, `BEGIN`)
-	rows, err := db.Query(`INSERT INTO t VALUES (1, 'tx') RETURNING id`)
-	if err != nil {
-		t.Fatalf("INSERT RETURNING in tx: %v", err)
-	}
+	rows := qDB(t, db, `INSERT INTO t VALUES (1, 'tx') RETURNING id`)
 	mustExec(t, db, `COMMIT`)
 	if len(rows.Data) != 1 || rows.Data[0][0] != int64(1) {
 		t.Errorf("unexpected RETURNING result: %v", rows.Data)
@@ -368,10 +331,7 @@ func TestRegression_E2_InsertReturningStarWildcard_L1(t *testing.T) {
 	defer db.Close()
 
 	mustExec(t, db, `CREATE TABLE t (id INTEGER, v TEXT)`)
-	rows, err := db.Query(`INSERT INTO t VALUES (5, 'five') RETURNING *`)
-	if err != nil {
-		t.Fatalf("INSERT RETURNING *: %v", err)
-	}
+	rows := qDB(t, db, `INSERT INTO t VALUES (5, 'five') RETURNING *`)
 	if len(rows.Data) != 1 || len(rows.Data[0]) != 2 {
 		t.Fatalf("expected 1 row with 2 cols, got %v", rows.Data)
 	}
@@ -383,10 +343,7 @@ func TestRegression_E2_InsertReturningEmptyTable_L1(t *testing.T) {
 	defer db.Close()
 
 	mustExec(t, db, `CREATE TABLE t (id INTEGER)`)
-	rows, err := db.Query(`INSERT INTO t VALUES (42) RETURNING id`)
-	if err != nil {
-		t.Fatalf("INSERT RETURNING on empty table: %v", err)
-	}
+	rows := qDB(t, db, `INSERT INTO t VALUES (42) RETURNING id`)
 	if len(rows.Data) != 1 || rows.Data[0][0] != int64(42) {
 		t.Errorf("expected id=42, got %v", rows.Data)
 	}
@@ -399,10 +356,7 @@ func TestRegression_E2_UpdateReturningMultipleRows_L1(t *testing.T) {
 
 	mustExec(t, db, `CREATE TABLE t (id INTEGER, v INTEGER)`)
 	mustExec(t, db, `INSERT INTO t VALUES (1,10),(2,20),(3,30)`)
-	rows, err := db.Query(`UPDATE t SET v = v * 2 RETURNING id, v`)
-	if err != nil {
-		t.Fatalf("UPDATE RETURNING multiple: %v", err)
-	}
+	rows := qDB(t, db, `UPDATE t SET v = v * 2 RETURNING id, v`)
 	if len(rows.Data) != 3 {
 		t.Errorf("expected 3 RETURNING rows, got %d", len(rows.Data))
 	}
@@ -435,7 +389,7 @@ func TestRegression_E3_DeepCascadeDelete_L1(t *testing.T) {
 	mustExec(t, db, `DELETE FROM a WHERE id = 1`)
 
 	for _, tbl := range []string{"a", "b", "c"} {
-		rows := mustQuery(t, db, `SELECT COUNT(*) FROM `+tbl)
+		rows := qDB(t, db, `SELECT COUNT(*) FROM `+tbl)
 		if rows.Data[0][0] != int64(0) {
 			t.Errorf("table %s should be empty after 3-level cascade, got count=%v", tbl, rows.Data[0][0])
 		}
@@ -489,7 +443,7 @@ func TestRegression_E3_FKSetNull_L1(t *testing.T) {
 
 	mustExec(t, db, `DELETE FROM parent WHERE id = 1`)
 
-	rows := mustQuery(t, db, `SELECT p_id FROM child WHERE id = 1`)
+	rows := qDB(t, db, `SELECT p_id FROM child WHERE id = 1`)
 	if len(rows.Data) != 1 || rows.Data[0][0] != nil {
 		t.Errorf("expected child p_id = NULL after SET NULL cascade, got %v", rows.Data)
 	}
@@ -508,7 +462,7 @@ func TestRegression_E3_FKCascadeUpdate_L1(t *testing.T) {
 
 	mustExec(t, db, `UPDATE parent SET id = 99 WHERE id = 1`)
 
-	rows := mustQuery(t, db, `SELECT p_id FROM child WHERE id = 1`)
+	rows := qDB(t, db, `SELECT p_id FROM child WHERE id = 1`)
 	if len(rows.Data) != 1 || rows.Data[0][0] != int64(99) {
 		t.Errorf("expected child p_id = 99 after CASCADE UPDATE, got %v", rows.Data)
 	}
@@ -528,7 +482,7 @@ func TestRegression_E3_SelfReferencingCascadeDelete_L1(t *testing.T) {
 
 	mustExec(t, db, `DELETE FROM nodes WHERE id = 1`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM nodes`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM nodes`)
 	if rows.Data[0][0] != int64(0) {
 		t.Errorf("expected all nodes deleted via self-referential cascade, got count=%v", rows.Data[0][0])
 	}
@@ -583,7 +537,7 @@ func TestRegression_E3_MultiLevelFKCascade_L1(t *testing.T) {
 	mustExec(t, db, `DELETE FROM a4 WHERE id = 1`)
 
 	for _, tbl := range []string{"a4", "b4", "c4", "d4"} {
-		rows := mustQuery(t, db, `SELECT COUNT(*) FROM `+tbl)
+		rows := qDB(t, db, `SELECT COUNT(*) FROM `+tbl)
 		if rows.Data[0][0] != int64(0) {
 			t.Errorf("table %s should be empty after 4-level cascade, got count=%v", tbl, rows.Data[0][0])
 		}
@@ -602,7 +556,7 @@ func TestRegression_E4_CollateNocaseWhere_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (id INTEGER, name TEXT)`)
 	mustExec(t, db, `INSERT INTO t VALUES (1, 'Alice'), (2, 'BOB'), (3, 'charlie')`)
 
-	rows := mustQuery(t, db, `SELECT id FROM t WHERE name = 'alice' COLLATE NOCASE`)
+	rows := qDB(t, db, `SELECT id FROM t WHERE name = 'alice' COLLATE NOCASE`)
 	if len(rows.Data) != 1 || rows.Data[0][0] != int64(1) {
 		t.Errorf("expected id=1 with COLLATE NOCASE, got %v", rows.Data)
 	}
@@ -616,7 +570,7 @@ func TestRegression_E4_CollateNocaseOrderBy_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (name TEXT)`)
 	mustExec(t, db, `INSERT INTO t VALUES ('banana'), ('Apple'), ('cherry')`)
 
-	rows := mustQuery(t, db, `SELECT name FROM t ORDER BY name COLLATE NOCASE ASC`)
+	rows := qDB(t, db, `SELECT name FROM t ORDER BY name COLLATE NOCASE ASC`)
 	if len(rows.Data) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(rows.Data))
 	}
@@ -634,7 +588,7 @@ func TestRegression_E4_CollateBinary_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (name TEXT)`)
 	mustExec(t, db, `INSERT INTO t VALUES ('Alice'), ('alice')`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t WHERE name = 'alice' COLLATE BINARY`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t WHERE name = 'alice' COLLATE BINARY`)
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("COLLATE BINARY should find only 'alice' (not 'Alice'), got %v", rows.Data[0][0])
 	}
@@ -649,7 +603,7 @@ func TestRegression_E4_CollateNocaseLike_L1(t *testing.T) {
 	mustExec(t, db, `INSERT INTO t VALUES ('Hello World'), ('hello world'), ('HELLO WORLD')`)
 
 	// LIKE is case-insensitive by default in SQLite for ASCII
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t WHERE name LIKE 'hello%'`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t WHERE name LIKE 'hello%'`)
 	if rows.Data[0][0] != int64(3) {
 		t.Errorf("LIKE 'hello%%' should match all 3 rows case-insensitively, got %v", rows.Data[0][0])
 	}
@@ -663,7 +617,7 @@ func TestRegression_E4_CollateColumnDefault_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (id INTEGER, name TEXT COLLATE NOCASE)`)
 	mustExec(t, db, `INSERT INTO t VALUES (1, 'Alice'), (2, 'BOB')`)
 
-	rows := mustQuery(t, db, `SELECT id FROM t WHERE name = 'alice'`)
+	rows := qDB(t, db, `SELECT id FROM t WHERE name = 'alice'`)
 	// With COLLATE NOCASE on column, this may match case-insensitively
 	// Acceptable result: either 1 (if COLLATE on column is honored) or 0
 	// We just verify no crash occurs
@@ -682,7 +636,7 @@ func TestRegression_E5_GlobBasic_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (filename TEXT)`)
 	mustExec(t, db, `INSERT INTO t VALUES ('file.txt'), ('image.png'), ('doc.txt'), ('README')`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t WHERE filename GLOB '*.txt'`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t WHERE filename GLOB '*.txt'`)
 	if rows.Data[0][0] != int64(2) {
 		t.Errorf("GLOB '*.txt' should match 2 rows, got %v", rows.Data[0][0])
 	}
@@ -696,7 +650,7 @@ func TestRegression_E5_GlobMatchAll_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (v TEXT)`)
 	mustExec(t, db, `INSERT INTO t VALUES ('a'), ('bb'), ('ccc')`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t WHERE v GLOB '*'`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t WHERE v GLOB '*'`)
 	if rows.Data[0][0] != int64(3) {
 		t.Errorf("GLOB '*' should match all rows, got %v", rows.Data[0][0])
 	}
@@ -710,7 +664,7 @@ func TestRegression_E5_GlobEmptyPattern_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (v TEXT)`)
 	mustExec(t, db, `INSERT INTO t VALUES (''), ('a'), ('bb')`)
 
-	rows := mustQuery(t, db, "SELECT COUNT(*) FROM t WHERE v GLOB ''")
+	rows := qDB(t, db, "SELECT COUNT(*) FROM t WHERE v GLOB ''")
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("GLOB '' should only match empty string, got %v", rows.Data[0][0])
 	}
@@ -724,7 +678,7 @@ func TestRegression_E5_GlobNullHandling_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (v TEXT)`)
 	mustExec(t, db, `INSERT INTO t VALUES (NULL), ('hello')`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t WHERE v GLOB '*'`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t WHERE v GLOB '*'`)
 	// NULL GLOB '*' = NULL = false, so only 'hello' matches
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("GLOB '*' should not match NULL, got %v", rows.Data[0][0])
@@ -739,7 +693,7 @@ func TestRegression_E5_GlobQuestionMark_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (v TEXT)`)
 	mustExec(t, db, `INSERT INTO t VALUES ('a'), ('ab'), ('abc'), ('')`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t WHERE v GLOB '?'`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t WHERE v GLOB '?'`)
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("GLOB '?' should match exactly one char, got %v", rows.Data[0][0])
 	}
@@ -753,7 +707,7 @@ func TestRegression_E5_GlobCaseSensitive_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (v TEXT)`)
 	mustExec(t, db, `INSERT INTO t VALUES ('Hello'), ('hello'), ('HELLO')`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t WHERE v GLOB 'hello'`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t WHERE v GLOB 'hello'`)
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("GLOB should be case-sensitive, expected 1 match for 'hello', got %v", rows.Data[0][0])
 	}
@@ -767,7 +721,7 @@ func TestRegression_E5_LikeBasic_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (v TEXT)`)
 	mustExec(t, db, `INSERT INTO t VALUES ('hello'), ('world'), ('help')`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t WHERE v LIKE 'hel%'`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t WHERE v LIKE 'hel%'`)
 	if rows.Data[0][0] != int64(2) {
 		t.Errorf("LIKE 'hel%%' should match 2 rows, got %v", rows.Data[0][0])
 	}
@@ -781,7 +735,7 @@ func TestRegression_E5_LikeNullHandling_L1(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE t (v TEXT)`)
 	mustExec(t, db, `INSERT INTO t VALUES (NULL), ('hello')`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t WHERE v LIKE '%'`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t WHERE v LIKE '%'`)
 	// NULL LIKE '%' = NULL = false
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("LIKE '%%' should not match NULL, got %v", rows.Data[0][0])
@@ -856,7 +810,7 @@ func TestRegression_E6_BeginRollback_L1(t *testing.T) {
 	mustExec(t, db, `INSERT INTO t VALUES (1)`)
 	mustExec(t, db, `ROLLBACK`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t`)
 	if rows.Data[0][0] != int64(0) {
 		t.Errorf("expected 0 rows after ROLLBACK, got %v", rows.Data[0][0])
 	}
@@ -872,7 +826,7 @@ func TestRegression_E6_BeginCommit_L1(t *testing.T) {
 	mustExec(t, db, `INSERT INTO t VALUES (1)`)
 	mustExec(t, db, `COMMIT`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t`)
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("expected 1 row after COMMIT, got %v", rows.Data[0][0])
 	}
@@ -891,7 +845,7 @@ func TestRegression_E6_SavepointRollback_L1(t *testing.T) {
 	mustExec(t, db, `ROLLBACK TO SAVEPOINT sp1`)
 	mustExec(t, db, `COMMIT`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t`)
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("expected 1 row after ROLLBACK TO SAVEPOINT, got %v", rows.Data[0][0])
 	}
@@ -910,7 +864,7 @@ func TestRegression_E6_ReleaseSavepoint_L1(t *testing.T) {
 	mustExec(t, db, `RELEASE SAVEPOINT sp1`)
 	mustExec(t, db, `COMMIT`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t`)
 	if rows.Data[0][0] != int64(2) {
 		t.Errorf("expected 2 rows after RELEASE SAVEPOINT, got %v", rows.Data[0][0])
 	}
@@ -931,7 +885,7 @@ func TestRegression_E6_MultipleSavepoints_L1(t *testing.T) {
 	mustExec(t, db, `ROLLBACK TO SAVEPOINT sp1`)
 	mustExec(t, db, `COMMIT`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t`)
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("expected 1 row after rolling back to sp1, got %v", rows.Data[0][0])
 	}
@@ -949,7 +903,7 @@ func TestRegression_E6_SavepointNoBegin_L1(t *testing.T) {
 	mustExec(t, db, `INSERT INTO t VALUES (2)`)
 	mustExec(t, db, `ROLLBACK TO SAVEPOINT sp1`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t`)
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("expected 1 row after savepoint rollback without explicit BEGIN, got %v", rows.Data[0][0])
 	}
@@ -983,7 +937,7 @@ func TestRegression_E6_SavepointDepth10_L1(t *testing.T) {
 	mustExec(t, db, `ROLLBACK TO SAVEPOINT sp1`)
 	mustExec(t, db, `COMMIT`)
 
-	rows := mustQuery(t, db, `SELECT COUNT(*) FROM t`)
+	rows := qDB(t, db, `SELECT COUNT(*) FROM t`)
 	// After rolling back to sp1, only row 1 should remain (sp1 was set after insert 1)
 	if rows.Data[0][0] != int64(1) {
 		t.Errorf("expected 1 row after rolling back to sp1 (10-level depth), got %v", rows.Data[0][0])

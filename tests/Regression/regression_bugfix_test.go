@@ -1,6 +1,7 @@
 package Regression
 
 import (
+	"database/sql"
 	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
@@ -16,10 +17,7 @@ func TestRegression_DerivedTableWhere_L1(t *testing.T) {
 	db.Exec("CREATE TABLE t (a INTEGER, b INTEGER)")
 	db.Exec("INSERT INTO t VALUES (1, 10), (2, 20), (3, 30)")
 
-	r, err := db.Query("SELECT a FROM (SELECT a, b FROM t) WHERE a > 1")
-	if err != nil {
-		t.Fatalf("query failed: %v", err)
-	}
+	r := qDB(t, db, "SELECT a FROM (SELECT a, b FROM t) WHERE a > 1")
 	if len(r.Data) != 2 {
 		t.Fatalf("expected 2 rows, got %d: %v", len(r.Data), r.Data)
 	}
@@ -32,10 +30,7 @@ func TestRegression_DerivedTableDoubleNested_L1(t *testing.T) {
 	db.Exec("CREATE TABLE t (a INTEGER, b INTEGER)")
 	db.Exec("INSERT INTO t VALUES (1, 10), (2, 20), (3, 30)")
 
-	r, err := db.Query("SELECT a FROM (SELECT a FROM (SELECT a, b FROM t) WHERE a > 1) AS sub ORDER BY a")
-	if err != nil {
-		t.Fatalf("query failed: %v", err)
-	}
+	r := qDB(t, db, "SELECT a FROM (SELECT a FROM (SELECT a, b FROM t) WHERE a > 1) AS sub ORDER BY a")
 	if len(r.Data) != 2 {
 		t.Fatalf("expected 2 rows, got %d: %v", len(r.Data), r.Data)
 	}
@@ -53,10 +48,7 @@ func TestRegression_GroupByTableAlias_L1(t *testing.T) {
 	db.Exec("INSERT INTO employees VALUES ('Bob', 'Engineering')")
 	db.Exec("INSERT INTO employees VALUES ('Charlie', 'HR')")
 
-	r, err := db.Query("SELECT e.department, COUNT(*) FROM employees AS e GROUP BY e.department ORDER BY e.department")
-	if err != nil {
-		t.Fatalf("query failed: %v", err)
-	}
+	r := qDB(t, db, "SELECT e.department, COUNT(*) FROM employees AS e GROUP BY e.department ORDER BY e.department")
 	if len(r.Data) != 2 {
 		t.Fatalf("expected 2 groups, got %d: %v", len(r.Data), r.Data)
 	}
@@ -76,10 +68,7 @@ func TestRegression_LeftJoinGroupBy_L1(t *testing.T) {
 	db.Exec("INSERT INTO t1 VALUES ('A', 1), ('A', 2), ('B', 3)")
 	db.Exec("INSERT INTO t2 VALUES (1, 10), (3, 30)")
 
-	r, err := db.Query("SELECT t1.cat, COUNT(*) FROM t1 LEFT JOIN t2 ON t1.id = t2.id GROUP BY t1.cat ORDER BY t1.cat")
-	if err != nil {
-		t.Fatalf("query failed: %v", err)
-	}
+	r := qDB(t, db, "SELECT t1.cat, COUNT(*) FROM t1 LEFT JOIN t2 ON t1.id = t2.id GROUP BY t1.cat ORDER BY t1.cat")
 	if len(r.Data) != 2 {
 		t.Fatalf("expected 2 groups, got %d: %v", len(r.Data), r.Data)
 	}
@@ -97,10 +86,7 @@ func TestRegression_CorrelatedSubqueryInSelect_L1(t *testing.T) {
 	db.Exec("CREATE TABLE orders (id INTEGER, customer_id INTEGER, total INTEGER)")
 	db.Exec("INSERT INTO orders VALUES (1, 1, 100), (2, 1, 200), (3, 2, 150)")
 
-	r, err := db.Query("SELECT name, (SELECT COUNT(*) FROM orders WHERE customer_id = customers.id) FROM customers ORDER BY id")
-	if err != nil {
-		t.Fatalf("query failed: %v", err)
-	}
+	r := qDB(t, db, "SELECT name, (SELECT COUNT(*) FROM orders WHERE customer_id = customers.id) FROM customers ORDER BY id")
 	if len(r.Data) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(r.Data))
 	}
@@ -127,10 +113,7 @@ func TestRegression_SubqueryGroupByColumn_L1(t *testing.T) {
 	db.Exec("CREATE TABLE t1 (a INTEGER, b INTEGER)")
 	db.Exec("INSERT INTO t1 VALUES (1, 10), (2, 20), (3, 30)")
 
-	r, err := db.Query("SELECT subq.a, COUNT(*) FROM (SELECT a, b FROM t1) AS subq GROUP BY subq.a ORDER BY subq.a")
-	if err != nil {
-		t.Fatalf("query failed: %v", err)
-	}
+	r := qDB(t, db, "SELECT subq.a, COUNT(*) FROM (SELECT a, b FROM t1) AS subq GROUP BY subq.a ORDER BY subq.a")
 	if len(r.Data) != 3 {
 		t.Fatalf("expected 3 rows, got %d: %v", len(r.Data), r.Data)
 	}

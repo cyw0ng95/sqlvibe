@@ -3,6 +3,7 @@
 package Regression
 
 import (
+	"database/sql"
 	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"encoding/json"
 	"fmt"
@@ -19,10 +20,7 @@ func TestRegression_JSONEachColumns_L1(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows, err := db.Query(`SELECT key, value, type, atom, id, parent, fullkey, path FROM json_each('[1,2,3]') ORDER BY key`)
-	if err != nil {
-		t.Fatalf("json_each columns: %v", err)
-	}
+	rows := qDB(t, db, `SELECT key, value, type, atom, id, parent, fullkey, path FROM json_each('[1,2,3]') ORDER BY key`)
 	if len(rows.Columns) != 8 {
 		t.Fatalf("expected 8 columns, got %d: %v", len(rows.Columns), rows.Columns)
 	}
@@ -45,10 +43,7 @@ func TestRegression_JSONTreeRecursive_L1(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows, err := db.Query(`SELECT count(*) FROM json_tree('{"a":{"b":{"c":1}}}')`)
-	if err != nil {
-		t.Fatalf("json_tree count: %v", err)
-	}
+	rows := qDB(t, db, `SELECT count(*) FROM json_tree('{"a":{"b":{"c":1}}}')`)
 	cnt := rows.Data[0][0]
 	// root + a + a.b + a.b.c = 4 nodes
 	if fmt.Sprintf("%v", cnt) != "4" {
@@ -70,10 +65,7 @@ func TestRegression_JSONGroupArray_L1(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO nums VALUES (1),(2),(3)`); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := db.Query(`SELECT json_group_array(n) FROM nums`)
-	if err != nil {
-		t.Fatalf("json_group_array: %v", err)
-	}
+	rows := qDB(t, db, `SELECT json_group_array(n) FROM nums`)
 	got := fmt.Sprintf("%v", rows.Data[0][0])
 	if got != "[1,2,3]" {
 		t.Errorf("json_group_array = %v, want [1,2,3]", got)
@@ -94,10 +86,7 @@ func TestRegression_JSONGroupObject_L1(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO kv2 VALUES ('a',1),('b',2)`); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := db.Query(`SELECT json_group_object(k, v) FROM kv2`)
-	if err != nil {
-		t.Fatalf("json_group_object: %v", err)
-	}
+	rows := qDB(t, db, `SELECT json_group_object(k, v) FROM kv2`)
 	got := fmt.Sprintf("%v", rows.Data[0][0])
 	// Result should be a valid JSON object containing a and b keys
 	parsed, valid := parseJSONForTest(got)
@@ -132,10 +121,7 @@ func TestRegression_JSONRoundTrip_L1(t *testing.T) {
 	}
 
 	// Verify the stored data
-	rows, err := db.Query(`SELECT data FROM docs WHERE id = 1`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rows := qDB(t, db, `SELECT data FROM docs WHERE id = 1`)
 	if len(rows.Data) != 1 {
 		t.Fatal("expected 1 row")
 	}
