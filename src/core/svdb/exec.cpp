@@ -462,6 +462,26 @@ static SvdbVal parse_literal(const std::string &v) {
         sv.type = SVDB_TYPE_TEXT;
         return sv;
     }
+    /* Hex blob literal: x'HEXHEX...' or X'HEXHEX...' (SQLite-compatible) */
+    if (v.size() >= 3 && (v[0] == 'x' || v[0] == 'X') && v[1] == '\'') {
+        sv.type = SVDB_TYPE_BLOB;
+        size_t end = v.rfind('\'');
+        if (end > 1) {
+            std::string hex = v.substr(2, end - 2);
+            std::string binary;
+            for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+                auto fromhex = [](char c) -> unsigned char {
+                    if (c >= '0' && c <= '9') return (unsigned char)(c - '0');
+                    if (c >= 'a' && c <= 'f') return (unsigned char)(c - 'a' + 10);
+                    if (c >= 'A' && c <= 'F') return (unsigned char)(c - 'A' + 10);
+                    return 0;
+                };
+                binary += (char)((fromhex(hex[i]) << 4) | fromhex(hex[i + 1]));
+            }
+            sv.sval = binary;
+        }
+        return sv;
+    }
     if (v[0] == '\'') {
         sv.type = SVDB_TYPE_TEXT;
         sv.sval = v.size() >= 2 ? v.substr(1, v.size() - 2) : "";
