@@ -112,6 +112,7 @@ set(SVDB_CORE_SOURCES
 
     # TM - Transaction Management
     core/TM/transaction.cpp
+    core/TM/mvcc.cpp
 
     # PB - Platform Bridges (VFS)
     core/PB/vfs.cpp
