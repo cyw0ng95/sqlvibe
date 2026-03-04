@@ -80,15 +80,16 @@ extern "C" svdb_ast_node_t* svdb_parser_parse_select(svdb_parser_t* parser,
         }
     }
 
-    /* Expect FROM */
-    if (!parser_expect_keyword(s, pos, "FROM")) return nullptr;
-
-    /* Read table name */
-    std::string table = parser_read_ident(s, pos);
-    if (table.empty()) return nullptr;
-
-    /* Read optional WHERE clause */
-    std::string where_text = parser_read_where(s, pos);
+    /* FROM is optional — SELECT without FROM produces a single-row result */
+    std::string table;
+    std::string where_text;
+    if (parser_expect_keyword(s, pos, "FROM")) {
+        /* Read table name */
+        table = parser_read_ident(s, pos);
+        if (table.empty()) return nullptr;
+        /* Read optional WHERE clause */
+        where_text = parser_read_where(s, pos);
+    }
 
     /* Build AST node */
     svdb_ast_node_t* node = svdb_ast_node_create(SVDB_AST_SELECT);
