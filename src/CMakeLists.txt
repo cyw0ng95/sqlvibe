@@ -55,6 +55,7 @@ set(SVDB_CORE_SOURCES
     core/DS/column_vector.cpp
     core/DS/hybrid_store.cpp
     core/DS/arena.cpp
+    core/DS/worker_pool.cpp
 
     # VM - Virtual Machine
     core/VM/hash.cpp
