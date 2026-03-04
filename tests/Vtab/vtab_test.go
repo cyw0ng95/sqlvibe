@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	DS "github.com/cyw0ng95/sqlvibe/internal/DS"
-	is "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/is"
+	IS "github.com/cyw0ng95/sqlvibe/internal/IS"
 	_ "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe" // ensure init() registers the series module
 	sqlvibe "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
@@ -15,7 +15,7 @@ import (
 
 // TestVTabRegistry_RegisterAndGet verifies that modules can be registered and retrieved.
 func TestVTabRegistry_RegisterAndGet(t *testing.T) {
-	mod, ok := is.GetVTabModule("series")
+	mod, ok := IS.GetVTabModule("series")
 	if !ok {
 		t.Fatal("series module not found in registry")
 	}
@@ -26,7 +26,7 @@ func TestVTabRegistry_RegisterAndGet(t *testing.T) {
 
 // TestVTabRegistry_UnknownModule verifies that looking up an unregistered name returns false.
 func TestVTabRegistry_UnknownModule(t *testing.T) {
-	_, ok := is.GetVTabModule("__no_such_module__")
+	_, ok := IS.GetVTabModule("__no_such_module__")
 	if ok {
 		t.Fatal("expected GetVTabModule to return false for unknown module")
 	}
@@ -37,9 +37,9 @@ func TestVTabRegistry_Overwrite(t *testing.T) {
 	// Register a dummy module, then overwrite with another.
 	dummy1 := &dummyModule{id: "first"}
 	dummy2 := &dummyModule{id: "second"}
-	is.RegisterVTabModule("__test_overwrite__", dummy1)
-	is.RegisterVTabModule("__test_overwrite__", dummy2)
-	mod, ok := is.GetVTabModule("__test_overwrite__")
+	IS.RegisterVTabModule("__test_overwrite__", dummy1)
+	IS.RegisterVTabModule("__test_overwrite__", dummy2)
+	mod, ok := IS.GetVTabModule("__test_overwrite__")
 	if !ok {
 		t.Fatal("module not found after overwrite")
 	}
@@ -50,7 +50,7 @@ func TestVTabRegistry_Overwrite(t *testing.T) {
 
 // TestVTabRegistry_ListModules verifies that ListVTabModules returns at least "series".
 func TestVTabRegistry_ListModules(t *testing.T) {
-	names := is.ListVTabModules()
+	names := IS.ListVTabModules()
 	found := false
 	for _, n := range names {
 		if n == "series" {
@@ -652,7 +652,7 @@ func TestVTabCursorHybridStore_RowID(t *testing.T) {
 
 // TestSeriesVTab_CursorRowID verifies seriesCursor.RowID returns correct values.
 func TestSeriesVTab_CursorRowID(t *testing.T) {
-	mod, ok := is.GetVTabModule("series")
+	mod, ok := IS.GetVTabModule("series")
 	if !ok {
 		t.Fatal("series module not found")
 	}
@@ -681,7 +681,7 @@ func TestSeriesVTab_CursorRowID(t *testing.T) {
 // TestSeriesVTab_CursorColumnOutOfRange verifies seriesCursor.Column returns
 // an error for invalid column indices.
 func TestSeriesVTab_CursorColumnOutOfRange(t *testing.T) {
-	mod, ok := is.GetVTabModule("series")
+	mod, ok := IS.GetVTabModule("series")
 	if !ok {
 		t.Fatal("series module not found")
 	}
@@ -703,7 +703,7 @@ func TestSeriesVTab_CursorColumnOutOfRange(t *testing.T) {
 
 // TestSeriesVTab_BestIndex verifies seriesVTab.BestIndex is callable (no-op).
 func TestSeriesVTab_BestIndex(t *testing.T) {
-	mod, ok := is.GetVTabModule("series")
+	mod, ok := IS.GetVTabModule("series")
 	if !ok {
 		t.Fatal("series module not found")
 	}
@@ -718,7 +718,7 @@ func TestSeriesVTab_BestIndex(t *testing.T) {
 
 // TestSeriesVTab_Connect verifies Connect produces a working vtab (same as Create).
 func TestSeriesVTab_Connect(t *testing.T) {
-	mod, ok := is.GetVTabModule("series")
+	mod, ok := IS.GetVTabModule("series")
 	if !ok {
 		t.Fatal("series module not found")
 	}
@@ -748,7 +748,7 @@ func TestSeriesVTab_Connect(t *testing.T) {
 
 // TestSeriesVTab_Disconnect verifies Disconnect does not error.
 func TestSeriesVTab_Disconnect(t *testing.T) {
-	mod, ok := is.GetVTabModule("series")
+	mod, ok := IS.GetVTabModule("series")
 	if !ok {
 		t.Fatal("series module not found")
 	}

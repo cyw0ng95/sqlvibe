@@ -5,14 +5,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	pb2 "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/pb"
+	PB "github.com/cyw0ng95/sqlvibe/internal/PB"
 )
 
 func setupTestPageManager(t *testing.T, pageSize int) *PageManager {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test.db")
 
-	file, err := pb2.OpenFile(testPath, pb2.O_CREATE|pb2.O_RDWR)
+	file, err := PB.OpenFile(testPath, PB.O_CREATE|PB.O_RDWR)
 	if err != nil {
 		t.Fatalf("failed to open file: %v", err)
 	}

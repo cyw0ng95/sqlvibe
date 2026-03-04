@@ -5,12 +5,12 @@ import (
 	"time"
 
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
-	pb2 "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/pb"
+	PB "github.com/cyw0ng95/sqlvibe/internal/PB"
 )
 
 func TestTransactionManager_Basic(t *testing.T) {
 	// Create in-memory page manager for testing
-	file, err := pb2.OpenFile(":memory:", pb2.O_RDWR|pb2.O_CREATE)
+	file, err := PB.OpenFile(":memory:", PB.O_RDWR|PB.O_CREATE)
 	if err != nil {
 		t.Fatalf("Failed to open memory file: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestTransactionManager_Basic(t *testing.T) {
 
 func TestTransactionManager_Concurrent(t *testing.T) {
 	// Create in-memory page manager for testing
-	file, err := pb2.OpenFile(":memory:", pb2.O_RDWR|pb2.O_CREATE)
+	file, err := PB.OpenFile(":memory:", PB.O_RDWR|PB.O_CREATE)
 	if err != nil {
 		t.Fatalf("Failed to open memory file: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestTransactionManager_Concurrent(t *testing.T) {
 
 func TestTransactionManager_LockAcquisition(t *testing.T) {
 	// Create in-memory page manager for testing
-	file, err := pb2.OpenFile(":memory:", pb2.O_RDWR|pb2.O_CREATE)
+	file, err := PB.OpenFile(":memory:", PB.O_RDWR|PB.O_CREATE)
 	if err != nil {
 		t.Fatalf("Failed to open memory file: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestTransactionManager_LockAcquisition(t *testing.T) {
 
 func TestTransactionManager_ActiveCount(t *testing.T) {
 	// Create in-memory page manager for testing
-	file, err := pb2.OpenFile(":memory:", pb2.O_RDWR|pb2.O_CREATE)
+	file, err := PB.OpenFile(":memory:", PB.O_RDWR|PB.O_CREATE)
 	if err != nil {
 		t.Fatalf("Failed to open memory file: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestTransactionManager_ActiveCount(t *testing.T) {
 
 func TestTransaction_RecordChange(t *testing.T) {
 	// Create in-memory page manager for testing
-	file, err := pb2.OpenFile(":memory:", pb2.O_RDWR|pb2.O_CREATE)
+	file, err := PB.OpenFile(":memory:", PB.O_RDWR|PB.O_CREATE)
 	if err != nil {
 		t.Fatalf("Failed to open memory file: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestTransaction_RecordChange(t *testing.T) {
 
 func TestTransactionManager_Close(t *testing.T) {
 	// Create in-memory page manager for testing
-	file, err := pb2.OpenFile(":memory:", pb2.O_RDWR|pb2.O_CREATE)
+	file, err := PB.OpenFile(":memory:", PB.O_RDWR|PB.O_CREATE)
 	if err != nil {
 		t.Fatalf("Failed to open memory file: %v", err)
 	}
@@ -361,7 +361,7 @@ func TestTransactionManager_Close(t *testing.T) {
 
 func TestTransaction_LockTimeout(t *testing.T) {
 	// Create in-memory page manager for testing
-	file, err := pb2.OpenFile(":memory:", pb2.O_RDWR|pb2.O_CREATE)
+	file, err := PB.OpenFile(":memory:", PB.O_RDWR|PB.O_CREATE)
 	if err != nil {
 		t.Fatalf("Failed to open memory file: %v", err)
 	}

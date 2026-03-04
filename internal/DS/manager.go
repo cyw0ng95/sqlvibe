@@ -1,19 +1,19 @@
 package DS
 
 import (
-	pb2 "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/pb"
+	PB "github.com/cyw0ng95/sqlvibe/internal/PB"
 	"github.com/cyw0ng95/sqlvibe/internal/SF/util"
 )
 
 type PageManager struct {
-	file     pb2.File
+	file     PB.File
 	pageSize int
 	numPages uint32
 	header   *DatabaseHeader
 	freeList []uint32
 }
 
-func NewPageManager(file pb2.File, pageSize int) (*PageManager, error) {
+func NewPageManager(file PB.File, pageSize int) (*PageManager, error) {
 	util.AssertNotNil(file, "file")
 	util.Assert(pageSize > 0, "page size must be positive: %d", pageSize)
 	util.Assert(pageSize >= MinPageSize, "page size must be at least %d", MinPageSize)

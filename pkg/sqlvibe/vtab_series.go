@@ -5,11 +5,11 @@ import (
 	"strconv"
 
 	DS "github.com/cyw0ng95/sqlvibe/internal/DS"
-	is "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/is"
+	IS "github.com/cyw0ng95/sqlvibe/internal/IS"
 )
 
 func init() {
-	is.RegisterVTabModule("series", &seriesModule{})
+	IS.RegisterVTabModule("series", &seriesModule{})
 }
 
 // seriesModule implements DS.VTabModule for the series virtual table.

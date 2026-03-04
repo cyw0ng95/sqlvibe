@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	DS "github.com/cyw0ng95/sqlvibe/internal/DS"
-	is "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/is"
+	IS "github.com/cyw0ng95/sqlvibe/internal/IS"
 )
 
 // vtabState holds the virtual table state for a Database instance.
@@ -133,7 +133,7 @@ func (db *Database) execCreateVirtualTable(sql string) (bool, error) {
 			return true, fmt.Errorf("table %s already exists", name)
 		}
 	}
-	mod, found := is.GetVTabModule(strings.ToLower(modName))
+	mod, found := IS.GetVTabModule(strings.ToLower(modName))
 	if !found {
 		return true, fmt.Errorf("no such module: %s", modName)
 	}
@@ -187,7 +187,7 @@ func (db *Database) queryVTab(sql string) (*Rows, bool, error) {
 	var vt DS.VTab
 	if isFunc {
 		// Table function call: resolve module name
-		mod, found := is.GetVTabModule(strings.ToLower(tableName))
+		mod, found := IS.GetVTabModule(strings.ToLower(tableName))
 		if !found {
 			return nil, false, nil
 		}
