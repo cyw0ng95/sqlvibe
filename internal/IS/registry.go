@@ -10,7 +10,7 @@ import (
 
 // Registry manages all information_schema views using C++ implementation.
 type Registry struct {
-	btree *DS.BTree
+	btree  *DS.BTree
 	cppReg *ISRegistry
 }
 
