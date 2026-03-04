@@ -179,74 +179,57 @@ internal/DS/skip_list.go       (295 LOC) - Remove
 
 ---
 
-## Phase 3: QP/CG/TM Layer ⏳ PENDING
+## Phase 3: QP/CG/TM Layer ⏳ PLANNING COMPLETE
 
-**Duration**: 2026-03-26 to 2026-04-22  
-**Status**: ⏳ Pending
+**Duration**: 2026-03-11 to 2026-04-08
+**Status**: ⏳ Planning Complete - Ready to Start
 
-### QP (Query Processing)
+### Overview
 
-**Current State**:
-- C++: `src/core/QP/` (2000 LOC) - Tokenizer, parser, binder, analyzer
-- Go: `internal/QP/` (4000 LOC) - AST types, optimizer, normalizer
+Phase 3 migrates Query Processing (QP), Code Generation (CG), and Transaction Management (TM) layers.
 
-**Migration Plan**:
-1. Keep Go AST types as pure data structures (no logic)
-2. Move tokenizer to C++ calls only
-3. Move parser to C++ calls only
-4. Move optimizer to C++
-5. Move normalizer to C++
+| Sub-Phase | Component | Duration | Target Reduction |
+|-----------|-----------|----------|------------------|
+| 3.1 | QP Migration | 2026-03-11 to 2026-03-18 | 3000 LOC → 400 LOC (87%) |
+| 3.2 | CG Migration | 2026-03-18 to 2026-03-25 | 3200 LOC → 400 LOC (87%) |
+| 3.3 | TM Migration | 2026-03-25 to 2026-04-01 | 1700 LOC → 250 LOC (85%) |
+| 3.4 | Integration | 2026-04-01 to 2026-04-08 | Testing + benchmarks |
 
-**Go Files to Reduce**:
-```
-internal/QP/tokenizer.go  (795 LOC) → 50 LOC wrapper
-internal/QP/parser.go     (584 LOC) → 100 LOC wrapper
-internal/QP/analyzer.go   (300 LOC) → 50 LOC wrapper
-internal/QP/optimizer.go  (412 LOC) → 50 LOC wrapper
-internal/QP/binder.go     (271 LOC) → 50 LOC wrapper
-```
+### Detailed Plan
 
-### CG (Code Generation)
+See [`docs/phase3-plan.md`](phase3-plan.md) for the complete Phase 3 migration plan.
 
-**Current State**:
-- C++: `src/core/CG/` (1500 LOC) - Bytecode compiler, optimizer
-- Go: `internal/CG/` (2500 LOC) - Compiler orchestration, plan cache
+### Current State
 
-**Migration Plan**:
-1. Move compiler orchestration to C++
-2. Move bytecode optimizer to C++
-3. Move plan cache to C++
-4. Move expression compiler to C++
+| Layer | C++ Implementation | Go Wrapper | Status |
+|-------|-------------------|------------|--------|
+| **QP** (Query Processing) | ✅ 2300 LOC (75%) | ⚠️ 3000 LOC | 📋 Ready |
+| **CG** (Code Generation) | ✅ 1600 LOC (50%) | ⚠️ 3200 LOC | 📋 Ready |
+| **TM** (Transaction Mgmt) | ⚠️ 500 LOC (25%) | ⚠️ 1700 LOC | 📋 Ready |
 
-**Go Files to Reduce**:
-```
-internal/CG/compiler.go            (1315 LOC) → 100 LOC wrapper
-internal/CG/bytecode_compiler.go   (340 LOC) → 50 LOC wrapper
-internal/CG/expr_compiler.go       (300 LOC) → 50 LOC wrapper
-internal/CG/optimizer.go           (719 LOC) → 50 LOC wrapper
-internal/CG/plan_cache.go          (200 LOC) → 50 LOC wrapper
-```
+### Key Tasks
 
-### TM (Transaction Management)
+#### QP Migration (Week of 2026-03-11)
 
-**Current State**:
-- C++: `src/core/TM/` (500 LOC) - Transaction basics
-- Go: `internal/TM/` (1500 LOC) - MVCC, locks, deadlock detection
+- [ ] Create `internal/QP/qp_cgo.go` wrapper
+- [ ] Migrate `Tokenize()` to C++
+- [ ] Migrate `Parse()` to C++
+- [ ] Create C++ optimizer
+- [ ] Migrate `Optimize()` to C++
 
-**Migration Plan**:
-1. Move MVCC engine to C++
-2. Move lock manager to C++
-3. Move deadlock detector to C++
-4. Move WAL coordination to C++
+#### CG Migration (Week of 2026-03-18)
 
-**Go Files to Reduce**:
-```
-internal/TM/transaction.go  (404 LOC) → 50 LOC wrapper
-internal/TM/mvcc.go         (400 LOC) → 50 LOC wrapper
-internal/TM/lock.go         (350 LOC) → 50 LOC wrapper
-internal/TM/isolation.go    (200 LOC) → 50 LOC wrapper
-internal/TM/wal.go          (371 LOC) → 50 LOC wrapper
-```
+- [ ] Create `internal/CG/cg_cgo.go` wrapper
+- [ ] Migrate `Compile()` to C++
+- [ ] Enhance C++ bytecode optimizer
+- [ ] Migrate plan cache to C++
+
+#### TM Migration (Week of 2026-03-25)
+
+- [ ] Create C++ MVCC engine (`src/core/TM/mvcc.cpp`)
+- [ ] Create C++ lock manager (`src/core/TM/lock_manager.cpp`)
+- [ ] Create `internal/TM/tm_cgo.go` wrapper
+- [ ] Migrate transaction operations to C++
 
 ---
 
@@ -404,12 +387,12 @@ Total: ~600 LOC Go wrappers
 | Phase | Start | End | Duration | Status |
 |-------|-------|-----|----------|--------|
 | **Phase 1: VM** | 2026-02-15 | 2026-03-03 | 2.5 weeks | ✅ Complete |
-| **Phase 2: DS** | 2026-03-04 | 2026-03-25 | 3 weeks | 🔄 In Progress (35%) |
-| **Phase 3: QP/CG/TM** | 2026-03-26 | 2026-04-22 | 4 weeks | ⏳ Pending |
-| **Phase 4: Cleanup** | 2026-04-23 | 2026-05-07 | 2 weeks | ⏳ Pending |
+| **Phase 2: DS** | 2026-03-04 | 2026-03-25 | 3 weeks | 🔄 In Progress (65%) |
+| **Phase 3: QP/CG/TM** | 2026-03-11 | 2026-04-08 | 4 weeks | 📋 Planning Complete |
+| **Phase 4: Cleanup** | 2026-04-09 | 2026-04-22 | 2 weeks | ⏳ Pending |
 
 **Total Duration**: 12 weeks (3 months)
-**Completion Target**: 2026-05-07
+**Completion Target**: 2026-04-22
 
 ### Phase 2 Progress Log
 
@@ -471,31 +454,41 @@ Total: ~600 LOC Go wrappers
 7. [x] C++ PageManager implementation with full I/O
 8. [x] All DS/VM/TM tests passing
 
-### Week of 2026-03-11
+### Week of 2026-03-11 - Phase 2 Completion + Phase 3 Start
 
-1. [ ] Migrate QueryEngine to use C++ PageManager
-2. [ ] Migrate TransactionManager to use C++ PageManager
-3. [ ] Migrate BTree to use C++ PageManager (optional - callback pattern works)
-4. [ ] Remove Go PageManager implementation (manager.go)
-5. [ ] Update all DS imports to use C++ wrappers
+1. [ ] Complete remaining DS migration tasks
+2. [ ] Create `internal/QP/qp_cgo.go` wrapper
+3. [ ] Migrate `Tokenize()` to C++
+4. [ ] Migrate `Parse()` to C++
+5. [ ] Write QP CGO tests
+6. [ ] Benchmark QP operations
 
-### Week of 2026-03-18
+### Week of 2026-03-18 - CG Migration
 
-1. [ ] Complete DS layer migration
-2. [ ] Pass all DS tests
-3. [ ] Meet DS performance targets
-4. [ ] Start QP layer planning
+1. [ ] Create `internal/CG/cg_cgo.go` wrapper
+2. [ ] Migrate `Compile()` to C++
+3. [ ] Enhance C++ bytecode optimizer
+4. [ ] Migrate plan cache to C++
+5. [ ] Write CG CGO tests
 
-### Week of 2026-03-25
+### Week of 2026-03-25 - TM Migration
 
-1. [ ] Phase 2 code freeze
+1. [ ] Create C++ MVCC engine
+2. [ ] Create C++ lock manager
+3. [ ] Create `internal/TM/tm_cgo.go` wrapper
+4. [ ] Migrate transaction operations to C++
+5. [ ] Write TM CGO tests
+
+### Week of 2026-04-01 - Integration
+
+1. [ ] Full integration testing
 2. [ ] Performance benchmarking
-3. [ ] Documentation update
-4. [ ] Begin Phase 3 (QP/CG/TM migration)
+3. [ ] Fix any regressions
+4. [ ] Documentation update
 
 ---
 
-**Document Version**: 1.3
+**Document Version**: 1.4
 **Last Updated**: 2026-03-04
 **Maintainer**: sqlvibe team
 **Next Review**: 2026-03-11
