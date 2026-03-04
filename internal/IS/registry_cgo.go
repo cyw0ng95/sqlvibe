@@ -218,3 +218,52 @@ func goStringOrNull(s *C.char) string {
 	}
 	return C.GoString(s)
 }
+
+// ToSQL converts column info to database/sql compatible format.
+func (ci ColumnInfo) ToSQL() []any {
+	return []any{
+		ci.ColumnName,
+		ci.TableName,
+		ci.TableSchema,
+		ci.DataType,
+		ci.IsNullable,
+		ci.ColumnDefault,
+	}
+}
+
+// ToSQL converts table info to database/sql compatible format.
+func (ti TableInfo) ToSQL() []any {
+	return []any{
+		ti.TableName,
+		ti.TableSchema,
+		ti.TableType,
+	}
+}
+
+// ToSQL converts view info to database/sql compatible format.
+func (vi ViewInfo) ToSQL() []any {
+	return []any{
+		vi.TableName,
+		vi.TableSchema,
+		vi.ViewDefinition,
+	}
+}
+
+// ToSQL converts constraint info to database/sql compatible format.
+func (ci ConstraintInfo) ToSQL() []any {
+	return []any{
+		ci.ConstraintName,
+		ci.TableName,
+		ci.TableSchema,
+		ci.ConstraintType,
+	}
+}
+
+// ToSQL converts referential constraint to database/sql compatible format.
+func (rc ReferentialConstraint) ToSQL() []any {
+	return []any{
+		rc.ConstraintName,
+		rc.UniqueConstraintSchema,
+		rc.UniqueConstraintName,
+	}
+}

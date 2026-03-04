@@ -3,60 +3,50 @@ package IS
 import (
 	"fmt"
 	"strings"
+	"unsafe"
 
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
 )
 
-// Registry manages all information_schema views
+// Registry manages all information_schema views using C++ implementation.
 type Registry struct {
-	btree           *DS.BTree
-	colsView        *COLUMNSView
-	tablesView      *TABLESView
-	viewsView       *VIEWSView
-	constraintsView *CONSTRAINTSView
-	referentialView *REFERENTIALView
+	btree *DS.BTree
+	cppReg *ISRegistry
 }
 
-// NewRegistry creates a new information schema registry
+// NewRegistry creates a new information schema registry using C++ implementation.
 func NewRegistry(btree *DS.BTree) *Registry {
+	var btreeHandle unsafe.Pointer
+	if btree != nil {
+		/* TODO: Get C++ btree handle from Go btree */
+	}
+	
 	return &Registry{
-		btree:           btree,
-		colsView:        NewCOLUMNSView(btree),
-		tablesView:      NewTABLESView(btree),
-		viewsView:       NewVIEWSView(btree),
-		constraintsView: NewCONSTRAINTSView(btree),
-		referentialView: NewREFERENTIALView(btree),
+		btree:  btree,
+		cppReg: NewISRegistry(btreeHandle),
+	}
+}
+
+// Close closes the registry and frees C++ resources.
+func (r *Registry) Close() {
+	if r.cppReg != nil {
+		r.cppReg.Destroy()
+		r.cppReg = nil
 	}
 }
 
 // IsInformationSchemaTable returns true if the table name is an information_schema table
 func (r *Registry) IsInformationSchemaTable(tableName string) bool {
-	if !strings.HasPrefix(strings.ToLower(tableName), "information_schema") {
-		return false
-	}
-
-	parts := strings.Split(tableName, ".")
-	if len(parts) != 2 {
-		return false
-	}
-
-	viewName := strings.ToLower(parts[1])
-
-	switch viewName {
-	case "columns", "tables", "views", "table_constraints", "referential_constraints":
-		return true
-	default:
-		return false
-	}
+	return IsInformationSchemaTable(tableName)
 }
 
-// QueryInformationSchema executes a query against information_schema views
+// QueryInformationSchema executes a query against information_schema views using C++ implementation.
 func (r *Registry) QueryInformationSchema(viewName, filterSchema, filterTable string) ([][]any, error) {
 	var results [][]any
 
 	switch strings.ToLower(viewName) {
 	case "columns":
-		cols, err := r.colsView.Query(filterSchema, filterTable)
+		cols, err := r.cppReg.QueryColumns(filterSchema, filterTable)
 		if err != nil {
 			return nil, err
 		}
@@ -65,7 +55,7 @@ func (r *Registry) QueryInformationSchema(viewName, filterSchema, filterTable st
 		}
 
 	case "tables":
-		tables, err := r.tablesView.Query(filterSchema, filterTable)
+		tables, err := r.cppReg.QueryTables(filterSchema, filterTable)
 		if err != nil {
 			return nil, err
 		}
@@ -74,7 +64,7 @@ func (r *Registry) QueryInformationSchema(viewName, filterSchema, filterTable st
 		}
 
 	case "views":
-		views, err := r.viewsView.Query(filterSchema, filterTable)
+		views, err := r.cppReg.QueryViews(filterSchema, filterTable)
 		if err != nil {
 			return nil, err
 		}
@@ -83,7 +73,7 @@ func (r *Registry) QueryInformationSchema(viewName, filterSchema, filterTable st
 		}
 
 	case "table_constraints":
-		constraints, err := r.constraintsView.Query(filterSchema, filterTable)
+		constraints, err := r.cppReg.QueryConstraints(filterSchema, filterTable)
 		if err != nil {
 			return nil, err
 		}
@@ -92,7 +82,7 @@ func (r *Registry) QueryInformationSchema(viewName, filterSchema, filterTable st
 		}
 
 	case "referential_constraints":
-		refs, err := r.referentialView.Query(filterSchema, "")
+		refs, err := r.cppReg.QueryReferential(filterSchema, filterTable)
 		if err != nil {
 			return nil, err
 		}
