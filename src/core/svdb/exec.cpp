@@ -1036,7 +1036,7 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
             if (cdit != db->schema[tname].end() && cdit->second.not_null) {
                 auto rit = row.find(cn);
                 if (rit == row.end() || rit->second.type == SVDB_TYPE_NULL) {
-                    if (on_conflict_nothing) { continue; }
+                    /* INSERT OR IGNORE only suppresses UNIQUE conflicts, not NOT NULL */
                     db->last_error = "NOT NULL constraint failed: " + tname + "." + cn;
                     svdb_ast_node_free(ast); svdb_parser_destroy(p);
                     return SVDB_ERR;
