@@ -1,4 +1,4 @@
-package IS
+package is
 
 import (
 	"fmt"

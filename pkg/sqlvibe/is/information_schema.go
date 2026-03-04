@@ -1,4 +1,4 @@
-package IS
+package is
 
 // InformationSchema package provides SQLite-compatible information_schema views
 // See: https://www.sqlite.org/information_schema.html

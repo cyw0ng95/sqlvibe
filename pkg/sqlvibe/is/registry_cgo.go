@@ -1,10 +1,10 @@
-package IS
+package is
 
 import "errors"
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/../../.build/cmake/lib -lsvdb -lstdc++
-#cgo CFLAGS: -I${SRCDIR}/../../src/core/IS
+#cgo LDFLAGS: -L${SRCDIR}/../../../.build/cmake/lib -lsvdb -lstdc++
+#cgo CFLAGS: -I${SRCDIR}/../../../src/core/IS
 #include "is_registry.h"
 #include <stdlib.h>
 */
