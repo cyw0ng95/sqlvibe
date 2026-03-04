@@ -72,7 +72,7 @@ temp/
 
 # Special filename that can be accidentally created
 # (appears as file named ":memory:" when using :memory: backend incorrectly)
-":memory:"
+**/:memory:
 
 # CodeQL build directory
 _codeql_build_dir/
