@@ -1,8 +1,8 @@
-package svdbcgo
+package cgo
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/../../.build/cmake/lib -lsvdb -lstdc++
-#cgo CFLAGS: -I${SRCDIR}/../../src/core/svdb
+#cgo LDFLAGS: -L${SRCDIR}/../../../.build/cmake/lib -lsvdb -lstdc++
+#cgo CFLAGS: -I${SRCDIR}/../../../src/core/svdb
 #include "svdb.h"
 #include <stdlib.h>
 */

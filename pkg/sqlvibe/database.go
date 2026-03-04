@@ -1,6 +1,6 @@
 // Package sqlvibe provides a high-performance, SQLite-compatible in-memory
 // database engine. The v0.11.4+ implementation delegates all SQL execution
-// to a self-contained C++ engine via internal/cgo (svdbcgo). Virtual tables
+// to a self-contained C++ engine via pkg/sqlvibe/cgo (svdbcgo). Virtual tables
 // are now fully implemented in C++ with no Go-side handling.
 package sqlvibe
 
@@ -15,13 +15,13 @@ import (
 	"strings"
 	"sync"
 
-	svdbcgo "github.com/cyw0ng95/sqlvibe/internal/cgo"
+	cgo "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe/cgo"
 )
 
 // Database is the primary handle for a sqlvibe database.
 // All methods are safe to call concurrently from multiple goroutines.
 type Database struct {
-	cdb *svdbcgo.DB
+	cdb *cgo.DB
 }
 
 // Result holds the outcome of a non-query SQL execution.
@@ -148,7 +148,7 @@ func scanValue(dst interface{}, src interface{}) error {
 
 // Statement is a compiled SQL statement for repeated execution.
 type Statement struct {
-	cstmt *svdbcgo.Stmt
+	cstmt *cgo.Stmt
 	db    *Database
 	sql   string
 }
@@ -175,7 +175,7 @@ func (s *Statement) Close() error {
 
 // Transaction is an in-progress database transaction.
 type Transaction struct {
-	ctx *svdbcgo.Tx
+	ctx *cgo.Tx
 	db  *Database
 }
 
@@ -213,7 +213,7 @@ func (tx *Transaction) Rollback() error {
 
 // Open opens (or creates) a database at path. Use ":memory:" for in-memory databases.
 func Open(path string) (*Database, error) {
-	cdb, err := svdbcgo.Open(path)
+	cdb, err := cgo.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -376,7 +376,7 @@ func (db *Database) ClearResultCache() {}
 func (db *Database) GetHybridStore(tableName string) interface{} { return nil }
 
 // Version returns the svdb engine version string.
-func Version() string { return svdbcgo.Version() }
+func Version() string { return cgo.Version() }
 
 // ── Internal helpers ──────────────────────────────────────────────
 
