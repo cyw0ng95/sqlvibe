@@ -269,12 +269,16 @@ func BenchmarkStatementPool(b *testing.B) {
 }
 
 // -----------------------------------------------------------------
-// Slab Allocator (v0.9.1)
+// Slab Allocator (v0.9.1) - DISABLED: SlabAllocator moved to C++
 // -----------------------------------------------------------------
 
 // BenchmarkSlabAllocator measures allocation throughput for the slab allocator
 // vs plain make([]byte, n) to quantify GC pressure reduction.
+// Note: Disabled in v0.11.2 as SlabAllocator is now in C++ (src/core/DS/slab.cpp)
+// A new benchmark will be added in a future migration step.
 func BenchmarkSlabAllocator(b *testing.B) {
+	b.Skip("SlabAllocator migrated to C++ - benchmark pending")
+	
 	b.Run("SlabAlloc_64", func(b *testing.B) {
 		sa := DS.NewSlabAllocator()
 		b.ResetTimer()
