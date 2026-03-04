@@ -59,6 +59,7 @@ set(SVDB_CORE_SOURCES
     core/DS/prefetch.cpp
     core/DS/slab.cpp
     core/DS/row.cpp
+    core/DS/metrics.cpp
 
     # VM - Virtual Machine
     core/VM/hash.cpp
