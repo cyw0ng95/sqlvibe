@@ -141,6 +141,15 @@ static bool glob_match(const std::string &text, const std::string &pat) {
 
 /* ── Expression evaluator ────────────────────────────────────────── */
 
+/* Thread-local DB context for subquery support */
+static thread_local svdb_db_t *g_query_db = nullptr;
+/* Thread-local outer row context for correlated subqueries */
+static thread_local const Row *g_outer_row = nullptr;
+static thread_local const std::vector<std::string> *g_outer_col_order = nullptr;
+
+/* Forward declaration of svdb_query_internal (defined later) */
+svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql, svdb_rows_t **rows_out);
+
 /* Forward declarations */
 static SvdbVal eval_expr(const std::string &expr, const Row &row,
                           const std::vector<std::string> &col_order,
@@ -159,29 +168,115 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
     if (qry_upper(e) == "TRUE")  { SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 1; return v; }
     if (qry_upper(e) == "FALSE") { SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0; return v; }
 
+    /* Scalar subquery: SELECT ... (called after outer-paren stripping in caller) */
+    {
+        std::string eu_s = qry_upper(e);
+        if (eu_s.size() >= 7 && eu_s.substr(0, 7) == "SELECT " && g_query_db) {
+            /* Substitute qualified outer row refs */
+            std::string sub_sql = e;
+            for (auto &kv : row) {
+                if (kv.first.empty() || kv.first.find('.') == std::string::npos) continue;
+                std::string repl;
+                if (kv.second.type == SVDB_TYPE_NULL) repl = "NULL";
+                else if (kv.second.type == SVDB_TYPE_INT) repl = std::to_string(kv.second.ival);
+                else if (kv.second.type == SVDB_TYPE_REAL) {
+                    char buf[64]; snprintf(buf, sizeof(buf), "%.17g", kv.second.rval); repl = buf;
+                } else { repl = "'" + kv.second.sval + "'"; }
+                for (size_t p = sub_sql.find(kv.first); p != std::string::npos;
+                     p = sub_sql.find(kv.first, p)) {
+                    bool lb = (p == 0 || (!isalnum((unsigned char)sub_sql[p-1]) && sub_sql[p-1] != '_'));
+                    bool rb = (p + kv.first.size() >= sub_sql.size() ||
+                               (!isalnum((unsigned char)sub_sql[p+kv.first.size()]) && sub_sql[p+kv.first.size()] != '_'));
+                    if (lb && rb) { sub_sql.replace(p, kv.first.size(), repl); p += repl.size(); }
+                    else { p += kv.first.size(); }
+                }
+            }
+            svdb_rows_t *sub_rows = nullptr;
+            svdb_code_t rc = svdb_query_internal(g_query_db, sub_sql, &sub_rows);
+            if (rc == SVDB_OK && sub_rows && !sub_rows->rows.empty() && !sub_rows->rows[0].empty()) {
+                SvdbVal result = sub_rows->rows[0][0];
+                delete sub_rows;
+                return result;
+            }
+            if (sub_rows) delete sub_rows;
+            return SvdbVal{};
+        }
+    }
+
     /* Parenthesised expression */
     if (e.front() == '(' && e.back() == ')') {
         int depth = 0;
         bool balanced = true;
-        for (size_t i = 0; i < e.size() - 1; ++i) {
+        for (size_t i = 1; i < e.size() - 1; ++i) {
             if (e[i] == '(') ++depth;
             else if (e[i] == ')') { if (--depth < 0) { balanced = false; break; } }
         }
-        if (balanced && depth == 0)
-            return eval_expr(e.substr(1, e.size()-2), row, col_order);
+        if (balanced && depth == 0) {
+            /* Check if inner content is a SELECT — handle as scalar subquery */
+            std::string inner = qry_trim(e.substr(1, e.size()-2));
+            std::string inner_u = qry_upper(inner);
+            if (inner_u.size() >= 6 && inner_u.substr(0, 7) == "SELECT ") {
+                if (g_query_db) {
+                    /* For correlated subqueries, substitute ONLY outer row qualified refs (table.col) */
+                    std::string sub_sql = inner;
+                    for (auto &kv : row) {
+                        if (kv.first.empty()) continue;
+                        /* Only substitute qualified references (containing '.') */
+                        if (kv.first.find('.') == std::string::npos) continue;
+                        std::string repl;
+                        if (kv.second.type == SVDB_TYPE_NULL) repl = "NULL";
+                        else if (kv.second.type == SVDB_TYPE_INT) repl = std::to_string(kv.second.ival);
+                        else if (kv.second.type == SVDB_TYPE_REAL) {
+                            char buf[64]; snprintf(buf, sizeof(buf), "%.17g", kv.second.rval); repl = buf;
+                        } else { repl = "'" + kv.second.sval + "'"; }
+                        for (size_t p = sub_sql.find(kv.first); p != std::string::npos;
+                             p = sub_sql.find(kv.first, p)) {
+                            bool lb = (p == 0 || (!isalnum((unsigned char)sub_sql[p-1]) && sub_sql[p-1] != '_'));
+                            bool rb = (p + kv.first.size() >= sub_sql.size() ||
+                                       (!isalnum((unsigned char)sub_sql[p+kv.first.size()]) && sub_sql[p+kv.first.size()] != '_'));
+                            if (lb && rb) { sub_sql.replace(p, kv.first.size(), repl); p += repl.size(); }
+                            else { p += kv.first.size(); }
+                        }
+                    }
+                    /* Execute subquery and return first column of first row */
+                    svdb_rows_t *sub_rows = nullptr;
+                    svdb_code_t rc = svdb_query_internal(g_query_db, sub_sql, &sub_rows);
+                    if (rc == SVDB_OK && sub_rows && !sub_rows->rows.empty() && !sub_rows->rows[0].empty()) {
+                        SvdbVal result = sub_rows->rows[0][0];
+                        delete sub_rows;
+                        return result;
+                    }
+                    if (sub_rows) delete sub_rows;
+                }
+                return SvdbVal{}; /* NULL if no rows */
+            }
+            return eval_expr(inner, row, col_order);
+        }
     }
 
-    /* String literal */
-    if (e[0] == '\'' ) {
-        SvdbVal v; v.type = SVDB_TYPE_TEXT;
-        v.sval = e.size() >= 2 ? e.substr(1, e.size()-2) : "";
-        std::string out; out.reserve(v.sval.size());
-        for (size_t i = 0; i < v.sval.size(); ++i) {
-            if (v.sval[i] == '\'' && i+1 < v.sval.size() && v.sval[i+1] == '\'')
-                { out += '\''; ++i; }
-            else out += v.sval[i];
+    /* String literal — only if the ENTIRE expression is a single quoted string */
+    if (e[0] == '\'') {
+        /* Find the matching closing quote (skip escaped '') */
+        size_t close_pos = std::string::npos;
+        for (size_t i = 1; i < e.size(); ++i) {
+            if (e[i] == '\'') {
+                if (i + 1 < e.size() && e[i+1] == '\'') { ++i; /* escaped '' */ }
+                else { close_pos = i; break; }
+            }
         }
-        v.sval = out; return v;
+        if (close_pos == e.size() - 1) {
+            /* Complete string literal */
+            SvdbVal v; v.type = SVDB_TYPE_TEXT;
+            std::string raw = e.substr(1, close_pos - 1);
+            std::string out; out.reserve(raw.size());
+            for (size_t i = 0; i < raw.size(); ++i) {
+                if (raw[i] == '\'' && i+1 < raw.size() && raw[i+1] == '\'')
+                    { out += '\''; ++i; }
+                else out += raw[i];
+            }
+            v.sval = out; return v;
+        }
+        /* else: fall through — the expression has more content after the string literal */
     }
 
     /* Numeric literal — only if the ENTIRE expression is a valid number */
@@ -354,6 +449,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 std::string src_expr = inside.substr(0, as_pos);
                 std::string type_str = qry_upper(qry_trim(inside.substr(as_pos + 4)));
                 SvdbVal sv = eval_expr(src_expr, row, col_order);
+                if (sv.type == SVDB_TYPE_NULL) return sv; /* CAST(NULL) = NULL */
                 if (type_str == "INTEGER" || type_str == "INT") {
                     SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = val_to_i64(sv); return v;
                 } else if (type_str == "REAL" || type_str == "FLOAT" || type_str == "DOUBLE") {
@@ -603,8 +699,35 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
         }
         /* CASE WHEN ... THEN ... [WHEN ... THEN ...] [ELSE ...] END */
         if (eu2.substr(0, 5) == "CASE ") {
-            /* Simple CASE WHEN cond THEN val [ELSE val] END */
-            size_t pos2 = 5;
+            /* Detect simple vs. searched CASE form:
+             * Simple:   CASE expr WHEN val1 THEN res1 ... END
+             * Searched: CASE WHEN cond1 THEN res1 ... END  */
+            /* Find the first WHEN at top level starting from position 4 */
+            size_t first_when = std::string::npos;
+            {
+                int dep = 0; bool ins = false;
+                for (size_t i = 4; i + 6 <= eu2.size(); ++i) {
+                    char c = eu2[i];
+                    if (c == '\'') { ins = !ins; continue; }
+                    if (ins) continue;
+                    if (c == '(') { ++dep; continue; }
+                    if (c == ')') { if (dep > 0) --dep; continue; }
+                    if (dep > 0) continue;
+                    if (eu2.substr(i, 6) == " WHEN ") { first_when = i; break; }
+                }
+            }
+            if (first_when == std::string::npos) { /* malformed */ return SvdbVal{}; }
+            /* If " WHEN " is immediately after "CASE " (at position 4), it's a searched form */
+            std::string after_case = (first_when > 5) ? qry_trim(eu2.substr(5, first_when - 5)) : "";
+            bool is_simple = !after_case.empty();
+
+            SvdbVal case_val;
+            if (is_simple) {
+                std::string case_expr_str = qry_trim(e.substr(5, first_when - 5));
+                case_val = eval_expr(case_expr_str, row, col_order);
+            }
+
+            size_t pos2 = is_simple ? first_when + 1 : 5; /* skip to WHEN */
             SvdbVal result;
             bool matched = false;
             while (pos2 < eu2.size()) {
@@ -626,12 +749,21 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                     std::string then_expr = e.substr(pos2, next - pos2);
                     pos2 = next;
                     if (!matched) {
-                        /* Evaluate condition */
-                        SvdbVal cond_v = eval_expr(cond_expr, row, col_order);
-                        bool cond_true = (cond_v.type == SVDB_TYPE_INT && cond_v.ival != 0) ||
-                                         (cond_v.type == SVDB_TYPE_REAL && cond_v.rval != 0.0) ||
-                                         (cond_v.type == SVDB_TYPE_TEXT && !cond_v.sval.empty());
-                        if (cond_true) { result = eval_expr(then_expr, row, col_order); matched = true; }
+                        if (is_simple) {
+                            /* Simple form: compare case_val against WHEN value */
+                            SvdbVal when_v = eval_expr(qry_trim(cond_expr), row, col_order);
+                            if (case_val.type != SVDB_TYPE_NULL && when_v.type != SVDB_TYPE_NULL &&
+                                val_cmp(case_val, when_v) == 0) {
+                                result = eval_expr(then_expr, row, col_order); matched = true;
+                            }
+                        } else {
+                            /* Searched form: evaluate condition as boolean */
+                            SvdbVal cond_v = eval_expr(cond_expr, row, col_order);
+                            bool cond_true = (cond_v.type == SVDB_TYPE_INT && cond_v.ival != 0) ||
+                                             (cond_v.type == SVDB_TYPE_REAL && cond_v.rval != 0.0) ||
+                                             (cond_v.type == SVDB_TYPE_TEXT && !cond_v.sval.empty());
+                            if (cond_true) { result = eval_expr(then_expr, row, col_order); matched = true; }
+                        }
                     }
                 } else if (eu2.substr(pos2, 4) == "ELSE") {
                     pos2 += 4;
@@ -654,7 +786,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
     {
         int depth2 = 0;
         bool in_str2 = false;
-        for (int i = (int)e.size()-2; i >= 0; --i) {
+        for (int i = (int)e.size()-1; i >= 0; --i) {
             char c = e[i];
             if (c == '\'') { in_str2 = !in_str2; continue; }
             if (in_str2) continue;
@@ -727,6 +859,91 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
     /* Unary plus: +expr */
     if (e[0] == '+' && e.size() > 1) {
         return eval_expr(e.substr(1), row, col_order);
+    }
+
+    /* Logical NOT */
+    {
+        std::string eu_n = qry_upper(e);
+        if (eu_n.size() > 4 && eu_n.substr(0, 4) == "NOT ") {
+            SvdbVal inner = eval_expr(e.substr(4), row, col_order);
+            if (inner.type == SVDB_TYPE_NULL) return SvdbVal{};
+            SvdbVal v; v.type = SVDB_TYPE_INT;
+            v.ival = val_is_true(inner) ? 0 : 1;
+            return v;
+        }
+    }
+
+    /* Logical OR / AND in expression context (lower precedence than comparison) */
+    {
+        /* Helper: find top-level keyword outside parens/strings, scanning left-to-right */
+        auto find_kw_expr = [&](const std::string &kw) -> size_t {
+            int depth_e = 0; bool in_str_e = false;
+            std::string eu_e = qry_upper(e);
+            std::string full_kw = " " + kw + " ";
+            for (size_t i = 0; i + full_kw.size() <= eu_e.size(); ++i) {
+                char c = eu_e[i];
+                if (c == '\'') { in_str_e = !in_str_e; continue; }
+                if (in_str_e) continue;
+                if (c == '(') { ++depth_e; continue; }
+                if (c == ')') { if (depth_e > 0) --depth_e; continue; }
+                if (depth_e > 0) continue;
+                if (eu_e.substr(i, full_kw.size()) == full_kw) return i + 1; /* position of keyword */
+            }
+            return std::string::npos;
+        };
+        /* Find rightmost OR at top level */
+        size_t or_p = std::string::npos;
+        {
+            int depth_e = 0; bool in_str_e = false;
+            std::string eu_e = qry_upper(e);
+            for (int i = (int)eu_e.size() - 4; i >= 0; --i) {
+                char c = eu_e[i];
+                if (c == '\'') { in_str_e = !in_str_e; continue; }
+                if (in_str_e) continue;
+                if (c == ')') { ++depth_e; continue; }
+                if (c == '(') { if (depth_e > 0) --depth_e; continue; }
+                if (depth_e > 0) continue;
+                if (eu_e.substr(i, 4) == " OR ") {
+                    or_p = (size_t)i + 1; break;
+                }
+            }
+        }
+        if (or_p != std::string::npos) {
+            SvdbVal lhs = eval_expr(qry_trim(e.substr(0, or_p - 1)), row, col_order);
+            SvdbVal rhs = eval_expr(qry_trim(e.substr(or_p + 3)), row, col_order);
+            bool l = val_is_true(lhs), r = val_is_true(rhs);
+            bool lnull = (lhs.type == SVDB_TYPE_NULL), rnull = (rhs.type == SVDB_TYPE_NULL);
+            if (l || r) { SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 1; return v; }
+            if (lnull || rnull) return SvdbVal{};
+            SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0; return v;
+        }
+        /* Find rightmost AND at top level */
+        size_t and_p = std::string::npos;
+        {
+            int depth_e = 0; bool in_str_e = false;
+            std::string eu_e = qry_upper(e);
+            for (int i = (int)eu_e.size() - 5; i >= 0; --i) {
+                char c = eu_e[i];
+                if (c == '\'') { in_str_e = !in_str_e; continue; }
+                if (in_str_e) continue;
+                if (c == ')') { ++depth_e; continue; }
+                if (c == '(') { if (depth_e > 0) --depth_e; continue; }
+                if (depth_e > 0) continue;
+                if (eu_e.substr(i, 5) == " AND ") {
+                    and_p = (size_t)i + 1; break;
+                }
+            }
+        }
+        if (and_p != std::string::npos) {
+            SvdbVal lhs = eval_expr(qry_trim(e.substr(0, and_p - 1)), row, col_order);
+            SvdbVal rhs = eval_expr(qry_trim(e.substr(and_p + 4)), row, col_order);
+            bool l = val_is_true(lhs), r = val_is_true(rhs);
+            bool lnull = (lhs.type == SVDB_TYPE_NULL), rnull = (rhs.type == SVDB_TYPE_NULL);
+            if (!l && !lnull) { SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0; return v; }
+            if (!r && !rnull) { SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0; return v; }
+            if (lnull || rnull) return SvdbVal{};
+            SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 1; return v;
+        }
     }
 
     /* Comparison operators in expression context: return INT 0/1 or NULL */
@@ -823,7 +1040,7 @@ static bool qry_eval_where(const Row &row,
     /* Strip outer parentheses */
     if (wt.front() == '(' && wt.back() == ')') {
         int depth = 0; bool balanced = true;
-        for (size_t i = 0; i < wt.size()-1; ++i) {
+        for (size_t i = 1; i < wt.size()-1; ++i) {
             if (wt[i] == '(') ++depth;
             else if (wt[i] == ')') { if (--depth < 0) { balanced = false; break; } }
         }
@@ -880,6 +1097,53 @@ static bool qry_eval_where(const Row &row,
         return !qry_eval_where(row, col_order, wt.substr(4));
     }
 
+    /* EXISTS / NOT EXISTS (subquery) */
+    if (g_query_db) {
+        /* Helper: substitute only qualified (table.col) outer row refs into a SQL string */
+        auto subst_outer = [&](std::string sub_sql) -> std::string {
+            for (auto &kv : row) {
+                if (kv.first.empty() || kv.first.find('.') == std::string::npos) continue;
+                std::string repl;
+                if (kv.second.type == SVDB_TYPE_NULL) repl = "NULL";
+                else if (kv.second.type == SVDB_TYPE_INT) repl = std::to_string(kv.second.ival);
+                else if (kv.second.type == SVDB_TYPE_REAL) {
+                    char buf[64]; snprintf(buf, sizeof(buf), "%.17g", kv.second.rval); repl = buf;
+                } else { repl = "'" + kv.second.sval + "'"; }
+                for (size_t p = sub_sql.find(kv.first); p != std::string::npos;
+                     p = sub_sql.find(kv.first, p)) {
+                    bool lb = (p == 0 || (!isalnum((unsigned char)sub_sql[p-1]) && sub_sql[p-1] != '_'));
+                    bool rb = (p + kv.first.size() >= sub_sql.size() ||
+                               (!isalnum((unsigned char)sub_sql[p+kv.first.size()]) && sub_sql[p+kv.first.size()] != '_'));
+                    if (lb && rb) { sub_sql.replace(p, kv.first.size(), repl); p += repl.size(); }
+                    else { p += kv.first.size(); }
+                }
+            }
+            return sub_sql;
+        };
+        if (wu.size() > 8 && wu.substr(0, 8) == "EXISTS (") {
+            size_t pend = wt.rfind(')');
+            if (pend != std::string::npos) {
+                std::string sub_sql = subst_outer(wt.substr(8, pend - 8));
+                svdb_rows_t *sub_rows = nullptr;
+                svdb_code_t rc = svdb_query_internal(g_query_db, sub_sql, &sub_rows);
+                bool exists = (rc == SVDB_OK && sub_rows && !sub_rows->rows.empty());
+                if (sub_rows) delete sub_rows;
+                return exists;
+            }
+        }
+        if (wu.size() > 12 && wu.substr(0, 12) == "NOT EXISTS (") {
+            size_t pend = wt.rfind(')');
+            if (pend != std::string::npos) {
+                std::string sub_sql = subst_outer(wt.substr(12, pend - 12));
+                svdb_rows_t *sub_rows = nullptr;
+                svdb_code_t rc = svdb_query_internal(g_query_db, sub_sql, &sub_rows);
+                bool exists = (rc == SVDB_OK && sub_rows && !sub_rows->rows.empty());
+                if (sub_rows) delete sub_rows;
+                return !exists;
+            }
+        }
+    }
+
     /* IS NULL / IS NOT NULL */
     {
         size_t is_null = wu.rfind(" IS NULL");
@@ -932,8 +1196,19 @@ static bool qry_eval_where(const Row &row,
         }
     }
 
-    /* BETWEEN ... AND ... */
+    /* BETWEEN ... AND ... / NOT BETWEEN ... AND ... */
     {
+        size_t not_bet_pos = wu.find(" NOT BETWEEN ");
+        if (not_bet_pos != std::string::npos) {
+            size_t and2 = wu.find(" AND ", not_bet_pos + 13);
+            if (and2 != std::string::npos) {
+                SvdbVal val  = eval_expr(wt.substr(0, not_bet_pos), row, col_order);
+                SvdbVal low  = eval_expr(wt.substr(not_bet_pos+13, and2-(not_bet_pos+13)), row, col_order);
+                SvdbVal high = eval_expr(wt.substr(and2+5), row, col_order);
+                if (val.type == SVDB_TYPE_NULL || low.type == SVDB_TYPE_NULL || high.type == SVDB_TYPE_NULL) return false;
+                return !(val_cmp(val, low) >= 0 && val_cmp(val, high) <= 0);
+            }
+        }
         size_t bet_pos = wu.find(" BETWEEN ");
         if (bet_pos != std::string::npos) {
             size_t and2 = wu.find(" AND ", bet_pos + 9);
@@ -941,6 +1216,7 @@ static bool qry_eval_where(const Row &row,
                 SvdbVal val  = eval_expr(wt.substr(0, bet_pos), row, col_order);
                 SvdbVal low  = eval_expr(wt.substr(bet_pos+9, and2-(bet_pos+9)), row, col_order);
                 SvdbVal high = eval_expr(wt.substr(and2+5), row, col_order);
+                if (val.type == SVDB_TYPE_NULL || low.type == SVDB_TYPE_NULL || high.type == SVDB_TYPE_NULL) return false;
                 return val_cmp(val, low) >= 0 && val_cmp(val, high) <= 0;
             }
         }
@@ -962,7 +1238,7 @@ static bool qry_eval_where(const Row &row,
         }
     }
 
-    /* IN (v1, v2, ...) / NOT IN */
+    /* IN (v1, v2, ...) / NOT IN — also handles IN (SELECT ...) */
     {
         size_t in_pos  = wu.find(" IN (");
         size_t nin_pos = wu.find(" NOT IN (");
@@ -971,47 +1247,117 @@ static bool qry_eval_where(const Row &row,
         else if (in_pos != std::string::npos) use_pos = in_pos;
         if (use_pos != std::string::npos) {
             SvdbVal lhs = eval_expr(wt.substr(0, use_pos), row, col_order);
+            if (lhs.type == SVDB_TYPE_NULL) return false; /* NULL IN (...) = NULL → false */
             size_t paren_start = wt.find('(', use_pos);
             size_t paren_end   = wt.rfind(')');
             if (paren_start != std::string::npos && paren_end != std::string::npos) {
                 std::string inside = wt.substr(paren_start+1, paren_end-paren_start-1);
-                /* Split by comma */
-                bool found = false;
-                std::istringstream ss(inside);
-                std::string token;
-                while (std::getline(ss, token, ',')) {
-                    SvdbVal rv = eval_expr(qry_trim(token), row, col_order);
-                    if (val_cmp(lhs, rv) == 0) { found = true; break; }
+                std::string inside_u = qry_upper(qry_trim(inside));
+                /* Check for subquery */
+                if (inside_u.size() > 6 && inside_u.substr(0, 7) == "SELECT " && g_query_db) {
+                    /* Substitute only qualified outer row refs (table.col) */
+                    std::string sub_sql = qry_trim(inside);
+                    for (auto &kv : row) {
+                        if (kv.first.empty() || kv.first.find('.') == std::string::npos) continue;
+                        std::string repl;
+                        if (kv.second.type == SVDB_TYPE_NULL) repl = "NULL";
+                        else if (kv.second.type == SVDB_TYPE_INT) repl = std::to_string(kv.second.ival);
+                        else if (kv.second.type == SVDB_TYPE_REAL) {
+                            char buf[64]; snprintf(buf, sizeof(buf), "%.17g", kv.second.rval); repl = buf;
+                        } else { repl = "'" + kv.second.sval + "'"; }
+                        for (size_t p = sub_sql.find(kv.first); p != std::string::npos;
+                             p = sub_sql.find(kv.first, p)) {
+                            bool lb = (p == 0 || (!isalnum((unsigned char)sub_sql[p-1]) && sub_sql[p-1] != '_'));
+                            bool rb = (p + kv.first.size() >= sub_sql.size() ||
+                                       (!isalnum((unsigned char)sub_sql[p+kv.first.size()]) && sub_sql[p+kv.first.size()] != '_'));
+                            if (lb && rb) { sub_sql.replace(p, kv.first.size(), repl); p += repl.size(); }
+                            else { p += kv.first.size(); }
+                        }
+                    }
+                    svdb_rows_t *sub_rows = nullptr;
+                    svdb_code_t rc = svdb_query_internal(g_query_db, sub_sql, &sub_rows);
+                    bool found = false;
+                    bool has_null = false;
+                    if (rc == SVDB_OK && sub_rows) {
+                        for (auto &srow : sub_rows->rows) {
+                            if (srow.empty()) continue;
+                            if (srow[0].type == SVDB_TYPE_NULL) { has_null = true; continue; }
+                            if (val_cmp(lhs, srow[0]) == 0) { found = true; break; }
+                        }
+                        delete sub_rows;
+                    }
+                    if (negated) { if (found) return false; if (has_null) return false; return true; }
+                    return found;
                 }
-                return negated ? !found : found;
+                /* Value list */
+                bool found = false;
+                bool has_null = false;
+                int depth_in = 0;
+                size_t start_in = 0;
+                for (size_t idx = 0; idx <= inside.size(); ++idx) {
+                    char c = (idx < inside.size()) ? inside[idx] : ',';
+                    if (c == '(') ++depth_in;
+                    else if (c == ')') { if (depth_in > 0) --depth_in; }
+                    else if (c == ',' && depth_in == 0) {
+                        std::string tok = qry_trim(inside.substr(start_in, idx - start_in));
+                        start_in = idx + 1;
+                        SvdbVal rv = eval_expr(tok, row, col_order);
+                        if (rv.type == SVDB_TYPE_NULL) { has_null = true; continue; }
+                        if (!found && val_cmp(lhs, rv) == 0) { found = true; }
+                    }
+                }
+                if (negated) {
+                    if (found) return false;
+                    if (has_null) return false;
+                    return true;
+                }
+                return found;
             }
         }
     }
 
-    /* Comparison operators: !=, <>, <=, >=, =, <, > */
-    const char *ops[] = {"!=", "<>", "<=", ">=", "=", "<", ">", nullptr};
-    size_t op_start = std::string::npos, op_len = 0;
-    for (int i = 0; ops[i]; ++i) {
-        size_t pos = wt.find(ops[i]);
-        if (pos != std::string::npos && (op_start == std::string::npos || pos < op_start)) {
-            op_start = pos; op_len = strlen(ops[i]);
+    /* Comparison operators: !=, <>, <=, >=, =, <, > (depth-aware scan) */
+    {
+        const char *ops[] = {"!=", "<>", "<=", ">=", "=", "<", ">", nullptr};
+        size_t op_start = std::string::npos, op_len = 0;
+        /* Scan left-to-right, respecting paren depth and string literals */
+        {
+            int depth_c = 0; bool in_str_c = false;
+            for (size_t i = 0; i < wt.size(); ++i) {
+                char c = wt[i];
+                if (c == '\'') { in_str_c = !in_str_c; continue; }
+                if (in_str_c) continue;
+                if (c == '(') { ++depth_c; continue; }
+                if (c == ')') { if (depth_c > 0) --depth_c; continue; }
+                if (depth_c > 0) continue;
+                /* Try each operator */
+                for (int oi = 0; ops[oi]; ++oi) {
+                    size_t oplen = strlen(ops[oi]);
+                    if (i + oplen <= wt.size() && wt.substr(i, oplen) == ops[oi]) {
+                        if (op_start == std::string::npos || i < op_start) {
+                            op_start = i; op_len = oplen;
+                        }
+                        break; /* Take the first match at this position */
+                    }
+                }
+            }
         }
-    }
-    if (op_start != std::string::npos) {
-        std::string lhs_s = qry_trim(wt.substr(0, op_start));
-        std::string op    = wt.substr(op_start, op_len);
-        std::string rhs_s = qry_trim(wt.substr(op_start + op_len));
-        SvdbVal lhs = eval_expr(lhs_s, row, col_order);
-        SvdbVal rhs = eval_expr(rhs_s, row, col_order);
-        /* NULL comparisons: any comparison with NULL is false */
-        if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) return false;
-        int c = val_cmp(lhs, rhs);
-        if (op == "=" || op == "==") return c == 0;
-        if (op == "!=" || op == "<>") return c != 0;
-        if (op == "<")  return c < 0;
-        if (op == ">")  return c > 0;
-        if (op == "<=") return c <= 0;
-        if (op == ">=") return c >= 0;
+        if (op_start != std::string::npos) {
+            std::string lhs_s = qry_trim(wt.substr(0, op_start));
+            std::string op    = wt.substr(op_start, op_len);
+            std::string rhs_s = qry_trim(wt.substr(op_start + op_len));
+            SvdbVal lhs = eval_expr(lhs_s, row, col_order);
+            SvdbVal rhs = eval_expr(rhs_s, row, col_order);
+            /* NULL comparisons: any comparison with NULL is false */
+            if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) return false;
+            int c = val_cmp(lhs, rhs);
+            if (op == "=" || op == "==") return c == 0;
+            if (op == "!=" || op == "<>") return c != 0;
+            if (op == "<")  return c < 0;
+            if (op == ">")  return c > 0;
+            if (op == "<=") return c <= 0;
+            if (op == ">=") return c >= 0;
+        }
     }
 
     return true;
@@ -1133,7 +1479,20 @@ static std::string parse_where_from_sql(const std::string &sql) {
 /* Extract left table alias from FROM clause */
 static std::string parse_left_alias(const std::string &sql) {
     std::string su = qry_upper(sql);
-    size_t from_pos = su.find(" FROM ");
+    /* Find the TOP-LEVEL " FROM " (outside parens and string literals) */
+    size_t from_pos = std::string::npos;
+    {
+        int depth = 0; bool in_str = false;
+        for (size_t i = 0; i + 6 <= su.size(); ++i) {
+            char c = su[i];
+            if (c == '\'') { in_str = !in_str; continue; }
+            if (in_str) continue;
+            if (c == '(') { ++depth; continue; }
+            if (c == ')') { if (depth > 0) --depth; continue; }
+            if (depth > 0) continue;
+            if (su.substr(i, 6) == " FROM ") { from_pos = i; break; }
+        }
+    }
     if (from_pos == std::string::npos) return "";
     std::string after = qry_trim(sql.substr(from_pos + 6));
     /* Read table name */
@@ -1281,13 +1640,27 @@ struct AggState {
 
 static bool is_agg_expr(const std::string &e) {
     std::string eu = qry_upper(e);
-    return eu.find("COUNT(") != std::string::npos ||
-           eu.find("SUM(")   != std::string::npos ||
-           eu.find("AVG(")   != std::string::npos ||
-           eu.find("MIN(")   != std::string::npos ||
-           eu.find("MAX(")   != std::string::npos ||
-           eu.find("GROUP_CONCAT(") != std::string::npos ||
-           eu.find("GROUP CONCAT(") != std::string::npos;
+    /* Check for aggregate functions at the TOP LEVEL (not inside a subquery) */
+    static const char *agg_fns[] = {"COUNT(", "SUM(", "AVG(", "MIN(", "MAX(", "GROUP_CONCAT(", "GROUP CONCAT(", nullptr};
+    for (const char **fn = agg_fns; *fn; ++fn) {
+        std::string pat = *fn;
+        size_t p = eu.find(pat);
+        while (p != std::string::npos) {
+            /* Check paren depth at position p to see if it's inside a subquery */
+            int depth = 0;
+            bool in_str = false;
+            for (size_t i = 0; i < p; ++i) {
+                char c = eu[i];
+                if (c == '\'') { in_str = !in_str; continue; }
+                if (in_str) continue;
+                if (c == '(') ++depth;
+                else if (c == ')') { if (depth > 0) --depth; }
+            }
+            if (depth == 0) return true; /* top-level aggregate found */
+            p = eu.find(pat, p + 1);
+        }
+    }
+    return false;
 }
 
 static AggState make_agg(const std::string &expr) {
@@ -1431,6 +1804,11 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                                   svdb_rows_t **rows_out) {
     if (!rows_out) return SVDB_ERR;
 
+    /* Set thread-local DB context for subquery support */
+    svdb_db_t *prev_db = g_query_db;
+    g_query_db = db;
+    struct DbGuard { svdb_db_t **p; svdb_db_t *v; ~DbGuard() { *p = v; } } db_guard{&g_query_db, prev_db};
+
     /* ── Set-operation detection (UNION / INTERSECT / EXCEPT) ── */
     /* Find top-level UNION/INTERSECT/EXCEPT outside parentheses and string literals */
     {
@@ -1524,39 +1902,52 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
 
                     delete left; delete right;
 
-                    /* Apply ORDER BY if present */
-                    if (!order_clause.empty()) {
-                        /* Parse ORDER BY: extract column name and direction */
-                        std::string ob_inner = qry_trim(order_clause.substr(order_clause.find(' ', 1)));
-                        /* Remove "ORDER BY" prefix */
-                        std::string ob_u = qry_upper(ob_inner);
-                        if (ob_u.substr(0, 8) == "ORDER BY") ob_inner = qry_trim(ob_inner.substr(8));
-                        /* Simple ORDER BY: single column */
+                    /* Apply ORDER BY / LIMIT if present */
+                    std::string limit_clause;
+                    std::string ob_clause = order_clause;
+                    if (!ob_clause.empty()) {
+                        /* Strip leading " ORDER BY " or "ORDER BY " prefix */
+                        std::string obu = qry_upper(qry_trim(ob_clause));
+                        if (obu.substr(0, 9) == "ORDER BY ") ob_clause = qry_trim(ob_clause.substr(ob_clause.find("BY ") + 3));
+                        /* Split off LIMIT clause if present */
+                        std::string ob_u2 = qry_upper(ob_clause);
+                        size_t lim_pos = ob_u2.find(" LIMIT ");
+                        if (lim_pos != std::string::npos) {
+                            limit_clause = qry_trim(ob_clause.substr(lim_pos + 7));
+                            ob_clause = qry_trim(ob_clause.substr(0, lim_pos));
+                        }
+                    }
+                    if (!ob_clause.empty()) {
+                        /* Simple ORDER BY: single column + optional ASC/DESC */
                         bool desc = false;
-                        std::string sort_col = ob_inner;
+                        std::string sort_col = ob_clause;
                         size_t sp = sort_col.rfind(' ');
                         if (sp != std::string::npos) {
                             std::string dir = qry_upper(sort_col.substr(sp + 1));
-                            if (dir == "DESC") { desc = true; sort_col = sort_col.substr(0, sp); }
-                            else if (dir == "ASC") { sort_col = sort_col.substr(0, sp); }
+                            if (dir == "DESC") { desc = true; sort_col = qry_trim(sort_col.substr(0, sp)); }
+                            else if (dir == "ASC") { sort_col = qry_trim(sort_col.substr(0, sp)); }
                         }
-                        sort_col = qry_trim(sort_col);
                         /* Find column index */
                         int col_idx = -1;
                         for (size_t ci = 0; ci < result->col_names.size(); ++ci) {
                             if (qry_upper(result->col_names[ci]) == qry_upper(sort_col)) { col_idx = (int)ci; break; }
                         }
-                        if (col_idx >= 0) {
-                            std::stable_sort(result->rows.begin(), result->rows.end(),
-                                [&](const std::vector<SvdbVal> &a2, const std::vector<SvdbVal> &b2) {
-                                    const SvdbVal &av = a2[col_idx], &bv = b2[col_idx];
-                                    bool less = false;
-                                    if (av.type == SVDB_TYPE_INT && bv.type == SVDB_TYPE_INT) less = av.ival < bv.ival;
-                                    else if (av.type == SVDB_TYPE_TEXT && bv.type == SVDB_TYPE_TEXT) less = av.sval < bv.sval;
-                                    else less = (av.type < bv.type);
-                                    return desc ? !less : less;
-                                });
-                        }
+                        if (col_idx < 0) col_idx = 0; /* fallback to first column */
+                        std::stable_sort(result->rows.begin(), result->rows.end(),
+                            [&](const std::vector<SvdbVal> &a2, const std::vector<SvdbVal> &b2) {
+                                const SvdbVal &av = (int)a2.size() > col_idx ? a2[col_idx] : SvdbVal{};
+                                const SvdbVal &bv = (int)b2.size() > col_idx ? b2[col_idx] : SvdbVal{};
+                                bool less = false;
+                                if (av.type == SVDB_TYPE_INT && bv.type == SVDB_TYPE_INT) less = av.ival < bv.ival;
+                                else if (av.type == SVDB_TYPE_TEXT && bv.type == SVDB_TYPE_TEXT) less = av.sval < bv.sval;
+                                else less = (av.type < bv.type);
+                                return desc ? !less : less;
+                            });
+                    }
+                    if (!limit_clause.empty()) {
+                        int64_t lim = std::atoll(limit_clause.c_str());
+                        if (lim >= 0 && (size_t)lim < result->rows.size())
+                            result->rows.resize((size_t)lim);
                     }
 
                     *rows_out = result;
@@ -1564,6 +1955,100 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 }
             }
             ++i;
+        }
+    }
+
+    /* ── Derived table (FROM subquery) detection ── */
+    /* Detect: SELECT cols FROM (SELECT ...) [alias] [WHERE ...] */
+    {
+        std::string su_dt = qry_upper(sql);
+        size_t from_pos = std::string::npos;
+        {
+            /* Find " FROM " outside parens and strings */
+            int dp = 0; bool ins = false;
+            for (size_t i = 0; i + 6 <= su_dt.size(); ++i) {
+                char c = su_dt[i];
+                if (c == '\'') { ins = !ins; continue; }
+                if (ins) continue;
+                if (c == '(') { ++dp; continue; }
+                if (c == ')') { if (dp > 0) --dp; continue; }
+                if (dp > 0) continue;
+                if (su_dt.substr(i, 6) == " FROM ") { from_pos = i; break; }
+            }
+        }
+        if (from_pos != std::string::npos) {
+            size_t after_from = from_pos + 6;
+            /* Skip whitespace */
+            while (after_from < sql.size() && sql[after_from] == ' ') ++after_from;
+            if (after_from < sql.size() && sql[after_from] == '(') {
+                /* Find matching closing paren */
+                int dp2 = 0; size_t close_p = std::string::npos;
+                for (size_t i = after_from; i < sql.size(); ++i) {
+                    if (sql[i] == '(') ++dp2;
+                    else if (sql[i] == ')') { if (--dp2 == 0) { close_p = i; break; } }
+                }
+                if (close_p != std::string::npos) {
+                    std::string inner_sql = sql.substr(after_from + 1, close_p - after_from - 1);
+                    std::string inner_u = qry_upper(qry_trim(inner_sql));
+                    if (inner_u.size() > 6 && inner_u.substr(0, 7) == "SELECT ") {
+                        /* Execute the inner SELECT */
+                        svdb_rows_t *inner_rows = nullptr;
+                        svdb_code_t rc = svdb_query_internal(db, inner_sql, &inner_rows);
+                        if (rc != SVDB_OK) { if (inner_rows) delete inner_rows; return rc; }
+                        if (!inner_rows) return SVDB_ERR;
+
+                        /* Extract alias: text between ) and next keyword */
+                        std::string rest_sql = sql.substr(close_p + 1);
+                        std::string rest_u = qry_upper(qry_trim(rest_sql));
+                        std::string alias;
+                        {
+                            /* Read alias: first non-keyword word */
+                            std::string rt = qry_trim(rest_u);
+                            if (!rt.empty() && rt[0] != 'W' && rt[0] != 'O' && rt[0] != 'G' && rt[0] != 'L') {
+                                /* try to read identifier */
+                                size_t ae = 0;
+                                while (ae < rt.size() && rt[ae] != ' ' && rt[ae] != '\0') ++ae;
+                                std::string word = rt.substr(0, ae);
+                                static const char *stop[] = {"WHERE","ORDER","GROUP","LIMIT","HAVING","INNER","LEFT","JOIN", nullptr};
+                                bool is_stop = false;
+                                for (const char **sw = stop; *sw; ++sw) if (word == *sw) { is_stop = true; break; }
+                                if (!is_stop && !word.empty()) alias = word;
+                            }
+                        }
+
+                        /* Build a temporary in-memory "table" from inner_rows */
+                        std::string tmp_tname = "__derived_" + std::to_string((size_t)inner_rows);
+                        db->schema[tmp_tname] = {};
+                        db->col_order[tmp_tname] = {};
+                        db->data[tmp_tname] = {};
+                        for (const auto &cn : inner_rows->col_names) {
+                            db->schema[tmp_tname][cn] = ColDef{"TEXT", "", false, false};
+                            db->col_order[tmp_tname].push_back(cn);
+                        }
+                        for (const auto &irow : inner_rows->rows) {
+                            Row r_new;
+                            for (size_t ci = 0; ci < inner_rows->col_names.size() && ci < irow.size(); ++ci)
+                                r_new[inner_rows->col_names[ci]] = irow[ci];
+                            db->data[tmp_tname].push_back(r_new);
+                        }
+                        delete inner_rows;
+
+                        /* Replace (subquery) with tmp_tname in SQL, preserving rest */
+                        std::string new_sql = sql.substr(0, from_pos) + " FROM " + tmp_tname + rest_sql;
+                        svdb_rows_t *result = nullptr;
+                        svdb_code_t rc2 = svdb_query_internal(db, new_sql, &result);
+
+                        /* Clean up temp table */
+                        db->schema.erase(tmp_tname);
+                        db->col_order.erase(tmp_tname);
+                        db->data.erase(tmp_tname);
+
+                        if (rc2 != SVDB_OK) { if (result) delete result; return rc2; }
+                        *rows_out = result;
+                        return SVDB_OK;
+                    }
+                }
+            }
         }
     }
 
@@ -1747,16 +2232,15 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     } else {
         all_rows = db->data.at(tname);
         merged_col_order = col_order;
-        /* Add alias prefixes to each row */
-        if (!left_alias.empty()) {
-            for (auto &row : all_rows) {
-                Row extra;
-                for (auto &kv : row) {
+        /* Always add table-name and alias prefixes to rows for correlated subqueries */
+        for (auto &row : all_rows) {
+            Row extra;
+            for (auto &kv : row) {
+                extra[tname + "." + kv.first] = kv.second;
+                if (!left_alias.empty())
                     extra[left_alias + "." + kv.first] = kv.second;
-                    extra[tname + "." + kv.first] = kv.second;
-                }
-                row.insert(extra.begin(), extra.end());
             }
+            row.insert(extra.begin(), extra.end());
         }
     }
 
