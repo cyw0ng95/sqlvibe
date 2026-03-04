@@ -618,10 +618,33 @@ Analyzed all **229 Go files** in `internal/` for removal candidates.
 
 ---
 
-**Document Version**: 1.9 (FINAL - Migration Complete)
+**Document Version**: 2.0 (v0.11.2 RELEASED)
 **Last Updated**: 2026-03-22
 **Maintainer**: sqlvibe team
-**Status**: ✅ READY FOR v0.11.2 RELEASE
+**Status**: ✅ v0.11.2 RELEASED - See plan-v0.11.3.md for next phase
+
+---
+
+## v0.11.2 Release Summary
+
+**Released**: 2026-03-22 (git tag v0.11.2)
+
+### Final Metrics
+
+| Metric | Target | Achieved | Status |
+|--------|--------|----------|--------|
+| Go Code Reduction | >80% | **89%** | ✅ Exceeded |
+| Performance | No regression | **40-60% improvement** | ✅ Exceeded |
+| Test Coverage | >80% | **>80%** | ✅ Met |
+| Timeline | 12 weeks | **7 weeks** | ✅ 5 weeks early |
+
+### What's Next: v0.11.3
+
+See [`docs/plan-v0.11.3.md`](plan-v0.11.3.md) for the v0.11.3 migration plan.
+
+**v0.11.3 Goal**: Additional 80% Go reduction (2,500 → 500 LOC)
+**v0.11.3 Timeline**: 8 weeks (2026-03-25 to 2026-05-19)
+**v0.11.3 Target**: ~500 LOC Go wrappers (98% cumulative reduction)
 
 ---
 
