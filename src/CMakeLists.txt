@@ -58,6 +58,7 @@ set(SVDB_CORE_SOURCES
     core/DS/worker_pool.cpp
     core/DS/prefetch.cpp
     core/DS/slab.cpp
+    core/DS/row.cpp
 
     # VM - Virtual Machine
     core/VM/hash.cpp
