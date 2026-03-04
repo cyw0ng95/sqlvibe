@@ -109,3 +109,119 @@ type qpError struct {
 func (e *qpError) Error() string {
 	return "QP: " + e.Msg
 }
+
+// ParseC parses SQL using the C++ parser and returns statement info.
+// This is a high-level wrapper around CParser for easy migration.
+func ParseC(sql string) (*ParsedStmt, error) {
+	if len(sql) == 0 {
+		return nil, &qpError{"empty SQL input"}
+	}
+
+	parser := NewCParser(sql)
+	if parser == nil {
+		return nil, &qpError{"failed to create parser"}
+	}
+
+	node := parser.Parse()
+	if node == nil {
+		errMsg := parser.Error()
+		if errMsg == "" {
+			errMsg = "parse error"
+		}
+		return nil, &qpError{errMsg}
+	}
+
+	stmt := &ParsedStmt{
+		Type:       stmtTypeFromInt(node.Type()),
+		Table:      node.Table(),
+		Where:      node.Where(),
+		SQL:        sql,
+		node:       node,
+		parser:     parser,
+	}
+
+	// Extract columns
+	colCount := node.ColumnCount()
+	if colCount > 0 {
+		stmt.Columns = make([]string, colCount)
+		for i := 0; i < colCount; i++ {
+			stmt.Columns[i] = node.Column(i)
+		}
+	}
+
+	// Extract INSERT values
+	valueRowCount := node.ValueRowCount()
+	if valueRowCount > 0 {
+		stmt.Values = make([][]string, valueRowCount)
+		for i := 0; i < valueRowCount; i++ {
+			valCount := node.ValueCount(i)
+			stmt.Values[i] = make([]string, valCount)
+			for j := 0; j < valCount; j++ {
+				stmt.Values[i][j] = node.Value(i, j)
+			}
+		}
+	}
+
+	return stmt, nil
+}
+
+// ParsedStmt holds parsed SQL statement information.
+type ParsedStmt struct {
+	Type    StmtType
+	Table   string
+	Columns []string
+	Values  [][]string
+	Where   string
+	SQL     string
+
+	node   *CASTNode
+	parser *CParser
+}
+
+// Free frees the parsed statement resources.
+func (s *ParsedStmt) Free() {
+	if s.node != nil {
+		// Node freed by parser
+	}
+	if s.parser != nil {
+		// Parser finalizer handles cleanup
+	}
+}
+
+// StmtType represents the type of SQL statement.
+type StmtType int
+
+const (
+	StmtUnknown StmtType = iota
+	StmtSelect
+	StmtInsert
+	StmtUpdate
+	StmtDelete
+	StmtCreate
+	StmtDrop
+	StmtAlter
+	StmtBegin
+	StmtCommit
+	StmtRollback
+)
+
+func stmtTypeFromInt(t int) StmtType {
+	switch t {
+	case ASTSelect:
+		return StmtSelect
+	case ASTInsert:
+		return StmtInsert
+	case ASTUpdate:
+		return StmtUpdate
+	case ASTDelete:
+		return StmtDelete
+	case ASTCreate:
+		return StmtCreate
+	case ASTDrop:
+		return StmtDrop
+	case ASTExpr:
+		return StmtUnknown
+	default:
+		return StmtUnknown
+	}
+}
