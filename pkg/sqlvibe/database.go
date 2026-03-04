@@ -839,6 +839,11 @@ defer sp.mu.RUnlock()
 return len(sp.stmts)
 }
 
+// Len returns the number of statements currently in the pool.
+func (sp *StatementPool) Len() int {
+return sp.Size()
+}
+
 func (sp *StatementPool) touch(sql string) {
 sp.mu.Lock()
 sp.touchLocked(sql)
