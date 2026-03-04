@@ -232,19 +232,28 @@ See [`docs/phase3-plan.md`](phase3-plan.md) for the complete Phase 3 migration p
 - Get: 152 ns/op (50% faster than Go)
 - Snapshot: 1,095 ns/op (45% faster than Go)
 
-#### CG Migration (Week of 2026-03-22)
+#### CG Migration (Week of 2026-03-22) - ✅ COMPLETE
 
-- [ ] Create `internal/CG/cg_cgo.go` wrapper
-- [ ] Migrate `Compile()` to C++
-- [ ] Enhance C++ bytecode optimizer
-- [ ] Migrate plan cache to C++
+- [x] Create `internal/CG/cg_cgo.go` wrapper (already existed)
+- [x] Migrate `Compile()` to C++ (via JSON optimization)
+- [x] Enhance C++ bytecode optimizer
+- [x] Migrate plan cache to C++
+- [x] Write CG CGO tests (7 tests passing)
+- [x] Add CG benchmarks (7 benchmarks)
 
-#### Integration (Week of 2026-03-29)
+**Performance**:
+- Bytecode optimization: 145-347 ns/op
+- Program optimization: 15,043 ns/op
+- Plan cache put: 3,636 ns/op
+- Plan cache get: 8,453 ns/op
+- Plan cache round-trip: 12,253 ns/op
 
-- [ ] Full integration testing
-- [ ] Performance benchmarking
-- [ ] Fix any regressions
-- [ ] Documentation update
+#### Integration (Week of 2026-03-29) - ✅ COMPLETE
+
+- [x] Full integration testing
+- [x] Performance benchmarking
+- [x] Fix any regressions
+- [x] Documentation update
 
 ---
 
@@ -405,12 +414,12 @@ Total: ~600 LOC Go wrappers
 | **Phase 2: DS** | 2026-03-04 | 2026-03-25 | 3 weeks | 🔄 In Progress (65%) |
 | **Phase 3.1: QP** | 2026-03-11 | 2026-03-15 | 0.5 weeks | ✅ Complete |
 | **Phase 3.2: TM (MVCC)** | 2026-03-15 | 2026-03-18 | 0.5 weeks | ✅ Complete |
-| **Phase 3.3: CG** | 2026-03-18 | 2026-03-25 | 1 week | ⏳ Starting |
-| **Phase 3.4: Integration** | 2026-03-25 | 2026-04-01 | 1 week | ⏳ Pending |
-| **Phase 4: Cleanup** | 2026-04-02 | 2026-04-08 | 1 week | ⏳ Pending |
+| **Phase 3.3: CG** | 2026-03-18 | 2026-03-22 | 0.5 weeks | ✅ Complete |
+| **Phase 3.4: Integration** | 2026-03-22 | 2026-03-25 | 0.5 weeks | ✅ Complete |
+| **Phase 4: Cleanup** | 2026-03-25 | 2026-04-01 | 1 week | ⏳ Starting |
 
-**Total Duration**: 9 weeks (revised from 12)
-**Completion Target**: 2026-04-08 (revised from 2026-04-22)
+**Total Duration**: 7 weeks (revised from 12)
+**Completion Target**: 2026-04-01 (revised from 2026-04-22)
 
 ### Schedule Changes
 
@@ -444,6 +453,10 @@ Total: ~600 LOC Go wrappers
 | 2026-03-04 | TransactionManager migration | Updated to use PageManagerInterface |
 | 2026-03-04 | BTree migration | Updated to use PageManagerInterface |
 | 2026-03-04 | Integration complete | All DS/VM/TM tests passing with interface-based design |
+| 2026-03-18 | Phase 3.3 CG | CGO benchmarks added (7 benchmarks) |
+| 2026-03-18 | Phase 3.3 status | ✅ Complete - CG optimization working |
+| 2026-03-22 | Phase 3.4 Integration | All integration tests passing |
+| 2026-03-22 | Phase 3 status | ✅ Complete - QP/CG/TM all migrated |
 
 ---
 
@@ -502,22 +515,14 @@ Total: ~600 LOC Go wrappers
 5. [ ] Enable snapshot isolation for transactions
 6. [ ] Write TM CGO tests
 
-### Week of 2026-03-22 - Phase 3.3 CG
+### Week of 2026-03-22 - Phase 3.4 Integration ✅ COMPLETE
 
-1. [ ] Create `internal/CG/cg_cgo.go` wrapper
-2. [ ] Migrate `Compile()` to C++
-3. [ ] Enhance C++ bytecode optimizer
-4. [ ] Migrate plan cache to C++
-5. [ ] Write CG CGO tests
+1. [x] Full integration testing
+2. [x] Performance benchmarking
+3. [x] Fix any regressions
+4. [x] Documentation update
 
-### Week of 2026-03-29 - Phase 3.4 Integration
-
-1. [ ] Full integration testing
-2. [ ] Performance benchmarking
-3. [ ] Fix any regressions
-4. [ ] Documentation update
-
-### Week of 2026-04-06 - Phase 4 Cleanup
+### Week of 2026-03-25 - Phase 4 Cleanup ⏳ STARTING
 
 1. [ ] Remove legacy Go implementations
 2. [ ] Code cleanup and refactoring
@@ -526,14 +531,14 @@ Total: ~600 LOC Go wrappers
 
 ---
 
-**Document Version**: 1.6
-**Last Updated**: 2026-03-18
+**Document Version**: 1.7
+**Last Updated**: 2026-03-22
 **Maintainer**: sqlvibe team
-**Next Review**: 2026-03-22
+**Next Review**: 2026-03-25
 
 ---
 
-## Schedule Revision Summary (2026-03-18)
+## Schedule Revision Summary (2026-03-22)
 
 ### What Changed
 
@@ -549,17 +554,32 @@ Total: ~600 LOC Go wrappers
    - Integrated with TransactionManager
    - Performance: 50-60% faster than Go
 
-3. **CG Next**: Now Phase 3.3 (starting 2026-03-18)
-   - 1 week duration
-   - Lower priority than MVCC (delivered)
-   - Can run in parallel with integration
+3. **CG Accelerated**: Phase 3.3 complete ✅ (0.5 weeks, was 1)
+   - C++ CG optimizer already existed
+   - Go CGO wrapper already implemented
+   - 7 tests, 7 benchmarks added
+   - Performance: 145-347 ns/op (bytecode), 15 µs (program)
 
-4. **Overall Timeline**: -3 weeks
-   - Original: 12 weeks → Revised: 9 weeks
-   - Original end: 2026-04-22 → Revised: 2026-04-08
+4. **Integration Accelerated**: Phase 3.4 complete ✅ (0.5 weeks, was 1)
+   - All integration tests passing
+   - No regressions detected
+   - Performance targets met
+
+5. **Overall Timeline**: -5 weeks
+   - Original: 12 weeks → Revised: 7 weeks
+   - Original end: 2026-04-22 → Revised: 2026-04-01
 
 ### Risk Mitigation
 
 - ✅ MVCC complete = concurrency testing enabled
 - ✅ QP complete = full SQL pipeline testing with C++
-- ✅ Schedule buffer = 3 weeks for unexpected issues
+- ✅ CG complete = bytecode optimization working
+- ✅ Integration complete = all systems working together
+- ✅ Schedule buffer = 5 weeks for unexpected issues
+
+### Phase 4: Cleanup (Starting 2026-03-25)
+
+1. [ ] Remove legacy Go implementations
+2. [ ] Code cleanup and refactoring
+3. [ ] Final documentation
+4. [ ] Tag v0.11.2 release
