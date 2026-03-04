@@ -14,11 +14,11 @@ const (
 
 // OverflowManager handles overflow page operations
 type OverflowManager struct {
-	pm *PageManager
+	pm PageManagerInterface
 }
 
 // NewOverflowManager creates a new overflow manager
-func NewOverflowManager(pm *PageManager) *OverflowManager {
+func NewOverflowManager(pm PageManagerInterface) *OverflowManager {
 	util.AssertNotNil(pm, "PageManager")
 	return &OverflowManager{pm: pm}
 }

@@ -11,12 +11,12 @@ import (
 // Heavy byte-level operations (split/merge/redistribute/overfull checks) are
 // delegated to the C++ layer via balance_cgo.go (Boundary-CGO: inner ops stay in C++).
 type PageBalancer struct {
-	pm *PageManager
+	pm PageManagerInterface
 	om *OverflowManager
 }
 
 // NewPageBalancer creates a new page balancer
-func NewPageBalancer(pm *PageManager) *PageBalancer {
+func NewPageBalancer(pm PageManagerInterface) *PageBalancer {
 	return &PageBalancer{
 		pm: pm,
 		om: NewOverflowManager(pm),

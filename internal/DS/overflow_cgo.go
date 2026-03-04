@@ -191,7 +191,13 @@ func (om *OverflowManager) WriteOverflowChain(payload []byte) (uint32, error) {
 	util.Assert(om.pm.PageSize() > int(OverflowPageHeaderSize), "page size too small for overflow: %d", om.pm.PageSize())
 
 	// Register PageManager and get ID
-	pmID := registerPageManager(om.pm)
+	// Note: This requires a Go *PageManager for callback support
+	// C++ CPageManager should use C++ overflow operations directly
+	goPm, ok := om.pm.(*PageManager)
+	if !ok {
+		return 0, fmt.Errorf("overflow operations require Go *PageManager, got %T", om.pm)
+	}
+	pmID := registerPageManager(goPm)
 	defer unregisterPageManager(pmID)
 
 	// Pin payload
@@ -222,7 +228,11 @@ func (om *OverflowManager) ReadOverflowChain(firstPage uint32, totalSize int) ([
 	}
 
 	// Register PageManager and get ID
-	pmID := registerPageManager(om.pm)
+	goPm, ok := om.pm.(*PageManager)
+	if !ok {
+		return nil, fmt.Errorf("overflow operations require Go *PageManager, got %T", om.pm)
+	}
+	pmID := registerPageManager(goPm)
 	defer unregisterPageManager(pmID)
 
 	var outLen C.size_t
@@ -245,7 +255,11 @@ func (om *OverflowManager) FreeOverflowChain(firstPage uint32) error {
 	}
 
 	// Register PageManager and get ID
-	pmID := registerPageManager(om.pm)
+	goPm, ok := om.pm.(*PageManager)
+	if !ok {
+		return fmt.Errorf("overflow operations require Go *PageManager, got %T", om.pm)
+	}
+	pmID := registerPageManager(goPm)
 	defer unregisterPageManager(pmID)
 
 	result := C.svdb_overflow_free_chain_go(C.uintptr_t(pmID), C.uint32_t(firstPage))
@@ -264,7 +278,11 @@ func (om *OverflowManager) GetOverflowChainLength(firstPage uint32) (int, error)
 	}
 
 	// Register PageManager and get ID
-	pmID := registerPageManager(om.pm)
+	goPm, ok := om.pm.(*PageManager)
+	if !ok {
+		return 0, fmt.Errorf("overflow operations require Go *PageManager, got %T", om.pm)
+	}
+	pmID := registerPageManager(goPm)
 	defer unregisterPageManager(pmID)
 
 	result := C.svdb_overflow_chain_length_go(C.uintptr_t(pmID), C.uint32_t(firstPage))

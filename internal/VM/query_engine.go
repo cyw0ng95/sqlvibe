@@ -28,7 +28,7 @@ const julianDayUnixEpoch = 2440587.5
 
 type QueryEngine struct {
 	vm         *VM
-	pm         *DS.PageManager
+	pm         DS.PageManagerInterface
 	tables     map[string]*TableReader
 	cursors    map[int]*QueryCursor
 	cursorID   int
@@ -56,7 +56,7 @@ type QueryCursor struct {
 	Closed bool
 }
 
-func NewQueryEngine(pm *DS.PageManager, data map[string][]map[string]interface{}) *QueryEngine {
+func NewQueryEngine(pm DS.PageManagerInterface, data map[string][]map[string]interface{}) *QueryEngine {
 	util.AssertNotNil(pm, "PageManager")
 	util.AssertNotNil(data, "data")
 

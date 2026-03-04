@@ -17,12 +17,12 @@ const (
 
 // FreelistManager handles free page management
 type FreelistManager struct {
-	pm         *PageManager
+	pm         PageManagerInterface
 	firstTrunk uint32 // First trunk page number
 }
 
 // NewFreelistManager creates a new freelist manager
-func NewFreelistManager(pm *PageManager, firstTrunk uint32) *FreelistManager {
+func NewFreelistManager(pm PageManagerInterface, firstTrunk uint32) *FreelistManager {
 	util.AssertNotNil(pm, "PageManager")
 	return &FreelistManager{
 		pm:         pm,

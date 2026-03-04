@@ -1,10 +1,10 @@
 package VM
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/internal/DS"
-	PB "github.com/cyw0ng95/sqlvibe/internal/PB"
 )
 
 func TestVMCreate(t *testing.T) {
@@ -94,16 +94,14 @@ func TestResultSet(t *testing.T) {
 }
 
 func TestQueryEngine(t *testing.T) {
-	file, err := PB.OpenFile(":memory:", PB.O_CREATE|PB.O_RDWR)
-	if err != nil {
-		t.Fatalf("failed to open file: %v", err)
-	}
-	defer file.Close()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
 
-	pm, err := DS.NewPageManager(file, 4096)
+	pm, err := DS.NewCPageManager(dbPath, 4096, 0)
 	if err != nil {
-		t.Fatalf("failed to create page manager: %v", err)
+		t.Fatalf("failed to create C++ page manager: %v", err)
 	}
+	defer pm.Close()
 
 	qe := NewQueryEngine(pm, nil)
 	qe.RegisterTable("users", map[string]ColumnType{

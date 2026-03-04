@@ -10,24 +10,38 @@ namespace pb {
 
 VFSFile::VFSFile(const std::string& path, OpenFlags flags)
     : path_(path), flags_(flags), cached_size_(0), is_valid_(false) {
-    
+
     std::ios_base::openmode mode = std::ios::binary;
-    
+
     int flag_val = static_cast<int>(flags);
-    
-    if (flag_val & 0x01) {  // ReadOnly
+
+    // Check for ReadWrite first (0x03) before ReadOnly (0x01) or WriteOnly (0x02)
+    bool read_write = (flag_val & 0x03) == 0x03;
+    bool read_only = !read_write && (flag_val & 0x01) != 0;
+    bool write_only = !read_write && (flag_val & 0x02) != 0;
+    bool create = (flag_val & 0x04) != 0;
+
+    // Check if file exists
+    struct stat st;
+    bool file_exists = (stat(path.c_str(), &st) == 0);
+
+    if (read_only) {
         mode |= std::ios::in;
-    }
-    if (flag_val & 0x02) {  // WriteOnly
+    } else if (write_only) {
         mode |= std::ios::out;
+        if (create && !file_exists) {
+            mode |= std::ios::trunc;
+        }
+    } else if (read_write) {
+        if (create && !file_exists) {
+            // Create new file
+            mode |= std::ios::out | std::ios::in | std::ios::trunc;
+        } else {
+            // Open existing file for read-write
+            mode |= std::ios::in | std::ios::out;
+        }
     }
-    if (flag_val & 0x03 == 0x03) {  // ReadWrite
-        mode |= std::ios::in | std::ios::out;
-    }
-    if (flag_val & 0x04) {  // Create
-        mode |= std::ios::trunc;
-    }
-    
+
     stream_.open(path, mode);
     if (stream_.is_open()) {
         is_valid_ = true;
@@ -64,22 +78,46 @@ int64_t VFSFile::WriteAt(const uint8_t* data, int64_t len, int64_t offset) {
     if (!stream_.is_open()) {
         return -1;
     }
+
+    // Clear any error flags before seeking
+    stream_.clear();
     
-    stream_.seekp(offset);
-    if (!stream_.good()) {
-        return -1;
+    // Seek to the end to get current size
+    stream_.seekp(0, std::ios::end);
+    int64_t current_size = stream_.tellp();
+    
+    // If writing beyond current size, we need to extend the file first
+    if (offset + len > current_size) {
+        // Seek to position where we want to write
+        stream_.seekp(offset, std::ios::beg);
+        if (!stream_.good()) {
+            return -1;
+        }
+        // Write data - this will extend the file
+        stream_.write(reinterpret_cast<const char*>(data), len);
+        if (!stream_.good()) {
+            return -1;
+        }
+        // Flush to ensure data is written
+        stream_.flush();
+    } else {
+        // Normal write within current file size
+        stream_.seekp(offset, std::ios::beg);
+        if (!stream_.good()) {
+            return -1;
+        }
+        stream_.write(reinterpret_cast<const char*>(data), len);
+        if (!stream_.good()) {
+            return -1;
+        }
+        stream_.flush();
     }
-    
-    stream_.write(reinterpret_cast<const char*>(data), len);
-    if (!stream_.good()) {
-        return -1;
-    }
-    
+
     int64_t new_pos = offset + len;
     if (new_pos > cached_size_) {
         cached_size_ = new_pos;
     }
-    
+
     return len;
 }
 

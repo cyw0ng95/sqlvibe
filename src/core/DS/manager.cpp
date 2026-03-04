@@ -58,7 +58,7 @@ svdb_page_manager* svdb_page_manager_create(const char* db_path, uint32_t page_s
         return nullptr;
     }
 
-    svdb_page_manager* pm = (svdb_page_manager*)std::malloc(sizeof(svdb_page_manager));
+    svdb_page_manager* pm = new (std::nothrow) svdb_page_manager();
     if (!pm) return nullptr;
 
     pm->db_path = db_path;
@@ -68,16 +68,16 @@ svdb_page_manager* svdb_page_manager_create(const char* db_path, uint32_t page_s
 
     pm->vfs = SVDB_PB_VFS_Create();
     if (!pm->vfs) {
-        std::free(pm);
+        delete pm;
         return nullptr;
     }
 
-    int flags = static_cast<int>(svdb::pb::OpenFlags::ReadWrite) | 
+    int flags = static_cast<int>(svdb::pb::OpenFlags::ReadWrite) |
                 static_cast<int>(svdb::pb::OpenFlags::Create);
     pm->file = SVDB_PB_VFS_Open(pm->vfs, db_path, flags);
     if (!pm->file) {
         SVDB_PB_VFS_Destroy(pm->vfs);
-        std::free(pm);
+        delete pm;
         return nullptr;
     }
 
@@ -86,7 +86,7 @@ svdb_page_manager* svdb_page_manager_create(const char* db_path, uint32_t page_s
     if (!pm->cache) {
         SVDB_PB_VFS_Close(pm->file);
         SVDB_PB_VFS_Destroy(pm->vfs);
-        std::free(pm);
+        delete pm;
         return nullptr;
     }
 
@@ -100,8 +100,22 @@ svdb_page_manager* svdb_page_manager_create(const char* db_path, uint32_t page_s
                 pm->num_pages = (uint32_t)(file_size / pm->page_size);
             }
         }
-    } else if (bytes_read < 0) {
-        pm->num_pages = 0;
+    } else {
+        // New database - initialize header
+        std::memset(header.data(), 0, pm->page_size);
+        std::memcpy(header.data(), SVDB_MAGIC, 16);
+        svdb_manager_write_header_page_size(header.data(), header.size(), pm->page_size);
+        pm->num_pages = 1;
+        svdb_manager_write_header_num_pages(header.data(), header.size(), pm->num_pages);
+        
+        // Set text encoding (bytes 56-59, big-endian uint32, 1 = UTF-8)
+        header[56] = 0;
+        header[57] = 0;
+        header[58] = 0;
+        header[59] = 1;
+
+        // Write header to disk
+        SVDB_PB_VFS_Write(pm->file, header.data(), pm->page_size, 0);
     }
 
     pm->is_valid = true;
@@ -115,7 +129,7 @@ void svdb_page_manager_destroy(svdb_page_manager* pm) {
     if (pm->file) SVDB_PB_VFS_Close(pm->file);
     if (pm->vfs) SVDB_PB_VFS_Destroy(pm->vfs);
 
-    std::free(pm);
+    delete pm;
 }
 
 int svdb_page_manager_read(svdb_page_manager* pm, uint32_t page_num,

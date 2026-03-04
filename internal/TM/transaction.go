@@ -63,7 +63,7 @@ type Transaction struct {
 	lockType  LockType
 	changes   []Change
 	wal       *WAL
-	pm        *DS.PageManager
+	pm        DS.PageManagerInterface
 }
 
 // Change represents a change made during a transaction
@@ -83,11 +83,11 @@ type TransactionManager struct {
 	transactions map[uint64]*Transaction
 	wal          *WAL
 	walEnabled   bool
-	pm           *DS.PageManager
+	pm           DS.PageManagerInterface
 }
 
 // NewTransactionManager creates a new transaction manager
-func NewTransactionManager(pm *DS.PageManager) *TransactionManager {
+func NewTransactionManager(pm DS.PageManagerInterface) *TransactionManager {
 	util.AssertNotNil(pm, "PageManager")
 
 	return &TransactionManager{

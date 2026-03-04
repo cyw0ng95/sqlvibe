@@ -29,7 +29,7 @@ var prefetchWorkerPool = &struct {
 // Table page types agree in both implementations (0x0d leaf, 0x05 interior),
 // so CBTree can safely search pages written by Go for table B-Trees.
 type BTree struct {
-	pm              *PageManager
+	pm              PageManagerInterface
 	om              *OverflowManager
 	balancer        *PageBalancer
 	freelist        *FreelistManager
@@ -52,7 +52,7 @@ type cursorLevel struct {
 }
 
 // NewBTree creates a new B-Tree
-func NewBTree(pm *PageManager, rootPage uint32, isTable bool) *BTree {
+func NewBTree(pm PageManagerInterface, rootPage uint32, isTable bool) *BTree {
 	util.AssertNotNil(pm, "PageManager")
 	return &BTree{
 		pm:       pm,
@@ -145,7 +145,10 @@ func (bt *BTree) getCBTree() *CBTree {
 		return nil
 	}
 	if bt.cbt == nil && bt.rootPage != 0 {
-		bt.cbt = NewCBTree(bt.pm, bt.rootPage, bt.isTable)
+		// CBTree requires Go *PageManager for callback support
+		if goPm, ok := bt.pm.(*PageManager); ok {
+			bt.cbt = NewCBTree(goPm, bt.rootPage, bt.isTable)
+		}
 	}
 	return bt.cbt
 }
