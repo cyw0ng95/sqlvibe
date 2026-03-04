@@ -21,7 +21,8 @@ svdbcgo "github.com/cyw0ng95/sqlvibe/internal/cgo"
 // Database is the primary handle for a sqlvibe database.
 // All methods are safe to call concurrently from multiple goroutines.
 type Database struct {
-cdb *svdbcgo.DB
+cdb   *svdbcgo.DB
+vtabs *vtabState // virtual table registry (Go-layer)
 }
 
 // Result holds the outcome of a non-query SQL execution.
@@ -217,7 +218,7 @@ cdb, err := svdbcgo.Open(path)
 if err != nil {
 return nil, err
 }
-return &Database{cdb: cdb}, nil
+return &Database{cdb: cdb, vtabs: newVTabState()}, nil
 }
 
 // Close closes the database and releases all resources.
@@ -232,6 +233,27 @@ return err
 
 // Exec executes a non-query SQL statement and returns the result.
 func (db *Database) Exec(sql string) (Result, error) {
+// Intercept CREATE VIRTUAL TABLE in Go layer
+up := strings.ToUpper(strings.TrimSpace(sql))
+if strings.HasPrefix(up, "CREATE VIRTUAL TABLE") {
+handled, err := db.execCreateVirtualTable(sql)
+if handled {
+if err != nil {
+return Result{}, err
+}
+return Result{}, nil
+}
+}
+// Intercept DROP TABLE for virtual tables
+if strings.HasPrefix(up, "DROP TABLE") {
+handled, err := db.execDropVirtualTable(sql)
+if handled {
+if err != nil {
+return Result{}, err
+}
+return Result{}, nil
+}
+}
 r, err := db.cdb.Exec(sql)
 if err != nil {
 return Result{}, err
@@ -241,6 +263,11 @@ return Result{RowsAffected: r.RowsAffected, LastInsertRowID: r.LastInsertRowid},
 
 // Query executes a SELECT statement and returns a result set.
 func (db *Database) Query(sql string) (*Rows, error) {
+// Try Go-layer vtab interception first
+rows, handled, err := db.queryVTab(sql)
+if handled {
+return rows, err
+}
 return db.queryCGO(sql)
 }
 

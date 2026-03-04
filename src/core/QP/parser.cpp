@@ -136,11 +136,22 @@ static std::string read_value(const std::string& sql, size_t& pos) {
         if (pos < sql.size()) ++pos;
         return s;
     }
-    /* Number (possibly negative) */
+    /* Number (possibly negative), including scientific notation like 1.23e-10 */
     if (isdigit(c) || (c == '-' && pos + 1 < sql.size() && isdigit((unsigned char)sql[pos+1]))) {
         size_t start = pos;
         if (c == '-') ++pos;
-        while (pos < sql.size() && (isdigit((unsigned char)sql[pos]) || sql[pos] == '.' || sql[pos] == 'e' || sql[pos] == 'E')) ++pos;
+        while (pos < sql.size() && (isdigit((unsigned char)sql[pos]) || sql[pos] == '.')) ++pos;
+        /* Handle scientific notation: optional e/E followed by optional +/- and digits */
+        if (pos < sql.size() && (sql[pos] == 'e' || sql[pos] == 'E')) {
+            size_t e_pos = pos;
+            ++pos; /* consume 'e'/'E' */
+            if (pos < sql.size() && (sql[pos] == '+' || sql[pos] == '-')) ++pos;
+            if (pos < sql.size() && isdigit((unsigned char)sql[pos])) {
+                while (pos < sql.size() && isdigit((unsigned char)sql[pos])) ++pos;
+            } else {
+                pos = e_pos; /* not valid scientific notation, back up to before 'e' */
+            }
+        }
         return sql.substr(start, pos - start);
     }
     /* NULL/TRUE/FALSE */

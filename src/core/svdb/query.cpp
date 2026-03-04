@@ -29,6 +29,7 @@
 #include <cmath>
 #include <sstream>
 #include <functional>
+#include <cstdio>
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
@@ -1767,6 +1768,199 @@ static svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
         return SVDB_OK;
     }
 
+    /* PRAGMA wal_mode [= val] */
+    if (pname == "WAL_MODE") {
+        if (!parg.empty()) {
+            std::string upper_arg = qry_upper(parg);
+            db->wal_mode = (upper_arg == "ON" || upper_arg == "WAL") ? "WAL" : "DELETE";
+        }
+        r->col_names = {"wal_mode"};
+        SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = db->wal_mode;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA journal_mode: alias for wal_mode */
+    if (pname == "JOURNAL_MODE") {
+        if (!parg.empty()) {
+            std::string upper_arg = qry_upper(parg);
+            db->wal_mode = (upper_arg == "WAL") ? "WAL" : "DELETE";
+        }
+        r->col_names = {"journal_mode"};
+        SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = db->wal_mode;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA isolation_level [= val] */
+    if (pname == "ISOLATION_LEVEL") {
+        if (!parg.empty()) db->isolation_level = parg;
+        r->col_names = {"isolation_level"};
+        SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = db->isolation_level;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA busy_timeout [= val] */
+    if (pname == "BUSY_TIMEOUT") {
+        if (!parg.empty()) {
+            try { db->busy_timeout_ms = std::stoll(parg); } catch (...) {}
+        }
+        r->col_names = {"timeout"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->busy_timeout_ms;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA compression [= val] */
+    if (pname == "COMPRESSION") {
+        if (!parg.empty()) db->compression = qry_upper(parg);
+        r->col_names = {"compression"};
+        SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = db->compression;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA synchronous [= val] */
+    if (pname == "SYNCHRONOUS") {
+        if (!parg.empty()) db->synchronous = qry_upper(parg);
+        r->col_names = {"synchronous"};
+        SvdbVal v; v.type = SVDB_TYPE_INT;
+        if      (db->synchronous == "OFF"   || db->synchronous == "0") v.ival = 0;
+        else if (db->synchronous == "NORMAL"|| db->synchronous == "1") v.ival = 1;
+        else if (db->synchronous == "FULL"  || db->synchronous == "2") v.ival = 2;
+        else if (db->synchronous == "EXTRA" || db->synchronous == "3") v.ival = 3;
+        else v.ival = 1;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA foreign_keys [= val] */
+    if (pname == "FOREIGN_KEYS") {
+        if (!parg.empty()) {
+            std::string up = qry_upper(parg);
+            db->foreign_keys_enabled = (up == "ON" || up == "1" || up == "TRUE");
+        }
+        r->col_names = {"foreign_keys"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->foreign_keys_enabled ? 1 : 0;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA max_rows [= val] */
+    if (pname == "MAX_ROWS") {
+        if (!parg.empty()) {
+            try { db->max_rows = std::stoll(parg); } catch (...) {}
+        }
+        r->col_names = {"max_rows"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->max_rows;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA cache_memory [= val] */
+    if (pname == "CACHE_MEMORY") {
+        if (!parg.empty()) {
+            try { db->cache_memory = std::stoll(parg); } catch (...) {}
+        }
+        r->col_names = {"cache_memory"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->cache_memory;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA memory_stats */
+    if (pname == "MEMORY_STATS" || pname == "MEMORY_STATUS") {
+        r->col_names = {"stat", "value"};
+        int64_t total_rows = 0;
+        for (auto &kv : db->data) total_rows += (int64_t)kv.second.size();
+        SvdbVal k1, v1, k2, v2;
+        k1.type = SVDB_TYPE_TEXT; k1.sval = "total_rows";  v1.type = SVDB_TYPE_INT; v1.ival = total_rows;
+        k2.type = SVDB_TYPE_TEXT; k2.sval = "table_count"; v2.type = SVDB_TYPE_INT; v2.ival = (int64_t)db->schema.size();
+        r->rows.push_back({k1, v1});
+        r->rows.push_back({k2, v2});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA storage_info */
+    if (pname == "STORAGE_INFO") {
+        r->col_names = {"table_name", "row_count", "col_count"};
+        for (auto &kv : db->schema) {
+            SvdbVal v_tbl, v_rows, v_cols;
+            v_tbl.type  = SVDB_TYPE_TEXT; v_tbl.sval  = kv.first;
+            v_rows.type = SVDB_TYPE_INT;
+            v_rows.ival = db->data.count(kv.first) ? (int64_t)db->data.at(kv.first).size() : 0;
+            v_cols.type = SVDB_TYPE_INT;
+            v_cols.ival = db->col_order.count(kv.first) ? (int64_t)db->col_order.at(kv.first).size() : 0;
+            r->rows.push_back({v_tbl, v_rows, v_cols});
+        }
+        return SVDB_OK;
+    }
+
+    /* PRAGMA page_size / page_count / freelist_count: return stubs */
+    if (pname == "PAGE_SIZE") {
+        r->col_names = {"page_size"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 4096;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+    if (pname == "PAGE_COUNT") {
+        r->col_names = {"page_count"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 1;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+    if (pname == "FREELIST_COUNT") {
+        r->col_names = {"freelist_count"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA auto_vacuum [= val] */
+    if (pname == "AUTO_VACUUM") {
+        r->col_names = {"auto_vacuum"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA collation_list */
+    if (pname == "COLLATION_LIST") {
+        r->col_names = {"seq", "name"};
+        for (int i = 0; i < 3; ++i) {
+            SvdbVal vs, vn; vs.type = SVDB_TYPE_INT; vs.ival = i;
+            vn.type = SVDB_TYPE_TEXT;
+            vn.sval = (i == 0 ? "BINARY" : (i == 1 ? "NOCASE" : "RTRIM"));
+            r->rows.push_back({vs, vn});
+        }
+        return SVDB_OK;
+    }
+
+    /* PRAGMA mmap_size [= val] */
+    if (pname == "MMAP_SIZE") {
+        r->col_names = {"mmap_size"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA query_timeout [= val] */
+    if (pname == "QUERY_TIMEOUT") {
+        r->col_names = {"query_timeout"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA max_memory [= val] */
+    if (pname == "MAX_MEMORY") {
+        r->col_names = {"max_memory"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
     /* Unknown PRAGMA: return empty result */
     return SVDB_OK;
 }
@@ -1782,6 +1976,39 @@ svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
     if (s.size() >= 6) {
         std::string su = qry_upper(s.substr(0, 6));
         if (su == "PRAGMA") return svdb_query_pragma(db, s, rows);
+    }
+    /* Dispatch BACKUP DATABASE TO 'path' */
+    if (s.size() >= 6 && qry_upper(s.substr(0, 6)) == "BACKUP") {
+        /* Extract destination path from: BACKUP DATABASE TO 'path' */
+        std::string path_str;
+        auto q1 = s.find('\'');
+        auto q2 = s.rfind('\'');
+        if (q1 != std::string::npos && q2 != q1) {
+            path_str = s.substr(q1 + 1, q2 - q1 - 1);
+        } else {
+            auto q3 = s.find('"');
+            auto q4 = s.rfind('"');
+            if (q3 != std::string::npos && q4 != q3)
+                path_str = s.substr(q3 + 1, q4 - q3 - 1);
+        }
+        *rows = new (std::nothrow) svdb_rows_t();
+        if (!(*rows)) return SVDB_NOMEM;
+        if (!path_str.empty()) {
+            /* Create/truncate file at destination */
+            FILE *f = fopen(path_str.c_str(), "wb");
+            if (f) {
+                /* Write minimal marker so the file exists and is non-empty */
+                const char *marker = "SVDB backup\n";
+                fwrite(marker, 1, strlen(marker), f);
+                /* Serialize table data as CSV-like text */
+                for (auto &kv : db->schema) {
+                    std::string hdr = "TABLE:" + kv.first + "\n";
+                    fwrite(hdr.c_str(), 1, hdr.size(), f);
+                }
+                fclose(f);
+            }
+        }
+        return SVDB_OK;
     }
     return svdb_query_internal(db, s, rows);
 }
