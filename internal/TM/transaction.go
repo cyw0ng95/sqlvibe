@@ -64,6 +64,8 @@ type Transaction struct {
 	changes   []Change
 	wal       *WAL
 	pm        DS.PageManagerInterface
+	mvcc      *MVCCStoreCGO
+	snapshot  *SnapshotCGO
 }
 
 // Change represents a change made during a transaction
@@ -84,6 +86,7 @@ type TransactionManager struct {
 	wal          *WAL
 	walEnabled   bool
 	pm           DS.PageManagerInterface
+	mvcc         *MVCCStoreCGO
 }
 
 // NewTransactionManager creates a new transaction manager
@@ -98,6 +101,40 @@ func NewTransactionManager(pm DS.PageManagerInterface) *TransactionManager {
 		walEnabled:   false,
 		pm:           pm,
 	}
+}
+
+// EnableMVCC enables MVCC-based snapshot isolation for transactions.
+func (tm *TransactionManager) EnableMVCC() error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	if tm.mvcc != nil {
+		return nil // Already enabled
+	}
+
+	tm.mvcc = NewMVCCStoreCGO()
+	return nil
+}
+
+// DisableMVCC disables MVCC and reverts to lock-based concurrency.
+func (tm *TransactionManager) DisableMVCC() error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	if tm.mvcc == nil {
+		return nil
+	}
+
+	tm.mvcc.Close()
+	tm.mvcc = nil
+	return nil
+}
+
+// GetMVCCStore returns the MVCC store if enabled.
+func (tm *TransactionManager) GetMVCCStore() *MVCCStoreCGO {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	return tm.mvcc
 }
 
 // EnableWAL enables Write-Ahead Logging mode
@@ -191,6 +228,12 @@ func (tm *TransactionManager) Begin(dbPath string, txType TransactionType) (*Tra
 	// Register transaction
 	tm.transactions[txID] = tx
 
+	// If MVCC enabled, create snapshot for this transaction
+	if tm.mvcc != nil {
+		tx.mvcc = tm.mvcc
+		tx.snapshot = tm.mvcc.Snapshot()
+	}
+
 	return tx, nil
 }
 
@@ -268,6 +311,12 @@ func (tx *Transaction) Commit() error {
 		return ErrNoTransaction
 	}
 
+	// If MVCC enabled, free snapshot
+	if tx.snapshot != nil {
+		tx.snapshot.Free()
+		tx.snapshot = nil
+	}
+
 	// If WAL is enabled, commit to WAL
 	if tx.wal != nil {
 		if err := tx.wal.Commit(); err != nil {
@@ -297,6 +346,12 @@ func (tx *Transaction) Commit() error {
 func (tx *Transaction) Rollback() error {
 	if tx.State != TransactionActive {
 		return ErrNoTransaction
+	}
+
+	// If MVCC enabled, free snapshot
+	if tx.snapshot != nil {
+		tx.snapshot.Free()
+		tx.snapshot = nil
 	}
 
 	// Undo changes in reverse order
@@ -334,6 +389,33 @@ func (tm *TransactionManager) GetTransaction(txID uint64) (*Transaction, error) 
 	}
 
 	return tx, nil
+}
+
+// MVCCGet retrieves a value using MVCC snapshot isolation.
+// Returns (nil, false) if MVCC is not enabled or key not found.
+func (tx *Transaction) MVCCGet(key []byte) ([]byte, bool) {
+	if tx.mvcc == nil || tx.snapshot == nil {
+		return nil, false
+	}
+	return tx.mvcc.Get(key, tx.snapshot)
+}
+
+// MVCCPut stores a value using MVCC.
+// Returns the commit ID, or 0 if MVCC is not enabled.
+func (tx *Transaction) MVCCPut(key []byte, value []byte) uint64 {
+	if tx.mvcc == nil {
+		return 0
+	}
+	return tx.mvcc.Put(key, value)
+}
+
+// MVCCDelete marks a key as deleted using MVCC.
+// Returns the commit ID, or 0 if MVCC is not enabled.
+func (tx *Transaction) MVCCDelete(key []byte) uint64 {
+	if tx.mvcc == nil {
+		return 0
+	}
+	return tx.mvcc.Delete(key)
 }
 
 // CommitTransaction commits a transaction by ID
