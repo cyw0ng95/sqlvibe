@@ -1,14 +1,16 @@
 package F870
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F870_Vacuum_L1 tests that VACUUM executes without error.
 func TestSQL1999_F870_Vacuum_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}
@@ -26,10 +28,7 @@ func TestSQL1999_F870_Vacuum_L1(t *testing.T) {
 	}
 
 	// Data should still be intact after VACUUM
-	rows, err := db.Query("SELECT id, val FROM t")
-	if err != nil {
-		t.Fatalf("SELECT after VACUUM: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id, val FROM t")
 	if len(rows.Data) != 1 {
 		t.Errorf("Expected 1 row after VACUUM, got %d", len(rows.Data))
 	}
@@ -37,7 +36,7 @@ func TestSQL1999_F870_Vacuum_L1(t *testing.T) {
 
 // TestSQL1999_F870_Analyze_L1 tests that ANALYZE executes without error and populates stats.
 func TestSQL1999_F870_Analyze_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}
@@ -57,10 +56,7 @@ func TestSQL1999_F870_Analyze_L1(t *testing.T) {
 		t.Fatalf("ANALYZE failed: %v", err)
 	}
 
-	rows, err := db.Query("SELECT * FROM sqlite_stat1")
-	if err != nil {
-		t.Fatalf("SELECT sqlite_stat1: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT * FROM sqlite_stat1")
 	if rows == nil {
 		t.Fatal("Expected rows from sqlite_stat1")
 	}
@@ -78,7 +74,7 @@ func TestSQL1999_F870_Analyze_L1(t *testing.T) {
 
 // TestSQL1999_F870_AnalyzeTarget_L1 tests ANALYZE with a specific table target.
 func TestSQL1999_F870_AnalyzeTarget_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}
@@ -98,7 +94,7 @@ func TestSQL1999_F870_AnalyzeTarget_L1(t *testing.T) {
 
 // TestSQL1999_F870_View_L1 tests basic CREATE VIEW and SELECT from it.
 func TestSQL1999_F870_View_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}
@@ -114,10 +110,7 @@ func TestSQL1999_F870_View_L1(t *testing.T) {
 		t.Fatalf("CREATE VIEW: %v", err)
 	}
 
-	rows, err := db.Query("SELECT * FROM v")
-	if err != nil {
-		t.Fatalf("SELECT from view: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT * FROM v")
 	if len(rows.Data) != 1 {
 		t.Errorf("Expected 1 row from view, got %d", len(rows.Data))
 	}
@@ -125,7 +118,7 @@ func TestSQL1999_F870_View_L1(t *testing.T) {
 
 // TestSQL1999_F870_DropView_L1 tests DROP VIEW.
 func TestSQL1999_F870_DropView_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}

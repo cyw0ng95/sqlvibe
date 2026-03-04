@@ -2,14 +2,15 @@ package E101
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 func TestSQL1999_F301_E10107_L1(t *testing.T) {
-	sqlvibeDB, _ := sqlvibe.Open(":memory:")
+	sqlvibeDB, _ := sql.Open("sqlvibe", ":memory:")
 	defer sqlvibeDB.Close()
 
 	sqliteDB, _ := sql.Open("sqlite", ":memory:")

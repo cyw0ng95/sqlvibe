@@ -2,15 +2,16 @@ package F651
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F651_Printf_L1 tests the printf() / format() function.
 func TestSQL1999_F651_Printf_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -41,7 +42,7 @@ func TestSQL1999_F651_Printf_L1(t *testing.T) {
 
 // TestSQL1999_F651_Quote_L1 tests the quote() function.
 func TestSQL1999_F651_Quote_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestSQL1999_F651_Quote_L1(t *testing.T) {
 
 // TestSQL1999_F651_Instr_L1 tests INSTR function.
 func TestSQL1999_F651_Instr_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -100,7 +101,7 @@ func TestSQL1999_F651_Instr_L1(t *testing.T) {
 
 // TestSQL1999_F651_HexChar_L1 tests hex() and char() functions.
 func TestSQL1999_F651_HexChar_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}

@@ -1,10 +1,10 @@
 package Regression
 
 import (
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"strings"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestRegression_UnknownFunction_L1 verifies that calling an undefined function
@@ -12,7 +12,7 @@ import (
 // Regression: evaluateFuncCallOnRow and evalFuncCall previously returned nil
 // without setting any error when a function was not found.
 func TestRegression_UnknownFunction_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestRegression_UnknownFunction_L1(t *testing.T) {
 // TestRegression_UnknownFunction_Constant_L1 verifies that calling an undefined
 // function in a constant SELECT (no FROM clause) returns an error.
 func TestRegression_UnknownFunction_Constant_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestRegression_UnknownFunction_Constant_L1(t *testing.T) {
 // Regression: parseDateTimeValue returned zero time for NULL, causing JULIANDAY
 // to fall back to time.Now() instead of returning NULL.
 func TestRegression_JulianDayNULL_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestRegression_JulianDayNULL_L1(t *testing.T) {
 // Regression: getRound returned int64 for 0 decimals, causing type mismatch in
 // queries that expected a real result (e.g. ROUND(julianday('now'))).
 func TestRegression_RoundFloat_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestRegression_RoundFloat_L1(t *testing.T) {
 // TestRegression_RoundJulianDay_L1 verifies that ROUND(JULIANDAY('now'), 2)
 // works correctly end-to-end.
 func TestRegression_RoundJulianDay_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

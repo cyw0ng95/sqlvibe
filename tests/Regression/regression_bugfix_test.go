@@ -1,9 +1,9 @@
 package Regression
 
 import (
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestRegression_DerivedTableWhere_L1 tests that WHERE clause is applied correctly
@@ -11,7 +11,7 @@ import (
 // Bug: vectorized filter used wrong type (TEXT) for derived table columns, causing
 // integer comparisons like a > 1 to match all rows due to type ordering.
 func TestRegression_DerivedTableWhere_L1(t *testing.T) {
-	db, _ := sqlvibe.Open(":memory:")
+	db, _ := sql.Open("sqlvibe", ":memory:")
 	defer db.Close()
 	db.Exec("CREATE TABLE t (a INTEGER, b INTEGER)")
 	db.Exec("INSERT INTO t VALUES (1, 10), (2, 20), (3, 30)")
@@ -27,7 +27,7 @@ func TestRegression_DerivedTableWhere_L1(t *testing.T) {
 
 // TestRegression_DerivedTableDoubleNested_L1 tests WHERE on doubly-nested derived table.
 func TestRegression_DerivedTableDoubleNested_L1(t *testing.T) {
-	db, _ := sqlvibe.Open(":memory:")
+	db, _ := sql.Open("sqlvibe", ":memory:")
 	defer db.Close()
 	db.Exec("CREATE TABLE t (a INTEGER, b INTEGER)")
 	db.Exec("INSERT INTO t VALUES (1, 10), (2, 20), (3, 30)")
@@ -46,7 +46,7 @@ func TestRegression_DerivedTableDoubleNested_L1(t *testing.T) {
 // Bug: evaluateExprOnRow did not fall back to unqualified lookup after failing
 // qualified lookup, so GROUP BY e.col returned nil for all rows.
 func TestRegression_GroupByTableAlias_L1(t *testing.T) {
-	db, _ := sqlvibe.Open(":memory:")
+	db, _ := sql.Open("sqlvibe", ":memory:")
 	defer db.Close()
 	db.Exec("CREATE TABLE employees (name TEXT, department TEXT)")
 	db.Exec("INSERT INTO employees VALUES ('Alice', 'Engineering')")
@@ -69,7 +69,7 @@ func TestRegression_GroupByTableAlias_L1(t *testing.T) {
 // Bug: execJoinAggregate only handled INNER JOINs; LEFT JOINs fell through to
 // a path that ignored the join entirely.
 func TestRegression_LeftJoinGroupBy_L1(t *testing.T) {
-	db, _ := sqlvibe.Open(":memory:")
+	db, _ := sql.Open("sqlvibe", ":memory:")
 	defer db.Close()
 	db.Exec("CREATE TABLE t1 (cat TEXT, id INTEGER)")
 	db.Exec("CREATE TABLE t2 (id INTEGER, val INTEGER)")
@@ -90,7 +90,7 @@ func TestRegression_LeftJoinGroupBy_L1(t *testing.T) {
 // Bug: evaluateExprOnRow fell back to unqualified lookup before outer context,
 // causing self-correlated subqueries to always return the wrong value.
 func TestRegression_CorrelatedSubqueryInSelect_L1(t *testing.T) {
-	db, _ := sqlvibe.Open(":memory:")
+	db, _ := sql.Open("sqlvibe", ":memory:")
 	defer db.Close()
 	db.Exec("CREATE TABLE customers (id INTEGER, name TEXT)")
 	db.Exec("INSERT INTO customers VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie')")
@@ -122,7 +122,7 @@ func TestRegression_CorrelatedSubqueryInSelect_L1(t *testing.T) {
 // Bug: subquery temp table registered with TEXT types caused HybridStore
 // to store values as strings, breaking integer GROUP BY comparisons.
 func TestRegression_SubqueryGroupByColumn_L1(t *testing.T) {
-	db, _ := sqlvibe.Open(":memory:")
+	db, _ := sql.Open("sqlvibe", ":memory:")
 	defer db.Close()
 	db.Exec("CREATE TABLE t1 (a INTEGER, b INTEGER)")
 	db.Exec("INSERT INTO t1 VALUES (1, 10), (2, 20), (3, 30)")

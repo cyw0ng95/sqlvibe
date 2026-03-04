@@ -1,16 +1,16 @@
 package Regression
 
 import (
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"fmt"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestRegression_NullPropagationArith_v0100 verifies NULL propagation in arithmetic.
 // Regression: NULL + x should always be NULL (bytecode path is now always-on).
 func TestRegression_NullPropagationArith_v0100(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestRegression_NullPropagationArith_v0100(t *testing.T) {
 // TestRegression_IntegerOverflowWrap_v0100 verifies that integer overflow wraps
 // rather than panicking.
 func TestRegression_IntegerOverflowWrap_v0100(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestRegression_IntegerOverflowWrap_v0100(t *testing.T) {
 
 // TestRegression_LikeWildcard_v0100 verifies LIKE with % and _ wildcards.
 func TestRegression_LikeWildcard_v0100(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestRegression_LikeWildcard_v0100(t *testing.T) {
 
 // TestRegression_CastTypes_v0100 verifies CAST with various input types.
 func TestRegression_CastTypes_v0100(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestRegression_CastTypes_v0100(t *testing.T) {
 
 // TestRegression_AggAllNullGroup_v0100 verifies that SUM of all-NULL returns NULL.
 func TestRegression_AggAllNullGroup_v0100(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}

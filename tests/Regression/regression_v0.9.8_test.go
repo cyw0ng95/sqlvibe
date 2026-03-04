@@ -1,15 +1,15 @@
 package Regression
 
 import (
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestRegression_PragmaIndexInfoMissingIndex_L1 regression test for PRAGMA index_info
 // Bug: PRAGMA index_info on non-existent index panicked instead of returning empty
 func TestRegression_PragmaIndexInfoMissingIndex_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestRegression_PragmaIndexInfoMissingIndex_L1(t *testing.T) {
 // TestRegression_PragmaForeignKeyListNoFK_L1 regression test for PRAGMA foreign_key_list
 // Bug: PRAGMA foreign_key_list on table without FKs returned error instead of empty
 func TestRegression_PragmaForeignKeyListNoFK_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestRegression_PragmaForeignKeyListNoFK_L1(t *testing.T) {
 // TestRegression_SubstrNegativeLengthPanic_L1 regression test for SUBSTR with negative length
 // Bug: SUBSTR('hello', 5, -3) panicked with slice bounds out of range
 func TestRegression_SubstrNegativeLengthPanic_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestRegression_SubstrNegativeLengthPanic_L1(t *testing.T) {
 // TestRegression_InformationSchemaViewsEmpty_L1 regression test for information_schema.views
 // Bug: information_schema.views always returned empty even when views existed
 func TestRegression_InformationSchemaViewsEmpty_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestRegression_InformationSchemaViewsEmpty_L1(t *testing.T) {
 // TestRegression_InformationSchemaTableConstraintsUNIQUE_L1 regression test
 // Bug: information_schema.table_constraints only returned PRIMARY KEY, not UNIQUE or FOREIGN KEY
 func TestRegression_InformationSchemaTableConstraintsUNIQUE_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestRegression_InformationSchemaTableConstraintsUNIQUE_L1(t *testing.T) {
 // TestRegression_SqliteMasterEmptySQL_L1 regression test
 // Bug: sqlite_master SQL column showed "CREATE TABLE name ()" with no column definitions
 func TestRegression_SqliteMasterEmptySQL_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

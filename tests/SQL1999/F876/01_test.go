@@ -5,15 +5,16 @@ package F876
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F876_PartialIndex_L1 validates CREATE INDEX ... WHERE expr (partial index).
 func TestSQL1999_F876_PartialIndex_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -58,7 +59,7 @@ func TestSQL1999_F876_PartialIndex_L1(t *testing.T) {
 
 // TestSQL1999_F876_ExpressionIndex_L1 validates CREATE INDEX ON table(LOWER(col)).
 func TestSQL1999_F876_ExpressionIndex_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -103,7 +104,7 @@ func TestSQL1999_F876_ExpressionIndex_L1(t *testing.T) {
 
 // TestSQL1999_F876_InsertReturning_L1 validates INSERT ... RETURNING.
 func TestSQL1999_F876_InsertReturning_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -144,7 +145,7 @@ func TestSQL1999_F876_InsertReturning_L1(t *testing.T) {
 
 // TestSQL1999_F876_DeleteReturning_L1 validates DELETE ... RETURNING.
 func TestSQL1999_F876_DeleteReturning_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -194,7 +195,7 @@ func TestSQL1999_F876_DeleteReturning_L1(t *testing.T) {
 
 // TestSQL1999_F876_UpdateReturning_L1 validates UPDATE ... RETURNING.
 func TestSQL1999_F876_UpdateReturning_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -234,7 +235,7 @@ func TestSQL1999_F876_UpdateReturning_L1(t *testing.T) {
 
 // TestSQL1999_F876_UpdateFrom_L1 validates UPDATE ... FROM (PostgreSQL-style).
 func TestSQL1999_F876_UpdateFrom_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -282,7 +283,7 @@ func TestSQL1999_F876_UpdateFrom_L1(t *testing.T) {
 
 // TestSQL1999_F876_DeleteUsing_L1 validates DELETE ... USING.
 func TestSQL1999_F876_DeleteUsing_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -318,7 +319,7 @@ func TestSQL1999_F876_DeleteUsing_L1(t *testing.T) {
 
 // TestSQL1999_F876_MatchOperator_L1 validates the MATCH operator.
 func TestSQL1999_F876_MatchOperator_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -353,7 +354,7 @@ func TestSQL1999_F876_MatchOperator_L1(t *testing.T) {
 
 // TestSQL1999_F876_CollateNocase_L1 validates COLLATE NOCASE on columns.
 func TestSQL1999_F876_CollateNocase_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -386,7 +387,7 @@ func TestSQL1999_F876_CollateNocase_L1(t *testing.T) {
 
 // TestSQL1999_F876_GlobOperator_L1 validates GLOB operator with * and ? wildcards.
 func TestSQL1999_F876_GlobOperator_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -431,7 +432,7 @@ func TestSQL1999_F876_GlobOperator_L1(t *testing.T) {
 
 // TestSQL1999_F876_AlterTable_L1 validates ALTER TABLE ADD COLUMN and RENAME TO.
 func TestSQL1999_F876_AlterTable_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}

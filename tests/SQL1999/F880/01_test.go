@@ -1,25 +1,24 @@
 package F880
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"testing"
 	"time"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F880_WALCheckpointPassive_L1 tests PRAGMA wal_checkpoint (passive mode).
 func TestSQL1999_F880_WALCheckpointPassive_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
 	// Passive checkpoint without WAL mode returns (0,0,0).
-	rows, err := db.Query("PRAGMA wal_checkpoint")
-	if err != nil {
-		t.Fatalf("PRAGMA wal_checkpoint: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "PRAGMA wal_checkpoint")
 	if len(rows.Columns) != 3 {
 		t.Fatalf("expected 3 columns, got %d", len(rows.Columns))
 	}
@@ -30,17 +29,14 @@ func TestSQL1999_F880_WALCheckpointPassive_L1(t *testing.T) {
 
 // TestSQL1999_F880_WALCheckpointModes_L1 tests PRAGMA wal_checkpoint with explicit modes.
 func TestSQL1999_F880_WALCheckpointModes_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
 	for _, mode := range []string{"passive", "full", "truncate"} {
-		rows, err := db.Query("PRAGMA wal_checkpoint(" + mode + ")")
-		if err != nil {
-			t.Fatalf("PRAGMA wal_checkpoint(%s): %v", mode, err)
-		}
+		rows := SQL1999.QueryRows(t, db, "PRAGMA wal_checkpoint(" + mode + ")")
 		if len(rows.Data) != 1 {
 			t.Fatalf("mode %s: expected 1 row, got %d", mode, len(rows.Data))
 		}
@@ -49,16 +45,13 @@ func TestSQL1999_F880_WALCheckpointModes_L1(t *testing.T) {
 
 // TestSQL1999_F880_WALAutocheckpointRead_L1 tests reading PRAGMA wal_autocheckpoint.
 func TestSQL1999_F880_WALAutocheckpointRead_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	rows, err := db.Query("PRAGMA wal_autocheckpoint")
-	if err != nil {
-		t.Fatalf("PRAGMA wal_autocheckpoint: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "PRAGMA wal_autocheckpoint")
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows.Data))
 	}
@@ -74,7 +67,7 @@ func TestSQL1999_F880_WALAutocheckpointRead_L1(t *testing.T) {
 
 // TestSQL1999_F880_WALAutocheckpointSet_L1 tests setting PRAGMA wal_autocheckpoint = N.
 func TestSQL1999_F880_WALAutocheckpointSet_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -85,10 +78,7 @@ func TestSQL1999_F880_WALAutocheckpointSet_L1(t *testing.T) {
 		t.Fatalf("set wal_autocheckpoint: %v", err)
 	}
 
-	rows, err := db.Query("PRAGMA wal_autocheckpoint")
-	if err != nil {
-		t.Fatalf("read wal_autocheckpoint: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "PRAGMA wal_autocheckpoint")
 	val, ok := rows.Data[0][0].(int64)
 	if !ok {
 		t.Fatalf("expected int64, got %T", rows.Data[0][0])
@@ -100,7 +90,7 @@ func TestSQL1999_F880_WALAutocheckpointSet_L1(t *testing.T) {
 
 // TestSQL1999_F880_WALAutocheckpointDisable_L1 tests disabling auto-checkpoint (N=0).
 func TestSQL1999_F880_WALAutocheckpointDisable_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -115,17 +105,14 @@ func TestSQL1999_F880_WALAutocheckpointDisable_L1(t *testing.T) {
 
 // TestSQL1999_F880_WALShouldCheckpoint_L1 tests WAL ShouldCheckpoint logic.
 func TestSQL1999_F880_WALShouldCheckpoint_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
 	// In delete mode (no WAL), wal_checkpoint returns (0,0,0) with no error.
-	rows, err := db.Query("PRAGMA wal_checkpoint(passive)")
-	if err != nil {
-		t.Fatalf("PRAGMA wal_checkpoint(passive): %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "PRAGMA wal_checkpoint(passive)")
 	row := rows.Data[0]
 	for i, v := range row {
 		if v.(int64) != 0 {
@@ -139,7 +126,7 @@ func TestSQL1999_F880_WALShouldCheckpoint_L1(t *testing.T) {
 func TestSQL1999_F880_WALChecksumRecovery_L1(t *testing.T) {
 	// This test exercises the DS WAL corruption-recovery path indirectly:
 	// opening a DB that has no WAL should still succeed cleanly.
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -151,10 +138,7 @@ func TestSQL1999_F880_WALChecksumRecovery_L1(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO t VALUES (42)"); err != nil {
 		t.Fatalf("INSERT: %v", err)
 	}
-	rows, err := db.Query("SELECT x FROM t")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT x FROM t")
 	if len(rows.Data) != 1 || rows.Data[0][0].(int64) != 42 {
 		t.Errorf("unexpected result: %v", rows.Data)
 	}

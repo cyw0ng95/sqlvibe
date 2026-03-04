@@ -3,15 +3,17 @@
 package F900
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 	_ "github.com/cyw0ng95/sqlvibe/ext/json"
 )
 
 // TestSQL1999_F900_JSONExtensions_L1 tests the JSON extension functions via SQL queries.
 func TestSQL1999_F900_JSONExtensions_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -91,10 +93,7 @@ func TestSQL1999_F900_JSONExtensions_L1(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows, err := db.Query(tt.query)
-			if err != nil {
-				t.Fatalf("Query %q: %v", tt.query, err)
-			}
+			rows := SQL1999.QueryRows(t, db, tt.query)
 			if len(rows.Data) != 1 || len(rows.Data[0]) != 1 {
 				t.Fatalf("expected 1 row/col, got %v", rows.Data)
 			}
@@ -109,16 +108,13 @@ func TestSQL1999_F900_JSONExtensions_L1(t *testing.T) {
 // TestSQL1999_F900_JSONExtensionsTable_L1 tests the sqlvibe_extensions virtual table
 // when the JSON extension is loaded.
 func TestSQL1999_F900_JSONExtensionsTable_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	rows, err := db.Query("SELECT name, description FROM sqlvibe_extensions WHERE name = 'json'")
-	if err != nil {
-		t.Fatalf("Query sqlvibe_extensions: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT name, description FROM sqlvibe_extensions WHERE name = 'json'")
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected 1 row for 'json' extension, got %d", len(rows.Data))
 	}
@@ -129,28 +125,22 @@ func TestSQL1999_F900_JSONExtensionsTable_L1(t *testing.T) {
 
 // TestSQL1999_F900_JSONRemoveReplace_L1 tests json_remove and json_replace.
 func TestSQL1999_F900_JSONRemoveReplace_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
 	// json_remove
-	rows, err := db.Query(`SELECT json_remove('{"a":1,"b":2}', '$.a')`)
-	if err != nil {
-		t.Fatalf("json_remove: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, `SELECT json_remove('{"a":1,"b":2}', '$.a')`)
 	if rows.Data[0][0] != `{"b":2}` {
 		t.Errorf("json_remove = %v, want {\"b\":2}", rows.Data[0][0])
 	}
 
 	// json_replace existing key
-	rows2, err := db.Query(`SELECT json_replace('{"a":1}', '$.a', 99)`)
-	if err != nil {
-		t.Fatalf("json_replace: %v", err)
-	}
+	rows2 := SQL1999.QueryRows(t, db, `SELECT json_replace('{"a":1}', '$.a', 99)`)
 	if s, ok := rows2.Data[0][0].(string); ok {
-		rows3, _ := db.Query(`SELECT json_extract('` + s + `', '$.a')`)
+		rows3 := SQL1999.QueryRows(t, db, `SELECT json_extract('` + s + `', '$.a')`)
 		if rows3 != nil && len(rows3.Data) > 0 {
 			v := rows3.Data[0][0]
 			if v != float64(99) && v != int64(99) {

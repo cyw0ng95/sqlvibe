@@ -1,15 +1,15 @@
 package Regression
 
 import (
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestRegression_ParamPositional_L1 verifies that ExecWithParams binds '?' positional
 // parameters correctly and does NOT treat the param value as raw SQL.
 func TestRegression_ParamPositional_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestRegression_ParamPositional_L1(t *testing.T) {
 // TestRegression_ParamInjectionSafe_L1 verifies that a SQL-injection attempt via a
 // string parameter is treated as a literal string and NOT executed as SQL.
 func TestRegression_ParamInjectionSafe_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestRegression_ParamInjectionSafe_L1(t *testing.T) {
 
 // TestRegression_ParamNamedColon_L1 verifies that :name named parameters bind correctly.
 func TestRegression_ParamNamedColon_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestRegression_ParamNamedColon_L1(t *testing.T) {
 
 // TestRegression_ParamNamedAt_L1 verifies that @name named parameters bind correctly.
 func TestRegression_ParamNamedAt_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestRegression_ParamNamedAt_L1(t *testing.T) {
 
 // TestRegression_ParamMissing_L1 verifies that a missing positional param returns an error.
 func TestRegression_ParamMissing_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestRegression_ParamMissing_L1(t *testing.T) {
 
 // TestRegression_ParamNullBind_L1 verifies that nil param binds as SQL NULL.
 func TestRegression_ParamNullBind_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestRegression_ParamNullBind_L1(t *testing.T) {
 
 // TestRegression_ParamBlob_L1 verifies that []byte params bind as BLOB (hex literal).
 func TestRegression_ParamBlob_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestRegression_ParamBlob_L1(t *testing.T) {
 
 // TestRegression_ParamPreparedStmt_L1 verifies that Prepare + stmt.Query works with params.
 func TestRegression_ParamPreparedStmt_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestRegression_ParamPreparedStmt_L1(t *testing.T) {
 
 // TestRegression_ParamTooMany_L1 verifies that extra params beyond '?' count are silently ignored.
 func TestRegression_ParamTooMany_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

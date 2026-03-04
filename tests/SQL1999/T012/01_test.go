@@ -1,14 +1,16 @@
 package T012
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
-func openDB(t *testing.T) *sqlvibe.Database {
+func openDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
@@ -37,10 +39,7 @@ func TestSQL1999_T012_SavepointCreateRelease_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT id FROM t ORDER BY id")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id FROM t ORDER BY id")
 	if len(rows.Data) != 2 {
 		t.Errorf("expected 2 rows after RELEASE SAVEPOINT + COMMIT, got %d: %v", len(rows.Data), rows.Data)
 	}
@@ -68,10 +67,7 @@ func TestSQL1999_T012_RollbackToSavepoint_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT id FROM t ORDER BY id")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id FROM t ORDER BY id")
 	if len(rows.Data) != 1 {
 		t.Errorf("expected 1 row after ROLLBACK TO SAVEPOINT, got %d: %v", len(rows.Data), rows.Data)
 	}
@@ -102,10 +98,7 @@ func TestSQL1999_T012_MultipleSavepointsStack_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT id FROM t ORDER BY id")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id FROM t ORDER BY id")
 	if len(rows.Data) != 2 {
 		t.Errorf("expected 2 rows, got %d: %v", len(rows.Data), rows.Data)
 	}
@@ -134,10 +127,7 @@ func TestSQL1999_T012_SavepointWithinTransaction_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT id FROM t ORDER BY id")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id FROM t ORDER BY id")
 	if len(rows.Data) != 3 {
 		t.Errorf("expected 3 rows, got %d: %v", len(rows.Data), rows.Data)
 	}
@@ -165,10 +155,7 @@ func TestSQL1999_T012_ReleaseSavepointVerifyState_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT id FROM t ORDER BY id")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id FROM t ORDER BY id")
 	if len(rows.Data) != 2 {
 		t.Errorf("expected 2 rows after RELEASE SAVEPOINT, got %d: %v", len(rows.Data), rows.Data)
 	}

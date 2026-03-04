@@ -2,17 +2,18 @@ package F261
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 func TestSQL1999_F301_F26101_L1(t *testing.T) {
 	sqlvibePath := ":memory:"
 	sqlitePath := ":memory:"
 
-	sqlvibeDB, err := sqlvibe.Open(sqlvibePath)
+	sqlvibeDB, err := sql.Open("sqlvibe", sqlvibePath)
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestSQL1999_F301_F26102_L1(t *testing.T) {
 	sqlvibePath := ":memory:"
 	sqlitePath := ":memory:"
 
-	sqlvibeDB, err := sqlvibe.Open(sqlvibePath)
+	sqlvibeDB, err := sql.Open("sqlvibe", sqlvibePath)
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestSQL1999_F301_F26103_L1(t *testing.T) {
 	sqlvibePath := ":memory:"
 	sqlitePath := ":memory:"
 
-	sqlvibeDB, err := sqlvibe.Open(sqlvibePath)
+	sqlvibeDB, err := sql.Open("sqlvibe", sqlvibePath)
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestSQL1999_F301_F26104_L1(t *testing.T) {
 	sqlvibePath := ":memory:"
 	sqlitePath := ":memory:"
 
-	sqlvibeDB, err := sqlvibe.Open(sqlvibePath)
+	sqlvibeDB, err := sql.Open("sqlvibe", sqlvibePath)
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}

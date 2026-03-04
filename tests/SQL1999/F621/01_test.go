@@ -1,14 +1,16 @@
 package F621
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F621_TriggerBasic_L1 tests basic AFTER INSERT trigger functionality.
 func TestSQL1999_F621_TriggerBasic_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}
@@ -36,10 +38,7 @@ func TestSQL1999_F621_TriggerBasic_L1(t *testing.T) {
 		t.Fatalf("INSERT error: %v", err)
 	}
 
-	rows, err := db.Query("SELECT COUNT(*) FROM audit_log")
-	if err != nil {
-		t.Fatalf("Query error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT COUNT(*) FROM audit_log")
 	if len(rows.Data) == 0 || rows.Data[0][0] != int64(2) {
 		t.Errorf("Expected 2 audit log entries, got %v", rows.Data)
 	}
@@ -47,7 +46,7 @@ func TestSQL1999_F621_TriggerBasic_L1(t *testing.T) {
 
 // TestSQL1999_F621_TriggerBeforeInsert_L1 tests BEFORE INSERT trigger.
 func TestSQL1999_F621_TriggerBeforeInsert_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}
@@ -72,10 +71,7 @@ func TestSQL1999_F621_TriggerBeforeInsert_L1(t *testing.T) {
 	db.Exec("INSERT INTO counter VALUES ('foo', 1)")
 	db.Exec("INSERT INTO counter VALUES ('bar', 2)")
 
-	rows, err := db.Query("SELECT val FROM counter WHERE name = 'inserts'")
-	if err != nil {
-		t.Fatalf("Query error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT val FROM counter WHERE name = 'inserts'")
 	if len(rows.Data) == 0 {
 		t.Error("No rows returned")
 	}
@@ -87,7 +83,7 @@ func TestSQL1999_F621_TriggerBeforeInsert_L1(t *testing.T) {
 
 // TestSQL1999_F621_CreateDropTrigger_L1 tests CREATE and DROP TRIGGER.
 func TestSQL1999_F621_CreateDropTrigger_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}
@@ -110,7 +106,7 @@ func TestSQL1999_F621_CreateDropTrigger_L1(t *testing.T) {
 
 	db.Exec("INSERT INTO t VALUES (1, 'a')")
 
-	rows, _ := db.Query("SELECT COUNT(*) FROM log_")
+	rows := SQL1999.QueryRows(t, db, "SELECT COUNT(*) FROM log_")
 	if len(rows.Data) == 0 || rows.Data[0][0] != int64(1) {
 		t.Errorf("Expected 1 log entry before drop, got %v", rows.Data)
 	}
@@ -122,7 +118,7 @@ func TestSQL1999_F621_CreateDropTrigger_L1(t *testing.T) {
 
 	db.Exec("INSERT INTO t VALUES (2, 'b')")
 
-	rows, _ = db.Query("SELECT COUNT(*) FROM log_")
+	rows = SQL1999.QueryRows(t, db, "SELECT COUNT(*) FROM log_")
 	if len(rows.Data) == 0 || rows.Data[0][0] != int64(1) {
 		t.Errorf("Expected still 1 log entry after drop, got %v", rows.Data)
 	}
@@ -130,7 +126,7 @@ func TestSQL1999_F621_CreateDropTrigger_L1(t *testing.T) {
 
 // TestSQL1999_F621_TriggerAfterDelete_L1 tests AFTER DELETE trigger.
 func TestSQL1999_F621_TriggerAfterDelete_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}
@@ -156,10 +152,7 @@ func TestSQL1999_F621_TriggerAfterDelete_L1(t *testing.T) {
 
 	db.Exec("DELETE FROM items WHERE id = 2")
 
-	rows, err := db.Query("SELECT id, name FROM deleted_items")
-	if err != nil {
-		t.Fatalf("Query error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id, name FROM deleted_items")
 	if len(rows.Data) != 1 {
 		t.Errorf("Expected 1 deleted item, got %d", len(rows.Data))
 		return
@@ -171,7 +164,7 @@ func TestSQL1999_F621_TriggerAfterDelete_L1(t *testing.T) {
 
 // TestSQL1999_F621_TriggerIfNotExists_L1 tests IF NOT EXISTS on CREATE TRIGGER.
 func TestSQL1999_F621_TriggerIfNotExists_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}

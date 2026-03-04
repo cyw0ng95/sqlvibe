@@ -1,14 +1,16 @@
 package T011
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
-func openDB(t *testing.T) *sqlvibe.Database {
+func openDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
@@ -34,10 +36,7 @@ func TestSQL1999_T011_BeginCommit_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT id, val FROM t")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id, val FROM t")
 	if len(rows.Data) != 1 {
 		t.Errorf("expected 1 row after COMMIT, got %d", len(rows.Data))
 	}
@@ -62,10 +61,7 @@ func TestSQL1999_T011_RollbackDiscardsChanges_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT id, val FROM t")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id, val FROM t")
 	if len(rows.Data) != 0 {
 		t.Errorf("expected 0 rows after ROLLBACK, got %d: %v", len(rows.Data), rows.Data)
 	}
@@ -92,10 +88,7 @@ func TestSQL1999_T011_MultipleStatementsInTransaction_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT id FROM t ORDER BY id")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id FROM t ORDER BY id")
 	if len(rows.Data) != 3 {
 		t.Errorf("expected 3 rows after COMMIT, got %d", len(rows.Data))
 	}
@@ -122,10 +115,7 @@ func TestSQL1999_T011_CommitMakesDataPersistent_L1(t *testing.T) {
 
 	// Query multiple times to confirm persistence
 	for i := 0; i < 3; i++ {
-		rows, err := db.Query("SELECT val FROM t WHERE id = 42")
-		if err != nil {
-			t.Fatalf("SELECT (iter %d): %v", i, err)
-		}
+		rows := SQL1999.QueryRows(t, db, "SELECT val FROM t WHERE id = 42")
 		if len(rows.Data) != 1 || rows.Data[0][0] != "committed" {
 			t.Errorf("iter %d: expected 1 row with 'committed', got %v", i, rows.Data)
 		}
@@ -158,10 +148,7 @@ func TestSQL1999_T011_RollbackRevertsToPreTransactionState_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT id FROM t ORDER BY id")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id FROM t ORDER BY id")
 	if len(rows.Data) != 1 {
 		t.Errorf("expected 1 row after ROLLBACK, got %d: %v", len(rows.Data), rows.Data)
 	}

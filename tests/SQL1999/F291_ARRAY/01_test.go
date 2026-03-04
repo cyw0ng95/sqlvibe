@@ -1,13 +1,15 @@
 package F291_ARRAY
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
-func openDB(t *testing.T) *sqlvibe.Database {
-	db, err := sqlvibe.Open(":memory:")
+func openDB(t *testing.T) *sql.DB {
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
@@ -35,19 +37,13 @@ func TestSQL1999_F291_ScalarSubquery_L1(t *testing.T) {
 	}
 
 	// Scalar subquery: employee with max salary
-	rows, err := db.Query("SELECT name FROM employees WHERE salary = (SELECT MAX(salary) FROM employees)")
-	if err != nil {
-		t.Fatalf("scalar subquery: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT name FROM employees WHERE salary = (SELECT MAX(salary) FROM employees)")
 	if len(rows.Data) != 1 || rows.Data[0][0] != "Alice" {
 		t.Errorf("expected Alice, got %v", rows.Data)
 	}
 
 	// Scalar subquery in SELECT list
-	rows2, err := db.Query("SELECT name, salary - (SELECT AVG(salary) FROM employees) FROM employees WHERE id = 1")
-	if err != nil {
-		t.Fatalf("scalar subquery in select: %v", err)
-	}
+	rows2 := SQL1999.QueryRows(t, db, "SELECT name, salary - (SELECT AVG(salary) FROM employees) FROM employees WHERE id = 1")
 	if len(rows2.Data) != 1 {
 		t.Errorf("expected 1 row, got %d", len(rows2.Data))
 	}
@@ -78,19 +74,13 @@ func TestSQL1999_F291_InSubquery_L1(t *testing.T) {
 	}
 
 	// IN subquery
-	rows, err := db.Query("SELECT id FROM orders WHERE customer_id IN (SELECT id FROM vip_customers) ORDER BY id")
-	if err != nil {
-		t.Fatalf("IN subquery: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id FROM orders WHERE customer_id IN (SELECT id FROM vip_customers) ORDER BY id")
 	if len(rows.Data) != 2 {
 		t.Errorf("expected 2 rows, got %d", len(rows.Data))
 	}
 
 	// NOT IN subquery
-	rows2, err := db.Query("SELECT id FROM orders WHERE customer_id NOT IN (SELECT id FROM vip_customers) ORDER BY id")
-	if err != nil {
-		t.Fatalf("NOT IN subquery: %v", err)
-	}
+	rows2 := SQL1999.QueryRows(t, db, "SELECT id FROM orders WHERE customer_id NOT IN (SELECT id FROM vip_customers) ORDER BY id")
 	if len(rows2.Data) != 1 || rows2.Data[0][0] != int64(2) {
 		t.Errorf("expected order id=2, got %v", rows2.Data)
 	}
@@ -116,19 +106,13 @@ func TestSQL1999_F291_ExistsSubquery_L1(t *testing.T) {
 	}
 
 	// EXISTS: products that have inventory records
-	rows, err := db.Query("SELECT name FROM products WHERE EXISTS (SELECT 1 FROM inventory WHERE inventory.product_id = products.id) ORDER BY name")
-	if err != nil {
-		t.Fatalf("EXISTS: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT name FROM products WHERE EXISTS (SELECT 1 FROM inventory WHERE inventory.product_id = products.id) ORDER BY name")
 	if len(rows.Data) != 2 {
 		t.Errorf("expected 2 rows, got %d: %v", len(rows.Data), rows.Data)
 	}
 
 	// NOT EXISTS: products with no inventory
-	rows2, err := db.Query("SELECT name FROM products WHERE NOT EXISTS (SELECT 1 FROM inventory WHERE inventory.product_id = products.id)")
-	if err != nil {
-		t.Fatalf("NOT EXISTS: %v", err)
-	}
+	rows2 := SQL1999.QueryRows(t, db, "SELECT name FROM products WHERE NOT EXISTS (SELECT 1 FROM inventory WHERE inventory.product_id = products.id)")
 	if len(rows2.Data) != 1 || rows2.Data[0][0] != "Gadget" {
 		t.Errorf("expected Gadget, got %v", rows2.Data)
 	}
@@ -153,14 +137,11 @@ func TestSQL1999_F291_CorrelatedSubquery_L1(t *testing.T) {
 	}
 
 	// Correlated: rows whose amount exceeds the regional average
-	rows, err := db.Query(`
+	rows := SQL1999.QueryRows(t, db, `
 		SELECT id, region, amount
 		FROM sales s1
 		WHERE amount > (SELECT AVG(amount) FROM sales s2 WHERE s2.region = s1.region)
 		ORDER BY id`)
-	if err != nil {
-		t.Fatalf("correlated subquery: %v", err)
-	}
 	if len(rows.Data) != 2 {
 		t.Errorf("expected 2 rows above regional avg, got %d: %v", len(rows.Data), rows.Data)
 	}
@@ -181,13 +162,10 @@ func TestSQL1999_F291_NestedSubquery_L1(t *testing.T) {
 	}
 
 	// Nested: values greater than the average of values less than 8
-	rows, err := db.Query(`
+	rows := SQL1999.QueryRows(t, db, `
 		SELECT n FROM nums
 		WHERE n > (SELECT AVG(n) FROM nums WHERE n < (SELECT MAX(n) FROM nums WHERE n < 8))
 		ORDER BY n`)
-	if err != nil {
-		t.Fatalf("nested subquery: %v", err)
-	}
 	if len(rows.Data) == 0 {
 		t.Error("expected at least one row from nested subquery")
 	}

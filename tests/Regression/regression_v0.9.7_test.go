@@ -10,6 +10,7 @@ package Regression
 //   E6 – Transaction / Savepoint edge cases
 
 import (
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"strings"
 	"testing"
 
@@ -20,23 +21,23 @@ import (
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-func mustOpen(t *testing.T) *sqlvibe.Database {
+func mustOpen(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	return db
 }
 
-func mustExec(t *testing.T, db *sqlvibe.Database, sql string) {
+func mustExec(t *testing.T, db *sql.DB, sql string) {
 	t.Helper()
 	if _, err := db.Exec(sql); err != nil {
 		t.Fatalf("exec %q: %v", sql, err)
 	}
 }
 
-func mustQuery(t *testing.T, db *sqlvibe.Database, sql string) *sqlvibe.Rows {
+func mustQuery(t *testing.T, db *sql.DB, sql string) *sqlvibe.Rows {
 	t.Helper()
 	rows, err := db.Query(sql)
 	if err != nil {
@@ -411,7 +412,7 @@ func TestRegression_E2_UpdateReturningMultipleRows_L1(t *testing.T) {
 // E3: Foreign Key cascade edge cases
 // ────────────────────────────────────────────────────────────────────────────
 
-func enableFK(t *testing.T, db *sqlvibe.Database) {
+func enableFK(t *testing.T, db *sql.DB) {
 	t.Helper()
 	mustExec(t, db, `PRAGMA foreign_keys = ON`)
 }

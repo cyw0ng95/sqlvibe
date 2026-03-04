@@ -3,17 +3,17 @@
 package Regression
 
 import (
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"encoding/json"
 	"fmt"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 	_ "github.com/cyw0ng95/sqlvibe/ext/json"
 )
 
 // TestRegression_JSONEachColumns_L1 tests that json_each returns correct columns.
 func TestRegression_JSONEachColumns_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestRegression_JSONEachColumns_L1(t *testing.T) {
 
 // TestRegression_JSONTreeRecursive_L1 tests that json_tree recursively traverses.
 func TestRegression_JSONTreeRecursive_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestRegression_JSONTreeRecursive_L1(t *testing.T) {
 
 // TestRegression_JSONGroupArray_L1 tests json_group_array aggregate.
 func TestRegression_JSONGroupArray_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestRegression_JSONGroupArray_L1(t *testing.T) {
 
 // TestRegression_JSONGroupObject_L1 tests json_group_object aggregate.
 func TestRegression_JSONGroupObject_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestRegression_JSONGroupObject_L1(t *testing.T) {
 
 // TestRegression_JSONRoundTrip_L1 tests JSON round-trip through table functions.
 func TestRegression_JSONRoundTrip_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}

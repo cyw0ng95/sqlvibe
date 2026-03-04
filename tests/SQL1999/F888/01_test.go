@@ -3,15 +3,17 @@
 package F888
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"fmt"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
-func openDB(t *testing.T) *sqlvibe.Database {
+func openDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -23,10 +25,7 @@ func TestF888_SelectLiteral(t *testing.T) {
 	db := openDB(t)
 	defer db.Close()
 
-	rows, err := db.Query("SELECT 1+1")
-	if err != nil {
-		t.Fatalf("SELECT 1+1: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT 1+1")
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows.Data))
 	}
@@ -41,10 +40,7 @@ func TestF888_SelectStringConcat(t *testing.T) {
 	db := openDB(t)
 	defer db.Close()
 
-	rows, err := db.Query("SELECT 'hello' || ' ' || 'world'")
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT 'hello' || ' ' || 'world'")
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows.Data))
 	}
@@ -66,10 +62,7 @@ func TestF888_SelectFromTable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, err := db.Query("SELECT n, s FROM t")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT n, s FROM t")
 	if len(rows.Data) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(rows.Data))
 	}
@@ -89,10 +82,7 @@ func TestF888_SelectWhereFilter(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT n FROM nums WHERE n > 3")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT n FROM nums WHERE n > 3")
 	if len(rows.Data) != 2 {
 		t.Fatalf("expected 2 rows (n>3), got %d", len(rows.Data))
 	}
@@ -103,10 +93,7 @@ func TestF888_SelectNullLiteral(t *testing.T) {
 	db := openDB(t)
 	defer db.Close()
 
-	rows, err := db.Query("SELECT NULL")
-	if err != nil {
-		t.Fatalf("SELECT NULL: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT NULL")
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows.Data))
 	}
@@ -131,11 +118,7 @@ func TestF888_SelectArithmetic(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		rows, err := db.Query(tc.sql)
-		if err != nil {
-			t.Errorf("%s: %v", tc.sql, err)
-			continue
-		}
+		rows := SQL1999.QueryRows(t, db, tc.sql)
 		if len(rows.Data) != 1 {
 			t.Errorf("%s: expected 1 row", tc.sql)
 			continue
@@ -155,10 +138,7 @@ func TestF888_BytecodeAlwaysOn(t *testing.T) {
 	defer db.Close()
 
 	// Simple literal via bytecode path.
-	rows, err := db.Query("SELECT 6 * 7")
-	if err != nil {
-		t.Fatalf("SELECT 6*7: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT 6 * 7")
 	if len(rows.Data) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows.Data))
 	}
@@ -187,10 +167,7 @@ func TestF888_LegacyFallback(t *testing.T) {
 	}
 
 	// JOIN is not supported in bytecode path; should fall back to legacy.
-	rows, err := db.Query("SELECT a.x FROM a JOIN b ON a.x = b.x")
-	if err != nil {
-		t.Fatalf("JOIN fallback: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT a.x FROM a JOIN b ON a.x = b.x")
 	if len(rows.Data) != 1 {
 		t.Errorf("expected 1 matching row, got %d", len(rows.Data))
 	}

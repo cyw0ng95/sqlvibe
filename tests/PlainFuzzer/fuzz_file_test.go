@@ -1,11 +1,11 @@
 package PlainFuzzer
 
 import (
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"math/rand"
 	"os"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // FuzzDBFile is a parallel fuzzer that mutates SQLVIBE binary database files
@@ -54,7 +54,7 @@ func FuzzDBFile(f *testing.F) {
 		}()
 
 		// Attempt to open the database; a clean error is expected and fine.
-		db, err := sqlvibe.Open(tmpPath)
+		db, err := sql.Open("sqlvibe", tmpPath)
 		if err != nil {
 			return
 		}

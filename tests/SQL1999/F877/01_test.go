@@ -4,16 +4,17 @@ package F877
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F877_ReindexAll_L1 validates REINDEX (all indexes) executes without error
 // and subsequent queries still return correct results.
 func TestSQL1999_F877_ReindexAll_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestSQL1999_F877_ReindexAll_L1(t *testing.T) {
 // TestSQL1999_F877_ReindexByTable_L1 validates REINDEX <tablename> rebuilds all
 // indexes on that table.
 func TestSQL1999_F877_ReindexByTable_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -105,7 +106,7 @@ func TestSQL1999_F877_ReindexByTable_L1(t *testing.T) {
 
 // TestSQL1999_F877_ReindexByIndex_L1 validates REINDEX <indexname> rebuilds a specific index.
 func TestSQL1999_F877_ReindexByIndex_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -153,7 +154,7 @@ func TestSQL1999_F877_ReindexByIndex_L1(t *testing.T) {
 // TestSQL1999_F877_SelectInto_L1 validates SELECT ... INTO newtable FROM src.
 // SELECT INTO is not supported by SQLite so this is a sqlvibe-only test.
 func TestSQL1999_F877_SelectInto_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -177,10 +178,7 @@ func TestSQL1999_F877_SelectInto_L1(t *testing.T) {
 	}
 
 	// Verify the new table exists and has correct data
-	rows, err := svDB.Query(`SELECT id, name, score FROM highscorers ORDER BY id`)
-	if err != nil {
-		t.Fatalf("query highscorers: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, svDB, `SELECT id, name, score FROM highscorers ORDER BY id`)
 	if len(rows.Data) != 2 {
 		t.Errorf("expected 2 rows in highscorers, got %d", len(rows.Data))
 	}
@@ -188,7 +186,7 @@ func TestSQL1999_F877_SelectInto_L1(t *testing.T) {
 
 // TestSQL1999_F877_SelectIntoAll_L1 validates SELECT * INTO newtable FROM src copies all columns.
 func TestSQL1999_F877_SelectIntoAll_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -212,14 +210,8 @@ func TestSQL1999_F877_SelectIntoAll_L1(t *testing.T) {
 	}
 
 	// Both tables must have the same data
-	orig, err := svDB.Query(`SELECT id, item, qty FROM inventory ORDER BY id`)
-	if err != nil {
-		t.Fatalf("query original: %v", err)
-	}
-	bkp, err := svDB.Query(`SELECT id, item, qty FROM inventory_backup ORDER BY id`)
-	if err != nil {
-		t.Fatalf("query backup: %v", err)
-	}
+	orig := SQL1999.QueryRows(t, svDB, `SELECT id, item, qty FROM inventory ORDER BY id`)
+	bkp := SQL1999.QueryRows(t, svDB, `SELECT id, item, qty FROM inventory_backup ORDER BY id`)
 	if len(orig.Data) != len(bkp.Data) {
 		t.Errorf("row count mismatch: original=%d, backup=%d", len(orig.Data), len(bkp.Data))
 	}

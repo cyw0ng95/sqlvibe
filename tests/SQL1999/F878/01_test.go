@@ -5,15 +5,16 @@ package F878
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F878_Savepoint_Basic_L1 validates basic SAVEPOINT and ROLLBACK TO SAVEPOINT.
 func TestSQL1999_F878_Savepoint_Basic_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestSQL1999_F878_Savepoint_Basic_L1(t *testing.T) {
 
 // TestSQL1999_F878_Savepoint_Release_L1 validates RELEASE SAVEPOINT.
 func TestSQL1999_F878_Savepoint_Release_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestSQL1999_F878_Savepoint_Release_L1(t *testing.T) {
 
 // TestSQL1999_F878_Savepoint_Nested_L1 validates nested savepoints.
 func TestSQL1999_F878_Savepoint_Nested_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -156,7 +157,7 @@ func TestSQL1999_F878_Savepoint_Nested_L1(t *testing.T) {
 
 // TestSQL1999_F878_NotNull_L1 validates NOT NULL constraint enforcement.
 func TestSQL1999_F878_NotNull_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -205,7 +206,7 @@ func TestSQL1999_F878_NotNull_L1(t *testing.T) {
 
 // TestSQL1999_F878_UniqueConstraint_L1 validates UNIQUE constraint enforcement.
 func TestSQL1999_F878_UniqueConstraint_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -254,7 +255,7 @@ func TestSQL1999_F878_UniqueConstraint_L1(t *testing.T) {
 
 // TestSQL1999_F878_FK_OnDelete_L1 validates FK ON DELETE CASCADE.
 func TestSQL1999_F878_FK_OnDelete_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
