@@ -1,6 +1,6 @@
 # OpenCode Agents Guidance
 
-## Project: sqlvibe - SQLite-Compatible Database Engine in Go
+## Project: sqlvibe - High-Performance Database Engine (Go + C++)
 
 This document provides guidance for OpenCode agents working on the sqlvibe project.
 
@@ -8,10 +8,14 @@ This document provides guidance for OpenCode agents working on the sqlvibe proje
 
 ## 1. Project Overview
 
-**Goal**: Implement a high-performance in-memory database engine in Go with SQL compatibility.
+**Goal**: Implement a high-performance database engine with SQL:1999 compatibility using a hybrid Go + C++ architecture.
 
-**Language**: Go (Golang)  
-**Architecture**: Hybrid row/columnar storage with adaptive execution
+**Architecture**: C++ core engine with thin Go CGO wrappers
+- **C++ Core** (`src/core/`): Query execution, storage, optimization (~15,000 LOC)
+- **Go Wrappers** (`internal/`): Thin CGO bindings for type conversion (~600 LOC)
+- **Public API** (`pkg/sqlvibe/`): High-level database operations (~800 LOC)
+
+**Key Design Decision**: DS/CG/VM/QP/TM/PB/IS subsystems are **C++ only** with thin Go wrappers. All business logic lives in C++.
 
 ---
 
@@ -583,24 +587,49 @@ func NewPage(num uint32, size int) *Page {
 
 ```
 sqlvibe/
-├── cmd/              # CLI application
-├── pkg/              # Public API
+├── cmd/                    # CLI applications (sv-cli, sv-check)
+├── pkg/                    # Public API
 │   └── sqlvibe/
-│       └── storage/  # Hybrid storage engine (row/columnar)
-├── internal/         # Internal packages
-│   ├── pb/          # Platform Bridges (VFS)
-│   ├── ds/          # Data Storage (B-Tree, pages)
-│   ├── qp/          # Query Processing (parser)
-│   ├── cg/          # Code Generator
-│   ├── vm/          # Virtual Machine
-│   ├── tm/          # Transaction Monitor
-│   ├── is/          # Information Schema
-│   └── ts/          # Test Suites
-├── docs/            # Documentation
-├── go.mod
-├── go.sum
-└── Makefile
+│       ├── database.go     # Main database API
+│       └── database/       # Database implementation
+├── src/                    # C++ Core Engine
+│   ├── core/
+│   │   ├── DS/            # Data Storage (B-Tree, pages, indexes)
+│   │   ├── VM/            # Virtual Machine (opcode execution)
+│   │   ├── QP/            # Query Processing (parser, optimizer)
+│   │   ├── CG/            # Code Generation (bytecode compiler)
+│   │   ├── TM/            # Transaction Management (MVCC, locks)
+│   │   ├── PB/            # Platform Bridges (VFS, file I/O)
+│   │   ├── IS/            # Information Schema
+│   │   ├── SF/            # Standard Functions
+│   │   └── svdb/          # Unified C API
+│   └── ext/               # Extensions (FTS5, JSON, Math)
+├── internal/               # Thin Go CGO Wrappers
+│   ├── cgo/               # Main CGO bindings (db, stmt, rows, tx)
+│   ├── DS/                # DS CGO wrappers
+│   ├── VM/                # VM CGO wrappers
+│   ├── QP/                # QP CGO wrappers
+│   ├── CG/                # CG CGO wrappers
+│   ├── TM/                # TM CGO wrappers
+│   ├── PB/                # PB CGO wrappers (VFS)
+│   └── IS/                # IS CGO wrappers (metadata)
+├── tests/                  # Test suites
+│   ├── Benchmark/         # Performance benchmarks
+│   ├── Regression/        # Regression tests
+│   ├── SQL1999/           # SQL:1999 compatibility tests
+│   ├── Vtab/              # Virtual table tests
+│   └── PlainFuzzer/       # Fuzz testing
+├── docs/                   # Documentation
+├── build.sh                # Build/test/benchmark script
+├── CMakeLists.txt          # C++ build configuration
+├── go.mod                  # Go module definition
+└── go.sum                  # Go dependencies
 ```
+
+**Key Directories**:
+- `src/core/`: **C++ implementation** - All business logic, query execution, storage
+- `internal/`: **Go CGO wrappers** - Type conversion, error mapping, memory management (NO business logic)
+- `pkg/sqlvibe/`: **Public API** - User-facing database operations
 
 ---
 
@@ -609,7 +638,16 @@ sqlvibe/
 **Always use `build.sh` to run tests, benchmarks, fuzzing, and coverage.**
 Output is collected under `.build/` (excluded from git).
 
+### Build Process
+
+The build process has two stages:
+1. **C++ Build** (cmake): Compiles C++ core engine to `libsvdb.so`
+2. **Go Build** (go build): Compiles Go wrappers and public API
+
 ```bash
+# Build everything (C++ + Go)
+./build.sh
+
 # Run all unit tests (default when no flag is given)
 ./build.sh -t
 
@@ -650,17 +688,17 @@ Options summary:
 Direct `go test` commands (for IDE integration or CI):
 
 ```bash
-# Build the project
-go build ./...
+# Build C++ first (required before Go build)
+cd .build/cmake && cmake ../.. && cmake --build .
+
+# Build the project (requires C++ libraries)
+go build -tags SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_ENABLE_CGO ./...
 
 # Run all tests (with extension tags)
-go test -tags SVDB_EXT_JSON,SVDB_EXT_MATH ./...
+go test -tags SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_ENABLE_CGO ./...
 
 # Run specific test
-go test -run TestName ./...
-
-# Generate parser
-make parser
+go test -tags SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_ENABLE_CGO -run TestName ./...
 
 # Format code
 go fmt ./...
@@ -692,11 +730,36 @@ go vet ./...
 
 ---
 
-## 13. Current Status: v0.10.4 - Storage Enhancements
+## 13. Current Status: v0.11.2 — C++ Migration In Progress
 
-### 13.1 Completed Features
+### 13.1 Architecture Migration (v0.11.x)
 
-**Storage Layer (v0.10.4)**:
+**Major Architectural Change**: Migrating from Go to C++ for all core subsystems.
+
+**Target Architecture**:
+- **C++ Core** (`src/core/`): All business logic (~15,000 LOC)
+- **Go Wrappers** (`internal/`): Thin CGO bindings (~600 LOC, 89% reduction)
+- **Public API** (`pkg/sqlvibe/`): High-level operations (~800 LOC)
+
+**Migration Progress** (see `docs/plan-v0.11.2.md`):
+
+| Subsystem | C++ Status | Go Wrapper | Progress |
+|-----------|------------|------------|----------|
+| **VM** (Virtual Machine) | ✅ Complete (2000 LOC) | ✅ Thin (500 LOC) | ✅ Phase 1 Complete |
+| **IS** (Info Schema) | ✅ Complete (300 LOC) | ✅ Thin (200 LOC) | ✅ Complete |
+| **PB** (Platform/VFS) | ✅ Complete (240 LOC) | ✅ Thin (200 LOC) | ✅ Complete |
+| **DS** (Data Storage) | ⚠️ Partial (3000 LOC) | ⚠️ Heavy (4000 LOC) | 🔄 Phase 2 In Progress |
+| **QP** (Query Processing) | ⚠️ Partial (2000 LOC) | ⚠️ Heavy (4000 LOC) | ⏳ Phase 3 Pending |
+| **CG** (Code Generation) | ⚠️ Partial (1500 LOC) | ⚠️ Heavy (2500 LOC) | ⏳ Phase 3 Pending |
+| **TM** (Transaction Mgmt) | ⚠️ Partial (500 LOC) | ⚠️ Heavy (1500 LOC) | ⏳ Phase 3 Pending |
+| **SF** (Standard Funcs) | ✅ Complete (500 LOC) | ✅ Minimal (200 LOC) | ✅ Complete |
+
+**Overall Progress**: 45% Complete  
+**Target Completion**: 2026-05-07 (12 weeks total)
+
+### 13.2 Completed Features (v0.10.x)
+
+**Storage Layer**:
 - ✅ HybridStore: Adaptive row/column storage switching
 - ✅ ColumnVector: Typed column storage (int64, float64, string, bytes)
 - ✅ RoaringBitmap: Fast bitmap indexes for O(1) filtering
@@ -705,7 +768,7 @@ go vet ./...
 - ✅ PageManager: Memory-mapped page management
 - ✅ Arena allocator: Zero-GC query execution
 
-**Query Engine (v0.10.x)**:
+**Query Engine**:
 - ✅ Bytecode VM: Register-based execution (200+ opcodes)
 - ✅ Query optimizer: Predicate pushdown, constant folding
 - ✅ Window functions: ROW_NUMBER, RANK, LAG, LEAD, etc.
@@ -730,7 +793,7 @@ go vet ./...
 - ✅ BackupToWriter: Backup to any io.Writer
 - ✅ BackupManifest: Enhanced backup metadata
 
-### 13.2 Performance Achievements (v0.10.0)
+### 13.3 Performance Achievements (v0.10.0)
 
 | Benchmark | sqlvibe | SQLite Go | Winner |
 |-----------|--------:|----------:|--------|
@@ -739,7 +802,13 @@ go vet ./...
 | SUM aggregate (1K) | 20.7 µs | 66.7 µs | **3.2x faster** |
 | GROUP BY (1K) | 128 µs | 480 µs | **3.8x faster** |
 
-### 13.3 Testing Status
+**v0.11.2 Target Improvements** (after full C++ migration):
+- SELECT 1K: 263 µs → <200 µs (24% faster)
+- SUM aggregate: 28 µs → <20 µs (29% faster)
+- GROUP BY: 148 µs → <100 µs (32% faster)
+- INNER JOIN: 1.12 ms → <0.8 ms (29% faster)
+
+### 13.4 Testing Status
 
 All tests passing (except pre-existing datetime tests):
 - ✅ SQL:1999 compatibility (84+ test suites)
@@ -749,23 +818,36 @@ All tests passing (except pre-existing datetime tests):
 - ✅ Benchmarks
 - ⚠️ F051 datetime functions (pre-existing, unrelated)
 
-### 13.4 Recent Releases
+### 13.5 Recent Releases
 
 | Version | Date | Features |
 |---------|------|----------|
+| v0.11.2 | 2026-03-04 | Architecture: C++ migration plan, IS/PB moved to internal |
 | v0.10.4 | 2026-03-01 | Storage: WAL truncate, memory stats, streaming backup |
 | v0.10.3 | 2026-03-01 | Advanced SQL: WINDOW clause, JSON_KEYS |
 | v0.10.2 | 2026-03-01 | FTS5: Full-text search with BM25 |
 | v0.10.1 | 2026-02-28 | Coverage: +25% in critical packages |
 | v0.10.0 | 2026-02-27 | Bytecode VM: Always-on execution engine |
 
-### 13.5 Next Steps (see docs/plan-v0.10.4.md)
+### 13.6 Next Steps (see docs/plan-v0.11.2.md)
 
-1. Complete remaining storage engine optimizations
-2. Add more SQL:1999 features (CLI, temporal types)
-3. Improve WAL performance with async checkpoint
-4. Add compression (LZ4, ZSTD)
-5. Enhance concurrency with MVCC
+**Phase 2: DS Layer** (2026-03-04 to 2026-03-25):
+1. [ ] Create DS CGO wrapper (`internal/DS/ds_cgo.go`)
+2. [ ] Migrate HybridStore.Insert() to C++
+3. [ ] Migrate HybridStore.Scan() to C++
+4. [ ] Migrate BTree.Search/Insert to C++
+5. [ ] Remove Go DS implementations
+
+**Phase 3: QP/CG/TM** (2026-03-26 to 2026-04-22):
+- Migrate query processing to C++
+- Migrate code generation to C++
+- Migrate transaction management to C++
+
+**Phase 4: Cleanup** (2026-04-23 to 2026-05-07):
+- Remove all legacy Go implementations
+- Final performance optimization
+- Documentation updates
+- Tag v0.11.2 release
 
 ---
 
