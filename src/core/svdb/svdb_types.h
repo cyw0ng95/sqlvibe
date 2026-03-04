@@ -81,6 +81,16 @@ struct svdb_db_s {
     /* Last error */
     std::string last_error;
 
+    /* PRAGMA settings */
+    std::string wal_mode         = "OFF";
+    std::string isolation_level  = "READ COMMITTED";
+    int64_t     busy_timeout_ms  = 0;
+    std::string compression      = "NONE";
+    bool        foreign_keys_enabled = false;
+    int64_t     max_rows         = 0;       /* 0 = unlimited */
+    int64_t     cache_memory     = 2097152; /* 2 MB default */
+    std::string synchronous      = "NORMAL";
+
     /* Transaction state */
     bool         in_transaction = false;
     svdb_tx_t   *sql_tx         = nullptr;  /* active SQL-level transaction */
