@@ -17,7 +17,7 @@ func (r *Rows) Columns() []string {
 	if r.rows == nil {
 		return nil
 	}
-	return r.rows.Columns
+	return r.rows.Columns()
 }
 
 // Close closes the rows iterator. No-op since sqlvibe Rows are in-memory.

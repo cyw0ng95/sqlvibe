@@ -12,8 +12,7 @@ import "unsafe"
 // DB wraps a svdb_db_t handle.
 type DB struct{ h *C.svdb_db_t }
 
-// Open opens (or creates) a database at the given path.
-// Use ":memory:" for an in-memory database.
+// Open opens a database.
 func Open(path string) (*DB, error) {
 	cs := C.CString(path)
 	defer C.free(unsafe.Pointer(cs))
@@ -24,7 +23,7 @@ func Open(path string) (*DB, error) {
 	return &DB{h: h}, nil
 }
 
-// Close closes the database and frees all resources.
+// Close closes the database.
 func (db *DB) Close() error {
 	if db.h == nil {
 		return nil
@@ -37,16 +36,51 @@ func (db *DB) Close() error {
 	return nil
 }
 
-// Errmsg returns the last error message for the database.
-func (db *DB) Errmsg() string {
-	if db.h == nil {
-		return ""
+// Exec executes SQL.
+func (db *DB) Exec(sql string) (Result, error) {
+	cs := C.CString(sql)
+	defer C.free(unsafe.Pointer(cs))
+	var res C.svdb_result_t
+	code := C.svdb_exec(db.h, cs, &res)
+	if code != C.SVDB_OK {
+		return Result{}, svdbErr(db, code)
 	}
-	return C.GoString(C.svdb_errmsg(db.h))
+	return Result{
+		RowsAffected:    int64(res.rows_affected),
+		LastInsertRowid: int64(res.last_insert_rowid),
+	}, nil
 }
 
-// Version returns the svdb version string.
-func Version() string { return C.GoString(C.svdb_version()) }
+// Query queries SQL.
+func (db *DB) Query(sql string) (*Rows, error) {
+	cs := C.CString(sql)
+	defer C.free(unsafe.Pointer(cs))
+	var h *C.svdb_rows_t
+	code := C.svdb_query(db.h, cs, &h)
+	if code != C.SVDB_OK {
+		return nil, svdbErr(db, code)
+	}
+	return &Rows{h: h}, nil
+}
 
-// VersionNumber returns the svdb version as an integer (e.g. 112 for 0.11.2).
-func VersionNumber() int { return int(C.svdb_version_number()) }
+// Prepare prepares SQL.
+func (db *DB) Prepare(sql string) (*Stmt, error) {
+	cs := C.CString(sql)
+	defer C.free(unsafe.Pointer(cs))
+	var h *C.svdb_stmt_t
+	code := C.svdb_prepare(db.h, cs, &h)
+	if code != C.SVDB_OK {
+		return nil, svdbErr(db, code)
+	}
+	return &Stmt{h: h, db: db, sql: sql}, nil
+}
+
+// Begin starts a transaction.
+func (db *DB) Begin() (*Tx, error) {
+	var h *C.svdb_tx_t
+	code := C.svdb_begin(db.h, &h)
+	if code != C.SVDB_OK {
+		return nil, svdbErr(db, code)
+	}
+	return &Tx{h: h, db: db}, nil
+}
