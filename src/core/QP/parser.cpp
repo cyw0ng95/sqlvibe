@@ -124,16 +124,20 @@ static std::string read_value(const std::string& sql, size_t& pos) {
         char q = c;
         ++pos;
         std::string s;
-        while (pos < sql.size() && sql[pos] != q) {
-            if (sql[pos] == '\\' && pos + 1 < sql.size()) {
+        while (pos < sql.size()) {
+            if (sql[pos] == q) {
+                if (pos + 1 < sql.size() && sql[pos+1] == q) {
+                    s += q; pos += 2; /* escaped '' or "" */
+                } else {
+                    break; /* closing quote */
+                }
+            } else if (sql[pos] == '\\' && pos + 1 < sql.size()) {
                 ++pos; s += sql[pos++];
-            } else if (sql[pos] == q && pos + 1 < sql.size() && sql[pos+1] == q) {
-                s += q; pos += 2; /* escaped quote */
             } else {
                 s += sql[pos++];
             }
         }
-        if (pos < sql.size()) ++pos;
+        if (pos < sql.size()) ++pos; /* skip closing quote */
         return s;
     }
     /* Number (possibly negative), including scientific notation like 1.23e-10 */
