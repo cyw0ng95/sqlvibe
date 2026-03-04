@@ -1044,22 +1044,41 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
             return -1;
         };
 
-        /* Check primary key / column-level UNIQUE */
+        /* Check primary key (composite or single-column) */
         bool conflict_handled = false;
-        for (const auto &cn : col_order) {
-            auto cdit = db->schema[tname].find(cn);
-            if (cdit != db->schema[tname].end() && cdit->second.primary_key) {
-                int ci = check_unique({cn});
+        if (db->primary_keys.count(tname)) {
+            const auto &pk_cols = db->primary_keys.at(tname);
+            if (!pk_cols.empty()) {
+                int ci = check_unique(pk_cols);
                 if (ci >= 0) {
-                    if (on_conflict_nothing) { conflict_handled = true; break; }
-                    if (on_conflict_update) {
-                        /* Replace the conflicting row */
+                    if (on_conflict_nothing) { conflict_handled = true; }
+                    else if (on_conflict_update) {
                         db->data[tname][ci] = row;
-                        ++inserted; conflict_handled = true; break;
+                        ++inserted; conflict_handled = true;
+                    } else {
+                        /* Report the first PK column in the error message */
+                        db->last_error = "UNIQUE constraint failed: " + tname + "." + pk_cols[0];
+                        svdb_ast_node_free(ast); svdb_parser_destroy(p);
+                        return SVDB_ERR;
                     }
-                    db->last_error = "UNIQUE constraint failed: " + tname + "." + cn;
-                    svdb_ast_node_free(ast); svdb_parser_destroy(p);
-                    return SVDB_ERR;
+                }
+            }
+        } else {
+            /* Column-level UNIQUE/PRIMARY KEY fallback */
+            for (const auto &cn : col_order) {
+                auto cdit = db->schema[tname].find(cn);
+                if (cdit != db->schema[tname].end() && cdit->second.primary_key) {
+                    int ci = check_unique({cn});
+                    if (ci >= 0) {
+                        if (on_conflict_nothing) { conflict_handled = true; break; }
+                        if (on_conflict_update) {
+                            db->data[tname][ci] = row;
+                            ++inserted; conflict_handled = true; break;
+                        }
+                        db->last_error = "UNIQUE constraint failed: " + tname + "." + cn;
+                        svdb_ast_node_free(ast); svdb_parser_destroy(p);
+                        return SVDB_ERR;
+                    }
                 }
             }
         }

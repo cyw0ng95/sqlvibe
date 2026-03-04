@@ -25,6 +25,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <unordered_set>
 #include <cstring>
 #include <cmath>
 #include <sstream>
@@ -628,7 +629,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = hex; return v;
         }
         /* TYPEOF(expr) */
-        if (eu.substr(0, 8) == "TYPEOF(" && e.back() == ')') {
+        if (eu.substr(0, 7) == "TYPEOF(" && e.back() == ')') {
             SvdbVal inner = eval_expr(e.substr(7, e.size()-8), row, col_order);
             SvdbVal v; v.type = SVDB_TYPE_TEXT;
             switch (inner.type) {
@@ -1368,6 +1369,59 @@ static bool qry_eval_where(const Row &row,
 struct OrderCol { std::string expr; bool desc; };
 struct JoinSpec  { std::string type; /* INNER/LEFT/CROSS */ std::string table; std::string alias; std::string on_left; std::string on_right; std::string using_col; };
 
+/* Parse comma-separated additional tables from FROM clause as CROSS JOINs.
+ * For "FROM a, b WHERE ..." returns [{CROSS, "b", ...}]. */
+static std::vector<JoinSpec> parse_comma_joins(const std::string &sql) {
+    std::vector<JoinSpec> result;
+    std::string su = qry_upper(sql);
+    /* Find " FROM " outside parens */
+    size_t from_pos = std::string::npos;
+    int depth = 0; bool in_str = false;
+    for (size_t i = 0; i + 6 <= su.size(); ++i) {
+        char c = su[i];
+        if (c == '\'') { in_str = !in_str; continue; }
+        if (in_str) continue;
+        if (c == '(') { ++depth; continue; }
+        if (c == ')') { if (depth > 0) --depth; continue; }
+        if (depth > 0) continue;
+        if (su.substr(i, 6) == " FROM ") { from_pos = i + 6; break; }
+    }
+    if (from_pos == std::string::npos) return result;
+    /* Read the FROM table list until WHERE/JOIN/ORDER/GROUP/LIMIT/HAVING/end */
+    static const char *stop_kws[] = {" WHERE ", " INNER ", " LEFT ", " RIGHT ", " CROSS ", " JOIN ",
+                                      " ORDER ", " GROUP ", " LIMIT ", " HAVING ", " UNION ", nullptr};
+    size_t from_end = su.size();
+    for (const char **kw = stop_kws; *kw; ++kw) {
+        size_t ep = su.find(*kw, from_pos);
+        if (ep != std::string::npos && ep < from_end) from_end = ep;
+    }
+    std::string from_clause = sql.substr(from_pos, from_end - from_pos);
+    /* Split by comma */
+    std::vector<std::string> tables;
+    size_t p = 0;
+    while (p < from_clause.size()) {
+        size_t comma = from_clause.find(',', p);
+        if (comma == std::string::npos) { tables.push_back(qry_trim(from_clause.substr(p))); break; }
+        tables.push_back(qry_trim(from_clause.substr(p, comma - p)));
+        p = comma + 1;
+    }
+    /* First table is the main table (already handled by tname); process rest as CROSS JOINs */
+    for (size_t i = 1; i < tables.size(); ++i) {
+        std::string t = tables[i];
+        JoinSpec j; j.type = "CROSS";
+        /* Split table name and alias */
+        size_t sp = t.find(' ');
+        if (sp != std::string::npos) {
+            j.table = qry_trim(t.substr(0, sp));
+            j.alias = qry_trim(t.substr(sp + 1));
+        } else {
+            j.table = t;
+        }
+        result.push_back(j);
+    }
+    return result;
+}
+
 /* Extract ORDER BY clause */
 static std::vector<OrderCol> parse_order_by(const std::string &sql) {
     std::vector<OrderCol> result;
@@ -1635,6 +1689,8 @@ struct AggState {
     SvdbVal min_val, max_val;
     bool has_min = false, has_max = false;
     bool is_real = false;
+    bool distinct = false; /* COUNT(DISTINCT ...) */
+    std::unordered_set<std::string> seen_vals; /* for DISTINCT counting */
     std::vector<std::string> concat_vals; /* for GROUP_CONCAT */
 };
 
@@ -1694,6 +1750,12 @@ static AggState make_agg(const std::string &expr) {
         if (eu.substr(0, prefix.size()) == prefix && eu.back() == ')') {
             a.func = funcs[i];
             a.arg = qry_trim(e_orig.substr(prefix.size(), e_orig.size() - prefix.size() - 1));
+            /* Strip DISTINCT prefix */
+            std::string arg_upper = qry_upper(a.arg);
+            if (arg_upper.size() > 9 && arg_upper.substr(0, 9) == "DISTINCT ") {
+                a.distinct = true;
+                a.arg = qry_trim(a.arg.substr(9));
+            }
             break;
         }
     }
@@ -1729,7 +1791,13 @@ static void agg_accumulate(AggState &a, const Row &row,
     if (a.func == "COUNT") {
         if (a.arg == "*") { ++a.count; return; }
         SvdbVal v = eval_expr(a.arg, row, col_order);
-        if (v.type != SVDB_TYPE_NULL) ++a.count;
+        if (v.type == SVDB_TYPE_NULL) return;
+        if (a.distinct) {
+            std::string key = val_to_str(v);
+            if (a.seen_vals.count(key)) return;
+            a.seen_vals.insert(key);
+        }
+        ++a.count;
         return;
     }
     SvdbVal v = eval_expr(a.arg, row, col_order);
@@ -2090,6 +2158,11 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     int64_t limit_val = -1, offset_val = 0;
     parse_limit_offset(sql, limit_val, offset_val);
     auto all_joins = parse_all_joins(sql);
+    /* Also detect comma-separated FROM tables (implicit CROSS JOIN) */
+    {
+        auto comma_joins = parse_comma_joins(sql);
+        for (auto &cj : comma_joins) all_joins.push_back(cj);
+    }
     JoinSpec join = all_joins.empty() ? JoinSpec{} : all_joins[0];
 
     /* Check DISTINCT */
@@ -2207,16 +2280,17 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 /* For ON condition: compare lrow cols vs rrow cols directly */
                 bool on_match = join.on_left.empty(); /* CROSS JOIN: always match */
                 if (!join.on_left.empty()) {
-                    /* Evaluate on_left against left row only */
-                    SvdbVal lv = eval_expr(join.on_left, lrow_prefixed, col_order);
-                    /* Evaluate on_right against right row only */
+                    /* Build combined row with both left and right aliases for ON evaluation */
                     Row rrow_prefixed;
                     for (auto &kv : rrow) {
                         rrow_prefixed[kv.first] = kv.second;
                         rrow_prefixed[right_tname + "." + kv.first] = kv.second;
                         rrow_prefixed[right_alias + "." + kv.first] = kv.second;
                     }
-                    SvdbVal rv = eval_expr(join.on_right, rrow_prefixed, right_col_order);
+                    Row combined_row = lrow_prefixed;
+                    for (auto &kv : rrow_prefixed) combined_row[kv.first] = kv.second;
+                    SvdbVal lv = eval_expr(join.on_left,  combined_row, merged_col_order);
+                    SvdbVal rv = eval_expr(join.on_right, combined_row, merged_col_order);
                     /* NULL = NULL is false in joins */
                     if (lv.type != SVDB_TYPE_NULL && rv.type != SVDB_TYPE_NULL)
                         on_match = (val_cmp(lv, rv) == 0);
@@ -2305,15 +2379,29 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         all_rows = std::move(new_all_rows);
     }
 
+    /* Find top-level " AS " (not inside parentheses) for alias stripping */
+    auto find_top_as = [](const std::string &cu) -> size_t {
+        int depth = 0;
+        for (size_t i = 0; i < cu.size(); ++i) {
+            if (cu[i] == '(') ++depth;
+            else if (cu[i] == ')') { if (depth > 0) --depth; }
+            else if (depth == 0 && i + 4 <= cu.size() &&
+                     cu[i] == ' ' && cu[i+1] == 'A' && cu[i+2] == 'S' && cu[i+3] == ' ') {
+                return i;
+            }
+        }
+        return std::string::npos;
+    };
+
     /* ── Determine output columns ── */
     std::vector<std::string> out_cols;
     if (star) {
         out_cols = col_order;
     } else {
         for (const auto &c : sel_cols) {
-            /* Strip alias (AS name) */
+            /* Strip alias (AS name) — must be at top level, not inside parens */
             std::string cu = qry_upper(c);
-            size_t as_pos = cu.find(" AS ");
+            size_t as_pos = find_top_as(cu);
             std::string col_expr = (as_pos != std::string::npos) ? c.substr(0, as_pos) : c;
             out_cols.push_back(qry_trim(col_expr));
         }
@@ -2323,7 +2411,7 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     std::vector<std::string> out_names;
     for (const auto &c : (star ? sel_cols : sel_cols)) {
         std::string cu = qry_upper(c);
-        size_t as_pos = cu.find(" AS ");
+        size_t as_pos = find_top_as(cu);
         if (as_pos != std::string::npos) out_names.push_back(qry_trim(c.substr(as_pos + 4)));
         else out_names.push_back(c);
     }
@@ -2335,7 +2423,7 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     } else {
         for (size_t i = 0; i < sel_cols.size(); ++i) {
             std::string cu = qry_upper(sel_cols[i]);
-            size_t as_pos = cu.find(" AS ");
+            size_t as_pos = find_top_as(cu);
             std::string col_name = (as_pos != std::string::npos)
                 ? qry_trim(sel_cols[i].substr(as_pos + 4))
                 : sel_cols[i];
@@ -2394,13 +2482,20 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         /* Build result */
         for (const auto &key : key_strs) {
             const Row &rep_row = key_rows[key];
-            /* Check HAVING */
+            auto &agg_list = key_aggs[key];
+            /* Check HAVING: augment row with aggregate results so HAVING can
+             * reference aggregate expressions like SUM(amount) > 500 */
             if (!having_txt.empty()) {
-                /* Evaluate having against the representative row */
-                if (!qry_eval_where(rep_row, merged_col_order, having_txt)) continue;
+                Row having_row = rep_row;
+                for (size_t i = 0; i < sel_cols.size() && i < agg_list.size(); ++i) {
+                    if (!agg_list[i].func.empty()) {
+                        having_row[sel_cols[i]] = agg_result(agg_list[i]);
+                        having_row[out_cols[i]] = agg_result(agg_list[i]);
+                    }
+                }
+                if (!qry_eval_where(having_row, merged_col_order, having_txt)) continue;
             }
             std::vector<SvdbVal> res_row;
-            auto &agg_list = key_aggs[key];
             if (star) {
                 for (const auto &cn : col_order) {
                     auto it = rep_row.find(cn);
