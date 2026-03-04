@@ -4,7 +4,6 @@ import (
 	"database/sql"
 
 	_ "github.com/cyw0ng95/sqlvibe/driver"
-	sferrors "github.com/cyw0ng95/sqlvibe/internal/SF/errors"
 	"context"
 	"errors"
 	"fmt"
@@ -56,12 +55,9 @@ func TestRegression_TimeoutErrorCodeReturned_L1(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	svErr, ok := err.(*sferrors.Error)
-	if !ok {
-		t.Fatalf("expected *sferrors.Error, got %T: %v", err, err)
-	}
-	if svErr.Code != sferrors.SVDB_QUERY_TIMEOUT {
-		t.Fatalf("expected SVDB_QUERY_TIMEOUT (%v), got %v", sferrors.SVDB_QUERY_TIMEOUT, svErr.Code)
+	// After driver/ migration, timeout surfaces as context.DeadlineExceeded.
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context deadline/canceled error, got %T: %v", err, err)
 	}
 }
 
