@@ -758,8 +758,8 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             return SvdbVal{};
         }
         /* json_type(json, path) */
-        if (eu.substr(0, 11) == "JSON_TYPE(" && fn_paren_ok(11-1)) {
-            std::string args = e.substr(11, e.size()-12);
+        if (eu.substr(0, 10) == "JSON_TYPE(" && fn_paren_ok(10-1)) {
+            std::string args = e.substr(10, e.size()-11);
             size_t comma = args.find(',');
             if (comma != std::string::npos) {
                 SvdbVal json_val = eval_expr(args.substr(0, comma), row, col_order);
@@ -777,8 +777,8 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
         }
         /* json_length(json, path) */
-        if (eu.substr(0, 13) == "JSON_LENGTH(" && fn_paren_ok(13-1)) {
-            std::string args = e.substr(13, e.size()-14);
+        if (eu.substr(0, 12) == "JSON_LENGTH(" && fn_paren_ok(12-1)) {
+            std::string args = e.substr(12, e.size()-13);
             size_t comma = args.find(',');
             SvdbVal json_val, path_val;
             if (comma != std::string::npos) {
@@ -794,9 +794,10 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             int64_t len = svdb_json_length(json_str.c_str(), path_str.c_str());
             SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = len; return v;
         }
-        /* json_valid(json) */
-        if (eu.substr(0, 12) == "JSON_VALID(" && fn_paren_ok(12-1)) {
-            SvdbVal json_val = eval_expr(e.substr(12, e.size()-13), row, col_order);
+        /* json_valid(json) / json_isvalid(json) */
+        if ((eu.substr(0, 12) == "JSON_VALID(" || eu.substr(0, 13) == "JSON_ISVALID(") && fn_paren_ok(eu.substr(0, 12) == "JSON_VALID(" ? 11 : 12)) {
+            size_t start = (eu.substr(0, 12) == "JSON_VALID(") ? 12 : 13;
+            SvdbVal json_val = eval_expr(e.substr(start, e.size()-start-1), row, col_order);
             if (json_val.type == SVDB_TYPE_NULL) { SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0; return v; }
             std::string json_str = val_to_str(json_val);
             SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = svdb_json_validate(json_str.c_str()); return v;
@@ -835,8 +836,8 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
         }
         /* json_set(json, path, value) */
-        if (eu.substr(0, 10) == "JSON_SET(" && fn_paren_ok(10-1)) {
-            std::string args = e.substr(10, e.size()-11);
+        if (eu.substr(0, 9) == "JSON_SET(" && fn_paren_ok(9-1)) {
+            std::string args = e.substr(9, e.size()-10);
             /* Parse: json, path, value */
             std::vector<std::string> parts;
             int depth = 0; size_t start = 0;
