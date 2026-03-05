@@ -894,6 +894,120 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
             SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = hex; return v;
         }
+        /* PRINTF(fmt, ...) / FORMAT(fmt, ...) — SQLite printf-style formatting */
+        if ((eu.substr(0, 7) == "PRINTF(" && fn_paren_ok(6)) ||
+            (eu.substr(0, 7) == "FORMAT(" && fn_paren_ok(6))) {
+            size_t pref = 7;
+            std::string args_str = e.substr(pref, e.size() - pref - 1);
+            std::vector<std::string> parts;
+            int rd = 0; size_t start2 = 0;
+            bool in_s = false;
+            for (size_t i = 0; i <= args_str.size(); ++i) {
+                char c = i < args_str.size() ? args_str[i] : ',';
+                if (c == '\'' && !in_s) { in_s = true; }
+                else if (c == '\'' && in_s) {
+                    if (i+1 < args_str.size() && args_str[i+1] == '\'') { ++i; }
+                    else in_s = false;
+                }
+                if (!in_s) {
+                    if (c == '(') ++rd; else if (c == ')') --rd;
+                    else if (c == ',' && rd == 0) { parts.push_back(qry_trim(args_str.substr(start2, i-start2))); start2 = i+1; }
+                }
+            }
+            if (!parts.empty()) {
+                SvdbVal fmt_v = eval_expr(parts[0], row, col_order);
+                if (fmt_v.type == SVDB_TYPE_NULL) return SvdbVal{};
+                std::string fmt_s = val_to_str(fmt_v);
+                std::string result;
+                size_t ai = 1;
+                for (size_t fi = 0; fi < fmt_s.size(); ++fi) {
+                    if (fmt_s[fi] != '%') { result += fmt_s[fi]; continue; }
+                    ++fi;
+                    if (fi >= fmt_s.size()) break;
+                    if (fmt_s[fi] == '%') { result += '%'; continue; }
+                    /* Collect flags, width, precision, specifier */
+                    std::string spec = "%";
+                    while (fi < fmt_s.size() && (fmt_s[fi] == '-' || fmt_s[fi] == '+' || fmt_s[fi] == ' ' || fmt_s[fi] == '0' || fmt_s[fi] == '#')) spec += fmt_s[fi++];
+                    while (fi < fmt_s.size() && isdigit((unsigned char)fmt_s[fi])) spec += fmt_s[fi++];
+                    if (fi < fmt_s.size() && fmt_s[fi] == '.') { spec += fmt_s[fi++]; while (fi < fmt_s.size() && isdigit((unsigned char)fmt_s[fi])) spec += fmt_s[fi++]; }
+                    if (fi >= fmt_s.size()) break;
+                    char sp = fmt_s[fi]; spec += sp;
+                    SvdbVal arg_v;
+                    if (ai < parts.size()) arg_v = eval_expr(parts[ai++], row, col_order);
+                    char buf[256] = {};
+                    if (sp == 'd' || sp == 'i') {
+                        int64_t iv = (arg_v.type == SVDB_TYPE_INT) ? arg_v.ival : (arg_v.type == SVDB_TYPE_REAL ? (int64_t)arg_v.rval : 0);
+                        std::string s2 = spec.substr(0, spec.size()-1) + "lld";
+                        snprintf(buf, sizeof(buf), s2.c_str(), (long long)iv);
+                    } else if (sp == 'f' || sp == 'e' || sp == 'g') {
+                        double dv = (arg_v.type == SVDB_TYPE_REAL) ? arg_v.rval : (arg_v.type == SVDB_TYPE_INT ? (double)arg_v.ival : 0.0);
+                        snprintf(buf, sizeof(buf), spec.c_str(), dv);
+                    } else if (sp == 's') {
+                        std::string sv = val_to_str(arg_v);
+                        snprintf(buf, sizeof(buf), spec.c_str(), sv.c_str());
+                    } else {
+                        result += spec; continue;
+                    }
+                    result += std::string(buf);
+                }
+                SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = result; return v;
+            }
+        }
+        /* QUOTE(val) — SQLite-style quoting: TEXT → 'escaped', NULL → NULL, INT/REAL → number */
+        if (eu.substr(0, 6) == "QUOTE(" && fn_paren_ok(5)) {
+            SvdbVal inner = eval_expr(e.substr(6, e.size()-7), row, col_order);
+            if (inner.type == SVDB_TYPE_NULL) {
+                SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = "NULL"; return v;
+            }
+            if (inner.type == SVDB_TYPE_INT) {
+                SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = std::to_string(inner.ival); return v;
+            }
+            if (inner.type == SVDB_TYPE_REAL) {
+                char buf[64]; snprintf(buf, sizeof(buf), "%.17g", inner.rval);
+                SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = std::string(buf); return v;
+            }
+            /* TEXT: wrap in single quotes, escape embedded single quotes as '' */
+            std::string s2 = val_to_str(inner);
+            std::string out = "'";
+            for (char c : s2) { if (c == '\'') out += "''"; else out += c; }
+            out += "'";
+            SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = out; return v;
+        }
+        /* CHAR(n1, n2, ...) — build string from Unicode code points */
+        if (eu.substr(0, 5) == "CHAR(" && fn_paren_ok(4)) {
+            std::string args_str = e.substr(5, e.size()-6);
+            std::vector<std::string> parts;
+            int rd = 0; size_t start2 = 0;
+            for (size_t i = 0; i <= args_str.size(); ++i) {
+                char c = i < args_str.size() ? args_str[i] : ',';
+                if (c == '(') ++rd; else if (c == ')') --rd;
+                else if (c == ',' && rd == 0) { parts.push_back(qry_trim(args_str.substr(start2, i-start2))); start2 = i+1; }
+            }
+            std::string result;
+            for (auto &part : parts) {
+                SvdbVal cv = eval_expr(part, row, col_order);
+                int64_t cp = (cv.type == SVDB_TYPE_INT) ? cv.ival : (cv.type == SVDB_TYPE_REAL ? (int64_t)cv.rval : 0);
+                /* Encode Unicode code point as UTF-8 */
+                if (cp < 0x80) { result += (char)cp; }
+                else if (cp < 0x800) { result += (char)(0xC0|(cp>>6)); result += (char)(0x80|(cp&0x3F)); }
+                else if (cp < 0x10000) { result += (char)(0xE0|(cp>>12)); result += (char)(0x80|((cp>>6)&0x3F)); result += (char)(0x80|(cp&0x3F)); }
+                else { result += (char)(0xF0|(cp>>18)); result += (char)(0x80|((cp>>12)&0x3F)); result += (char)(0x80|((cp>>6)&0x3F)); result += (char)(0x80|(cp&0x3F)); }
+            }
+            SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = result; return v;
+        }
+        /* UNICODE(str) — return Unicode code point of first character */
+        if (eu.substr(0, 8) == "UNICODE(" && fn_paren_ok(7)) {
+            SvdbVal inner = eval_expr(e.substr(8, e.size()-9), row, col_order);
+            if (inner.type == SVDB_TYPE_NULL || val_to_str(inner).empty()) return SvdbVal{};
+            const std::string &s2 = val_to_str(inner);
+            unsigned char c = (unsigned char)s2[0];
+            int64_t cp = 0;
+            if      (c < 0x80)  cp = c;
+            else if (c < 0xE0 && s2.size() >= 2) cp = ((c & 0x1F) << 6)  | ((unsigned char)s2[1] & 0x3F);
+            else if (c < 0xF0 && s2.size() >= 3) cp = ((c & 0x0F) << 12) | (((unsigned char)s2[1] & 0x3F) << 6) | ((unsigned char)s2[2] & 0x3F);
+            else if (s2.size() >= 4) cp = ((c & 0x07) << 18) | (((unsigned char)s2[1] & 0x3F) << 12) | (((unsigned char)s2[2] & 0x3F) << 6) | ((unsigned char)s2[3] & 0x3F);
+            SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = cp; return v;
+        }
         /* ZEROBLOB(N) — returns a BLOB of N zero bytes */
         if (eu.substr(0, 9) == "ZEROBLOB(" && fn_paren_ok(9-1)) {
             SvdbVal nv = eval_expr(e.substr(9, e.size()-10), row, col_order);
