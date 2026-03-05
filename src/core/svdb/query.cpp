@@ -4345,7 +4345,14 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         }
     }
 
-    const auto &col_order = db->col_order.at(tname);
+    /* Safe access to col_order — return empty result if metadata is missing */
+    auto col_order_it = db->col_order.find(tname);
+    if (col_order_it == db->col_order.end()) {
+        /* Table exists in schema but col_order is missing (e.g., incomplete CTAS) */
+        *rows_out = r;
+        return SVDB_OK;
+    }
+    const auto &col_order = col_order_it->second;
 
     /* ── Build joined rows if JOIN present ── */
     std::vector<Row> all_rows;
@@ -4363,8 +4370,15 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         for (auto &kv : db->schema) {
             if (qry_upper(kv.first) == qry_upper(join.table)) { right_tname = kv.first; break; }
         }
-        const std::vector<Row> *right_data = db->schema.count(right_tname) ? &db->data.at(right_tname) : nullptr;
-        std::vector<std::string> right_col_order = db->schema.count(right_tname) ? db->col_order.at(right_tname) : std::vector<std::string>{};
+        /* Safe access to right table data and col_order */
+        const std::vector<Row> *right_data = nullptr;
+        std::vector<std::string> right_col_order;
+        if (db->schema.count(right_tname)) {
+            auto data_it = db->data.find(right_tname);
+            auto col_it = db->col_order.find(right_tname);
+            if (data_it != db->data.end()) right_data = &data_it->second;
+            if (col_it != db->col_order.end()) right_col_order = col_it->second;
+        }
 
         /* Right alias: prefer join.alias, else right_tname */
         std::string right_alias = join.alias.empty() ? right_tname : join.alias;
@@ -4519,7 +4533,11 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         auto right_rows_list = right_data ? *right_data : std::vector<Row>{};
         std::vector<bool> right_matched(right_rows_list.size(), false);
 
-        for (const auto &lrow : db->data.at(tname)) {
+        /* Safe access to db->data.at(tname) */
+        auto data_it = db->data.find(tname);
+        const std::vector<Row> &left_rows = (data_it != db->data.end()) ? data_it->second : std::vector<Row>{};
+        
+        for (const auto &lrow : left_rows) {
             bool matched = false;
             Row lrow_prefixed;
             for (auto &kv : lrow) {
@@ -4546,7 +4564,11 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                     all_rows.push_back(make_right_unmatched_row(right_rows_list[ri]));
         }
     } else {
-        all_rows = db->data.at(tname);
+        /* Safe access to db->data.at(tname) */
+        auto data_it = db->data.find(tname);
+        if (data_it != db->data.end()) {
+            all_rows = data_it->second;
+        }
         merged_col_order = col_order;
         /* Always add table-name and alias prefixes to rows for correlated subqueries */
         for (auto &row : all_rows) {
@@ -4570,8 +4592,12 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
             if (qry_upper(kv.first) == qry_upper(jn.table)) { rt = kv.first; break; }
         }
         if (!db->schema.count(rt)) continue;
-        const auto &rt_col_order = db->col_order.at(rt);
-        const auto &rt_data = db->data.at(rt);
+        /* Safe access to rt_col_order and rt_data */
+        auto rt_col_it = db->col_order.find(rt);
+        auto rt_data_it = db->data.find(rt);
+        if (rt_col_it == db->col_order.end() || rt_data_it == db->data.end()) continue;
+        const auto &rt_col_order = rt_col_it->second;
+        const auto &rt_data = rt_data_it->second;
         std::string rt_alias = jn.alias.empty() ? rt : jn.alias;
 
         /* Merge col order */
@@ -5030,10 +5056,16 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
         if (!tname.empty() && db->col_order.count(tname)) {
             int cid = 0;
             int pk_seq = 1;
-            for (const auto &col : db->col_order.at(tname)) {
+            /* Safe access to col_order, schema, and primary_keys */
+            auto col_order_it = db->col_order.find(tname);
+            auto schema_it = db->schema.find(tname);
+            if (col_order_it == db->col_order.end() || schema_it == db->schema.end()) {
+                return SVDB_OK;
+            }
+            for (const auto &col : col_order_it->second) {
                 const ColDef *def = nullptr;
-                auto sit = db->schema.at(tname).find(col);
-                if (sit != db->schema.at(tname).end()) def = &sit->second;
+                auto sit = schema_it->second.find(col);
+                if (sit != schema_it->second.end()) def = &sit->second;
                 std::string ctype = def ? def->type : "TEXT";
                 int notnull = def ? (def->not_null ? 1 : 0) : 0;
                 int pk = 0;
@@ -5042,9 +5074,12 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
                     pk = pk_seq++;
                 } else if (db->primary_keys.count(tname)) {
                     int seq2 = 1;
-                    for (auto &pk_col : db->primary_keys.at(tname)) {
-                        if (pk_col == col) { pk = seq2; break; }
-                        ++seq2;
+                    auto pk_it = db->primary_keys.find(tname);
+                    if (pk_it != db->primary_keys.end()) {
+                        for (auto &pk_col : pk_it->second) {
+                            if (pk_col == col) { pk = seq2; break; }
+                            ++seq2;
+                        }
                     }
                 }
                 std::string base_type = ctype;
@@ -5072,8 +5107,9 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
         for (auto &kv : db->schema) {
             /* Determine if this is a view */
             std::string ttype = "table";
-            if (db->create_sql.count(kv.first)) {
-                std::string su3 = qry_upper(db->create_sql.at(kv.first));
+            auto create_it = db->create_sql.find(kv.first);
+            if (create_it != db->create_sql.end()) {
+                std::string su3 = qry_upper(create_it->second);
                 /* Strip leading whitespace */
                 size_t i = 0;
                 while (i < su3.size() && isspace((unsigned char)su3[i])) ++i;
@@ -5207,17 +5243,21 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
         r->col_names = {"table", "rowid", "parent", "fkid"};
         /* Scan all (or one) tables for FK violations */
         auto check_table_fks = [&](const std::string &tname) {
-            if (!db->fk_constraints.count(tname)) return;
-            const auto &rows2 = db->data.count(tname) ? db->data.at(tname) : std::vector<Row>{};
+            auto fk_it = db->fk_constraints.find(tname);
+            if (fk_it == db->fk_constraints.end()) return;
+            auto data_it = db->data.find(tname);
+            if (data_it == db->data.end()) return;
+            const auto &rows2 = data_it->second;
             int64_t rowid2 = 1;
             for (const auto &row2 : rows2) {
-                for (const auto &fk : db->fk_constraints.at(tname)) {
+                for (const auto &fk : fk_it->second) {
                     auto cit = row2.find(fk.child_col);
                     if (cit == row2.end() || cit->second.type == SVDB_TYPE_NULL) { ++rowid2; continue; }
                     const std::string &pcol = fk.parent_col.empty() ? fk.child_col : fk.parent_col;
                     bool found = false;
-                    if (db->data.count(fk.parent_table)) {
-                        for (const auto &pr : db->data.at(fk.parent_table)) {
+                    auto parent_data_it = db->data.find(fk.parent_table);
+                    if (parent_data_it != db->data.end()) {
+                        for (const auto &pr : parent_data_it->second) {
                             auto pit = pr.find(pcol);
                             if (pit == pr.end()) continue;
                             if (pit->second.type == cit->second.type) {
@@ -5396,9 +5436,11 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
             SvdbVal v_tbl, v_rows, v_cols;
             v_tbl.type  = SVDB_TYPE_TEXT; v_tbl.sval  = kv.first;
             v_rows.type = SVDB_TYPE_INT;
-            v_rows.ival = db->data.count(kv.first) ? (int64_t)db->data.at(kv.first).size() : 0;
+            auto data_it = db->data.find(kv.first);
+            v_rows.ival = (data_it != db->data.end()) ? (int64_t)data_it->second.size() : 0;
             v_cols.type = SVDB_TYPE_INT;
-            v_cols.ival = db->col_order.count(kv.first) ? (int64_t)db->col_order.at(kv.first).size() : 0;
+            auto col_it = db->col_order.find(kv.first);
+            v_cols.ival = (col_it != db->col_order.end()) ? (int64_t)col_it->second.size() : 0;
             r->rows.push_back({v_tbl, v_rows, v_cols});
         }
         return SVDB_OK;
@@ -5638,9 +5680,13 @@ svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
                 const std::vector<std::string> *col_order_p = nullptr;
                 std::vector<Row> before_snap, after_snap;
 
-                if (!tname.empty() && db->data.count(tname)) {
-                    before_snap = db->data.at(tname);
-                    col_order_p = &db->col_order.at(tname);
+                if (!tname.empty()) {
+                    auto data_it = db->data.find(tname);
+                    auto col_it = db->col_order.find(tname);
+                    if (data_it != db->data.end() && col_it != db->col_order.end()) {
+                        before_snap = data_it->second;
+                        col_order_p = &col_it->second;
+                    }
                 }
 
                 lk.unlock();
@@ -5648,9 +5694,13 @@ svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
                 svdb_exec(db, sql_no_ret.c_str(), &res);
                 lk.lock();
 
-                if (!tname.empty() && db->data.count(tname)) {
-                    after_snap = db->data.at(tname);
-                    col_order_p = &db->col_order.at(tname);
+                if (!tname.empty()) {
+                    auto data_it = db->data.find(tname);
+                    auto col_it = db->col_order.find(tname);
+                    if (data_it != db->data.end() && col_it != db->col_order.end()) {
+                        after_snap = data_it->second;
+                        col_order_p = &col_it->second;
+                    }
                 }
 
                 std::vector<Row> affected_rows;

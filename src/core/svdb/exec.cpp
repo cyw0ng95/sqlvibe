@@ -917,19 +917,30 @@ static svdb_code_t do_create_table(svdb_db_t *db, const std::string &sql) {
         return SVDB_ERR;
     }
 
+    /* Check for CREATE TABLE ... AS SELECT syntax */
+    size_t as_pos = su.find(" AS ");
+    size_t select_pos = su.find("SELECT");
+    bool is_ctas = (as_pos != std::string::npos && select_pos != std::string::npos && 
+                    select_pos > as_pos && as_pos < 50);
+    
     TableDef td;
     std::vector<std::string> order;
     std::vector<std::string> pks;
     std::vector<std::vector<std::string>> uniqs;
     CheckList checks;
     std::vector<FKDef> fks;
-    parse_column_defs(sql, 0, td, order, &pks, &uniqs, &checks, &fks);
+    
+    if (!is_ctas) {
+        /* Standard CREATE TABLE with column definitions */
+        parse_column_defs(sql, 0, td, order, &pks, &uniqs, &checks, &fks);
+    }
+    /* For CREATE TABLE AS SELECT, td and order remain empty - will be populated by executing the SELECT */
 
     db->schema[tname]    = td;
     db->col_order[tname] = order;
 
-    /* Empty column list is not valid */
-    if (order.empty()) {
+    /* For CTAS, empty column list is OK - will be populated when SELECT is executed */
+    if (order.empty() && !is_ctas) {
         db->last_error = "near \")\"" ": syntax error";
         return SVDB_ERR;
     }
@@ -941,6 +952,44 @@ static svdb_code_t do_create_table(svdb_db_t *db, const std::string &sql) {
     if (!uniqs.empty()) db->unique_constraints[tname] = uniqs;
     if (!checks.empty()) db->check_constraints[tname] = checks;
     if (!fks.empty()) db->fk_constraints[tname] = fks;
+    
+    /* For CREATE TABLE AS SELECT, execute the SELECT and populate the table */
+    if (is_ctas) {
+        std::string select_sql = sql.substr(as_pos + 4);
+        select_sql = svdb_str_trim(select_sql);
+        svdb_rows_t *rows = nullptr;
+        svdb_code_t rc = svdb_query_internal(db, select_sql, &rows);
+        if (rc != SVDB_OK || !rows) {
+            /* Clean up partial table definition on error */
+            db->schema.erase(tname);
+            db->col_order.erase(tname);
+            db->data.erase(tname);
+            db->rowid_counter.erase(tname);
+            db->create_sql.erase(tname);
+            if (rows) svdb_rows_close(rows);
+            return rc;
+        }
+        
+        /* Populate column order from result */
+        db->col_order[tname] = rows->col_names;
+        for (size_t ci = 0; ci < rows->col_names.size(); ++ci) {
+            ColDef col;
+            col.type = "TEXT"; /* Default type for CTAS */
+            db->schema[tname][rows->col_names[ci]] = col;
+        }
+        
+        /* Insert all rows - convert from vector<SvdbVal> to Row (map) */
+        for (auto &row_vec : rows->rows) {
+            Row row_map;
+            for (size_t ci = 0; ci < rows->col_names.size() && ci < row_vec.size(); ++ci) {
+                row_map[rows->col_names[ci]] = row_vec[ci];
+            }
+            db->data[tname].push_back(row_map);
+        }
+        
+        svdb_rows_close(rows);
+    }
+    
     return SVDB_OK;
 }
 
