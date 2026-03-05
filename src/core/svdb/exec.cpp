@@ -2121,7 +2121,9 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
     std::string tname     = svdb_ast_get_table(ast);
     std::string where_txt = svdb_ast_get_where(ast);
 
-    if (!db->schema.count(tname)) {
+    /* Case-insensitive table lookup */
+    std::string resolved_tname = resolve_table_name(db, tname);
+    if (resolved_tname.empty()) {
         db->last_error = "no such table: " + tname;
         svdb_ast_node_free(ast); svdb_parser_destroy(p);
         return SVDB_ERR;
@@ -2206,7 +2208,7 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
             while(ap<set_clause2.size()&&(isspace((unsigned char)set_clause2[ap])||set_clause2[ap]==','))++ap;
         }
         /* Build combined column order: target cols first, then from_table cols (prefixed) */
-        auto &tcols = db->col_order[tname];
+        auto &tcols = db->col_order[resolved_tname];
         auto &fcols = db->col_order[from_table];
         Row combined_cols_order; /* Use string list */
         std::vector<std::string> combined_order;
@@ -2217,12 +2219,12 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
         }
         svdb_set_query_db(db);
         int64_t updated = 0;
-        for (auto &trow : db->data[tname]) {
+        for (auto &trow : db->data[resolved_tname]) {
             for (auto &frow : db->data[from_table]) {
                 /* Build combined row */
                 Row combined = trow;
                 /* Add target table's columns with qualified names */
-                for (auto &cn : tcols) combined[tname + "." + cn] = trow.count(cn) ? trow.at(cn) : SvdbVal{};
+                for (auto &cn : tcols) combined[resolved_tname + "." + cn] = trow.count(cn) ? trow.at(cn) : SvdbVal{};
                 for (auto &cn : fcols) {
                     combined[from_table + "." + cn] = frow.count(cn) ? frow.at(cn) : SvdbVal{};
                     if (!combined.count(cn)) combined[cn] = frow.count(cn) ? frow.at(cn) : SvdbVal{};
@@ -2302,12 +2304,12 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
         }
     }
 
-    const auto &col_order = db->col_order[tname];
+    const auto &col_order = db->col_order[resolved_tname];
     int64_t updated = 0;
     /* Collect old and new row values (needed for FK ON UPDATE actions) */
     std::vector<std::pair<Row,Row>> updated_pairs; /* {old_row, new_row} */
     svdb_set_query_db(db);  /* set thread-local DB context for subquery eval in SET expressions */
-    for (auto &row : db->data[tname]) {
+    for (auto &row : db->data[resolved_tname]) {
         if (!eval_where(row, col_order, where_txt)) continue;
         Row old_row = row;
         for (const auto &asgn : assignments)
@@ -2323,7 +2325,7 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
             const std::string &child_tname = kv.first;
             if (!db->data.count(child_tname)) continue;
             for (const auto &fk : kv.second) {
-                if (str_upper(fk.parent_table) != str_upper(tname)) continue;
+                if (str_upper(fk.parent_table) != str_upper(resolved_tname)) continue;
                 std::string action = str_upper(fk.on_update);
                 if (action.empty() || action == "NO ACTION" || action == "RESTRICT") continue;
                 if (action == "CASCADE") {
@@ -2367,7 +2369,7 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
     /* Fire AFTER UPDATE triggers */
     if (!db->triggers.empty()) {
         for (const auto &pr : updated_pairs)
-            fire_triggers(db, TRIGGER_AFTER, TRIGGER_UPDATE, tname, &pr.second, &pr.first);
+            fire_triggers(db, TRIGGER_AFTER, TRIGGER_UPDATE, resolved_tname, &pr.second, &pr.first);
     }
 
     svdb_ast_node_free(ast);
@@ -2464,7 +2466,9 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
     svdb_ast_node_free(ast);
     svdb_parser_destroy(p);
 
-    if (!db->schema.count(tname)) {
+    /* Case-insensitive table lookup */
+    std::string resolved_tname = resolve_table_name(db, tname);
+    if (resolved_tname.empty()) {
         db->last_error = "no such table: " + tname;
         return SVDB_ERR;
     }
@@ -2526,7 +2530,7 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
                     if (to_delete[i]) ++deleted;
                     else new_rows.push_back(trows[i]);
                 }
-                db->data[tname] = std::move(new_rows);
+                db->data[resolved_tname] = std::move(new_rows);
                 db->rows_affected = deleted;
                 if (res) { res->code = SVDB_OK; res->rows_affected = deleted; }
                 return SVDB_OK;
@@ -2534,8 +2538,8 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
         }
     }
 
-    const auto &col_order = db->col_order[tname];
-    auto &rows = db->data[tname];
+    const auto &col_order = db->col_order[resolved_tname];
+    auto &rows = db->data[resolved_tname];
     int64_t deleted = 0;
 
     /* Collect deleted rows before erasing (needed for FK cascade) */
@@ -2558,7 +2562,7 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
             const std::string &child_tname = kv.first;
             if (!db->data.count(child_tname)) continue;
             for (const auto &fk : kv.second) {
-                if (str_upper(fk.parent_table) != str_upper(tname)) continue;
+                if (str_upper(fk.parent_table) != str_upper(resolved_tname)) continue;
                 std::string action = str_upper(fk.on_delete);
                 if (!action.empty() && action != "RESTRICT" && action != "NO ACTION") continue;
                 for (const auto &drow : deleted_rows) {
@@ -2569,7 +2573,7 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
                         if (cit == crow.end()) continue;
                         if (fk_vals_equal(cit->second, pit->second)) {
                             /* Undo deletes and return error */
-                            for (auto &dr : deleted_rows) db->data[tname].push_back(dr);
+                            for (auto &dr : deleted_rows) db->data[resolved_tname].push_back(dr);
                             db->last_error = "FOREIGN KEY constraint failed";
                             return SVDB_ERR;
                         }
@@ -2578,10 +2582,10 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
             }
         }
         /* Apply CASCADE / SET NULL recursively (skip RESTRICT - already checked) */
-        svdb_code_t fk_rc = fk_on_delete(db, tname, deleted_rows);
+        svdb_code_t fk_rc = fk_on_delete(db, resolved_tname, deleted_rows);
         if (fk_rc != SVDB_OK) {
             /* Undo deletes */
-            for (auto &dr : deleted_rows) db->data[tname].push_back(dr);
+            for (auto &dr : deleted_rows) db->data[resolved_tname].push_back(dr);
             return fk_rc;
         }
     }
@@ -2592,7 +2596,7 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
     /* Fire AFTER DELETE triggers */
     if (!db->triggers.empty()) {
         for (const auto &drow : deleted_rows)
-            fire_triggers(db, TRIGGER_AFTER, TRIGGER_DELETE, tname, nullptr, &drow);
+            fire_triggers(db, TRIGGER_AFTER, TRIGGER_DELETE, resolved_tname, nullptr, &drow);
     }
 
     return SVDB_OK;
