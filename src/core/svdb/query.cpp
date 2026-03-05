@@ -766,7 +766,8 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                     while (j >= 0 && s[j] == ' ') --j;
                     if (j < 0) continue; /* at start */
                     char prev = s[j];
-                    if (prev == '+' || prev == '-' || prev == '*' || prev == '/' || prev == '%' || prev == '(') continue;
+                    if (prev == '+' || prev == '-' || prev == '*' || prev == '/' || prev == '%' || prev == '(' ||
+                        prev == '=' || prev == '<' || prev == '>' || prev == '!') continue;
                 }
                 return (size_t)i;
             }
