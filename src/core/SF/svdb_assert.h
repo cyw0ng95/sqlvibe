@@ -1,15 +1,19 @@
 /* svdb_assert.h — Linux kernel-style debug assertions for the svdb engine.
  *
+ * Lives in src/core/SF/ (shared foundations).
+ *
  * When SVDB_BUILD_DEBUG is defined (build.sh -d), assertions are active and
  * abort the process on violation, printing file/line/function diagnostics.
  * In release builds every macro compiles away to nothing.
  *
- * Macros:
- *   svdb_assert(cond)               — abort if cond is false
- *   svdb_assert_msg(cond, fmt, ...) — abort with printf-style message
- *   SVDB_BUG_ON(cond)               — abort if cond is true (like kernel BUG_ON)
- *   SVDB_WARN_ON(cond)              — print warning (no abort) if cond is true
- *   SVDB_BUG()                      — unconditional abort (unreachable path)
+ * Macros (uppercase, no prefix — kernel style for external callers):
+ *   BUG_ON(cond)               — abort if cond is true
+ *   WARN_ON(cond)              — print warning (no abort) if cond is true
+ *   BUG()                      — unconditional abort (unreachable path)
+ *
+ * Internal/verbose forms (keep svdb_ prefix for in-file use):
+ *   svdb_assert(cond)
+ *   svdb_assert_msg(cond, fmt, ...)
  */
 #pragma once
 
@@ -60,25 +64,33 @@ static inline bool svdb_warn_on_helper(
         }                                                                   \
     } while (0)
 
-/* SVDB_BUG_ON(cond) — abort if condition is true (kernel BUG_ON style) */
-#define SVDB_BUG_ON(cond)                                                   \
+/* BUG_ON(cond) — abort if condition is true (kernel BUG_ON style) */
+#define BUG_ON(cond)                                                        \
     do {                                                                    \
         if (__builtin_expect((cond), 0))                                    \
             svdb_assert_fail("BUG_ON(" #cond ")", __FILE__, __LINE__, __func__); \
     } while (0)
 
-/* SVDB_WARN_ON(cond) — print warning but continue */
-#define SVDB_WARN_ON(cond) \
+/* WARN_ON(cond) — print warning but continue */
+#define WARN_ON(cond) \
     svdb_warn_on_helper((cond), "WARN_ON(" #cond ")", __FILE__, __LINE__, __func__)
 
-/* SVDB_BUG() — unconditional abort for unreachable code paths */
-#define SVDB_BUG()                                                          \
+/* BUG() — unconditional abort for unreachable code paths */
+#define BUG()                                                               \
     svdb_assert_fail("BUG() unreachable path", __FILE__, __LINE__, __func__)
+
+/* Compatibility aliases (old SVDB_ prefix) */
+#define SVDB_BUG_ON(cond)  BUG_ON(cond)
+#define SVDB_WARN_ON(cond) WARN_ON(cond)
+#define SVDB_BUG()         BUG()
 
 #else /* !SVDB_BUILD_DEBUG — all macros compile away */
 
 #define svdb_assert(cond)               ((void)0)
 #define svdb_assert_msg(cond, fmt, ...) ((void)0)
+#define BUG_ON(cond)                    ((void)0)
+#define WARN_ON(cond)                   ((void)0)
+#define BUG()                           ((void)0)
 #define SVDB_BUG_ON(cond)               ((void)0)
 #define SVDB_WARN_ON(cond)              ((void)0)
 #define SVDB_BUG()                      ((void)0)

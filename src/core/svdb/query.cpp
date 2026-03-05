@@ -17,7 +17,7 @@
 #include "svdb.h"
 #include "svdb_types.h"
 #include "svdb_util.h"
-#include "svdb_assert.h"
+#include "../SF/svdb_assert.h"
 #include "QP/parser.h"
 
 #include <cctype>
