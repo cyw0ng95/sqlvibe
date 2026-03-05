@@ -1957,6 +1957,74 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
         rc = svdb_query_pragma(db, s, &rows);
         if (rows) svdb_rows_close(rows);
     } else if (kw == "SELECT") {
+        /* Check for SELECT ... INTO newtable FROM ... (CREATE TABLE AS SELECT) */
+        {
+            std::string su_s = str_upper(s);
+            /* Find "INTO" that appears before "FROM" and is not inside parens */
+            size_t into_pos = std::string::npos;
+            size_t from_pos = std::string::npos;
+            int depth = 0; bool in_sq = false;
+            for (size_t i = 0; i < s.size(); ++i) {
+                char c = s[i];
+                if (c == '\'' && !in_sq) { in_sq = true; continue; }
+                if (c == '\'' && in_sq) { if (i+1<s.size()&&s[i+1]=='\''){++i;} else in_sq=false; continue; }
+                if (in_sq) continue;
+                if (c == '(') ++depth; else if (c == ')') --depth;
+                if (depth == 0) {
+                    if (i+4 <= s.size() && str_upper(s.substr(i,4)) == "INTO" &&
+                        (i == 0 || !isalnum((unsigned char)s[i-1])) &&
+                        (i+4 >= s.size() || !isalnum((unsigned char)s[i+4]))) {
+                        into_pos = i;
+                    }
+                    if (i+4 <= s.size() && str_upper(s.substr(i,4)) == "FROM" &&
+                        (i == 0 || !isalnum((unsigned char)s[i-1])) &&
+                        (i+4 >= s.size() || !isalnum((unsigned char)s[i+4])) &&
+                        into_pos != std::string::npos) {
+                        from_pos = i;
+                        break;
+                    }
+                }
+            }
+            if (into_pos != std::string::npos && from_pos != std::string::npos) {
+                /* Extract newtable name */
+                size_t np = into_pos + 4;
+                while (np < s.size() && isspace((unsigned char)s[np])) ++np;
+                size_t ns = np;
+                while (np < s.size() && (isalnum((unsigned char)s[np]) || s[np] == '_')) ++np;
+                std::string new_table = s.substr(ns, np - ns);
+                /* Rewrite: SELECT <cols> FROM ... (without INTO part) */
+                std::string rewritten = s.substr(0, into_pos) + s.substr(from_pos);
+                /* Run the select */
+                svdb_rows_t *rows = nullptr;
+                rc = svdb_query_internal(db, rewritten, &rows);
+                if (rc == SVDB_OK && rows && !new_table.empty()) {
+                    /* Build CREATE TABLE statement from result columns */
+                    std::string create_sql2 = "CREATE TABLE " + new_table + " (";
+                    for (size_t ci = 0; ci < rows->col_names.size(); ++ci) {
+                        if (ci) create_sql2 += ", ";
+                        create_sql2 += rows->col_names[ci] + " TEXT";
+                    }
+                    create_sql2 += ")";
+                    do_create_table(db, create_sql2);
+                    /* Insert all rows */
+                    for (auto &row : rows->rows) {
+                        std::string ins = "INSERT INTO " + new_table + " VALUES (";
+                        for (size_t ci = 0; ci < row.size(); ++ci) {
+                            if (ci) ins += ", ";
+                            if (row[ci].type == SVDB_TYPE_NULL) ins += "NULL";
+                            else if (row[ci].type == SVDB_TYPE_INT) ins += std::to_string(row[ci].ival);
+                            else if (row[ci].type == SVDB_TYPE_REAL) { char buf[64]; snprintf(buf,sizeof(buf),"%.17g",row[ci].rval); ins+=buf; }
+                            else { ins += "'"; for (char ch:row[ci].sval){if(ch=='\'')ins+="''";else ins+=ch;} ins += "'"; }
+                        }
+                        ins += ")";
+                        do_insert(db, ins, nullptr);
+                    }
+                }
+                if (rows) svdb_rows_close(rows);
+                if (rc != SVDB_OK && res) { res->code = rc; res->errmsg = db->last_error.c_str(); }
+                return rc;
+            }
+        }
         /* svdb_exec on SELECT: run and discard result */
         svdb_rows_t *rows = nullptr;
         rc = svdb_query_internal(db, s, &rows);
