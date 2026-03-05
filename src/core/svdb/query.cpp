@@ -1843,7 +1843,19 @@ static std::vector<JoinSpec> parse_comma_joins(const std::string &sql) {
 static std::vector<OrderCol> parse_order_by(const std::string &sql) {
     std::vector<OrderCol> result;
     std::string su = qry_upper(sql);
-    size_t pos = su.find("ORDER BY ");
+    /* Find the last top-level ORDER BY (not inside parentheses / OVER clause) */
+    size_t pos = std::string::npos;
+    {
+        int depth = 0; bool in_s = false;
+        for (size_t i = 0; i + 9 <= su.size(); ++i) {
+            char c = su[i];
+            if (c == '\'') { in_s = !in_s; continue; }
+            if (in_s) continue;
+            if (c == '(') { ++depth; continue; }
+            if (c == ')') { if (depth > 0) --depth; continue; }
+            if (depth == 0 && su.substr(i, 9) == "ORDER BY ") pos = i;
+        }
+    }
     if (pos == std::string::npos) return result;
     /* End at LIMIT or end of string */
     size_t end = su.find("LIMIT ", pos);
@@ -2109,6 +2121,9 @@ static std::vector<JoinSpec> parse_all_joins(const std::string &sql) {
 
 /* ── Aggregate function evaluation ──────────────────────────────── */
 
+/* Forward declaration: is_window_expr defined later in Window Function Support block */
+static bool is_window_expr(const std::string &expr);
+
 struct AggState {
     std::string func;    /* COUNT/SUM/AVG/MIN/MAX/GROUP_CONCAT */
     std::string arg;     /* column or * */
@@ -2125,6 +2140,8 @@ struct AggState {
 };
 
 static bool is_agg_expr(const std::string &e) {
+    /* Window functions (e.g. SUM(...) OVER (...)) are NOT regular aggregates */
+    if (is_window_expr(e)) return false;
     std::string eu = qry_upper(e);
     /* Check for aggregate functions at the TOP LEVEL (not inside a subquery) */
     static const char *agg_fns[] = {"COUNT(", "SUM(", "AVG(", "MIN(", "MAX(", "GROUP_CONCAT(", "GROUP CONCAT(", nullptr};
@@ -2364,6 +2381,290 @@ static SvdbVal agg_result(const AggState &a) {
         }
     }
     return base_result;
+}
+
+/* ── Window Function Support ─────────────────────────────────────── */
+
+/* Check if expression contains a window function (has OVER at top level) */
+static bool is_window_expr(const std::string &expr) {
+    std::string eu = qry_upper(qry_trim(expr));
+    int depth = 0; bool in_s = false;
+    for (size_t i = 0; i < eu.size(); ++i) {
+        char c = eu[i];
+        if (c == '\'') { in_s = !in_s; continue; }
+        if (in_s) continue;
+        if (c == '(') { ++depth; continue; }
+        if (c == ')') { if (depth > 0) --depth; continue; }
+        if (depth == 0 && i + 5 <= eu.size() && eu.substr(i, 5) == " OVER") {
+            if (i + 5 < eu.size() && (eu[i+5] == ' ' || eu[i+5] == '(')) return true;
+        }
+    }
+    return false;
+}
+
+/* Parse "OVER (...)" clause: extract PARTITION BY and ORDER BY */
+struct OverSpec {
+    std::vector<std::string> partition_by;
+    std::vector<OrderCol>    order_by;
+};
+
+static OverSpec parse_over_spec(const std::string &over_content) {
+    OverSpec os;
+    std::string u = qry_upper(qry_trim(over_content));
+    size_t pb_pos = u.find("PARTITION BY ");
+    size_t ob_pos = u.find("ORDER BY ");
+    /* Handle ROWS/RANGE frame spec at end */
+    size_t frame_pos = u.find(" ROWS "); if (frame_pos == std::string::npos) frame_pos = u.find(" RANGE ");
+    if (frame_pos == std::string::npos) frame_pos = u.find(" ROWS BETWEEN ");
+    if (frame_pos == std::string::npos) frame_pos = u.find(" RANGE BETWEEN ");
+    size_t ob_end = (frame_pos != std::string::npos) ? frame_pos : u.size();
+
+    if (pb_pos != std::string::npos) {
+        size_t start = pb_pos + 13;
+        size_t end = (ob_pos != std::string::npos) ? ob_pos : ob_end;
+        std::string pb_str = over_content.substr(start, end - start);
+        /* Split by top-level comma */
+        int d = 0; size_t s = 0;
+        for (size_t i = 0; i <= pb_str.size(); ++i) {
+            char c = (i < pb_str.size()) ? pb_str[i] : ',';
+            if (c == '(') ++d; else if (c == ')') --d;
+            else if (c == ',' && d == 0) {
+                os.partition_by.push_back(qry_trim(pb_str.substr(s, i-s)));
+                s = i + 1;
+            }
+        }
+    }
+    if (ob_pos != std::string::npos) {
+        std::string ob_str = over_content.substr(ob_pos + 9, ob_end - ob_pos - 9);
+        /* Parse "col [ASC|DESC] [NULLS FIRST|LAST], ..." */
+        int d = 0; size_t s = 0;
+        for (size_t i = 0; i <= ob_str.size(); ++i) {
+            char c = (i < ob_str.size()) ? ob_str[i] : ',';
+            if (c == '(') ++d; else if (c == ')') --d;
+            else if (c == ',' && d == 0) {
+                std::string seg = qry_trim(ob_str.substr(s, i-s));
+                OrderCol oc; oc.desc = false; oc.nocase = false;
+                std::string seg_u = qry_upper(seg);
+                /* Strip NULLS FIRST/LAST */
+                for (const char *nkw : {" NULLS FIRST", " NULLS LAST"}) {
+                    size_t np = seg_u.rfind(nkw);
+                    if (np != std::string::npos) { seg = qry_trim(seg.substr(0, np)); seg_u = qry_upper(seg); break; }
+                }
+                if (seg_u.size() >= 5 && seg_u.substr(seg_u.size()-5) == " DESC") {
+                    oc.desc = true; seg = qry_trim(seg.substr(0, seg.size()-5));
+                } else if (seg_u.size() >= 4 && seg_u.substr(seg_u.size()-4) == " ASC") {
+                    seg = qry_trim(seg.substr(0, seg.size()-4));
+                }
+                oc.expr = seg;
+                os.order_by.push_back(oc);
+                s = i + 1;
+            }
+        }
+    }
+    return os;
+}
+
+/* Parse a window function expression into components */
+struct WinFunc {
+    std::string name;  /* ROW_NUMBER, RANK, DENSE_RANK, NTILE, LAG, LEAD, FIRST_VALUE, LAST_VALUE, SUM, etc. */
+    std::string args;  /* argument(s) to the function */
+    OverSpec    over;
+};
+
+static bool parse_win_func(const std::string &expr, WinFunc &wf) {
+    std::string eu = qry_upper(qry_trim(expr));
+    /* Find OVER at top level */
+    size_t over_pos = std::string::npos;
+    {
+        int depth = 0; bool in_s = false;
+        for (size_t i = 0; i < eu.size(); ++i) {
+            char c = eu[i];
+            if (c == '\'') { in_s = !in_s; continue; }
+            if (in_s) continue;
+            if (c == '(') { ++depth; continue; }
+            if (c == ')') { if (depth > 0) --depth; continue; }
+            if (depth == 0 && i + 5 <= eu.size() && eu.substr(i, 5) == " OVER" &&
+                (i + 5 == eu.size() || eu[i+5] == ' ' || eu[i+5] == '(')) {
+                over_pos = i; break;
+            }
+        }
+    }
+    if (over_pos == std::string::npos) return false;
+
+    std::string func_part = qry_trim(expr.substr(0, over_pos));
+    std::string func_upper = qry_upper(func_part);
+    size_t paren = func_part.find('(');
+    if (paren == std::string::npos) return false;
+    wf.name = qry_trim(func_upper.substr(0, paren));
+    /* Extract args (contents between outermost parens) */
+    {
+        int d = 0; size_t close = func_part.size();
+        for (size_t i = paren; i < func_part.size(); ++i) {
+            if (func_part[i] == '(') ++d;
+            else if (func_part[i] == ')') { if (--d == 0) { close = i; break; } }
+        }
+        wf.args = qry_trim(func_part.substr(paren + 1, close - paren - 1));
+    }
+    /* Extract OVER (...) content */
+    std::string after_over = qry_trim(expr.substr(over_pos + 5));
+    if (!after_over.empty() && after_over[0] == '(') {
+        int d = 0;
+        for (size_t i = 0; i < after_over.size(); ++i) {
+            if (after_over[i] == '(') ++d;
+            else if (after_over[i] == ')') { if (--d == 0) { wf.over = parse_over_spec(after_over.substr(1, i-1)); break; } }
+        }
+    }
+    return true;
+}
+
+/* Build a sort comparator that sorts rows by given order columns */
+static int compare_rows_by_order(const Row &a, const Row &b,
+                                  const std::vector<std::string> &col_order,
+                                  const std::vector<OrderCol> &order) {
+    for (const auto &oc : order) {
+        SvdbVal va = eval_expr(oc.expr, a, col_order);
+        SvdbVal vb = eval_expr(oc.expr, b, col_order);
+        /* NULLs sort first */
+        if (va.type == SVDB_TYPE_NULL && vb.type == SVDB_TYPE_NULL) continue;
+        if (va.type == SVDB_TYPE_NULL) return oc.desc ? 1 : -1;
+        if (vb.type == SVDB_TYPE_NULL) return oc.desc ? -1 : 1;
+        int c = val_cmp(va, vb);
+        if (c != 0) return oc.desc ? -c : c;
+    }
+    return 0;
+}
+
+/* Compute window function values for all rows.
+ * Returns a 2D vector: [col_index][row_index] = computed SvdbVal (or NULL placeholder). */
+static std::vector<std::vector<SvdbVal>>
+compute_window_functions(const std::vector<Row> &rows,
+                          const std::vector<std::string> &col_order,
+                          const std::vector<std::string> &out_cols) {
+    size_t ncols = out_cols.size();
+    size_t nrows = rows.size();
+    std::vector<std::vector<SvdbVal>> result(ncols, std::vector<SvdbVal>(nrows));
+
+    for (size_t ci = 0; ci < ncols; ++ci) {
+        WinFunc wf;
+        if (!parse_win_func(out_cols[ci], wf)) continue;  /* not a window func */
+
+        /* Build partition key for each row */
+        auto part_key = [&](const Row &r) -> std::string {
+            std::string key;
+            for (const auto &pb : wf.over.partition_by)
+                key += val_to_str(eval_expr(pb, r, col_order)) + "\x01";
+            return key;
+        };
+
+        /* Group rows by partition */
+        std::map<std::string, std::vector<size_t>> partitions;
+        for (size_t ri = 0; ri < nrows; ++ri)
+            partitions[part_key(rows[ri])].push_back(ri);
+
+        for (auto &kv : partitions) {
+            auto &idxs = kv.second;
+            /* Sort partition indices by ORDER BY */
+            if (!wf.over.order_by.empty()) {
+                std::stable_sort(idxs.begin(), idxs.end(),
+                    [&](size_t a, size_t b) {
+                        return compare_rows_by_order(rows[a], rows[b], col_order, wf.over.order_by) < 0;
+                    });
+            }
+            size_t n = idxs.size();
+
+            if (wf.name == "ROW_NUMBER") {
+                for (size_t i = 0; i < n; ++i) {
+                    SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = (int64_t)(i + 1);
+                    result[ci][idxs[i]] = v;
+                }
+            } else if (wf.name == "RANK") {
+                int64_t rank = 1;
+                for (size_t i = 0; i < n; ++i) {
+                    if (i > 0 && compare_rows_by_order(rows[idxs[i]], rows[idxs[i-1]], col_order, wf.over.order_by) != 0)
+                        rank = (int64_t)(i + 1);
+                    SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = rank;
+                    result[ci][idxs[i]] = v;
+                }
+            } else if (wf.name == "DENSE_RANK") {
+                int64_t drank = 1;
+                for (size_t i = 0; i < n; ++i) {
+                    if (i > 0 && compare_rows_by_order(rows[idxs[i]], rows[idxs[i-1]], col_order, wf.over.order_by) != 0)
+                        ++drank;
+                    SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = drank;
+                    result[ci][idxs[i]] = v;
+                }
+            } else if (wf.name == "NTILE") {
+                int64_t buckets = 1;
+                try { buckets = std::stoll(wf.args); } catch (...) {}
+                if (buckets < 1) buckets = 1;
+                for (size_t i = 0; i < n; ++i) {
+                    /* Standard NTILE: ceil distribution */
+                    int64_t tile = (int64_t)(i * buckets / n) + 1;
+                    SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = tile;
+                    result[ci][idxs[i]] = v;
+                }
+            } else if (wf.name == "LAG" || wf.name == "LEAD") {
+                /* LAG/LEAD(expr [, offset [, default]]) */
+                std::string col_expr = wf.args;
+                int64_t offset = 1;
+                SvdbVal default_val; default_val.type = SVDB_TYPE_NULL;
+                /* Split args by top-level comma */
+                std::vector<std::string> ll_args;
+                { int d = 0; size_t s = 0;
+                  for (size_t i = 0; i <= wf.args.size(); ++i) {
+                      char c = (i < wf.args.size()) ? wf.args[i] : ',';
+                      if (c == '(') ++d; else if (c == ')') --d;
+                      else if (c == ',' && d == 0) { ll_args.push_back(qry_trim(wf.args.substr(s, i-s))); s = i+1; }
+                  }
+                }
+                if (!ll_args.empty()) col_expr = ll_args[0];
+                if (ll_args.size() >= 2) { try { offset = std::stoll(ll_args[1]); } catch (...) {} }
+                if (ll_args.size() >= 3) default_val = eval_expr(ll_args[2], {}, col_order);
+                bool is_lead = (wf.name == "LEAD");
+                for (size_t i = 0; i < n; ++i) {
+                    int64_t target = is_lead ? (int64_t)(i + offset) : (int64_t)(i - offset);
+                    SvdbVal v;
+                    if (target >= 0 && target < (int64_t)n)
+                        v = eval_expr(col_expr, rows[idxs[(size_t)target]], col_order);
+                    else
+                        v = default_val;
+                    result[ci][idxs[i]] = v;
+                }
+            } else if (wf.name == "FIRST_VALUE") {
+                for (size_t i = 0; i < n; ++i) {
+                    /* Default frame: RANGE UNBOUNDED PRECEDING — value from first row in partition */
+                    result[ci][idxs[i]] = eval_expr(wf.args, rows[idxs[0]], col_order);
+                }
+            } else if (wf.name == "LAST_VALUE") {
+                /* Default frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                 * → returns the value at the current sorted position (last in the frame) */
+                for (size_t i = 0; i < n; ++i) {
+                    result[ci][idxs[i]] = eval_expr(wf.args, rows[idxs[i]], col_order);
+                }
+            } else if (wf.name == "SUM" || wf.name == "AVG" || wf.name == "COUNT" ||
+                       wf.name == "MIN" || wf.name == "MAX") {
+                /* Aggregate window functions — running total within partition ordered by ORDER BY */
+                bool is_running = !wf.over.order_by.empty();
+                /* Full partition aggregate */
+                AggState full_agg = make_agg(wf.name + "(" + wf.args + ")");
+                if (!is_running) {
+                    for (size_t i = 0; i < n; ++i)
+                        agg_accumulate(full_agg, rows[idxs[i]], col_order);
+                    SvdbVal agg_val = agg_result(full_agg);
+                    for (size_t i = 0; i < n; ++i) result[ci][idxs[i]] = agg_val;
+                } else {
+                    /* Running aggregate: include rows up to and including current */
+                    for (size_t i = 0; i < n; ++i) {
+                        AggState run_agg = make_agg(wf.name + "(" + wf.args + ")");
+                        for (size_t j = 0; j <= i; ++j)
+                            agg_accumulate(run_agg, rows[idxs[j]], col_order);
+                        result[ci][idxs[i]] = agg_result(run_agg);
+                    }
+                }
+            }
+        }
+    }
+    return result;
 }
 
 /* ── Main SELECT execution ──────────────────────────────────────── */
@@ -3383,10 +3684,27 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     }
 
     /* ── Simple SELECT (no GROUP BY) ── */
-    std::vector<std::vector<SvdbVal>> raw_rows;
-    std::vector<Row> orig_rows;  /* keep original rows for ORDER BY on non-SELECT cols */
+    /* First, collect matching rows for window function support */
+    std::vector<Row> matching_rows;
     for (const auto &row : all_rows) {
         if (!qry_eval_where(row, merged_col_order, where_txt)) continue;
+        matching_rows.push_back(row);
+    }
+
+    /* Detect and pre-compute window functions */
+    bool has_win = false;
+    if (!star) {
+        for (const auto &ce : out_cols)
+            if (is_window_expr(ce)) { has_win = true; break; }
+    }
+    std::vector<std::vector<SvdbVal>> win_vals; /* [col][row] */
+    if (has_win)
+        win_vals = compute_window_functions(matching_rows, merged_col_order, out_cols);
+
+    std::vector<std::vector<SvdbVal>> raw_rows;
+    std::vector<Row> orig_rows;  /* keep original rows for ORDER BY on non-SELECT cols */
+    for (size_t ri = 0; ri < matching_rows.size(); ++ri) {
+        const auto &row = matching_rows[ri];
         std::vector<SvdbVal> result_row;
         if (star) {
             for (const auto &cn : col_order) {
@@ -3394,8 +3712,11 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 result_row.push_back(it != row.end() ? it->second : SvdbVal{});
             }
         } else {
-            for (const auto &ce : out_cols) {
-                result_row.push_back(eval_expr(ce, row, merged_col_order));
+            for (size_t ci = 0; ci < out_cols.size(); ++ci) {
+                if (has_win && is_window_expr(out_cols[ci]))
+                    result_row.push_back(win_vals[ci][ri]);
+                else
+                    result_row.push_back(eval_expr(out_cols[ci], row, merged_col_order));
             }
         }
         raw_rows.push_back(result_row);
