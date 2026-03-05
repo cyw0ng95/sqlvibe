@@ -238,6 +238,37 @@ static void parse_column_defs(const std::string &sql, size_t pos,
                 fk.child_col = child_col;
                 fk.parent_table = parent_table;
                 fk.parent_col = parent_col;
+                /* Parse optional ON DELETE action */
+                while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                size_t peek = pos;
+                std::string w1, w2;
+                while (peek < sql.size() && isalpha((unsigned char)sql[peek])) ++peek;
+                w1 = str_upper(sql.substr(pos, peek - pos));
+                if (w1 == "ON") {
+                    pos = peek;
+                    while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                    peek = pos;
+                    while (peek < sql.size() && isalpha((unsigned char)sql[peek])) ++peek;
+                    w2 = str_upper(sql.substr(pos, peek - pos));
+                    if (w2 == "DELETE") {
+                        pos = peek;
+                        while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                        peek = pos;
+                        while (peek < sql.size() && isalpha((unsigned char)sql[peek])) ++peek;
+                        std::string action = str_upper(sql.substr(pos, peek - pos));
+                        pos = peek;
+                        if (action == "SET") {
+                            while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                            peek = pos;
+                            while (peek < sql.size() && isalpha((unsigned char)sql[peek])) ++peek;
+                            std::string action2 = str_upper(sql.substr(pos, peek - pos));
+                            pos = peek;
+                            fk.on_delete = action + " " + action2; /* "SET NULL" or "SET DEFAULT" */
+                        } else {
+                            fk.on_delete = action; /* "CASCADE", "RESTRICT", "NO ACTION" */
+                        }
+                    }
+                }
                 out_fks->push_back(fk);
             }
             while (pos < sql.size() && sql[pos] != ',' && sql[pos] != ')') ++pos;
@@ -1113,6 +1144,19 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
             else
                 row[cn] = SvdbVal{};
         }
+        /* Auto-assign INTEGER PRIMARY KEY if not set */
+        for (const auto &cn2 : col_order2) {
+            auto cdit = db->schema[tname2].find(cn2);
+            if (cdit != db->schema[tname2].end() && cdit->second.primary_key &&
+                str_upper(cdit->second.type) == "INTEGER") {
+                auto rit = row.find(cn2);
+                if (rit == row.end() || rit->second.type == SVDB_TYPE_NULL) {
+                    SvdbVal v; v.type = SVDB_TYPE_INT;
+                    v.ival = db->rowid_counter[tname2] + 1;
+                    row[cn2] = v;
+                }
+            }
+        }
         db->rowid_counter[tname2]++;
         row[SVDB_ROWID_COLUMN] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[tname2], 0.0, {}};
         db->data[tname2].push_back(row);
@@ -1424,8 +1468,39 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         }
 
         /* FK constraint check */
-        /* FK enforcement is disabled at insert-time (like SQLite default).
-         * Use PRAGMA foreign_key_check to detect violations. */
+        if (db->foreign_keys_enabled && db->fk_constraints.count(tname)) {
+            for (const auto &fk : db->fk_constraints.at(tname)) {
+                auto child_it = row.find(fk.child_col);
+                if (child_it == row.end() || child_it->second.type == SVDB_TYPE_NULL)
+                    continue; /* NULL values don't violate FK */
+                std::string parent_up = str_upper(fk.parent_table);
+                std::string resolved_parent;
+                for (auto &kv : db->schema)
+                    if (str_upper(kv.first) == parent_up) { resolved_parent = kv.first; break; }
+                if (resolved_parent.empty() || !db->data.count(resolved_parent))
+                    continue;
+                bool found = false;
+                for (const auto &prow : db->data.at(resolved_parent)) {
+                    auto pit = prow.find(fk.parent_col);
+                    if (pit == prow.end()) continue;
+                    if (pit->second.type == child_it->second.type) {
+                        bool match = false;
+                        switch (pit->second.type) {
+                            case SVDB_TYPE_INT:  match = (pit->second.ival == child_it->second.ival); break;
+                            case SVDB_TYPE_REAL: match = (pit->second.rval == child_it->second.rval); break;
+                            case SVDB_TYPE_TEXT: match = (pit->second.sval == child_it->second.sval); break;
+                            default: break;
+                        }
+                        if (match) { found = true; break; }
+                    }
+                }
+                if (!found) {
+                    db->last_error = "FOREIGN KEY constraint failed";
+                    svdb_ast_node_free(ast); svdb_parser_destroy(p);
+                    return SVDB_ERR;
+                }
+            }
+        }
 
         /* Auto-increment rowid */
         db->rowid_counter[tname]++;
@@ -1579,13 +1654,93 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
     const auto &col_order = db->col_order[tname];
     auto &rows = db->data[tname];
     int64_t deleted = 0;
+
+    /* Collect deleted rows before erasing (needed for FK cascade) */
+    std::vector<Row> deleted_rows;
     auto it = rows.begin();
     while (it != rows.end()) {
         if (eval_where(*it, col_order, where_txt)) {
+            deleted_rows.push_back(*it);
             it = rows.erase(it);
             ++deleted;
         } else {
             ++it;
+        }
+    }
+
+    /* FK ON DELETE actions: CASCADE, SET NULL, RESTRICT */
+    if (db->foreign_keys_enabled && !deleted_rows.empty()) {
+        for (auto &kv : db->fk_constraints) {
+            const std::string &child_tname = kv.first;
+            for (const auto &fk : kv.second) {
+                std::string parent_up = str_upper(fk.parent_table);
+                std::string tname_up  = str_upper(tname);
+                if (parent_up != tname_up) continue;
+                std::string action = str_upper(fk.on_delete);
+                if (action == "RESTRICT" || action == "NO ACTION") {
+                    /* Check if any child rows reference any deleted parent row */
+                    for (const auto &drow : deleted_rows) {
+                        auto pit = drow.find(fk.parent_col);
+                        if (pit == drow.end()) continue;
+                        for (const auto &crow : db->data.at(child_tname)) {
+                            auto cit = crow.find(fk.child_col);
+                            if (cit == crow.end()) continue;
+                            if (cit->second.type == pit->second.type) {
+                                bool match = false;
+                                switch (pit->second.type) {
+                                    case SVDB_TYPE_INT:  match = (cit->second.ival == pit->second.ival); break;
+                                    case SVDB_TYPE_REAL: match = (cit->second.rval == pit->second.rval); break;
+                                    case SVDB_TYPE_TEXT: match = (cit->second.sval == pit->second.sval); break;
+                                    default: break;
+                                }
+                                if (match) {
+                                    /* Undo deletes */
+                                    for (auto &dr : deleted_rows) db->data[tname].push_back(dr);
+                                    db->last_error = "FOREIGN KEY constraint failed";
+                                    return SVDB_ERR;
+                                }
+                            }
+                        }
+                    }
+                } else if (action == "CASCADE") {
+                    for (const auto &drow : deleted_rows) {
+                        auto pit = drow.find(fk.parent_col);
+                        if (pit == drow.end()) continue;
+                        auto &crows = db->data[child_tname];
+                        crows.erase(std::remove_if(crows.begin(), crows.end(),
+                            [&](const Row &crow) {
+                                auto cit = crow.find(fk.child_col);
+                                if (cit == crow.end()) return false;
+                                if (cit->second.type != pit->second.type) return false;
+                                switch (pit->second.type) {
+                                    case SVDB_TYPE_INT:  return cit->second.ival == pit->second.ival;
+                                    case SVDB_TYPE_REAL: return cit->second.rval == pit->second.rval;
+                                    case SVDB_TYPE_TEXT: return cit->second.sval == pit->second.sval;
+                                    default: return false;
+                                }
+                            }), crows.end());
+                    }
+                } else if (action == "SET NULL") {
+                    for (const auto &drow : deleted_rows) {
+                        auto pit = drow.find(fk.parent_col);
+                        if (pit == drow.end()) continue;
+                        for (auto &crow : db->data[child_tname]) {
+                            auto cit = crow.find(fk.child_col);
+                            if (cit == crow.end()) continue;
+                            if (cit->second.type == pit->second.type) {
+                                bool match = false;
+                                switch (pit->second.type) {
+                                    case SVDB_TYPE_INT:  match = (cit->second.ival == pit->second.ival); break;
+                                    case SVDB_TYPE_REAL: match = (cit->second.rval == pit->second.rval); break;
+                                    case SVDB_TYPE_TEXT: match = (cit->second.sval == pit->second.sval); break;
+                                    default: break;
+                                }
+                                if (match) cit->second = SvdbVal{};
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

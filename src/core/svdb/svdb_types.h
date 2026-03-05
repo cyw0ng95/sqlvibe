@@ -26,6 +26,7 @@ struct FKDef {
     std::string child_col;
     std::string parent_table;
     std::string parent_col;
+    std::string on_delete; /* "CASCADE", "SET NULL", "RESTRICT", or "" */
 };
 
 /* Table schema: column name -> ColDef */

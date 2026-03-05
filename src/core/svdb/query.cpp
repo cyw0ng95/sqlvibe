@@ -3426,7 +3426,8 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         std::string su_cte = qry_upper(qry_trim(sql));
         if (su_cte.size() >= 5 && su_cte.substr(0, 5) == "WITH ") {
             /* Parse one or more CTEs: WITH n1 AS (q1), n2 AS (q2) SELECT ... */
-            std::vector<std::pair<std::string,std::string>> cte_list; /* (name, query) */
+            struct CTEDef { std::string name; std::string query; std::vector<std::string> col_names; };
+            std::vector<CTEDef> cte_list;
             size_t pos = 5; /* after "WITH " */
             bool parse_ok = true;
             while (parse_ok) {
@@ -3437,6 +3438,31 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 while (pos < sql.size() && (isalnum((unsigned char)sql[pos]) || sql[pos] == '_')) ++pos;
                 if (pos == ns) { parse_ok = false; break; }
                 std::string cte_name = sql.substr(ns, pos - ns);
+                /* Skip RECURSIVE keyword */
+                if (qry_upper(cte_name) == "RECURSIVE") {
+                    while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                    ns = pos;
+                    while (pos < sql.size() && (isalnum((unsigned char)sql[pos]) || sql[pos] == '_')) ++pos;
+                    if (pos == ns) { parse_ok = false; break; }
+                    cte_name = sql.substr(ns, pos - ns);
+                }
+                /* Optional column list: name(col1, col2, ...) */
+                std::vector<std::string> cte_cols;
+                while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                if (pos < sql.size() && sql[pos] == '(') {
+                    size_t cl_end = pos + 1; int cl_depth = 1;
+                    while (cl_end < sql.size() && cl_depth > 0) {
+                        if (sql[cl_end] == '(') ++cl_depth;
+                        else if (sql[cl_end] == ')') --cl_depth;
+                        ++cl_end;
+                    }
+                    std::string col_list_str = sql.substr(pos + 1, cl_end - pos - 2);
+                    std::istringstream css(col_list_str);
+                    std::string col_tok;
+                    while (std::getline(css, col_tok, ',')) cte_cols.push_back(qry_trim(col_tok));
+                    pos = cl_end;
+                    while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                }
                 /* Expect AS */
                 while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
                 std::string su_next = qry_upper(sql.substr(pos, 2));
@@ -3453,7 +3479,7 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 }
                 if (close_p == std::string::npos) { parse_ok = false; break; }
                 std::string cte_query = qry_trim(sql.substr(pos + 1, close_p - pos - 1));
-                cte_list.push_back({cte_name, cte_query});
+                cte_list.push_back({cte_name, cte_query, cte_cols});
                 pos = close_p + 1;
                 while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
                 if (pos < sql.size() && sql[pos] == ',') { ++pos; continue; }
@@ -3468,10 +3494,108 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                     std::vector<std::string> tmp_names;
                     for (auto &cte : cte_list) {
                         svdb_rows_t *cte_rows = nullptr;
-                        svdb_code_t rc = svdb_query_internal(db, cte.second, &cte_rows);
-                        if (rc != SVDB_OK) { if (cte_rows) delete cte_rows; return rc; }
+                        /* Check for recursive CTE: query references itself AND has UNION ALL.
+                         * Use word-boundary check to avoid substring false positives
+                         * (e.g. CTE named 'a' matching 'table_a'). */
+                        static const size_t UNION_ALL_LEN = 10; /* length of " UNION ALL" */
+                        std::string cte_q_upper = qry_upper(cte.query);
+                        std::string cte_name_upper = qry_upper(cte.name);
+                        /* Verify " FROM <name><boundary>" (boundary = space, comma, ), or end) */
+                        bool has_self_ref = false;
+                        {
+                            std::string from_kw = " FROM " + cte_name_upper;
+                            size_t fp = cte_q_upper.find(from_kw);
+                            while (fp != std::string::npos) {
+                                size_t after = fp + from_kw.size();
+                                if (after >= cte_q_upper.size() ||
+                                    !isalnum((unsigned char)cte_q_upper[after]) &&
+                                    cte_q_upper[after] != '_') {
+                                    has_self_ref = true; break;
+                                }
+                                fp = cte_q_upper.find(from_kw, fp + 1);
+                            }
+                        }
+                        size_t ua_pos = std::string::npos;
+                        if (has_self_ref) {
+                            int ua_d = 0; bool ua_s = false;
+                            for (size_t i2 = 0; i2 + UNION_ALL_LEN <= cte_q_upper.size(); ++i2) {
+                                char c2 = cte_q_upper[i2];
+                                if (c2 == '\'') { ua_s = !ua_s; continue; }
+                                if (ua_s) continue;
+                                if (c2 == '(') { ++ua_d; continue; }
+                                if (c2 == ')') { if (ua_d > 0) --ua_d; continue; }
+                                if (ua_d == 0 && cte_q_upper.substr(i2, UNION_ALL_LEN) == " UNION ALL") { ua_pos = i2; break; }
+                            }
+                        }
+                        if (has_self_ref && ua_pos != std::string::npos) {
+                            /* Recursive CTE execution */
+                            std::string anchor_q = qry_trim(cte.query.substr(0, ua_pos));
+                            std::string recur_q  = qry_trim(cte.query.substr(ua_pos + 10));
+                            svdb_code_t rc_a = svdb_query_internal(db, anchor_q, &cte_rows);
+                            if (rc_a != SVDB_OK) { if (cte_rows) delete cte_rows; return rc_a; }
+                            /* Apply column renaming to anchor result BEFORE seeding,
+                             * so the recursive part can reference columns by declared names */
+                            if (!cte.col_names.empty() && cte_rows) {
+                                for (size_t ci = 0; ci < cte.col_names.size() && ci < cte_rows->col_names.size(); ++ci)
+                                    cte_rows->col_names[ci] = cte.col_names[ci];
+                            }
+                            /* Seed temp table with anchor results so recursive part can read it */
+                            std::string tmp_rname = cte.name;
+                            db->schema[tmp_rname] = {};
+                            db->col_order[tmp_rname] = {};
+                            db->data[tmp_rname] = {};
+                            if (cte_rows) {
+                                for (const auto &cn : cte_rows->col_names) {
+                                    db->schema[tmp_rname][cn] = ColDef{"TEXT", "", false, false};
+                                    db->col_order[tmp_rname].push_back(cn);
+                                }
+                                for (const auto &irow : cte_rows->rows) {
+                                    Row r_seed;
+                                    for (size_t ci = 0; ci < cte_rows->col_names.size() && ci < irow.size(); ++ci)
+                                        r_seed[cte_rows->col_names[ci]] = irow[ci];
+                                    db->data[tmp_rname].push_back(r_seed);
+                                }
+                            }
+                            /* Iterative recursion — cap at 1000 iterations to prevent
+                             * infinite loops; matches SQLite's compile-time default. */
+                            int max_iter = 1000;
+                            while (max_iter-- > 0) {
+                                svdb_rows_t *new_rows = nullptr;
+                                svdb_code_t rc_r = svdb_query_internal(db, recur_q, &new_rows);
+                                if (rc_r != SVDB_OK || !new_rows || new_rows->rows.empty()) {
+                                    if (new_rows) delete new_rows;
+                                    break;
+                                }
+                                /* Rename new_rows columns so next iteration can reference them */
+                                if (!cte.col_names.empty()) {
+                                    for (size_t ci = 0; ci < cte.col_names.size() && ci < new_rows->col_names.size(); ++ci)
+                                        new_rows->col_names[ci] = cte.col_names[ci];
+                                }
+                                for (auto &irow : new_rows->rows) cte_rows->rows.push_back(irow);
+                                db->data[tmp_rname].clear();
+                                for (const auto &irow : new_rows->rows) {
+                                    Row r_next;
+                                    for (size_t ci = 0; ci < new_rows->col_names.size() && ci < irow.size(); ++ci)
+                                        r_next[new_rows->col_names[ci]] = irow[ci];
+                                    db->data[tmp_rname].push_back(r_next);
+                                }
+                                delete new_rows;
+                            }
+                            /* Remove temporary recursive seed table; main setup below rebuilds it */
+                            db->schema.erase(tmp_rname);
+                            db->col_order.erase(tmp_rname);
+                            db->data.erase(tmp_rname);
+                        } else {
+                            svdb_code_t rc = svdb_query_internal(db, cte.query, &cte_rows);
+                            if (rc != SVDB_OK) { if (cte_rows) delete cte_rows; return rc; }
+                        }
+                        /* Apply column renaming if a column list was specified (non-recursive case) */
+                        if (!cte.col_names.empty() && cte_rows && ua_pos == std::string::npos) {
+                            for (size_t ci = 0; ci < cte.col_names.size() && ci < cte_rows->col_names.size(); ++ci)
+                                cte_rows->col_names[ci] = cte.col_names[ci];
+                        }
                         /* Store as temp table with CTE name */
-                        std::string tmp_name = cte.first;
+                        std::string tmp_name = cte.name;
                         db->schema[tmp_name] = {};
                         db->col_order[tmp_name] = {};
                         db->data[tmp_name] = {};
@@ -3937,6 +4061,36 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         *rows_out = r; return SVDB_OK;
     }
     tname = resolved_tname;
+
+    /* ── View resolution: redirect SELECT FROM view to its underlying query ── */
+    if (db->create_sql.count(tname)) {
+        std::string cs_up = qry_upper(db->create_sql.at(tname));
+        size_t view_kw = cs_up.find("VIEW");
+        if (view_kw != std::string::npos && view_kw < 20) {
+            size_t as_pos = cs_up.find(" AS ");
+            if (as_pos != std::string::npos) {
+                std::string view_select = db->create_sql.at(tname).substr(as_pos + 4);
+                view_select = qry_trim(view_select);
+                std::string sql_up = qry_upper(sql);
+                size_t from_p = sql_up.find(" FROM ");
+                if (from_p != std::string::npos) {
+                    size_t ts = from_p + 6;
+                    while (ts < sql_up.size() && isspace((unsigned char)sql_up[ts])) ++ts;
+                    size_t te = ts;
+                    while (te < sql_up.size() && (isalnum((unsigned char)sql_up[te]) || sql_up[te] == '_')) ++te;
+                    if (qry_upper(sql.substr(ts, te - ts)) == tname_upper) {
+                        delete r;
+                        std::string new_sql = sql.substr(0, ts) + "(" + view_select + ") AS " + tname + sql.substr(te);
+                        svdb_rows_t *view_result = nullptr;
+                        svdb_code_t rc2 = svdb_query_internal(db, new_sql, &view_result);
+                        if (rc2 != SVDB_OK) { if (view_result) delete view_result; return rc2; }
+                        *rows_out = view_result;
+                        return SVDB_OK;
+                    }
+                }
+            }
+        }
+    }
 
     const auto &col_order = db->col_order.at(tname);
 
