@@ -1,6 +1,234 @@
 # sqlvibe Release History
 
-## Current Version: v0.10.15 (2026-03-01)
+## Current Version: v0.11.2 (2026-03-03)
+
+**Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
+
+---
+
+## **v0.11.2** (2026-03-03)
+
+### C++ Native Engine Module — Unified Public API
+
+Introduces `src/core/svdb/` — a self-contained C++ database engine module with a unified
+C public API (`svdb.h`), enabling direct C/C++ caller integration without the Go runtime.
+
+#### New: `src/core/svdb/` C++ Engine Module
+
+- **`svdb.h`** — Public C API: `svdb_open`/`svdb_close`/`svdb_exec`/`svdb_query`,
+  `svdb_rows_*`, `svdb_stmt_*` (prepared statements), `svdb_begin`/`svdb_commit`/
+  `svdb_rollback`/`svdb_savepoint`, `svdb_tables`/`svdb_columns`/`svdb_indexes`,
+  `svdb_backup`, `svdb_version`
+- **`svdb_types.h`** — C++ structs behind opaque handles (`svdb_db_s`, `svdb_rows_s`,
+  `svdb_stmt_s`, `svdb_tx_s`)
+- **`svdb_util.h`** — Shared helpers (`svdb_str_upper/trim`, `SVDB_ROWID_COLUMN`)
+- **`database.cpp`** — `svdb_open`/`svdb_close`/`svdb_errmsg`/`svdb_version`
+- **`exec.cpp`** — Full DDL (CREATE/DROP/ALTER TABLE, CREATE INDEX), DML (INSERT/UPDATE/
+  DELETE), prepared statement bind/exec, transactions, schema introspection
+- **`query.cpp`** — SELECT via in-memory row scan; WHERE evaluation (AND/OR, comparisons,
+  arithmetic); division-by-zero returns NULL (SQLite semantics)
+- **`result.cpp`** — `svdb_rows_t` cursor iteration
+
+#### New: `internal/cgo/` Thin CGO Binding (package `svdbcgo`)
+
+Pure type-mapping (~400 LOC across 8 files) — no business logic:
+- `db_cgo.go` — DB lifecycle, `Version`
+- `exec_cgo.go` — `Exec` (non-query)
+- `rows_cgo.go` — `Query` + `Rows` iterator
+- `stmt_cgo.go` — Prepared statements
+- `tx_cgo.go` — Transactions + savepoints
+- `schema_cgo.go` — Schema introspection
+- `backup_cgo.go` — Backup
+- `errors.go` — `svdb_code_t` → Go error
+
+#### Phase 11: C Smoke Test
+
+`build.sh` now includes a C smoke test that verifies the `svdb.h` C API end-to-end
+(open → CREATE TABLE → INSERT → SELECT → close) without any Go runtime:
+```
+smoke test PASSED: svdb_open/exec/query/rows API works.
+====> Phase 11: C smoke test PASSED
+```
+
+#### Build System
+
+`src/CMakeLists.txt` extended with 18 new `core/svdb/*.cpp` sources and the `core/svdb`
+include path. All existing tests unchanged and passing.
+
+#### Performance (v0.11.2 vs SQLite)
+
+| Query | 1K rows | 10K rows | 100K rows |
+|-------|--------:|---------:|----------:|
+| SELECT all | **1.1× faster** | **1.3× faster** | **1.0× faster** |
+| SUM aggregate | **2.8× faster** | **3.0× faster** | **2.6× faster** |
+| GROUP BY | **3.3× faster** | **4.8× faster** | **4.9× faster** |
+
+---
+
+**Test Status**: All 89+ SQL:1999 test suites passing.
+
+---
+
+## **v0.11.1** (2026-03-02)
+
+### Phase 5 — Complete VM Orchestration via C++
+
+Completed the Go→C++ migration for all query engine orchestration functions.
+All 14 engine operations are now implemented in `src/core/VM/engine/engine.cpp`
+and exposed to Go via `internal/VM/engine/engine_cgo.go`.
+
+#### Build Fix
+- Fixed `src/core/VM/engine/engine_api.h` include path: `"../SF/types.h"` →
+  `"../../SF/types.h"` (header is in `VM/engine/` subdirectory)
+- Corrected `engine_cgo.go` to use `C.svdb_value_t` instead of
+  `C.svdb_engine_value_t` (type alias was absent from API header)
+
+#### C++ Engine Functions — Complete
+- **SELECT**: `svdb_engine_filter_rows` (Go callback predicate), `svdb_engine_apply_distinct`
+  (Go callback key function), `svdb_engine_apply_limit_offset`
+- **JOIN**: `svdb_engine_merge_rows`, `svdb_engine_merge_rows_alias`,
+  `svdb_engine_cross_join`, `svdb_engine_inner_join` (Go callback predicate),
+  `svdb_engine_left_outer_join` (NULL-padded outer join)
+- **Aggregate**: `svdb_engine_count_rows`, `svdb_engine_sum_rows`,
+  `svdb_engine_avg_rows`, `svdb_engine_min_rows`, `svdb_engine_max_rows`,
+  `svdb_engine_group_rows` (Go callback key function)
+- **Sort**: `svdb_engine_sort_rows` (multi-key, ASC/DESC, NULLS FIRST/LAST),
+  `svdb_engine_reverse_rows`
+- **Window**: `svdb_engine_row_numbers`, `svdb_engine_ranks`, `svdb_engine_dense_ranks`
+- **Subquery**: `svdb_engine_exists_rows`, `svdb_engine_in_rows`,
+  `svdb_engine_not_in_rows`
+
+All Go engine files (`select.go`, `join.go`, `aggregate.go`, `sort.go`,
+`window.go`, `subquery.go`) delegate to the C++ implementations via CGO callbacks.
+Existing Go fallback implementations retained for compatibility.
+
+### Phase 6 — C++ Optimizer Bugs Fixed + BytecodeVM Optimizer Wired
+
+Three correctness bugs found and fixed in the C++ dead-code elimination passes:
+
+**`src/core/CG/optimizer.cpp`** — `eliminateBcDeadCode`:
+- **Critical fix**: `BC_RESULT_ROW` was `31` (pointing at BcHalt) instead of `30` (BcResultRow).
+  This caused the optimizer to never mark any result registers as "read", so it was
+  silently eliminating all `BcLoadConst` instructions — dropping every literal value
+  from the output.
+- **Complete opcode table**: Added all 36 BcOpCode constants with correct values
+  (BcNeg=9, BcEq=11..BcGe=16, BcAnd/Or/Not=17..19, BcIsNull/NotNull=20..21,
+  BcJump*=22..24, BcOpenCursor/Rewind/Next=25..27, BcColumn/Rowid=28..29,
+  BcHalt=31, BcAggInit/Step/Final=32..34, BcCall=35). Previous code was using
+  wrong constants (`BC_CALL=42` instead of `35`, etc.), causing misidentified opcodes.
+- **BcCall args fix**: `BcCall` reads registers `C-B..C-1` (not ins.a/ins.b which are
+  a const-pool index and arg count respectively). Args loaded by `BcLoadReg` before
+  a `BcCall` were being incorrectly eliminated, breaking CAST/function expressions.
+- **Conservative default**: Added `default` handler that marks all positive operand
+  registers of unknown opcodes as "read" (safety net for any future opcodes).
+- **BcAggStep**: Added explicit case marking the value register (B) as "read".
+- Same conservative fix applied to `eliminateDeadCode` (legacy CG path).
+
+**`src/core/CG/compiler.cpp`** — `cgEliminateDeadCode`:
+- **p4_regs fix**: Added `default` handler that iterates `ins.p4_regs` (p4_type==3)
+  for unknown opcodes (e.g. `OpInsert` with positional register list) and marks each
+  register as "read", preventing elimination of constant loads that feed INSERT ops.
+
+**`internal/CG/cg_cgo.go`** — `programToJSON`:
+- **map[string]int fix**: Named-column INSERT instructions carrying `map[string]int` P4
+  now serialize as `p4_type=3/p4_regs` instead of being silently dropped, so the C++
+  optimizer correctly sees which registers are used by the INSERT.
+
+**`pkg/sqlvibe/vm_exec.go`** — `execBytecode`:
+- `CG.OptimizeBytecodeInstrs(prog.Instrs)` wired into the BytecodeVM path after
+  compilation — zero-copy raw instruction-buffer path (no JSON round-trip).
+  All SQL1999 tests continue to pass.
+
+**Note**: `CGOptimizeProgram` (legacy VM.Program path via JSON) remains unwired.
+The `CG_OP_*` constants in `compiler.cpp` use a different opcode numbering from
+Go's `VM.OpCode` values, which would cause incorrect optimisation of legacy programs.
+This mismatch is tracked in `docs/plan-v0.11.1.md` Phase 6.
+
+### Phase 6 Update — CG_OP_* Constants Reconciled + CGOptimizeProgram Wired
+
+**`src/core/CG/compiler.cpp`** — `CG_OP_*` constants:
+- Fixed all `CG_OP_*` constants to match actual `VM.OpCode` iota values from
+  `internal/VM/opcodes.go`. Previous values were incorrect (e.g. `CG_OP_RESULT_ROW=30`
+  should be `24`, `CG_OP_LOAD_CONST=1` should be `30`, `CG_OP_NULL=13` should be `0`,
+  arithmetic ops off by ~56 positions).
+
+**`internal/CG/compiler.go`** — `finalize()`:
+- `CGOptimizeProgram` now wired into `compiler.finalize()` after the Go optimizer.
+  Programs compiled via the main compiler path now receive both Go + C++ optimization
+  passes, enabling C++ dead-code elimination on the legacy VM.Program path.
+
+### Phase 8.1 — Go Engine Fallbacks Removed
+
+All unused `go*`-prefixed fallback functions removed from `internal/VM/engine/`:
+- `select.go`: removed `goFilterRows`, `goApplyDistinct`, `goApplyLimitOffset`, `goColNames`
+- `join.go`: removed `goMergeRows`, `goMergeRowsWithAlias`, `goCrossJoin`, `goInnerJoin`, `goLeftOuterJoin`
+- `aggregate.go`: removed `goGroupRows`, `goCountRows`, `goSumRows`, `goAvgRows`, `goMinRows`, `goMaxRows`, `toFloat`; simplified `GroupRows` to pure Go
+- `sort.go`: removed `goSortRowsByKeys`, `goReverseRows`; removed unused `sort` import
+- `window.go`: removed `goRowNumbers`; inlined `goDenseRanks` into `DenseRanks`
+- `subquery.go`: removed `goExistsRows`, `goInRows`, `goNotInRows`
+
+### Performance (v0.11.1, AMD EPYC 7763)
+
+| Workload | SQLite | sqlvibe | Result |
+|----------|-------:|--------:|--------|
+| SELECT all 1K | 297 µs | 191 µs | **1.6× faster** |
+| SUM 1K | 68 µs | 28 µs | **2.5× faster** |
+| GROUP BY 1K | 535 µs | 170 µs | **3.1× faster** |
+| GROUP BY 100K | 57.8 ms | 11.2 ms | **5.2× faster** |
+| INSERT 1K | 5.77 ms | 2.83 ms | **2.0× faster** |
+| COUNT(*) 100K | 25.6 µs | 9.3 µs | **2.8× faster** |
+
+---
+
+## **v0.11.0** (2026-03-02)
+
+### C++ Migration — Phase 1–4
+
+Continued the `internal/` → `src/core/` C++ refactoring from
+[docs/plan-v0.11.0.md](plan-v0.11.0.md).
+
+#### Phase 1.2 — DS Overflow Chain (`src/core/DS/overflow.cpp`)
+- `svdb_overflow_write_chain` / `read_chain` / `free_chain` / `chain_length`
+- Big-endian 4-byte next-page header; corruption guard at 10 000 pages.
+
+#### Phase 2.1 — DS Page Cache (`src/core/DS/cache.cpp`)
+- Thread-safe O(1) LRU using `std::list` + `std::unordered_map`.
+- `svdb_cache_{create,destroy,get,set,remove,clear,size,stats,set_capacity}`.
+- Negative-capacity KiB convention matches Go `Cache.NewCache`.
+
+#### Phase 2.2 — DS Columnar Store (`src/core/DS/columnar.cpp`)
+- Column-oriented store with owned string/blob backing.
+- `SVDB_TYPE_{NULL,INT,REAL,TEXT,BLOB}` constants defined in `columnar.h`.
+
+#### Phase 2.3 — DS Row Store (`src/core/DS/row_store.cpp`)
+- Row-oriented store with tombstone deletion; insert returns row index.
+- `svdb_row_store_{create,destroy,insert,get,update,delete,row_count,live_count}`.
+
+#### Phase 3.1 — VM Bytecode VM (`src/core/VM/bytecode_vm.cpp`)
+- 256-register C++ bytecode VM with `step()` dispatch.
+- Handles HALT, LOAD_CONST, COPY/MOVE, arithmetic, NEG, IS_NULL/NOT_NULL.
+- `svdb_bytecode_vm_{create,destroy,set_register,get_register,step,reset}`.
+
+#### Phase 4 — QP Parser Stubs (`src/core/QP/parser*.{h,cpp}`)
+- Skeleton files for `parser.{h,cpp}`, `parser_select`, `parser_expr`,
+  `parser_dml`, `parser_ddl`; sub-parsers wired to dispatcher; full
+  implementation continues incrementally.
+
+### Performance (v0.11.0)
+
+Benchmarks on Intel Xeon Platinum 8370C @ 2.80 GHz, in-memory, `-benchtime=3s`:
+
+| Workload | SQLite | sqlvibe | Δ |
+|----------|-------:|--------:|---|
+| SELECT all 100 K | 52.6 ms | 16.9 ms | **3.1× faster** |
+| SUM aggregate 10 K | 564 µs | 201 µs | **2.8× faster** |
+| GROUP BY 100 K | 55.0 ms | 11.1 ms | **5.0× faster** |
+| COUNT(*) 100 K | 30.3 µs | 6.1 µs | **4.9× faster** |
+| INSERT 1 K | 5.55 ms | 2.65 ms | **2.1× faster** |
+| INNER JOIN 100 K | 76.8 ms | 143.8 ms | 1.9× slower |
+| WHERE filter 100 K | 29.5 ms | 99.5 ms | 3.4× slower |
+
+---
 
 **Build & Test**: Use `./build.sh -t` to run all tests with proper build tags.
 
@@ -262,7 +490,7 @@ New pure-helper subpackage extracted from `internal/CG/compiler.go`:
 ### Bug Fixes
 
 #### Resolved TODOs
-- `internal/TS/SQL1999/E171/01_test.go`: now checks SQLSTATE code on duplicate key
+- `tests/SQL1999/E171/01_test.go`: now checks SQLSTATE code on duplicate key
 - `internal/IS/registry_test.go`: removed TODO comment on BTree initialization
 
 ---
@@ -633,7 +861,7 @@ All tests run via `./build.sh -t` with build tags `SVDB_EXT_JSON,SVDB_EXT_MATH,S
 - `execVTabQuery` materializes virtual table rows via cursor
 - `execVTabQuerySelect` routes SELECT queries through virtual tables (with type inference)
 
-#### Track 5: Tests (`internal/TS/Vtab/vtab_test.go`)
+#### Track 5: Tests (`tests/Vtab/vtab_test.go`)
 - 7 tests: registry, RowStoreCursor scan, series basic range, step, CREATE VIRTUAL TABLE, empty range, IF NOT EXISTS
 
 ## **v0.10.0** (2026-02-27)
@@ -684,9 +912,9 @@ All tests run via `./build.sh -t` with build tags `SVDB_EXT_JSON,SVDB_EXT_MATH,S
 - New `internal/VM/bytecode_prog_test.go`: builder emit, label fixup, const pool
 - New `internal/VM/bytecode_vm_test.go`: load const, arithmetic, jump, table scan
 - New `internal/CG/bytecode_compiler_test.go`: SELECT literal, multi-column, FROM table, WHERE filter
-- New `internal/TS/SQL1999/F888/01_test.go`: end-to-end bytecode tests
-- New `internal/TS/Regression/regression_v0.10.0_test.go`: NULL propagation, overflow, LIKE, CAST, agg all-NULL
-- New `internal/TS/Benchmark/benchmark_v0.10.0_test.go`: BC_SelectAll1K, BC_ArithInt, BC_WhereFilter, BC_SumAggregate, BC_Allocs
+- New `tests/SQL1999/F888/01_test.go`: end-to-end bytecode tests
+- New `tests/Regression/regression_v0.10.0_test.go`: NULL propagation, overflow, LIKE, CAST, agg all-NULL
+- New `tests/Benchmark/benchmark_v0.10.0_test.go`: BC_SelectAll1K, BC_ArithInt, BC_WhereFilter, BC_SumAggregate, BC_Allocs
 
 ## **v0.9.17** (2026-02-26)
 
@@ -701,8 +929,8 @@ All tests run via `./build.sh -t` with build tags `SVDB_EXT_JSON,SVDB_EXT_MATH,S
 - Added `->` and `->>` JSON extraction operators (map to `json_extract`)
 - New optional extension interfaces: `TableFunctionProvider`, `AggregateProvider`
 - New registry helpers: `GetTableFunction()`, `AllAggregates()`, `IsExtensionAggregate()`
-- New test suite: `internal/TS/SQL1999/F886` (12 tests)
-- New regression tests: `internal/TS/Regression/regression_v0.9.17_test.go` (5 tests)
+- New test suite: `tests/SQL1999/F886` (12 tests)
+- New regression tests: `tests/Regression/regression_v0.9.17_test.go` (5 tests)
 
 ## **v0.9.16** (2026-02-25)
 
@@ -736,7 +964,7 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
   - `OpRemainder` → `execDispatchRemainder`: dst = P1 % P2.
 
 #### Tests & Benchmarks
-- New `internal/TS/Benchmark/benchmark_v0.9.16_test.go`: 7 benchmarks covering bloom-filter join, vectorized WHERE, index-only scan, allocation overhead (with `-benchmem`), IS NULL dispatch, bitwise dispatch, and range filter.
+- New `tests/Benchmark/benchmark_v0.9.16_test.go`: 7 benchmarks covering bloom-filter join, vectorized WHERE, index-only scan, allocation overhead (with `-benchmem`), IS NULL dispatch, bitwise dispatch, and range filter.
 
 #### Performance Results (Intel Xeon Platinum 8370C @ 2.80GHz)
 | Operation | v0.9.15 | v0.9.16 | Change |
@@ -804,16 +1032,16 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 ### Features: SQLValidator — Differential SQL Testing Framework
 
 #### Track A: LCG Random SQL Generator
-- New `internal/TS/SQLValidator/lcg.go`: `LCG` struct with Knuth MMIX parameters (multiplier `6364136223846793005`, increment `1442695040888963407`). Methods: `Next()`, `Intn(n)`, `Float64()`, `Choice(items)`.
-- New `internal/TS/SQLValidator/generator.go`: `Generator` struct producing 8 deterministic SQL statement types weighted by frequency: simple SELECT, ORDER BY+LIMIT, aggregate, GROUP BY, INNER JOIN, LEFT JOIN, IS NULL predicate, BETWEEN predicate.
+- New `tests/SQLValidator/lcg.go`: `LCG` struct with Knuth MMIX parameters (multiplier `6364136223846793005`, increment `1442695040888963407`). Methods: `Next()`, `Intn(n)`, `Float64()`, `Choice(items)`.
+- New `tests/SQLValidator/generator.go`: `Generator` struct producing 8 deterministic SQL statement types weighted by frequency: simple SELECT, ORDER BY+LIMIT, aggregate, GROUP BY, INNER JOIN, LEFT JOIN, IS NULL predicate, BETWEEN predicate.
 - All generated queries with LIMIT include the full primary key in ORDER BY to guarantee deterministic results across both SQLite and sqlvibe.
 
 #### Track B: TPC-C Starter Schema
-- New `internal/TS/SQLValidator/schema.go`: Full TPC-C schema definition for 7 tables (`warehouse`, `district`, `customer`, `orders`, `order_line`, `item`, `stock`) with column types, NOT NULL constraints, and primary key metadata.
+- New `tests/SQLValidator/schema.go`: Full TPC-C schema definition for 7 tables (`warehouse`, `district`, `customer`, `orders`, `order_line`, `item`, `stock`) with column types, NOT NULL constraints, and primary key metadata.
 - Deterministic seed dataset: 4 warehouses, 8 districts, 10 customers, 10 orders, 18 order lines, 10 items, 20 stock rows — inserted identically into both SQLite and sqlvibe backends.
 
 #### Track C: Result Comparison
-- New `internal/TS/SQLValidator/compare.go`: `Compare(query, sqliteResult, svibeResult)` function with:
+- New `tests/SQLValidator/compare.go`: `Compare(query, sqliteResult, svibeResult)` function with:
   - Error type matching (both error → match; one error one success → mismatch).
   - Order-independent row comparison via `normaliseRows()` sort.
   - Float comparison with 1e-9 tolerance.
@@ -821,13 +1049,13 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
   - Type normalisation bridging `database/sql` and sqlvibe return types.
 
 #### Track D: Validator Driver
-- New `internal/TS/SQLValidator/validator.go`: `Validator` struct managing both backends. `NewValidator(seed)` creates both in-memory databases and seeds them. `Run(n)` generates and executes `n` statements, collecting all `Mismatch` records.
+- New `tests/SQLValidator/validator.go`: `Validator` struct managing both backends. `NewValidator(seed)` creates both in-memory databases and seeds them. `Run(n)` generates and executes `n` statements, collecting all `Mismatch` records.
 
 #### Track E: Tests
-- New `internal/TS/SQLValidator/validator_test.go`:
+- New `tests/SQLValidator/validator_test.go`:
   - `TestSQLValidator_TPC_C`: 1000 random statements with seed 42 — all pass.
   - `TestSQLValidator_Regression`: Replay specific seeds from HUNTINGS.md (empty initially).
-- New `internal/TS/SQLValidator/HUNTINGS.md`: Bug log for correctness mismatches (format: Severity / Type / Table / Trigger SQL / SQLite Result / SQLVibe Result / Root Cause / Fix / Seed / Date).
+- New `tests/SQLValidator/HUNTINGS.md`: Bug log for correctness mismatches (format: Severity / Type / Table / Trigger SQL / SQLite Result / SQLVibe Result / Root Cause / Fix / Seed / Date).
 
 #### Track F: Documentation
 - New `docs/plan-v0.9.15.md`: Full SQLValidator design plan.
@@ -861,8 +1089,8 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - New `pkg/sqlvibe/export.go`: `ExportCSV(w, sql, opts CSVExportOptions) error` — executes SQL, streams rows as CSV with configurable delimiter and null representation. `ExportJSON(w, sql) error` — outputs a JSON array of objects; NULL values are JSON `null` literals.
 
 #### Track D: Tests
-- `internal/TS/SQL1999/F885/01_test.go`: 12 tests covering DROP COLUMN, DROP COLUMN PK rejection, RENAME COLUMN, ADD CONSTRAINT CHECK, FETCH FIRST, FETCH NEXT, INTERSECT ALL, EXCEPT ALL, CAST(NULL), standalone VALUES, GROUP BY alias.
-- `internal/TS/Regression/regression_v0.9.14_test.go`: 5 tests covering DROP COLUMN + INSERT round-trip, RENAME COLUMN schema reflection, RENAME COLUMN index update, CSV round-trip, JSON null export.
+- `tests/SQL1999/F885/01_test.go`: 12 tests covering DROP COLUMN, DROP COLUMN PK rejection, RENAME COLUMN, ADD CONSTRAINT CHECK, FETCH FIRST, FETCH NEXT, INTERSECT ALL, EXCEPT ALL, CAST(NULL), standalone VALUES, GROUP BY alias.
+- `tests/Regression/regression_v0.9.14_test.go`: 5 tests covering DROP COLUMN + INSERT round-trip, RENAME COLUMN schema reflection, RENAME COLUMN index update, CSV round-trip, JSON null export.
 
 #### Track E: PlainFuzzer Updates
 - `GenerateAlterTable` extended with DROP COLUMN, RENAME COLUMN, ADD CONSTRAINT patterns.
@@ -899,8 +1127,8 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - `driver/conn.go`: `ExecContext` and `QueryContext` now call `db.ExecContextWithParams` / `db.ExecContextNamed` / `db.QueryContextWithParams` / `db.QueryContextNamed` directly. The goroutine wrapper is removed from the driver layer; context handling is now done natively inside the `*Database` methods.
 
 #### Track E: Tests
-- `internal/TS/SQL1999/F884/01_test.go`: 6 tests covering pre-cancelled context, deadline completion, mid-scan cancellation, `PRAGMA query_timeout`, `PRAGMA max_memory` rejection, and concurrent independent cancellation.
-- `internal/TS/Regression/regression_v0.9.13_test.go`: 5 tests covering DDL no partial schema, `SVDB_QUERY_TIMEOUT` error code, `max_memory=0` unlimited, row counter reset between queries, and `query_timeout` pragma round-trip.
+- `tests/SQL1999/F884/01_test.go`: 6 tests covering pre-cancelled context, deadline completion, mid-scan cancellation, `PRAGMA query_timeout`, `PRAGMA max_memory` rejection, and concurrent independent cancellation.
+- `tests/Regression/regression_v0.9.13_test.go`: 5 tests covering DDL no partial schema, `SVDB_QUERY_TIMEOUT` error code, `max_memory=0` unlimited, row counter reset between queries, and `query_timeout` pragma round-trip.
 
 ---
 
@@ -922,8 +1150,8 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - `ExecContext`, `QueryContext`, `BeginTx`, `StmtExecContext`, `StmtQueryContext` all run the underlying sqlvibe call in a goroutine and select on `ctx.Done()`, returning `ctx.Err()` on cancellation.
 
 #### Track C: Tests
-- `internal/TS/SQL1999/F883/01_test.go`: 7 tests covering `sql.Open`, DDL round-trip, `QueryRow` with `?` params, `Query`+scan, `Begin`/`Commit`, `Begin`/`Rollback`, `Prepare`/`stmt.QueryRow`/`stmt.Close`.
-- `internal/TS/Regression/regression_v0.9.12_test.go`: 6 tests covering int64/float64/string/[]byte/nil type round-trips, NULL via `sql.NullString`, named params via `sql.Named`, concurrent reads with `SetMaxOpenConns(1)`, closed-stmt error, context cancellation.
+- `tests/SQL1999/F883/01_test.go`: 7 tests covering `sql.Open`, DDL round-trip, `QueryRow` with `?` params, `Query`+scan, `Begin`/`Commit`, `Begin`/`Rollback`, `Prepare`/`stmt.QueryRow`/`stmt.Close`.
+- `tests/Regression/regression_v0.9.12_test.go`: 6 tests covering int64/float64/string/[]byte/nil type round-trips, NULL via `sql.NullString`, named params via `sql.Named`, concurrent reads with `SetMaxOpenConns(1)`, closed-stmt error, context cancellation.
 
 ---
 
@@ -950,8 +1178,8 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - `MustExec` now passes variadic params through to `ExecWithParams`.
 
 #### Track D: Tests
-- `internal/TS/Regression/regression_v0.9.11_test.go`: 9 tests covering positional binding, SQL injection safety, named params (`:name`/`@name`), missing param error, `nil`→NULL, `[]byte` BLOB, `Prepare`+`Query` round trip, extra params silently ignored.
-- `internal/TS/SQL1999/F882/01_test.go`: 6 tests covering `SELECT ? + 1`, `INSERT VALUES (?,?)`, `SELECT WHERE id = ?`, `SELECT WHERE name = :name`, `Prepare` + `stmt.Query`, multi-row parameterized insert.
+- `tests/Regression/regression_v0.9.11_test.go`: 9 tests covering positional binding, SQL injection safety, named params (`:name`/`@name`), missing param error, `nil`→NULL, `[]byte` BLOB, `Prepare`+`Query` round trip, extra params silently ignored.
+- `tests/SQL1999/F882/01_test.go`: 6 tests covering `SELECT ? + 1`, `INSERT VALUES (?,?)`, `SELECT WHERE id = ?`, `SELECT WHERE name = :name`, `Prepare` + `stmt.Query`, multi-row parameterized insert.
 
 
 
@@ -973,7 +1201,7 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - `PRAGMA cache_grind` — returns `(pages_cached, pages_free, hits, misses)` cache statistics.
 
 #### Track C: FuzzDBFile
-- New fuzzer `FuzzDBFile` in `internal/TS/PlainFuzzer/fuzz_file_test.go`.
+- New fuzzer `FuzzDBFile` in `tests/PlainFuzzer/fuzz_file_test.go`.
 - `FileMutator` with 6 mutation strategies: header, truncate, byte-flip, structure, footer, padding injection.
 - `generateSeedDatabases()` creates 5 seed databases at runtime (no binary blobs in repository).
 
@@ -1035,8 +1263,8 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - **Reconstructed CREATE TABLE SQL** (`pkg/sqlvibe/database.go`): New `reconstructCreateTableSQL` helper rebuilds a full `CREATE TABLE` statement from in-memory schema metadata including column types, `NOT NULL`, `PRIMARY KEY`, and `FOREIGN KEY` clauses.
 
 ### Testing
-- **F879 test suite** (`internal/TS/SQL1999/F879/01_test.go`): 8 test functions covering all v0.9.8 features: `PRAGMA index_info`, `PRAGMA foreign_key_list` (with and without FKs), `PRAGMA function_list`, `information_schema.views`, `information_schema.table_constraints` (PK+UNIQUE+FK), `information_schema.referential_constraints`, `sqlite_master` SQL reconstruction, and `SUBSTR` negative length.
-- **Regression suite v0.9.8** (`internal/TS/Regression/regression_v0.9.8_test.go`): 6 regression tests guarding against recurrence of all bugs fixed in this release.
+- **F879 test suite** (`tests/SQL1999/F879/01_test.go`): 8 test functions covering all v0.9.8 features: `PRAGMA index_info`, `PRAGMA foreign_key_list` (with and without FKs), `PRAGMA function_list`, `information_schema.views`, `information_schema.table_constraints` (PK+UNIQUE+FK), `information_schema.referential_constraints`, `sqlite_master` SQL reconstruction, and `SUBSTR` negative length.
+- **Regression suite v0.9.8** (`tests/Regression/regression_v0.9.8_test.go`): 6 regression tests guarding against recurrence of all bugs fixed in this release.
 
 
 
@@ -1051,7 +1279,7 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - **Composite UNIQUE index key inconsistency** (`pkg/sqlvibe/database.go`): `UNIQUE(a, b)` table-level constraints are now correctly enforced for `INSERT` and `INSERT OR REPLACE`. Root cause: `buildIndexData`/`indexAdd`/`indexRemove` all used only the first column as the hash key for composite indexes, while `checkUniqueIndexes` built a composite key string.
 
 ### Testing
-- **E-series edge-case regression suite** (`internal/TS/Regression/regression_v0.9.7_test.go`): 60+ tests across 6 categories — INSERT edge cases (E1), RETURNING expressions (E2), FK cascade (E3), COLLATE (E4), MATCH/GLOB (E5), transaction savepoints (E6). All validated against expected SQLite behaviour.
+- **E-series edge-case regression suite** (`tests/Regression/regression_v0.9.7_test.go`): 60+ tests across 6 categories — INSERT edge cases (E1), RETURNING expressions (E2), FK cascade (E3), COLLATE (E4), MATCH/GLOB (E5), transaction savepoints (E6). All validated against expected SQLite behaviour.
 
 
 
@@ -1064,7 +1292,7 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - **Auto Unique Indexes**: `CREATE TABLE` now creates implicit unique indexes for `UNIQUE` columns and `UNIQUE(...)` table constraints, stored in `db.indexes` under `sqlite_autoindex_*` names.
 
 ### Testing
-- **F878 test suite** (`internal/TS/SQL1999/F878/01_test.go`): 6 test functions covering basic savepoints, RELEASE SAVEPOINT, nested savepoints, NOT NULL enforcement, UNIQUE constraint enforcement, and FK ON DELETE CASCADE — all validated against SQLite.
+- **F878 test suite** (`tests/SQL1999/F878/01_test.go`): 6 test functions covering basic savepoints, RELEASE SAVEPOINT, nested savepoints, NOT NULL enforcement, UNIQUE constraint enforcement, and FK ON DELETE CASCADE — all validated against SQLite.
 
 ### Performance (v0.9.6, AMD EPYC 7763, -benchtime=2s)
 - SELECT all (3 cols, 1K rows): **60 µs** sqlvibe vs 568 µs SQLite — **9.4× faster**
@@ -1096,7 +1324,7 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - **LIKE ESCAPE**: `expr LIKE pattern ESCAPE '\'` — user-defined escape character.
 
 ### Testing
-- **F877 test suite** (`internal/TS/SQL1999/F877/01_test.go`): 5 test functions covering REINDEX (all / by table / by index) validated against SQLite, and SELECT INTO as a sqlvibe-only test (SQLite does not support the syntax).
+- **F877 test suite** (`tests/SQL1999/F877/01_test.go`): 5 test functions covering REINDEX (all / by table / by index) validated against SQLite, and SELECT INTO as a sqlvibe-only test (SQLite does not support the syntax).
 
 ### Performance (v0.9.5, AMD EPYC 7763, -benchtime=3s)
 - SELECT all (3 cols, 1K rows): **61 µs** sqlvibe vs 564 µs SQLite — **9.3× faster**
@@ -1120,7 +1348,7 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - **RETURNING keyword** recognized as a top-level SQL keyword in the tokenizer, enabling correct parsing without identifier collision.
 
 ### Testing
-- **F876 test suite** (`internal/TS/SQL1999/F876/01_test.go`): 9 test functions covering partial index, expression index, INSERT/UPDATE/DELETE RETURNING, UPDATE...FROM, DELETE...USING, MATCH operator, COLLATE NOCASE, GLOB operator, and ALTER TABLE — validated against SQLite where applicable.
+- **F876 test suite** (`tests/SQL1999/F876/01_test.go`): 9 test functions covering partial index, expression index, INSERT/UPDATE/DELETE RETURNING, UPDATE...FROM, DELETE...USING, MATCH operator, COLLATE NOCASE, GLOB operator, and ALTER TABLE — validated against SQLite where applicable.
 - **E061/08 test updated**: MATCH test now validates sqlvibe's own substring-search implementation (sqlvibe intentionally diverges from SQLite's FTS-only MATCH restriction).
 
 ### Performance (v0.9.4, AMD EPYC 7763, -benchtime=3s)
@@ -1143,8 +1371,8 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - **Extended dispatch table** (`internal/VM/dispatch.go`): Dispatch table expanded from 10 to 22 opcodes. Comparison operators (`OpEq`, `OpNe`, `OpLt`, `OpLe`, `OpGt`, `OpGe`) and string operations (`OpTrim`, `OpLTrim`, `OpRTrim`, `OpReplace`, `OpInstr`) now have fast-path handlers, reducing branch-prediction misses in tight query loops.
 
 ### Testing
-- **F875 test suite** (`internal/TS/SQL1999/F875/01_test.go`): 4 test functions covering `INSERT OR REPLACE`, `INSERT OR IGNORE`, `UPSERT (ON CONFLICT DO)`, and 13 string function variants — all validated against SQLite.
-- **v0.9.3 benchmarks** (`internal/TS/Benchmark/benchmark_v0.9.3_test.go`): Benchmarks for dispatch comparison ops, dispatch string ops, SIMD sum/add/mul, `INSERT OR REPLACE`, and `INSERT OR IGNORE`.
+- **F875 test suite** (`tests/SQL1999/F875/01_test.go`): 4 test functions covering `INSERT OR REPLACE`, `INSERT OR IGNORE`, `UPSERT (ON CONFLICT DO)`, and 13 string function variants — all validated against SQLite.
+- **v0.9.3 benchmarks** (`tests/Benchmark/benchmark_v0.9.3_test.go`): Benchmarks for dispatch comparison ops, dispatch string ops, SIMD sum/add/mul, `INSERT OR REPLACE`, and `INSERT OR IGNORE`.
 
 ### Performance (v0.9.3, AMD EPYC 7763, -benchtime=3s)
 - SELECT all (3 cols, 1K rows): **60 µs** sqlvibe vs 572 µs SQLite — **9.5× faster**
@@ -1171,8 +1399,8 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - **Math functions in QE path** (`internal/VM/query_engine.go`): `ROUND`, `ABS`, `CEIL`, `CEILING`, `FLOOR`, `SQRT`, `POWER`, `POW`, `EXP`, `LOG`, `LN`, `SIN`, `COS`, `TAN`, `ASIN`, `ACOS`, `ATAN`, `ATAN2` added to `evalFuncCall` so they work in constant-SELECT context (no FROM clause).
 
 ### Testing
-- **Regression suite** (`internal/TS/Regression/regression_test.go`): Five regression tests guard against the three bug fixes above.
-- **F874 test suite** (`internal/TS/SQL1999/F874/01_test.go`): 15 new test cases covering date/time functions, unknown-function errors, and math functions in constant-SELECT context.
+- **Regression suite** (`tests/Regression/regression_test.go`): Five regression tests guard against the three bug fixes above.
+- **F874 test suite** (`tests/SQL1999/F874/01_test.go`): 15 new test cases covering date/time functions, unknown-function errors, and math functions in constant-SELECT context.
 
 ### Performance (v0.9.2, AMD EPYC 7763, -benchtime=3s)
 - SELECT all (3 cols, 1K rows): **60 µs** sqlvibe vs 576 µs SQLite — **9.6× faster**
@@ -1208,8 +1436,8 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - Result cache hit: 1.4 µs sqlvibe vs 571 µs SQLite — **397x faster**
 
 ### Tests
-- `internal/TS/SQL1999/F873/01_test.go`: 15 unit tests for all v0.9.1 optimization features (CoversColumns, FindCoveringIndex, SelectBestIndex, CanSkipScan, StatementPool, SlabAllocator, ExprBytecode, RequiredColumns, IsFastPath, HasDispatchHandler).
-- `internal/TS/Benchmark/benchmark_v0.9.1_test.go`: New benchmarks appended (BenchmarkStatementPool, BenchmarkSlabAllocator, BenchmarkExprBytecode, BenchmarkDirectCompilerFastPath).
+- `tests/SQL1999/F873/01_test.go`: 15 unit tests for all v0.9.1 optimization features (CoversColumns, FindCoveringIndex, SelectBestIndex, CanSkipScan, StatementPool, SlabAllocator, ExprBytecode, RequiredColumns, IsFastPath, HasDispatchHandler).
+- `tests/Benchmark/benchmark_v0.9.1_test.go`: New benchmarks appended (BenchmarkStatementPool, BenchmarkSlabAllocator, BenchmarkExprBytecode, BenchmarkDirectCompilerFastPath).
 
 ## **v0.9.0** (2026-02-22)
 
@@ -1237,10 +1465,10 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 ### Tests
 - `ext/extension_test.go`: Registry unit tests (Register, Get, List, CallFunc).
 - `ext/json/json_test.go`: JSON function unit tests (build tag `SVDB_EXT_JSON`).
-- `internal/TS/SQL1999/F900/01_test.go`: SQL-level JSON function integration tests (build tag `SVDB_EXT_JSON`).
+- `tests/SQL1999/F900/01_test.go`: SQL-level JSON function integration tests (build tag `SVDB_EXT_JSON`).
 - `pkg/sqlvibe/sqlvibe_extensions_test.go`: Virtual table query test.
-- `internal/TS/Benchmark/benchmark_v0.9.0_test.go`: BETWEEN pushdown, fast hash JOIN, and extension benchmarks.
-- `internal/TS/Benchmark/benchmark_v0.9.1_test.go`: Early Termination, AND index lookup, and pre-sized slice benchmarks with SQLite baselines. Cache bypass via per-iteration SQL comment for fair comparison.
+- `tests/Benchmark/benchmark_v0.9.0_test.go`: BETWEEN pushdown, fast hash JOIN, and extension benchmarks.
+- `tests/Benchmark/benchmark_v0.9.1_test.go`: Early Termination, AND index lookup, and pre-sized slice benchmarks with SQLite baselines. Cache bypass via per-iteration SQL comment for fair comparison.
 
 ### Breaking Changes
 - None
@@ -1356,7 +1584,7 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 - **Recursive CTE**: `WITH RECURSIVE name(col) AS (anchor UNION ALL recursive)` now executes correctly via iterative materialization with a 1000-iteration safety limit.
 - **CTE Column List**: `WITH cte(col1, col2) AS (...)` column list syntax is now parsed and applied to CTE result columns.
 - **ANY/ALL Subqueries**: `expr > ALL (SELECT ...)`, `expr = ANY (SELECT ...)`, `expr < SOME (SELECT ...)` quantified comparisons fully implemented.
-- **SQL:1999 F771 Test Suite**: New test suite in `internal/TS/SQL1999/F771/` with 8 test functions covering ROW_NUMBER, RANK/DENSE_RANK, LAG/LEAD, NTILE, GROUP_CONCAT, Recursive CTE, CTE column lists, and window frame parsing — all verified against SQLite.
+- **SQL:1999 F771 Test Suite**: New test suite in `tests/SQL1999/F771/` with 8 test functions covering ROW_NUMBER, RANK/DENSE_RANK, LAG/LEAD, NTILE, GROUP_CONCAT, Recursive CTE, CTE column lists, and window frame parsing — all verified against SQLite.
 
 ### Bug Fixes
 - Fixed window function ORDER BY direction (ASC/DESC was silently ignored; now properly respected in RANK, ROW_NUMBER, LAG/LEAD, etc.)
@@ -1475,7 +1703,7 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 
 ### New Benchmarks
 
-- `internal/TS/Benchmark/benchmark_storage_v080_test.go` — v0.8.0 storage benchmarks (16 tests):
+- `tests/Benchmark/benchmark_storage_v080_test.go` — v0.8.0 storage benchmarks (16 tests):
   - Insert/scan/filter/sum/count comparisons between `HybridStore` and SQL `Database`
   - `BenchmarkStorage_RoaringBitmap_AndFilter`
   - `BenchmarkStorage_MemoryProfile_*` (4 benchmarks) — `ReportAllocs` memory profiling
@@ -1499,14 +1727,14 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 
 ### New Benchmarks
 
-- `internal/TS/Benchmark/benchmark_v0.7.8_test.go` — v0.7.8 benchmarks (12 tests):
+- `tests/Benchmark/benchmark_v0.7.8_test.go` — v0.7.8 benchmarks (12 tests):
   - `BenchmarkBranchPrediction_WarmLoop`, `BenchmarkBranchPrediction_ShortLoop` — branch prediction paths
   - `BenchmarkPlanCache_Hit` — plan-cache hit throughput
   - `BenchmarkResultCache_Hit`, `BenchmarkResultCache_Miss` — result-cache hit/miss
   - `BenchmarkTopN_Limit10`, `BenchmarkTopN_Limit100` — ORDER BY + LIMIT
   - `BenchmarkStringInterning_Repeated` — DISTINCT with repeated values
   - `BenchmarkWhereFiltering_1K`, `BenchmarkCountStar_1K`, `BenchmarkCountStarWhere_1K`, `BenchmarkJoinTwoTables`, `BenchmarkSubqueryIN`
-- `internal/TS/Benchmark/benchmark_v0.7.8_sqlite_compare_test.go` — v0.7.8 SQLite comparison benchmarks (14 tests):
+- `tests/Benchmark/benchmark_v0.7.8_sqlite_compare_test.go` — v0.7.8 SQLite comparison benchmarks (14 tests):
   - `BenchmarkSQLite78_WhereFiltering` / `BenchmarkSqlvibe78_WhereFiltering` — predicate pushdown comparison
   - `BenchmarkSQLite78_CountStar` / `BenchmarkSqlvibe78_CountStar`
   - `BenchmarkSQLite78_TopN_Limit10` / `BenchmarkSqlvibe78_TopN_Limit10` — ORDER BY LIMIT 10
@@ -1558,7 +1786,7 @@ All functions support ops: `=`, `!=`, `<`, `<=`, `>`, `>=`. The Go compiler can 
 ## **v0.7.5** (2026-02-21)
 
 ### New Features
-- **SQLLogicTest runner** (`internal/TS/SQLLogic/`) — Custom black-box test runner that parses the standard sqllogictest `.test` format used by SQLite, PostgreSQL, TiDB and CockroachDB. Implemented using only the Go standard library (no external dependencies). Supports `statement ok`, `statement error`, and `query TYPE [rowsort|valuesort|nosort]` records. Test files are loaded from `testdata/*.test`. Runner entry point: `TestSQLLogic` in `sql_logic_test.go`.
+- **SQLLogicTest runner** (`tests/SQLLogic/`) — Custom black-box test runner that parses the standard sqllogictest `.test` format used by SQLite, PostgreSQL, TiDB and CockroachDB. Implemented using only the Go standard library (no external dependencies). Supports `statement ok`, `statement error`, and `query TYPE [rowsort|valuesort|nosort]` records. Test files are loaded from `testdata/*.test`. Runner entry point: `TestSQLLogic` in `sql_logic_test.go`.
 - **Test data files** — Three coverage areas added:
   - `basic.test` — DDL (CREATE/DROP), DML (INSERT/UPDATE/DELETE), basic SELECT, NULL handling, DISTINCT, LIKE, BETWEEN, IN, string functions (48 records, 100% pass)
   - `joins.test` — INNER JOIN, LEFT JOIN, self-join, 3-table JOIN, JOIN with WHERE and aggregate (27 records, 100% pass)

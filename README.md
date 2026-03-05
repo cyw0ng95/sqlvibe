@@ -6,6 +6,7 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
+| **v0.10.16** | 2026-03-01 | CGO Phases 12-18: expression eval, bytecode dispatch, type conversion, string/datetime/aggregate batch ops, fast QP tokenizer |
 | **v0.10.15** | 2026-03-01 | CLI: .dump enhancements, .export fix; context/ window/ subpackages; ANY_VALUE, MODE aggregates |
 | **v0.9.17** | 2026-02-26 | JSON Extension Enhancement: Table-valued functions (json_each, json_tree), Aggregates (json_group_array, json_group_object), JSONB format |
 
@@ -103,148 +104,118 @@ SELECT * FROM sqlvibe_extensions;
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
-## Performance (v0.10.15)
+## Performance
 
-Benchmarks on AMD EPYC 7763 (CI environment), in-memory database, `-benchtime=2s`.
+Benchmarks on AMD EPYC 7763 64-Core @ 2.45 GHz, in-memory database, `-benchtime=1s`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
 `db.ClearResultCache()` so actual per-query execution cost is measured.
 SQLite's `database/sql` driver reuses prepared statements across iterations.
 Both sides iterate all result rows end-to-end.
-(`go test ./internal/TS/Benchmark/... -bench=BenchmarkCompare_ -benchtime=2s`).
+(`go test ./tests/Benchmark/... -bench=BenchmarkCompare_ -benchtime=1s`).
 Results may vary on different hardware.
 
-### v0.10.15 CLI + Refactoring Enhancements
+### SQLite vs sqlvibe (v0.11.2 — C++ Native Engine Module + Unified Public API)
 
-sqlvibe v0.10.15 introduces `context/` and `window/` helper subpackages for
-improved testability, adds `ANY_VALUE()` and `MODE()` aggregate functions,
-enhances the `.dump` CLI command (--data-only, --schema-only, --inserts),
-and fixes the `.export` command to correctly write CSV/JSON output.
+Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
 
-### v0.10.7 Query Optimizer + Performance Enhancements
-
-sqlvibe v0.10.7 introduces query optimization features including index-only scans,
-cost-based query planning, and an improved query cache with configurable size.
-
-#### SELECT with Index-Only Scan (covering index)
-
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 245 µs | 156 µs | **sqlvibe 1.6× faster** |
-| 10 K | 2.31 ms | 1.28 ms | **sqlvibe 1.8× faster** |
-| 100 K | 22.4 ms | 14.2 ms | **sqlvibe 1.6× faster** |
-
-#### WHERE filter with Cost-Based Planning
-
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 165 µs | 89 µs | **sqlvibe 1.9× faster** |
-| 10 K | 1.52 ms | 782 µs | **sqlvibe 1.9× faster** |
-| 100 K | 15.8 ms | 7.1 ms | **sqlvibe 2.2× faster** |
-
-#### Batch INSERT (1000 rows)
-
-| Batch Size | SQLite | sqlvibe | Result |
-|-----------:|-------:|--------:|--------|
-| 100 | 1.2 ms | 0.8 ms | **sqlvibe 1.5× faster** |
-| 1000 | 11.5 ms | 6.2 ms | **sqlvibe 1.9× faster** |
-| 10000 | 112 ms | 58 ms | **sqlvibe 1.9× faster** |
-
-#### Query Cache Hit (repeated query)
-
-| Cache Size | SQLite | sqlvibe | Result |
-|-----------:|-------:|--------:|--------|
-| 100 | 138 µs | 0.8 µs | **sqlvibe 172× faster** |
-| 512 | 142 µs | 0.9 µs | **sqlvibe 158× faster** |
-| 1000 | 145 µs | 1.0 µs | **sqlvibe 145× faster** |
-
-> **v0.10.7 analysis**: The query optimizer delivers 1.6–2.2× speedups for indexed queries
-> through index-only scans and cost-based planning. Batch INSERT optimization provides
-> consistent 1.5–1.9× improvements. The query cache maintains sub-microsecond latency
-> for cached queries, delivering 145–172× speedup over SQLite's prepared statement path.
-> The configurable cache size (`PRAGMA query_cache_size = N`) allows tuning for
-> memory-constrained environments.
-
-### v0.10.0 Bytecode Engine: SQLite vs sqlvibe across data scales
-
-sqlvibe v0.10.0 ships a register-based **bytecode execution engine** that is always on.
-The old AST-walking path has been removed; the bytecode VM is the sole execution path,
-with a transparent fallback to the register VM for SQL constructs the bytecode compiler
-does not yet cover (e.g. multi-table JOINs with ORDER BY).
+**v0.11.2 Highlights**: Introduces `src/core/svdb/` — a self-contained C++ engine module
+with a unified C public API (`svdb.h`). The `internal/cgo/` package provides a thin
+type-mapping CGO binding layer (~400 LOC). All orchestration logic moves from Go into C++.
 
 #### SELECT all rows
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 292 µs | 182 µs | **sqlvibe 1.6× faster** |
-| 10 K | 2.87 ms | 1.62 ms | **sqlvibe 1.8× faster** |
-| 100 K | 28.8 ms | 20.4 ms | **sqlvibe 1.4× faster** |
+| 1 K | 293 µs | 263 µs | **1.1× faster** |
+| 10 K | 2.91 ms | 2.26 ms | **1.3× faster** |
+| 100 K | 28.6 ms | 27.4 ms | **1.0× faster** |
 
-#### WHERE filter (integer column, ~50% selectivity)
+#### WHERE filter (integer column)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 188 µs | 104 µs | **sqlvibe 1.8× faster** |
-| 10 K | 1.79 ms | 990 µs | **sqlvibe 1.8× faster** |
-| 100 K | 18.1 ms | 8.71 ms | **sqlvibe 2.1× faster** |
+| 1 K | 197 µs | 793 µs | 4.0× slower |
+| 10 K | 1.81 ms | 8.39 ms | 4.6× slower |
 
 #### SUM aggregate
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 66.7 µs | 20.7 µs | **sqlvibe 3.2× faster** |
-| 10 K | 600 µs | 113 µs | **sqlvibe 5.3× faster** |
-| 100 K | 6.11 ms | 1.41 ms | **sqlvibe 4.3× faster** |
+| 1 K | 78 µs | 28 µs | **2.8× faster** |
+| 10 K | 609 µs | 203 µs | **3.0× faster** |
+| 100 K | 6.08 ms | 2.33 ms | **2.6× faster** |
 
-#### GROUP BY (4 groups, SUM + COUNT)
+#### GROUP BY (4 groups)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 480 µs | 128 µs | **sqlvibe 3.8× faster** |
-| 10 K | 4.93 ms | 1.03 ms | **sqlvibe 4.8× faster** |
-| 100 K | 57.9 ms | 11.9 ms | **sqlvibe 4.9× faster** |
+| 1 K | 490 µs | 148 µs | **3.3× faster** |
+| 10 K | 4.85 ms | 1.01 ms | **4.8× faster** |
+| 100 K | 57.7 ms | 11.7 ms | **4.9× faster** |
 
 #### COUNT(*)
 
 | Rows | SQLite | sqlvibe | Result |
 |-----:|-------:|--------:|--------|
-| 1 K | 5.4 µs | 8.1 µs | SQLite 1.5× faster |
-| 10 K | 7.0 µs | 7.9 µs | roughly equal |
-| 100 K | 25.2 µs | 7.8 µs | **sqlvibe 3.2× faster** |
+| 1 K | 5.5 µs | 7.3 µs | 1.3× slower |
+| 10 K | 7.2 µs | 8.0 µs | 1.1× slower |
+| 100 K | 25.6 µs | 9.3 µs | **2.8× faster** |
 
-> **v0.10.0 analysis**: The bytecode engine delivers consistent 1.4–5.3× speedups over
-> SQLite for scan-heavy and aggregate workloads. GROUP BY and SUM show the largest gains
-> (up to 5×) because the bytecode VM eliminates interface{} boxing on hot aggregate loops.
-> COUNT(*) on small tables is slightly slower than SQLite's prepared-statement fast path
-> but surpasses it at 100 K rows. ORDER BY + LIMIT (Top-N) still falls back to the
-> register VM and is currently slower than SQLite; this will be addressed in v0.11.0.
+#### INSERT (batch rows)
 
-### Key Optimizations
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 5.77 ms | 2.83 ms | **2.0× faster** |
+| 10 K | 56.1 ms | 32.3 ms | **1.7× faster** |
 
-- **Columnar storage**: Fast full table scans via vectorised SIMD-friendly layouts
+#### INNER JOIN
+
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 462 µs | 1.12 ms | 2.4× slower |
+| 10 K | 4.60 ms | 11.5 ms | 2.5× slower |
+| 100 K | 45.8 ms | 133.7 ms | 2.9× slower |
+
+#### ORDER BY + LIMIT (Top N)
+
+| Rows | SQLite | sqlvibe | Result |
+|-----:|-------:|--------:|--------|
+| 1 K | 236 µs | 298 µs | 1.3× slower |
+| 10 K | 2.16 ms | 2.99 ms | 1.4× slower |
+| 100 K | 21.2 ms | 35.7 ms | 1.7× slower |
+
+> **Analysis (v0.11.2 — C++ Native Engine Module + Unified Public API)**: sqlvibe excels at aggregate workloads with **2.6–4.9× speedups** over SQLite for SUM and GROUP BY. The v0.11.2 unified C public API (`svdb.h`) in `src/core/svdb/` enables direct C/C++ integration without Go. Key improvements:
+> - **SUM aggregate**: 2.6–3.0× faster (C++ aggregate engine)
+> - **GROUP BY**: 3.3–4.9× faster (C++ hash aggregation + batch compare)
+> - **SELECT all**: 1.0–1.3× faster (C++ columnar store + SIMD batch ops)
+> - **Architecture**: New `svdb.h` C public API — zero-overhead for C/C++ native callers
+>
+> WHERE filter and JOIN remain areas for future optimization — the bytecode VM evaluation path adds overhead vs SQLite's tightly-optimized scan.
+
+### Key Optimizations (v0.11.2)
+
+- **C++ Native Engine**: New `src/core/svdb/` module with unified C public API (`svdb.h`) — open/exec/query/transactions/schema from pure C/C++
+- **Phase 11 C smoke test**: `build.sh` verifies the C API via `svdb_open`/`svdb_exec`/`svdb_query` without any Go runtime
+- **Thin CGO binding**: `internal/cgo/` package (~400 LOC) — pure type-mapping, no business logic
+- **C++ Bytecode Optimizer**: Dead-code elimination + peephole passes via `svdb_cg_optimize_bc_instrs` applied to every query (zero-copy raw-buffer path)
+- **C++ Query Engine Module**: 14 engine operations (FilterRows, InnerJoin, LeftOuterJoin, GroupRows, SortRows, ExistsRows, etc.) in C++ with Go-callback predicates
+- **C++ DS Layer**: B-Tree, columnar store, row store, overflow — all in C++ with embedded PageManager
+- **C++ VM Layer**: All 46 bytecode opcodes implemented in C++ with batch SIMD execution
+- **C++ QP/CG**: Full SQL parser and bytecode compiler in C++
+- **Boundary CGO**: Zero Go callback overhead — inner C++ modules call directly (~5ns vs ~260ns)
+- **Columnar storage**: Fast full table scans via vectorized SIMD-friendly layouts
 - **Hybrid row/column**: Adaptive switching for best performance per workload
-- **Result cache**: Near-zero latency for repeated identical queries (FNV-1a keyed, 381x vs SQLite)
+- **Result cache**: Near-zero latency for repeated identical queries
 - **Predicate pushdown**: WHERE/BETWEEN conditions evaluated before VM for fast filtered scans
-- **Plan cache**: Skip tokenise/parse/codegen for cached query plans
+- **Plan cache**: Skip tokenize/parse/codegen for cached query plans
 - **Batch INSERT fast path**: Literal multi-row INSERT bypasses VM entirely
-- **Fast Hash JOIN**: Integer/string join keys bypass `fmt.Sprintf` allocation (v0.9.0)
-- **BETWEEN pushdown**: Range predicates pushed to Go layer before VM (v0.9.0)
-- **Early termination for LIMIT**: VM halts after collecting N rows when no ORDER BY (v0.9.0)
-- **AND index lookup**: Compound `WHERE col=val AND cond` uses secondary index (v0.9.0)
-- **LIMIT-aware pre-allocation**: Flat result buffer capped at LIMIT rows to avoid over-allocation (v0.9.0)
-- **Pre-sized result slices**: Column-name slices pre-allocated to reduce GC pressure (v0.9.0)
-- **Covering Index**: `IndexMeta.CoversColumns` enables index-only scans with zero table lookup (v0.9.1)
-- **Column Projection**: `ScanProjected`/`ScanProjectedWhere` materialise only required columns (v0.9.1)
-- **Index Skip Scan**: `SkipScan` enables range scans on non-leading index columns (v0.9.1)
-- **Slab Allocator**: Bump-pointer slab with `sync.Pool` for small objects reduces GC pressure (v0.9.1)
-- **Prepared Statement Pool**: LRU-evicting `StatementPool` caches compiled plans for parameterized queries (v0.9.1)
-- **Direct Threaded VM**: Dispatch table (22 opcodes: arith + comparison + string) reduces branch misprediction (v0.9.1–v0.9.3)
-- **Expression Bytecode**: Compact `ExprBytecode` stack machine for single-call expression evaluation (v0.9.1)
-- **Direct Compiler**: `DirectCompiler` with fast-path detection for simple SELECT patterns (v0.9.1)
-- **bytes.Compare**: `[]byte` comparison uses stdlib `bytes.Compare` (v0.9.2)
-- **SIMD Vectorization**: 4-way unrolled batch ops for int64/float64 (VectorSum/Add/Sub/Mul/Min/Max) (v0.9.3)
-- **sync.Pool allocation reduction**: Pooled schema maps reduce per-query allocations
-- **VM constant folding**: Arithmetic on compile-time constants folded at compile time
-- **Strength reduction**: `x*1` → copy, `x*0` → 0, `x*2` → add (VM optimizer)
+- **Fast Hash JOIN**: Integer/string join keys bypass `fmt.Sprintf` allocation
+- **BETWEEN pushdown**: Range predicates pushed to Go layer before VM
+- **Early termination for LIMIT**: VM halts after collecting N rows when no ORDER BY
+- **AND index lookup**: Compound `WHERE col=val AND cond` uses secondary index
+- **Covering Index**: Index-only scans with zero table lookup
+- **Column Projection**: Materialize only required columns
+- **SIMD Vectorization**: 4-way unrolled batch ops for int64/float64 (AVX2)
 
 ## SQL:1999 Compatibility
 
@@ -255,7 +226,7 @@ does not yet cover (e.g. multi-table JOINs with ORDER BY).
 ```bash
 go build ./...
 go test ./...
-go test ./internal/TS/Benchmark/... -bench . -benchmem
+go test ./tests/Benchmark/... -bench . -benchmem
 ```
 
 ## Build Config Flags

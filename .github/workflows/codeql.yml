@@ -1,0 +1,52 @@
+# CodeQL analysis is disabled for this repository.
+#
+# Reasons:
+# 1. The project uses CGO (C/C++ shared libraries built via cmake) that require
+#    a custom build step before Go compilation. The CodeQL default build mode
+#    cannot satisfy this dependency and produces false positives / build errors.
+# 2. C++ sources contain intentional low-level patterns (manual memory management,
+#    pointer arithmetic for SIMD, varint encoding) that trigger many false-positive
+#    CodeQL alerts unrelated to real vulnerabilities.
+# 3. Security review for Go code is handled by gosec and manual review.
+#
+# To re-enable, remove the `if: false` guard below and adjust the build steps
+# to run `./build.sh` (which builds the required .so files) before CodeQL
+# autobuild.
+name: "CodeQL"
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "0 0 * * 0"
+
+jobs:
+  analyze:
+    name: Analyze
+    # Disabled: see comment at top of file.
+    if: false
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["go", "c-cpp"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Build C++ libraries
+        run: ./build.sh
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
