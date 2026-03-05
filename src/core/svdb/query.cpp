@@ -369,6 +369,24 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
         /* else: fall through — the expression has more content after the string literal */
     }
 
+    /* Hex blob literal: X'HEXHEX' or x'HEXHEX' (SQLite-compatible) */
+    if (e.size() >= 3 && (e[0] == 'x' || e[0] == 'X') && e[1] == '\'') {
+        SvdbVal v; v.type = SVDB_TYPE_BLOB;
+        size_t end = e.rfind('\'');
+        if (end > 1) {
+            std::string hex = e.substr(2, end - 2);
+            auto fh = [](char c2) -> unsigned char {
+                if (c2 >= '0' && c2 <= '9') return (unsigned char)(c2 - '0');
+                if (c2 >= 'a' && c2 <= 'f') return (unsigned char)(c2 - 'a' + 10);
+                if (c2 >= 'A' && c2 <= 'F') return (unsigned char)(c2 - 'A' + 10);
+                return 0;
+            };
+            for (size_t i = 0; i + 1 < hex.size(); i += 2)
+                v.sval += (char)((fh(hex[i]) << 4) | fh(hex[i + 1]));
+        }
+        return v;
+    }
+
     /* Numeric literal — only if the ENTIRE expression is a valid number */
     bool starts_num = isdigit((unsigned char)e[0]) || e[0] == '.' ||
                       ((e[0] == '-' || e[0] == '+') && e.size() > 1 &&
@@ -438,12 +456,16 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 return a;
             }
         }
-        /* LENGTH(expr) — returns Unicode character count (UTF-8 code points) */
+        /* LENGTH(expr) — returns byte count for BLOB, Unicode code-point count for TEXT */
         if (eu.substr(0, 7) == "LENGTH(" && e.back() == ')') {
             SvdbVal inner = eval_expr(e.substr(7, e.size()-8), row, col_order);
             if (inner.type == SVDB_TYPE_NULL) return SvdbVal{};
+            if (inner.type == SVDB_TYPE_BLOB) {
+                /* BLOB: return raw byte count */
+                SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = (int64_t)inner.sval.size(); return v;
+            }
             std::string s = val_to_str(inner);
-            /* Count UTF-8 code points: leading bytes start with 0x00-0x7F or 0xC0-0xFF */
+            /* TEXT: Count UTF-8 code points: leading bytes start with 0x00-0x7F or 0xC0-0xFF */
             int64_t len = 0;
             for (size_t i = 0; i < s.size(); ++i) {
                 unsigned char c = (unsigned char)s[i];
@@ -708,6 +730,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
         /* HEX(expr) */
         if (eu.substr(0, 4) == "HEX(" && e.back() == ')') {
             SvdbVal inner = eval_expr(e.substr(4, e.size()-5), row, col_order);
+            if (inner.type == SVDB_TYPE_NULL) return SvdbVal{};
             static const char *hexchars = "0123456789ABCDEF";
             std::string s2 = val_to_str(inner);
             std::string hex;
@@ -716,6 +739,13 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 hex += hexchars[c & 0xf];
             }
             SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = hex; return v;
+        }
+        /* ZEROBLOB(N) — returns a BLOB of N zero bytes */
+        if (eu.substr(0, 9) == "ZEROBLOB(" && e.back() == ')') {
+            SvdbVal nv = eval_expr(e.substr(9, e.size()-10), row, col_order);
+            int64_t n = (nv.type == SVDB_TYPE_INT) ? nv.ival : 0;
+            if (n < 0) n = 0;
+            SvdbVal v; v.type = SVDB_TYPE_BLOB; v.sval = std::string((size_t)n, '\0'); return v;
         }
         /* TYPEOF(expr) */
         if (eu.substr(0, 7) == "TYPEOF(" && e.back() == ')') {
