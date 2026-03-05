@@ -168,15 +168,33 @@ static std::string read_value(const std::string& sql, size_t& pos) {
             return kw;
         }
     }
-    /* Expression: read until ',' or ')' or end */
+    /* Expression: read until ',' or ')' or end, stopping at top-level SQL keywords */
     size_t start = pos;
     int depth = 0;
     while (pos < sql.size()) {
-        if (sql[pos] == '(') { ++depth; ++pos; }
+        if (sql[pos] == '\'') {
+            /* Skip quoted string */
+            char q = sql[pos++];
+            while (pos < sql.size()) {
+                if (sql[pos] == q) { ++pos; if (pos < sql.size() && sql[pos] == q) ++pos; else break; }
+                else ++pos;
+            }
+        } else if (sql[pos] == '(') { ++depth; ++pos; }
         else if (sql[pos] == ')') {
             if (depth == 0) break;
             --depth; ++pos;
         } else if (sql[pos] == ',' && depth == 0) break;
+        else if (depth == 0 && isalpha((unsigned char)sql[pos])) {
+            /* Peek for SQL clause keywords that end the value expression */
+            size_t tmp = pos;
+            std::string kw = read_keyword(sql, tmp);
+            if (kw == "WHERE" || kw == "ORDER" || kw == "GROUP" || kw == "LIMIT" ||
+                kw == "HAVING" || kw == "RETURNING" || kw == "ON" || kw == "JOIN" ||
+                kw == "UNION" || kw == "INTERSECT" || kw == "EXCEPT") {
+                break; /* end of value expression */
+            }
+            pos = tmp; /* consumed keyword as part of expression (e.g. CASE, WHEN, END, IS, NOT, etc.) */
+        }
         else ++pos;
     }
     std::string v = sql.substr(start, pos - start);
