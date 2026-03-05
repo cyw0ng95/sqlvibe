@@ -1818,6 +1818,9 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
 /* Prepared statement stubs */
 
 svdb_code_t svdb_prepare(svdb_db_t *db, const char *sql, svdb_stmt_t **stmt) {
+    BUG_ON(db == nullptr);
+    BUG_ON(sql == nullptr);
+    BUG_ON(stmt == nullptr);
     if (!db || !sql || !stmt) return SVDB_ERR;
     /* Empty SQL is an error */
     const char *p = sql;
@@ -1835,6 +1838,7 @@ svdb_code_t svdb_prepare(svdb_db_t *db, const char *sql, svdb_stmt_t **stmt) {
 }
 
 svdb_code_t svdb_stmt_bind_int(svdb_stmt_t *stmt, int idx, int64_t val) {
+    BUG_ON(stmt == nullptr);
     if (!stmt) return SVDB_ERR;
     SvdbVal sv; sv.type = SVDB_TYPE_INT; sv.ival = val;
     stmt->bindings[idx] = sv;
@@ -1842,6 +1846,7 @@ svdb_code_t svdb_stmt_bind_int(svdb_stmt_t *stmt, int idx, int64_t val) {
 }
 
 svdb_code_t svdb_stmt_bind_real(svdb_stmt_t *stmt, int idx, double val) {
+    BUG_ON(stmt == nullptr);
     if (!stmt) return SVDB_ERR;
     SvdbVal sv; sv.type = SVDB_TYPE_REAL; sv.rval = val;
     stmt->bindings[idx] = sv;
@@ -1850,6 +1855,7 @@ svdb_code_t svdb_stmt_bind_real(svdb_stmt_t *stmt, int idx, double val) {
 
 svdb_code_t svdb_stmt_bind_text(svdb_stmt_t *stmt, int idx,
                                   const char *val, size_t len) {
+    BUG_ON(stmt == nullptr);
     if (!stmt) return SVDB_ERR;
     SvdbVal sv; sv.type = SVDB_TYPE_TEXT;
     sv.sval = val ? std::string(val, len) : std::string();
@@ -1858,12 +1864,14 @@ svdb_code_t svdb_stmt_bind_text(svdb_stmt_t *stmt, int idx,
 }
 
 svdb_code_t svdb_stmt_bind_null(svdb_stmt_t *stmt, int idx) {
+    BUG_ON(stmt == nullptr);
     if (!stmt) return SVDB_ERR;
     stmt->bindings[idx] = SvdbVal{};
     return SVDB_OK;
 }
 
 svdb_code_t svdb_stmt_exec(svdb_stmt_t *stmt, svdb_result_t *res) {
+    BUG_ON(stmt == nullptr);
     if (!stmt) return SVDB_ERR;
     return svdb_exec(stmt->db, stmt->sql.c_str(), res);
 }
@@ -1887,6 +1895,8 @@ svdb_code_t svdb_stmt_close(svdb_stmt_t *stmt) {
 /* Transaction stubs */
 
 svdb_code_t svdb_begin(svdb_db_t *db, svdb_tx_t **tx) {
+    BUG_ON(db == nullptr);
+    BUG_ON(tx == nullptr);
     if (!db || !tx) return SVDB_ERR;
     if (db->in_transaction) {
         db->last_error = "cannot start a transaction within a transaction";
@@ -1904,6 +1914,7 @@ svdb_code_t svdb_begin(svdb_db_t *db, svdb_tx_t **tx) {
 }
 
 svdb_code_t svdb_commit(svdb_tx_t *tx) {
+    BUG_ON(tx == nullptr);
     if (!tx) return SVDB_ERR;
     if (tx->db) tx->db->in_transaction = false;
     delete tx;
@@ -1911,6 +1922,7 @@ svdb_code_t svdb_commit(svdb_tx_t *tx) {
 }
 
 svdb_code_t svdb_rollback(svdb_tx_t *tx) {
+    BUG_ON(tx == nullptr);
     if (!tx) return SVDB_ERR;
     if (tx->db) {
         /* Restore snapshot */
@@ -1923,6 +1935,8 @@ svdb_code_t svdb_rollback(svdb_tx_t *tx) {
 }
 
 svdb_code_t svdb_savepoint(svdb_tx_t *tx, const char *name) {
+    BUG_ON(tx == nullptr);
+    BUG_ON(name == nullptr);
     if (!tx || !name) return SVDB_ERR;
     tx->savepoints.push_back(name);
     /* Save current data as savepoint snapshot */
@@ -1932,6 +1946,8 @@ svdb_code_t svdb_savepoint(svdb_tx_t *tx, const char *name) {
 }
 
 svdb_code_t svdb_release(svdb_tx_t *tx, const char *name) {
+    BUG_ON(tx == nullptr);
+    BUG_ON(name == nullptr);
     if (!tx || !name) return SVDB_ERR;
     std::string n(name);
     for (int i = (int)tx->savepoints.size() - 1; i >= 0; --i) {
@@ -1948,6 +1964,8 @@ svdb_code_t svdb_release(svdb_tx_t *tx, const char *name) {
 }
 
 svdb_code_t svdb_rollback_to(svdb_tx_t *tx, const char *name) {
+    BUG_ON(tx == nullptr);
+    BUG_ON(name == nullptr);
     if (!tx || !name || !tx->db) return SVDB_ERR;
     std::string n(name);
     for (int i = (int)tx->savepoints.size() - 1; i >= 0; --i) {
@@ -1971,6 +1989,8 @@ svdb_code_t svdb_rollback_to(svdb_tx_t *tx, const char *name) {
 /* Schema introspection */
 
 svdb_code_t svdb_tables(svdb_db_t *db, svdb_rows_t **rows) {
+    BUG_ON(db == nullptr);
+    BUG_ON(rows == nullptr);
     if (!db || !rows) return SVDB_ERR;
     svdb_rows_t *r = new (std::nothrow) svdb_rows_t();
     if (!r) return SVDB_NOMEM;
@@ -1987,6 +2007,9 @@ svdb_code_t svdb_tables(svdb_db_t *db, svdb_rows_t **rows) {
 }
 
 svdb_code_t svdb_columns(svdb_db_t *db, const char *table, svdb_rows_t **rows) {
+    BUG_ON(db == nullptr);
+    BUG_ON(table == nullptr);
+    BUG_ON(rows == nullptr);
     if (!db || !table || !rows) return SVDB_ERR;
     std::string tname(table);
     svdb_rows_t *r = new (std::nothrow) svdb_rows_t();
@@ -2006,6 +2029,9 @@ svdb_code_t svdb_columns(svdb_db_t *db, const char *table, svdb_rows_t **rows) {
 }
 
 svdb_code_t svdb_indexes(svdb_db_t *db, const char *table, svdb_rows_t **rows) {
+    BUG_ON(db == nullptr);
+    BUG_ON(table == nullptr);
+    BUG_ON(rows == nullptr);
     if (!db || !table || !rows) return SVDB_ERR;
     *rows = new (std::nothrow) svdb_rows_t();
     if (!*rows) return SVDB_NOMEM;
@@ -2028,6 +2054,8 @@ svdb_code_t svdb_indexes(svdb_db_t *db, const char *table, svdb_rows_t **rows) {
 }
 
 svdb_code_t svdb_backup(svdb_db_t *src, const char *dest_path) {
+    BUG_ON(src == nullptr);
+    BUG_ON(dest_path == nullptr);
     if (!src || !dest_path) return SVDB_ERR;
     /* Create or truncate the destination file as a minimal backup marker */
     FILE *f = fopen(dest_path, "wb");

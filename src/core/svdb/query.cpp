@@ -4014,6 +4014,8 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
 
 svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
                                svdb_rows_t **rows_out) {
+    svdb_assert(db != nullptr);
+    svdb_assert(rows_out != nullptr);
     svdb_rows_t *r = new (std::nothrow) svdb_rows_t();
     if (!r) return SVDB_NOMEM;
     *rows_out = r;
