@@ -119,26 +119,27 @@ static std::string read_value(const std::string& sql, size_t& pos) {
     pos = skip_ws(sql, pos);
     if (pos >= sql.size()) return "";
     char c = sql[pos];
-    /* Quoted string */
+    /* Quoted string — preserve quotes so parse_literal can recognize TEXT */
     if (c == '\'' || c == '"') {
         char q = c;
+        size_t start = pos;
         ++pos;
-        std::string s;
         while (pos < sql.size()) {
             if (sql[pos] == q) {
                 if (pos + 1 < sql.size() && sql[pos+1] == q) {
-                    s += q; pos += 2; /* escaped '' or "" */
+                    pos += 2; /* escaped '' or "" */
                 } else {
-                    break; /* closing quote */
+                    ++pos; /* skip closing quote */
+                    break;
                 }
             } else if (sql[pos] == '\\' && pos + 1 < sql.size()) {
-                ++pos; s += sql[pos++];
+                pos += 2; /* skip escape sequence */
             } else {
-                s += sql[pos++];
+                ++pos;
             }
         }
-        if (pos < sql.size()) ++pos; /* skip closing quote */
-        return s;
+        /* Return the full quoted literal, e.g. "'hello'" */
+        return sql.substr(start, pos - start);
     }
     /* Number (possibly negative), including scientific notation like 1.23e-10 */
     if (isdigit(c) || (c == '-' && pos + 1 < sql.size() && isdigit((unsigned char)sql[pos+1]))) {
