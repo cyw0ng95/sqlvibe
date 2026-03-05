@@ -251,6 +251,27 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
     std::string e = qry_trim(expr);
     if (e.empty()) { return SvdbVal{}; }
 
+    /* Strip top-level AS alias suffix (e.g. "COALESCE(a,b) AS name" → "COALESCE(a,b)").
+     * Depth-tracks parentheses so CAST(x AS type) is not affected.
+     * Also tracks single-quote string literals so 'AS' inside strings is ignored. */
+    {
+        int dep_as = 0; bool ins_as = false;
+        std::string eu_as = qry_upper(e);
+        for (size_t i = 0; i < eu_as.size(); ++i) {
+            char c = eu_as[i];
+            if (c == '\'') { ins_as = !ins_as; continue; }
+            if (ins_as) continue;
+            if (c == '(') { ++dep_as; continue; }
+            if (c == ')') { if (dep_as > 0) --dep_as; continue; }
+            if (dep_as == 0 && i >= 1 && eu_as[i-1] == ' ' &&
+                i + 3 <= eu_as.size() && eu_as.substr(i, 3) == "AS ") {
+                e = qry_trim(e.substr(0, i - 1));
+                break;
+            }
+        }
+    }
+    if (e.empty()) { return SvdbVal{}; }
+
     /* NULL literal */
     if (qry_upper(e) == "NULL") { return SvdbVal{}; }
 
@@ -905,11 +926,38 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                     if (then_pos == std::string::npos) break;
                     std::string cond_expr = e.substr(pos2, then_pos - pos2);
                     pos2 = then_pos + 6;
-                    /* find next WHEN, ELSE or END */
+                    /* find next WHEN, ELSE or END at the same nesting level
+                     * (must skip nested CASE...END blocks) */
                     size_t next = eu2.size();
-                    for (const char *kw : {" WHEN ", " ELSE ", " END"}) {
-                        size_t p2 = eu2.find(kw, pos2);
-                        if (p2 != std::string::npos && p2 < next) next = p2;
+                    {
+                        int case_depth = 1; /* we're inside 1 outer CASE */
+                        bool in_s2 = false;
+                        for (size_t pi = pos2; pi < eu2.size(); ++pi) {
+                            char cc = eu2[pi];
+                            if (cc == '\'') { in_s2 = !in_s2; continue; }
+                            if (in_s2) continue;
+                            /* Detect nested CASE */
+                            if (pi + 5 <= eu2.size() && eu2.substr(pi, 5) == "CASE ") {
+                                ++case_depth; pi += 4; continue;
+                            }
+                            if (case_depth == 1) {
+                                /* At our level — look for WHEN / ELSE / END */
+                                if (pi + 5 <= eu2.size() && eu2.substr(pi, 5) == " WHEN") {
+                                    next = pi; break;
+                                }
+                                if (pi + 5 <= eu2.size() && eu2.substr(pi, 5) == " ELSE") {
+                                    next = pi; break;
+                                }
+                                if (pi + 4 <= eu2.size() && eu2.substr(pi, 4) == " END") {
+                                    next = pi; break;
+                                }
+                            }
+                            if (pi + 4 <= eu2.size() && eu2.substr(pi, 4) == " END") {
+                                --case_depth;
+                                if (case_depth == 0) { next = pi; break; }
+                                pi += 3; continue;
+                            }
+                        }
                     }
                     std::string then_expr = e.substr(pos2, next - pos2);
                     pos2 = next;
@@ -1655,9 +1703,11 @@ static bool qry_eval_where(const Row &row,
     {
         const char *ops[] = {"!=", "<>", "<=", ">=", "=", "<", ">", nullptr};
         size_t op_start = std::string::npos, op_len = 0;
-        /* Scan left-to-right, respecting paren depth and string literals */
+        /* Scan left-to-right, respecting paren depth, string literals,
+         * and CASE...END blocks (so operators inside CASE conditions are skipped) */
         {
-            int depth_c = 0; bool in_str_c = false;
+            int depth_c = 0; int case_depth_c = 0; bool in_str_c = false;
+            std::string wu_scan = qry_upper(wt);
             for (size_t i = 0; i < wt.size(); ++i) {
                 char c = wt[i];
                 if (c == '\'') { in_str_c = !in_str_c; continue; }
@@ -1665,6 +1715,14 @@ static bool qry_eval_where(const Row &row,
                 if (c == '(') { ++depth_c; continue; }
                 if (c == ')') { if (depth_c > 0) --depth_c; continue; }
                 if (depth_c > 0) continue;
+                /* Track CASE...END depth to skip operators inside CASE blocks */
+                if (i + 5 <= wu_scan.size() && wu_scan.substr(i, 5) == "CASE ") {
+                    ++case_depth_c; i += 4; continue;
+                }
+                if (i + 4 <= wu_scan.size() && wu_scan.substr(i, 4) == " END") {
+                    if (case_depth_c > 0) { --case_depth_c; i += 3; continue; }
+                }
+                if (case_depth_c > 0) continue;
                 /* Try each operator */
                 for (int oi = 0; ops[oi]; ++oi) {
                     size_t oplen = strlen(ops[oi]);
@@ -2093,8 +2151,25 @@ static bool is_agg_expr(const std::string &e) {
 
 static AggState make_agg(const std::string &expr) {
     AggState a; a.func = "";
-    std::string eu = qry_upper(qry_trim(expr));
     std::string e_orig = qry_trim(expr);
+    /* Strip top-level AS alias (e.g. "SUM(x) AS total" → "SUM(x)") */
+    {
+        int dep = 0; bool ins = false;
+        std::string eu_chk = qry_upper(e_orig);
+        for (size_t i = 0; i < eu_chk.size(); ++i) {
+            char c = eu_chk[i];
+            if (c == '\'') { ins = !ins; continue; }
+            if (ins) continue;
+            if (c == '(') { ++dep; continue; }
+            if (c == ')') { if (dep > 0) --dep; continue; }
+            if (dep == 0 && i >= 1 && eu_chk[i-1] == ' ' &&
+                i + 3 <= eu_chk.size() && eu_chk.substr(i, 3) == "AS ") {
+                e_orig = qry_trim(e_orig.substr(0, i - 1));
+                break;
+            }
+        }
+    }
+    std::string eu = qry_upper(e_orig);
     /* Check for outer scalar wrapper: e.g. ABS(MIN(a)), UPPER(MAX(s)) */
     static const char *scalar_funcs[] = {"ABS", "UPPER", "LOWER", "ROUND", "CEIL", "FLOOR", "LENGTH", nullptr};
     for (const char **sf = scalar_funcs; *sf && a.func.empty(); ++sf) {
@@ -2219,6 +2294,11 @@ static void agg_accumulate(AggState &a, const Row &row,
     SvdbVal v = eval_expr(a.arg, row, col_order);
     if (v.type == SVDB_TYPE_NULL) return;
     if (a.func == "SUM" || a.func == "AVG") {
+        if (a.distinct) {
+            std::string key = val_to_str(v);
+            if (a.seen_vals.count(key)) return;
+            a.seen_vals.insert(key);
+        }
         ++a.count;
         if (v.type == SVDB_TYPE_REAL) a.is_real = true;
         a.sum += val_to_dbl(v);
@@ -2885,8 +2965,27 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
             Row empty_row;
             std::vector<std::string> empty_order;
             std::vector<SvdbVal> result_row;
+            /* Helper: find top-level " AS " position */
+            auto find_as_no_tbl = [](const std::string &cu) -> size_t {
+                int d = 0; bool in_s = false;
+                for (size_t i = 0; i < cu.size(); ++i) {
+                    char c = cu[i];
+                    if (c == '\'') { in_s = !in_s; continue; }
+                    if (in_s) continue;
+                    if (c == '(') ++d;
+                    else if (c == ')') { if (d > 0) --d; }
+                    else if (d == 0 && i + 4 <= cu.size() &&
+                             c == ' ' && cu[i+1] == 'A' && cu[i+2] == 'S' && cu[i+3] == ' ')
+                        return i;
+                }
+                return std::string::npos;
+            };
             for (const auto &expr : sel_cols) {
-                r->col_names.push_back(expr);
+                std::string cu = qry_upper(expr);
+                size_t as_p = find_as_no_tbl(cu);
+                std::string col_name = (as_p != std::string::npos)
+                    ? qry_trim(expr.substr(as_p + 4)) : expr;
+                r->col_names.push_back(col_name);
                 result_row.push_back(eval_expr(expr, empty_row, empty_order));
             }
             r->rows.push_back(result_row);
