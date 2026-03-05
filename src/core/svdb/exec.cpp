@@ -89,17 +89,19 @@ static std::string first_keyword(const std::string &sql) {
 }
 
 /* Parse column definitions from CREATE TABLE sql (after the opening '(').
- * Fills schema ColDef and col_order for the table. */
-static void parse_column_defs(const std::string &sql, size_t pos,
+ * Fills schema ColDef and col_order for the table.
+ * Returns number of column-level PRIMARY KEY declarations (for validation). */
+static int parse_column_defs(const std::string &sql, size_t pos,
                                TableDef &out_td,
                                std::vector<std::string> &out_order,
                                std::vector<std::string> *out_pk = nullptr,
                                std::vector<std::vector<std::string>> *out_uniq = nullptr,
                                CheckList *out_checks = nullptr,
                                std::vector<FKDef> *out_fks = nullptr) {
+    int column_pk_count = 0;  /* Count column-level PRIMARY KEY declarations */
     /* Find the opening '(' */
     while (pos < sql.size() && sql[pos] != '(') ++pos;
-    if (pos >= sql.size()) return;
+    if (pos >= sql.size()) return 0;
     ++pos; /* skip '(' */
 
     int depth = 1;
@@ -362,6 +364,7 @@ static void parse_column_defs(const std::string &sql, size_t pos,
                 cd.primary_key = true;
                 cd.not_null = true;
                 if (out_pk) out_pk->push_back(col_name);
+                column_pk_count++;  /* Track column-level PRIMARY KEY declarations */
             } else if (ckw == "AUTOINCREMENT") {
                 cd.auto_increment = true;
             } else if (ckw == "UNIQUE") {
@@ -442,6 +445,8 @@ static void parse_column_defs(const std::string &sql, size_t pos,
         out_td[col_name] = cd;
         out_order.push_back(col_name);
     }
+    
+    return column_pk_count;
 }
 
 /* Evaluate a simple WHERE expression against a single row.
@@ -929,10 +934,11 @@ static svdb_code_t do_create_table(svdb_db_t *db, const std::string &sql) {
     std::vector<std::vector<std::string>> uniqs;
     CheckList checks;
     std::vector<FKDef> fks;
+    int column_pk_count = 0;
     
     if (!is_ctas) {
         /* Standard CREATE TABLE with column definitions */
-        parse_column_defs(sql, 0, td, order, &pks, &uniqs, &checks, &fks);
+        column_pk_count = parse_column_defs(sql, 0, td, order, &pks, &uniqs, &checks, &fks);
     }
     /* For CREATE TABLE AS SELECT, td and order remain empty - will be populated by executing the SELECT */
 
@@ -942,6 +948,15 @@ static svdb_code_t do_create_table(svdb_db_t *db, const std::string &sql) {
     /* For CTAS, empty column list is OK - will be populated when SELECT is executed */
     if (order.empty() && !is_ctas) {
         db->last_error = "near \")\"" ": syntax error";
+        return SVDB_ERR;
+    }
+
+    /* Enforce single PRIMARY KEY constraint (SQLite compatibility)
+     * Multiple separate PRIMARY KEY column declarations are not allowed
+     * e.g., "x INTEGER PRIMARY KEY, y INTEGER PRIMARY KEY" is invalid
+     * But composite PK "PRIMARY KEY (a, b)" is valid */
+    if (column_pk_count > 1) {
+        db->last_error = "table \"" + tname + "\" has more than one primary key";
         return SVDB_ERR;
     }
 
