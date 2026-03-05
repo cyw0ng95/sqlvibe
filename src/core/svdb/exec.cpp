@@ -29,6 +29,26 @@ extern SvdbVal svdb_eval_expr_in_row(const std::string &expr, const Row &row,
                                       const std::vector<std::string> &col_order);
 extern void svdb_set_query_db(svdb_db_t *db);
 
+/* ── Helper: case-insensitive table lookup ───────────────────────────────── */
+
+/* Resolve table name case-insensitively (for unquoted identifiers).
+ * Returns the canonical table name from schema, or empty string if not found. */
+static std::string resolve_table_name(svdb_db_t *db, const std::string &tname) {
+    /* Exact match first */
+    if (db->schema.count(tname)) return tname;
+    
+    /* For unquoted identifiers, do case-insensitive lookup */
+    if (!is_quoted_identifier(tname)) {
+        std::string tname_upper = svdb_str_upper(tname);
+        for (auto &kv : db->schema) {
+            if (svdb_str_upper(kv.first) == tname_upper) {
+                return kv.first;
+            }
+        }
+    }
+    return "";
+}
+
 /* ── helpers ────────────────────────────────────────────────────── */
 
 static std::string str_upper(std::string s) {
@@ -1036,8 +1056,9 @@ static svdb_code_t do_create_index(svdb_db_t *db, const std::string &sql, bool u
     size_t ts = pos;
     while (pos < su.size() && !isspace((unsigned char)su[pos]) && su[pos] != '(') ++pos;
     std::string tname = sql.substr(ts, pos - ts);
-    /* Check table exists */
-    if (!db->schema.count(tname)) { db->last_error = "no such table: " + tname; return SVDB_ERR; }
+    /* Check table exists (case-insensitive for unquoted identifiers) */
+    std::string resolved_tname = resolve_table_name(db, tname);
+    if (resolved_tname.empty()) { db->last_error = "no such table: " + tname; return SVDB_ERR; }
     /* Check duplicate index name */
     if (db->indexes.count(iname)) {
         if (if_not_exists) return SVDB_OK;
@@ -1047,7 +1068,7 @@ static svdb_code_t do_create_index(svdb_db_t *db, const std::string &sql, bool u
     /* Read column list */
     size_t paren = sql.find('(', pos);
     size_t rparen = sql.rfind(')');
-    IndexDef idef; idef.table = tname; idef.unique = unique;
+    IndexDef idef; idef.table = resolved_tname; idef.unique = unique;
     if (paren != std::string::npos && rparen != std::string::npos) {
         std::string cols_str = sql.substr(paren + 1, rparen - paren - 1);
         std::istringstream ss(cols_str);
@@ -1105,15 +1126,18 @@ static svdb_code_t do_drop_table(svdb_db_t *db, const std::string &sql) {
 
     std::string su = str_upper(sql);
     bool if_exists = su.find("IF EXISTS") != std::string::npos;
-    if (!db->schema.count(tname)) {
+    
+    /* Case-insensitive table lookup */
+    std::string resolved_tname = resolve_table_name(db, tname);
+    if (resolved_tname.empty()) {
         if (if_exists) return SVDB_OK;
         db->last_error = "no such table: " + tname;
         return SVDB_ERR;
     }
-    db->schema.erase(tname);
-    db->col_order.erase(tname);
-    db->data.erase(tname);
-    db->rowid_counter.erase(tname);
+    db->schema.erase(resolved_tname);
+    db->col_order.erase(resolved_tname);
+    db->data.erase(resolved_tname);
+    db->rowid_counter.erase(resolved_tname);
     return SVDB_OK;
 }
 
@@ -1734,13 +1758,15 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
     int ncols = svdb_ast_get_column_count(ast);
     int nrows = svdb_ast_get_value_row_count(ast);
 
-    if (!db->schema.count(tname)) {
+    /* Case-insensitive table lookup */
+    std::string resolved_tname = resolve_table_name(db, tname);
+    if (resolved_tname.empty()) {
         db->last_error = "no such table: " + tname;
         svdb_ast_node_free(ast); svdb_parser_destroy(p);
         return SVDB_ERR;
     }
 
-    const auto &col_order = db->col_order[tname];
+    const auto &col_order = db->col_order[resolved_tname];
 
     /* ── INSERT ... SELECT ─────────────────────────────────────────── */
     if (nrows == 0) {
@@ -1783,20 +1809,20 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
                 /* Fill missing columns with defaults */
                 for (const auto &cn : col_order) {
                     if (!row2.count(cn)) {
-                        auto dit = db->schema[tname].find(cn);
-                        if (dit != db->schema[tname].end() && !dit->second.default_val.empty())
+                        auto dit = db->schema[resolved_tname].find(cn);
+                        if (dit != db->schema[resolved_tname].end() && !dit->second.default_val.empty())
                             row2[cn] = svdb_eval_expr_in_row(dit->second.default_val, row2, {});
                         else row2[cn] = SvdbVal{};
                     }
                 }
-                db->rowid_counter[tname]++;
-                row2[SVDB_ROWID_COLUMN] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[tname], 0.0, {}};
-                db->data[tname].push_back(row2);
+                db->rowid_counter[resolved_tname]++;
+                row2[SVDB_ROWID_COLUMN] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[resolved_tname], 0.0, {}};
+                db->data[resolved_tname].push_back(row2);
                 ++inserted2;
             }
             delete sel_rows;
             db->rows_affected = inserted2;
-            db->last_insert_rowid = db->rowid_counter[tname];
+            db->last_insert_rowid = db->rowid_counter[resolved_tname];
             if (res) { res->code = SVDB_OK; res->rows_affected = inserted2; res->last_insert_rowid = db->last_insert_rowid; }
             svdb_ast_node_free(ast); svdb_parser_destroy(p);
             return SVDB_OK;
@@ -1810,7 +1836,7 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
             ins_cols.push_back(svdb_ast_get_column(ast, i));
         /* Validate: all specified column names must exist in the table */
         for (const auto &ic : ins_cols) {
-            if (db->schema[tname].find(ic) == db->schema[tname].end() &&
+            if (db->schema[resolved_tname].find(ic) == db->schema[resolved_tname].end() &&
                 str_upper(ic) != "ROWID" && str_upper(ic) != "_SVDB_ROWID_") {
                 db->last_error = "table " + tname + " has no column named " + ic;
                 svdb_ast_node_free(ast); svdb_parser_destroy(p);
