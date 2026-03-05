@@ -25,6 +25,9 @@ extern svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                                         svdb_rows_t **rows_out);
 extern svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
                                       svdb_rows_t **rows_out);
+extern SvdbVal svdb_eval_expr_in_row(const std::string &expr, const Row &row,
+                                      const std::vector<std::string> &col_order);
+extern void svdb_set_query_db(svdb_db_t *db);
 
 /* ── helpers ────────────────────────────────────────────────────── */
 
@@ -530,6 +533,19 @@ static SvdbVal parse_literal(const std::string &v) {
  * Handles: column refs, integer/float/string/NULL literals, arithmetic ops.
  * E.g. "v + 1", "price * 1.1", "col", "'hello'" */
 static SvdbVal eval_expr_exec(const std::string &expr_in, const Row &row,
+                               const std::vector<std::string> &col_order);
+
+/* String conversion for eval_expr_exec */
+static std::string val_to_str_exec(const SvdbVal &v) {
+    if (v.type == SVDB_TYPE_TEXT || v.type == SVDB_TYPE_BLOB) return v.sval;
+    if (v.type == SVDB_TYPE_INT)  return std::to_string(v.ival);
+    if (v.type == SVDB_TYPE_REAL) {
+        char buf[64]; snprintf(buf, sizeof(buf), "%.17g", v.rval); return buf;
+    }
+    return "";
+}
+
+static SvdbVal eval_expr_exec(const std::string &expr_in, const Row &row,
                                const std::vector<std::string> &col_order) {
     (void)col_order;
     std::string e = str_trim(expr_in);
@@ -545,8 +561,27 @@ static SvdbVal eval_expr_exec(const std::string &expr_in, const Row &row,
         if (matched) return eval_expr_exec(e.substr(1, e.size()-2), row, col_order);
     }
 
-    /* Find rightmost top-level + or - (for left-associative parsing) */
+    /* Find rightmost top-level || (string concatenation, lowest precedence) */
     int depth2 = 0; bool in_str2 = false;
+    for (size_t i = e.size(); i >= 2; --i) {
+        char c1 = e[i-2], c2 = e[i-1];
+        if (c2 == '\'') { in_str2 = !in_str2; continue; }
+        if (in_str2) continue;
+        if (c2 == ')') ++depth2;
+        if (c2 == '(') { if (depth2 > 0) --depth2; }
+        if (depth2 > 0) continue;
+        if (c1 == '|' && c2 == '|' && i >= 2) {
+            SvdbVal lhs = eval_expr_exec(e.substr(0, i-2), row, col_order);
+            SvdbVal rhs = eval_expr_exec(e.substr(i), row, col_order);
+            if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) return SvdbVal{};
+            SvdbVal res; res.type = SVDB_TYPE_TEXT;
+            res.sval = val_to_str_exec(lhs) + val_to_str_exec(rhs);
+            return res;
+        }
+    }
+
+    /* Find rightmost top-level + or - (for left-associative parsing) */
+    depth2 = 0; in_str2 = false;
     for (size_t i = e.size(); i > 0; --i) {
         char c = e[i-1];
         if (c == '\'') { in_str2 = !in_str2; continue; }
@@ -1446,12 +1481,14 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
 
     const auto &col_order = db->col_order[tname];
     int64_t updated = 0;
+    svdb_set_query_db(db);  /* set thread-local DB context for subquery eval in SET expressions */
     for (auto &row : db->data[tname]) {
         if (!eval_where(row, col_order, where_txt)) continue;
         for (const auto &asgn : assignments)
-            row[asgn.first] = eval_expr_exec(asgn.second, row, col_order);
+            row[asgn.first] = svdb_eval_expr_in_row(asgn.second, row, col_order);
         ++updated;
     }
+    svdb_set_query_db(nullptr);
 
     db->rows_affected = updated;
     if (res) { res->code = SVDB_OK; res->rows_affected = updated; }

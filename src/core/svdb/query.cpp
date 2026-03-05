@@ -4645,3 +4645,15 @@ svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
 }
 
 } /* extern "C" */
+
+/* Non-static wrapper: evaluate a SQL expression in the context of a given row.
+ * Used by exec.cpp's do_update to evaluate complex SET expressions (CASE, functions, subqueries). */
+SvdbVal svdb_eval_expr_in_row(const std::string &expr, const Row &row,
+                               const std::vector<std::string> &col_order) {
+    return eval_expr(expr, row, col_order);
+}
+
+/* Set thread-local DB context for use by eval_expr subqueries */
+void svdb_set_query_db(svdb_db_t *db) {
+    g_query_db = db;
+}
