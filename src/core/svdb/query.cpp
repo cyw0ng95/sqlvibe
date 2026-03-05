@@ -928,6 +928,67 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
         }
     }
 
+    /* Logical OR / AND in expression context (lowest precedence — must come BEFORE comparison ops) */
+    /* Scan LEFT-to-RIGHT to correctly handle BETWEEN...AND patterns. */
+    {
+        std::string eu_e = qry_upper(e);
+        /* Find leftmost OR at top level */
+        size_t or_p = std::string::npos;
+        {
+            int depth_e = 0; bool in_str_e = false;
+            for (size_t i = 0; i + 4 <= eu_e.size(); ++i) {
+                char c = eu_e[i];
+                if (c == '\'') { in_str_e = !in_str_e; continue; }
+                if (in_str_e) continue;
+                if (c == '(') { ++depth_e; continue; }
+                if (c == ')') { if (depth_e > 0) --depth_e; continue; }
+                if (depth_e > 0) continue;
+                if (eu_e.substr(i, 4) == " OR ") { or_p = i + 1; break; }
+            }
+        }
+        if (or_p != std::string::npos) {
+            SvdbVal lhs = eval_expr(qry_trim(e.substr(0, or_p - 1)), row, col_order);
+            SvdbVal rhs = eval_expr(qry_trim(e.substr(or_p + 3)), row, col_order);
+            bool l = val_is_true(lhs), r = val_is_true(rhs);
+            bool lnull = (lhs.type == SVDB_TYPE_NULL), rnull = (rhs.type == SVDB_TYPE_NULL);
+            if (l || r) { SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 1; return v; }
+            if (lnull || rnull) return SvdbVal{};
+            SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0; return v;
+        }
+        /* Find leftmost boolean AND at top level (skip BETWEEN's AND) */
+        size_t and_p = std::string::npos;
+        {
+            int depth_e = 0; bool in_str_e = false;
+            bool after_between = false;
+            for (size_t i = 0; i + 5 <= eu_e.size(); ++i) {
+                char c = eu_e[i];
+                if (c == '\'') { in_str_e = !in_str_e; continue; }
+                if (in_str_e) continue;
+                if (c == '(') { ++depth_e; continue; }
+                if (c == ')') { if (depth_e > 0) --depth_e; continue; }
+                if (depth_e > 0) continue;
+                /* Track BETWEEN keyword */
+                if (i + 8 <= eu_e.size() && eu_e.substr(i, 8) == " BETWEEN") { after_between = true; i += 7; continue; }
+                if (i + 12 <= eu_e.size() && eu_e.substr(i, 12) == " NOT BETWEEN") { after_between = true; i += 11; continue; }
+                if (eu_e.substr(i, 5) == " AND ") {
+                    if (after_between) { after_between = false; i += 4; continue; } /* Skip BETWEEN's AND */
+                    and_p = i + 1; break;
+                }
+            }
+        }
+        if (and_p != std::string::npos) {
+            SvdbVal lhs = eval_expr(qry_trim(e.substr(0, and_p - 1)), row, col_order);
+            SvdbVal rhs = eval_expr(qry_trim(e.substr(and_p + 4)), row, col_order);
+            bool l = val_is_true(lhs), r = val_is_true(rhs);
+            bool lnull = (lhs.type == SVDB_TYPE_NULL), rnull = (rhs.type == SVDB_TYPE_NULL);
+            if (!l && !lnull) { SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0; return v; }
+            if (!r && !rnull) { SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0; return v; }
+            if (lnull || rnull) return SvdbVal{};
+            SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 1; return v;
+        }
+    }
+
+
     /* ── Comparison / boolean operators (lower precedence than arithmetic) ── */
     /* These must be checked BEFORE arithmetic so that `a + b = c` splits on `=` first. */
     {
@@ -1208,79 +1269,6 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             SvdbVal v; v.type = SVDB_TYPE_INT;
             v.ival = val_is_true(inner) ? 0 : 1;
             return v;
-        }
-    }
-
-    /* Logical OR / AND in expression context (lower precedence than comparison) */
-    {
-        /* Helper: find top-level keyword outside parens/strings, scanning left-to-right */
-        auto find_kw_expr = [&](const std::string &kw) -> size_t {
-            int depth_e = 0; bool in_str_e = false;
-            std::string eu_e = qry_upper(e);
-            std::string full_kw = " " + kw + " ";
-            for (size_t i = 0; i + full_kw.size() <= eu_e.size(); ++i) {
-                char c = eu_e[i];
-                if (c == '\'') { in_str_e = !in_str_e; continue; }
-                if (in_str_e) continue;
-                if (c == '(') { ++depth_e; continue; }
-                if (c == ')') { if (depth_e > 0) --depth_e; continue; }
-                if (depth_e > 0) continue;
-                if (eu_e.substr(i, full_kw.size()) == full_kw) return i + 1; /* position of keyword */
-            }
-            return std::string::npos;
-        };
-        /* Find rightmost OR at top level */
-        size_t or_p = std::string::npos;
-        {
-            int depth_e = 0; bool in_str_e = false;
-            std::string eu_e = qry_upper(e);
-            for (int i = (int)eu_e.size() - 4; i >= 0; --i) {
-                char c = eu_e[i];
-                if (c == '\'') { in_str_e = !in_str_e; continue; }
-                if (in_str_e) continue;
-                if (c == ')') { ++depth_e; continue; }
-                if (c == '(') { if (depth_e > 0) --depth_e; continue; }
-                if (depth_e > 0) continue;
-                if (eu_e.substr(i, 4) == " OR ") {
-                    or_p = (size_t)i + 1; break;
-                }
-            }
-        }
-        if (or_p != std::string::npos) {
-            SvdbVal lhs = eval_expr(qry_trim(e.substr(0, or_p - 1)), row, col_order);
-            SvdbVal rhs = eval_expr(qry_trim(e.substr(or_p + 3)), row, col_order);
-            bool l = val_is_true(lhs), r = val_is_true(rhs);
-            bool lnull = (lhs.type == SVDB_TYPE_NULL), rnull = (rhs.type == SVDB_TYPE_NULL);
-            if (l || r) { SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 1; return v; }
-            if (lnull || rnull) return SvdbVal{};
-            SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0; return v;
-        }
-        /* Find rightmost AND at top level */
-        size_t and_p = std::string::npos;
-        {
-            int depth_e = 0; bool in_str_e = false;
-            std::string eu_e = qry_upper(e);
-            for (int i = (int)eu_e.size() - 5; i >= 0; --i) {
-                char c = eu_e[i];
-                if (c == '\'') { in_str_e = !in_str_e; continue; }
-                if (in_str_e) continue;
-                if (c == ')') { ++depth_e; continue; }
-                if (c == '(') { if (depth_e > 0) --depth_e; continue; }
-                if (depth_e > 0) continue;
-                if (eu_e.substr(i, 5) == " AND ") {
-                    and_p = (size_t)i + 1; break;
-                }
-            }
-        }
-        if (and_p != std::string::npos) {
-            SvdbVal lhs = eval_expr(qry_trim(e.substr(0, and_p - 1)), row, col_order);
-            SvdbVal rhs = eval_expr(qry_trim(e.substr(and_p + 4)), row, col_order);
-            bool l = val_is_true(lhs), r = val_is_true(rhs);
-            bool lnull = (lhs.type == SVDB_TYPE_NULL), rnull = (rhs.type == SVDB_TYPE_NULL);
-            if (!l && !lnull) { SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0; return v; }
-            if (!r && !rnull) { SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0; return v; }
-            if (lnull || rnull) return SvdbVal{};
-            SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 1; return v;
         }
     }
 
