@@ -140,7 +140,96 @@ static bool glob_match(const std::string &text, const std::string &pat) {
     return false;
 }
 
-/* ── Expression evaluator ────────────────────────────────────────── */
+/* ── RETURNING clause helpers ───────────────────────────────────── */
+
+/* Forward declarations (defined later in this file) */
+static SvdbVal eval_expr(const std::string &expr, const Row &row,
+                          const std::vector<std::string> &col_order,
+                          bool allow_agg);
+static bool qry_eval_where(const Row &row,
+                            const std::vector<std::string> &col_order,
+                            const std::string &where_txt);
+
+/* Extracts RETURNING clause from a DML statement.
+ * Sets returning_clause to everything after RETURNING (trimmed).
+ * Sets sql_without_returning to the DML without the RETURNING part.
+ * Returns true if RETURNING was found. */
+static bool qry_extract_returning(const std::string &sql,
+                                   std::string &returning_clause,
+                                   std::string &sql_without_returning) {
+    std::string su = qry_upper(sql);
+    size_t ret_pos = std::string::npos;
+    int depth = 0; bool in_str = false;
+    for (size_t i = 0; i + 9 <= su.size(); ++i) {
+        char c = su[i];
+        if (c == '\'') { in_str = !in_str; continue; }
+        if (in_str) continue;
+        if (c == '(') { ++depth; continue; }
+        if (c == ')') { if (depth > 0) --depth; continue; }
+        if (depth > 0) continue;
+        /* Match " RETURNING " or "RETURNING " at start */
+        if ((i == 0 || su[i-1] == ' ') && su.substr(i, 10) == "RETURNING ") {
+            ret_pos = i; break;
+        }
+    }
+    if (ret_pos == std::string::npos) return false;
+    returning_clause = qry_trim(sql.substr(ret_pos + 9));
+    /* Strip trailing ';' from returning clause */
+    while (!returning_clause.empty() && (returning_clause.back() == ';' || isspace((unsigned char)returning_clause.back())))
+        returning_clause.pop_back();
+    sql_without_returning = qry_trim(sql.substr(0, ret_pos));
+    while (!sql_without_returning.empty() && (sql_without_returning.back() == ';' || isspace((unsigned char)sql_without_returning.back())))
+        sql_without_returning.pop_back();
+    return true;
+}
+
+/* Split a RETURNING clause into individual expression strings. */
+static std::vector<std::string> qry_split_returning_exprs(const std::string &ret_clause) {
+    std::vector<std::string> exprs;
+    int depth = 0; bool in_str = false;
+    size_t start = 0;
+    for (size_t i = 0; i <= ret_clause.size(); ++i) {
+        char c = (i < ret_clause.size()) ? ret_clause[i] : ',';
+        if (c == '\'') { in_str = !in_str; continue; }
+        if (in_str) continue;
+        if (c == '(') { ++depth; continue; }
+        if (c == ')') { if (depth > 0) --depth; continue; }
+        if (c == ',' && depth == 0) {
+            exprs.push_back(qry_trim(ret_clause.substr(start, i - start)));
+            start = i + 1;
+        }
+    }
+    return exprs;
+}
+
+/* Build a result set by evaluating returning_exprs against each row in rows_in.
+ * For RETURNING *, expands to all columns in col_order. */
+static svdb_rows_t *qry_build_returning_result(
+        const std::vector<std::string> &ret_exprs,
+        const std::vector<Row>         &rows_in,
+        const std::vector<std::string> &col_order) {
+    svdb_rows_t *r = new (std::nothrow) svdb_rows_t();
+    if (!r) return nullptr;
+
+    /* Determine effective expression list (expand * to col_order) */
+    std::vector<std::string> exprs;
+    for (const auto &e : ret_exprs) {
+        if (qry_trim(e) == "*") {
+            for (const auto &c : col_order) exprs.push_back(c);
+        } else {
+            exprs.push_back(e);
+        }
+    }
+
+    for (const auto &e : exprs) r->col_names.push_back(e);
+    for (const auto &row : rows_in) {
+        std::vector<SvdbVal> ret_row;
+        for (const auto &e : exprs)
+            ret_row.push_back(eval_expr(e, row, col_order, false));
+        r->rows.push_back(ret_row);
+    }
+    return r;
+}
 
 /* Thread-local DB context for subquery support */
 static thread_local svdb_db_t *g_query_db = nullptr;
@@ -3200,7 +3289,7 @@ extern "C" {
 
 svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
     if (!db || !sql || !rows) return SVDB_ERR;
-    std::lock_guard<std::mutex> lk(db->mu);
+    std::unique_lock<std::mutex> lk(db->mu);
     db->last_error.clear();
     /* Dispatch PRAGMA to dedicated handler */
     std::string s = qry_trim(std::string(sql));
@@ -3243,21 +3332,127 @@ svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
     }
     /* Only SELECT and WITH (CTE) statements produce rows; for DML/DDL,
      * execute via svdb_exec and return an empty result (matching SQLite behavior
-     * when Query() is called with a non-SELECT statement). */
+     * when Query() is called with a non-SELECT statement).
+     * svdb_exec acquires db->mu; we must release our lock first to prevent
+     * re-entrant deadlock on the non-recursive std::mutex. */
     {
-        const char *non_select[] = {"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", nullptr};
-        std::string s_upper = qry_upper(s.size() >= 7 ? s.substr(0, 7) : s);
-        for (const char **ns = non_select; *ns; ++ns) {
-            size_t klen = strlen(*ns);
-            if (s.size() >= klen && qry_upper(s.substr(0, klen)) == std::string(*ns)) {
-                /* Execute via exec path and return empty rows */
+        const char *dml_keywords[] = {"INSERT", "UPDATE", "DELETE", nullptr};
+        const char *ddl_keywords[] = {"CREATE", "DROP", "ALTER", nullptr};
+
+        auto starts_with_kw = [&](const char *kw) -> bool {
+            size_t klen = strlen(kw);
+            return s.size() >= klen && qry_upper(s.substr(0, klen)) == std::string(kw);
+        };
+
+        /* Check for DML with possible RETURNING clause */
+        bool is_dml = false;
+        for (const char **ns = dml_keywords; *ns; ++ns) {
+            if (starts_with_kw(*ns)) { is_dml = true; break; }
+        }
+        bool is_ddl = false;
+        for (const char **ns = ddl_keywords; *ns; ++ns) {
+            if (starts_with_kw(*ns)) { is_ddl = true; break; }
+        }
+
+        if (is_dml) {
+            std::string ret_clause, sql_no_ret;
+            if (qry_extract_returning(s, ret_clause, sql_no_ret)) {
+                /* DML with RETURNING: execute DML then return RETURNING rows */
+                std::string ret_kw = qry_upper(s.substr(0, 6).substr(0, s.find(' ')));
+                /* Find table name */
+                std::string tname;
+                {
+                    std::string su2 = qry_upper(sql_no_ret);
+                    size_t tp = std::string::npos;
+                    if (su2.substr(0, 6) == "INSERT") {
+                        tp = su2.find("INTO");
+                        if (tp != std::string::npos) tp += 4;
+                    } else if (su2.substr(0, 6) == "UPDATE") {
+                        tp = 6;
+                    } else if (su2.substr(0, 6) == "DELETE") {
+                        tp = su2.find("FROM");
+                        if (tp != std::string::npos) tp += 4;
+                    }
+                    if (tp != std::string::npos) {
+                        while (tp < sql_no_ret.size() && isspace((unsigned char)sql_no_ret[tp])) ++tp;
+                        size_t ts = tp;
+                        while (tp < sql_no_ret.size() && (isalnum((unsigned char)sql_no_ret[tp]) || sql_no_ret[tp] == '_')) ++tp;
+                        tname = sql_no_ret.substr(ts, tp - ts);
+                    }
+                }
+
+                auto ret_exprs = qry_split_returning_exprs(ret_clause);
+                const std::vector<std::string> *col_order_p = nullptr;
+                std::vector<Row> before_snap, after_snap;
+
+                if (!tname.empty() && db->data.count(tname)) {
+                    before_snap = db->data.at(tname);
+                    col_order_p = &db->col_order.at(tname);
+                }
+
+                lk.unlock();
                 svdb_result_t res{};
-                svdb_exec(db, s.c_str(), &res);
-                *rows = new (std::nothrow) svdb_rows_t();
+                svdb_exec(db, sql_no_ret.c_str(), &res);
+                lk.lock();
+
+                if (!tname.empty() && db->data.count(tname)) {
+                    after_snap = db->data.at(tname);
+                    col_order_p = &db->col_order.at(tname);
+                }
+
+                std::vector<Row> affected_rows;
+                std::string su2 = qry_upper(sql_no_ret.substr(0, 6));
+                if (su2 == "INSERT") {
+                    /* New rows appended at the end */
+                    for (size_t i = before_snap.size(); i < after_snap.size(); ++i)
+                        affected_rows.push_back(after_snap[i]);
+                } else if (su2 == "UPDATE") {
+                    /* Rows that were updated: evaluate the UPDATE's WHERE clause
+                     * against the post-update data to identify affected rows. */
+                    std::string su_no_ret = qry_upper(sql_no_ret);
+                    std::string where_for_update;
+                    size_t wp = su_no_ret.find(" WHERE ");
+                    if (wp != std::string::npos)
+                        where_for_update = qry_trim(sql_no_ret.substr(wp + 7));
+                    for (const auto &r2 : after_snap) {
+                        if (where_for_update.empty() ||
+                            qry_eval_where(r2, col_order_p ? *col_order_p : std::vector<std::string>{}, where_for_update))
+                            affected_rows.push_back(r2);
+                    }
+                } else if (su2 == "DELETE") {
+                    /* Rows present before but gone after (compare by rowid) */
+                    std::set<int64_t> after_rowids;
+                    for (auto &r2 : after_snap) {
+                        auto rit = r2.find(SVDB_ROWID_COLUMN);
+                        if (rit != r2.end()) after_rowids.insert(rit->second.ival);
+                    }
+                    for (auto &r2 : before_snap) {
+                        auto rit = r2.find(SVDB_ROWID_COLUMN);
+                        if (rit == r2.end() || !after_rowids.count(rit->second.ival))
+                            affected_rows.push_back(r2);
+                    }
+                }
+
+                const std::vector<std::string> empty_order;
+                *rows = qry_build_returning_result(ret_exprs, affected_rows,
+                                                   col_order_p ? *col_order_p : empty_order);
                 return (*rows) ? SVDB_OK : SVDB_NOMEM;
             }
+            /* Plain DML without RETURNING */
+            lk.unlock();
+            svdb_result_t res{};
+            svdb_exec(db, s.c_str(), &res);
+            *rows = new (std::nothrow) svdb_rows_t();
+            return (*rows) ? SVDB_OK : SVDB_NOMEM;
         }
-        (void)s_upper;
+
+        if (is_ddl) {
+            lk.unlock();
+            svdb_result_t res{};
+            svdb_exec(db, s.c_str(), &res);
+            *rows = new (std::nothrow) svdb_rows_t();
+            return (*rows) ? SVDB_OK : SVDB_NOMEM;
+        }
     }
     return svdb_query_internal(db, s, rows);
 }
