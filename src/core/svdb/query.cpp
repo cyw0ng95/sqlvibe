@@ -2015,23 +2015,54 @@ static bool qry_eval_where(const Row &row,
 
     /* EXISTS / NOT EXISTS (subquery) */
     if (g_query_db) {
-        /* Helper: substitute only qualified (table.col) outer row refs into a SQL string */
+        /* Helper: substitute outer row refs into a SQL string.
+         * Handles both qualified (table.col) and unqualified (col) names.
+         * Uses longest-match first to avoid partial substitutions.
+         * Does NOT substitute if the column is qualified with a different table. */
         auto subst_outer = [&](std::string sub_sql) -> std::string {
+            /* Build list of (key, value) pairs sorted by key length (longest first) */
+            std::vector<std::pair<std::string, std::string>> subs;
             for (auto &kv : row) {
-                if (kv.first.empty() || kv.first.find('.') == std::string::npos) continue;
+                if (kv.first.empty()) continue;
                 std::string repl;
                 if (kv.second.type == SVDB_TYPE_NULL) repl = "NULL";
                 else if (kv.second.type == SVDB_TYPE_INT) repl = std::to_string(kv.second.ival);
                 else if (kv.second.type == SVDB_TYPE_REAL) {
                     char buf[64]; snprintf(buf, sizeof(buf), "%.17g", kv.second.rval); repl = buf;
                 } else { repl = "'" + kv.second.sval + "'"; }
-                for (size_t p = sub_sql.find(kv.first); p != std::string::npos;
-                     p = sub_sql.find(kv.first, p)) {
+                subs.push_back({kv.first, repl});
+            }
+            /* Sort by key length (longest first) to avoid partial matches */
+            std::sort(subs.begin(), subs.end(),
+                [](const auto &a, const auto &b) { return a.first.size() > b.first.size(); });
+
+            /* Substitute each key */
+            for (auto &sub : subs) {
+                const std::string &key = sub.first;
+                const std::string &repl = sub.second;
+                /* Check if this is a qualified key (contains '.') */
+                bool is_qualified = (key.find('.') != std::string::npos);
+                
+                for (size_t p = sub_sql.find(key); p != std::string::npos;
+                     p = sub_sql.find(key, p)) {
+                    /* Check word boundaries */
                     bool lb = (p == 0 || (!isalnum((unsigned char)sub_sql[p-1]) && sub_sql[p-1] != '_'));
-                    bool rb = (p + kv.first.size() >= sub_sql.size() ||
-                               (!isalnum((unsigned char)sub_sql[p+kv.first.size()]) && sub_sql[p+kv.first.size()] != '_'));
-                    if (lb && rb) { sub_sql.replace(p, kv.first.size(), repl); p += repl.size(); }
-                    else { p += kv.first.size(); }
+                    bool rb = (p + key.size() >= sub_sql.size() ||
+                               (!isalnum((unsigned char)sub_sql[p+key.size()]) && sub_sql[p+key.size()] != '_'));
+                    
+                    /* Additional check: if key is unqualified, make sure it's not preceded by 'table.' */
+                    if (!is_qualified && lb && p > 0) {
+                        /* Check if preceded by identifier and dot (e.g., "order_line.") */
+                        size_t dot_pos = p - 1;
+                        if (sub_sql[dot_pos] == '.') {
+                            /* Skip this - it's part of a qualified reference */
+                            p += key.size();
+                            continue;
+                        }
+                    }
+                    
+                    if (lb && rb) { sub_sql.replace(p, key.size(), repl); p += repl.size(); }
+                    else { p += key.size(); }
                 }
             }
             return sub_sql;
@@ -2191,23 +2222,39 @@ static bool qry_eval_where(const Row &row,
                 std::string inside_u = qry_upper(qry_trim(inside));
                 /* Check for subquery */
                 if (inside_u.size() > 6 && inside_u.substr(0, 7) == "SELECT " && g_query_db) {
-                    /* Substitute only qualified outer row refs (table.col) */
+                    /* Substitute outer row refs (both qualified and unqualified) */
                     std::string sub_sql = qry_trim(inside);
+                    /* Build list of (key, value) pairs sorted by key length (longest first) */
+                    std::vector<std::pair<std::string, std::string>> subs;
                     for (auto &kv : row) {
-                        if (kv.first.empty() || kv.first.find('.') == std::string::npos) continue;
+                        if (kv.first.empty()) continue;
                         std::string repl;
                         if (kv.second.type == SVDB_TYPE_NULL) repl = "NULL";
                         else if (kv.second.type == SVDB_TYPE_INT) repl = std::to_string(kv.second.ival);
                         else if (kv.second.type == SVDB_TYPE_REAL) {
                             char buf[64]; snprintf(buf, sizeof(buf), "%.17g", kv.second.rval); repl = buf;
                         } else { repl = "'" + kv.second.sval + "'"; }
-                        for (size_t p = sub_sql.find(kv.first); p != std::string::npos;
-                             p = sub_sql.find(kv.first, p)) {
+                        subs.push_back({kv.first, repl});
+                    }
+                    std::sort(subs.begin(), subs.end(),
+                        [](const auto &a, const auto &b) { return a.first.size() > b.first.size(); });
+                    /* Substitute each key */
+                    for (auto &sub : subs) {
+                        const std::string &key = sub.first;
+                        const std::string &repl = sub.second;
+                        bool is_qualified = (key.find('.') != std::string::npos);
+                        for (size_t p = sub_sql.find(key); p != std::string::npos;
+                             p = sub_sql.find(key, p)) {
                             bool lb = (p == 0 || (!isalnum((unsigned char)sub_sql[p-1]) && sub_sql[p-1] != '_'));
-                            bool rb = (p + kv.first.size() >= sub_sql.size() ||
-                                       (!isalnum((unsigned char)sub_sql[p+kv.first.size()]) && sub_sql[p+kv.first.size()] != '_'));
-                            if (lb && rb) { sub_sql.replace(p, kv.first.size(), repl); p += repl.size(); }
-                            else { p += kv.first.size(); }
+                            bool rb = (p + key.size() >= sub_sql.size() ||
+                                       (!isalnum((unsigned char)sub_sql[p+key.size()]) && sub_sql[p+key.size()] != '_'));
+                            /* Skip if unqualified key is preceded by '.' (part of qualified ref) */
+                            if (!is_qualified && lb && p > 0 && sub_sql[p-1] == '.') {
+                                p += key.size();
+                                continue;
+                            }
+                            if (lb && rb) { sub_sql.replace(p, key.size(), repl); p += repl.size(); }
+                            else { p += key.size(); }
                         }
                     }
                     svdb_rows_t *sub_rows = nullptr;
@@ -3956,19 +4003,34 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 if (i + kwlen <= su2.size() && su2.substr(i, kwlen) == kw) {
                     std::string lhs = qry_trim(sql.substr(0, i));
                     std::string rhs = qry_trim(sql.substr(i + kwlen));
-                    /* Remove trailing ORDER BY from rhs (apply to merged result) */
+                    /* Validate: ORDER BY/GROUP BY/HAVING not allowed in individual SELECTs of UNION/INTERSECT/EXCEPT.
+                     * They must appear only at the end of the entire set operation. */
+                    std::string lhs_upper = qry_upper(lhs);
                     std::string rhs_upper = qry_upper(rhs);
+                    /* Check LHS for invalid clauses */
+                    if (lhs_upper.find(" ORDER BY ") != std::string::npos ||
+                        lhs_upper.find(" GROUP BY ") != std::string::npos ||
+                        lhs_upper.find(" HAVING ") != std::string::npos) {
+                        db->last_error = "SQL logic error: ORDER BY clause should come after " + 
+                            std::string(kw, 1, kwlen-2) + " not before";
+                        return SVDB_ERR;
+                    }
+                    /* Check RHS for trailing clauses (these will be applied to the combined result) */
                     std::string order_clause;
                     size_t ob = rhs_upper.rfind(" ORDER BY ");
                     if (ob == std::string::npos) ob = rhs_upper.rfind("ORDER BY ");
                     if (ob != std::string::npos) {
+                        /* Check if there are other clauses before ORDER BY that shouldn't be there */
+                        std::string before_ob = rhs_upper.substr(0, ob);
+                        if (before_ob.find(" GROUP BY ") != std::string::npos ||
+                            before_ob.find(" HAVING ") != std::string::npos) {
+                            db->last_error = "SQL logic error: ORDER BY clause should come after " + 
+                                std::string(kw, 1, kwlen-2);
+                            return SVDB_ERR;
+                        }
                         order_clause = rhs.substr(ob);
                         rhs = rhs.substr(0, ob);
                     }
-                    /* Also strip ORDER BY from lhs */
-                    std::string lhs_upper = qry_upper(lhs);
-                    size_t ob2 = lhs_upper.rfind(" ORDER BY ");
-                    if (ob2 != std::string::npos) { lhs = lhs.substr(0, ob2); }
 
                     svdb_rows_t *left = nullptr, *right = nullptr;
                     svdb_code_t rc1 = svdb_query_internal(db, lhs, &left);
