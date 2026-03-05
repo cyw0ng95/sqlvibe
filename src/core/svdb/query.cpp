@@ -4409,7 +4409,9 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                         va = eval_expr(oc.expr, orig_rows[ia], merged_col_order);
                         vb = eval_expr(oc.expr, orig_rows[ib], merged_col_order);
                     }
-                    /* Handle NULLs: SQLite treats NULL as smallest value (NULLS LAST for DESC, NULLS FIRST for ASC by default)
+                    /* Handle NULLs: SQLite treats NULL as smallest value, so:
+                     *   ASC  → NULLS FIRST (smallest values sort first)
+                     *   DESC → NULLS LAST  (smallest values sort last)
                      * NULLS FIRST/LAST override: nulls<0 = NULLS FIRST, nulls>0 = NULLS LAST */
                     bool a_null = (va.type == SVDB_TYPE_NULL);
                     bool b_null = (vb.type == SVDB_TYPE_NULL);
@@ -5113,26 +5115,27 @@ svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
             /* Split on top-level semicolons to find trailing SELECT */
             {
                 std::vector<std::string> stmts;
-                std::string cur; int dep=0; bool ins=false;
-                for (size_t i=0;i<s.size();++i) {
-                    char c2=s[i];
-                    if(c2=='\''){ins=!ins;cur+=c2;continue;} if(ins){cur+=c2;continue;}
-                    if(c2=='(')++dep; else if(c2==')')--dep;
-                    if(c2==';'&&dep==0){
-                        std::string st=qry_trim(cur);
-                        if(!st.empty()) stmts.push_back(st);
-                        cur.clear();
-                    } else { cur+=c2; }
+                std::string cur_stmt; int paren_depth = 0; bool in_string = false;
+                for (size_t i = 0; i < s.size(); ++i) {
+                    char ch = s[i];
+                    if (ch == '\'') { in_string = !in_string; cur_stmt += ch; continue; }
+                    if (in_string) { cur_stmt += ch; continue; }
+                    if (ch == '(') ++paren_depth; else if (ch == ')') --paren_depth;
+                    if (ch == ';' && paren_depth == 0) {
+                        std::string stmt = qry_trim(cur_stmt);
+                        if (!stmt.empty()) stmts.push_back(stmt);
+                        cur_stmt.clear();
+                    } else { cur_stmt += ch; }
                 }
-                std::string last=qry_trim(cur);
-                if(!last.empty()) stmts.push_back(last);
-                if(stmts.size()>1) {
-                    std::string last_upper=qry_upper(stmts.back().substr(0, std::min((size_t)7,stmts.back().size())));
-                    if(last_upper.substr(0,6)=="SELECT"||last_upper.substr(0,4)=="WITH") {
+                std::string last_stmt = qry_trim(cur_stmt);
+                if (!last_stmt.empty()) stmts.push_back(last_stmt);
+                if (stmts.size() > 1) {
+                    std::string last_upper = qry_upper(stmts.back().substr(0, std::min((size_t)7, stmts.back().size())));
+                    if (last_upper.substr(0,6) == "SELECT" || last_upper.substr(0,4) == "WITH") {
                         /* Execute non-SELECT statements (release lock to avoid deadlock),
                          * then return SELECT result */
                         lk.unlock();
-                        for(size_t i=0;i<stmts.size()-1;++i){
+                        for (size_t i = 0; i < stmts.size()-1; ++i) {
                             svdb_result_t res{};
                             svdb_exec(db, stmts[i].c_str(), &res);
                         }

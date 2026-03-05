@@ -1821,6 +1821,7 @@ svdb_code_t svdb_prepare(svdb_db_t *db, const char *sql, svdb_stmt_t **stmt) {
     BUG_ON(db == nullptr);
     BUG_ON(sql == nullptr);
     BUG_ON(stmt == nullptr);
+    /* BUG_ON fires in debug builds only; the if-guard is the release-build safety net */
     if (!db || !sql || !stmt) return SVDB_ERR;
     /* Empty SQL is an error */
     const char *p = sql;
