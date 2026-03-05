@@ -760,7 +760,16 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
         /* json_type(json, path) */
         if (eu.substr(0, 10) == "JSON_TYPE(" && fn_paren_ok(10-1)) {
             std::string args = e.substr(10, e.size()-11);
-            size_t comma = args.find(',');
+            /* Find comma outside of string literals */
+            size_t comma = std::string::npos;
+            int depth = 0; bool in_str = false;
+            for (size_t i = 0; i < args.size(); ++i) {
+                char c = args[i];
+                if (c == '\'' && (i == 0 || args[i-1] != '\'')) { in_str = !in_str; continue; }
+                if (in_str) continue;
+                if (c == '(') ++depth; else if (c == ')') --depth;
+                else if (c == ',' && depth == 0) { comma = i; break; }
+            }
             if (comma != std::string::npos) {
                 SvdbVal json_val = eval_expr(args.substr(0, comma), row, col_order);
                 SvdbVal path_val = eval_expr(args.substr(comma+1), row, col_order);
@@ -790,7 +799,16 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
         /* json_length(json, path) */
         if (eu.substr(0, 12) == "JSON_LENGTH(" && fn_paren_ok(12-1)) {
             std::string args = e.substr(12, e.size()-13);
-            size_t comma = args.find(',');
+            /* Find comma outside of string literals */
+            size_t comma = std::string::npos;
+            int depth = 0; bool in_str = false;
+            for (size_t i = 0; i < args.size(); ++i) {
+                char c = args[i];
+                if (c == '\'' && (i == 0 || args[i-1] != '\'')) { in_str = !in_str; continue; }
+                if (in_str) continue;
+                if (c == '(') ++depth; else if (c == ')') --depth;
+                else if (c == ',' && depth == 0) { comma = i; break; }
+            }
             SvdbVal json_val, path_val;
             if (comma != std::string::npos) {
                 json_val = eval_expr(args.substr(0, comma), row, col_order);
