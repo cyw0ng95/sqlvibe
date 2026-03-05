@@ -700,27 +700,46 @@ char* svdb_json_extract_multi(const char* json_str, const char** paths, int n_pa
 
 char* svdb_json_array(const char** values, int n_values) {
     if (!values || n_values < 0) return nullptr;
-    
+
     try {
         svdb_json::Value arr = svdb_json::Value::makeArray();
-        
+
         for (int i = 0; i < n_values; i++) {
             if (values[i]) {
                 // Try to parse as JSON, otherwise treat as string
-                if (values[i][0] == '{' || values[i][0] == '[' || 
-                    strcmp(values[i], "null") == 0 || strcmp(values[i], "true") == 0 ||
-                    strcmp(values[i], "false") == 0) {
-                    svdb_json::Parser parser(values[i]);
+                const char* val = values[i];
+                bool parsed = false;
+                
+                // Check for object, array, null, boolean
+                if (val[0] == '{' || val[0] == '[' ||
+                    strcmp(val, "null") == 0 || strcmp(val, "true") == 0 ||
+                    strcmp(val, "false") == 0) {
+                    svdb_json::Parser parser(val);
                     svdb_json::Value v = parser.parse();
                     arr.array.push_back(v);
-                } else {
-                    arr.array.push_back(svdb_json::Value::makeString(values[i]));
+                    parsed = true;
+                }
+                
+                // Check for number (integer or real)
+                if (!parsed) {
+                    char* endptr = nullptr;
+                    double num = strtod(val, &endptr);
+                    if (endptr > val && *endptr == '\0') {
+                        // Valid number
+                        arr.array.push_back(svdb_json::Value::makeNumber(num));
+                        parsed = true;
+                    }
+                }
+                
+                // Default: treat as string
+                if (!parsed) {
+                    arr.array.push_back(svdb_json::Value::makeString(val));
                 }
             } else {
                 arr.array.push_back(svdb_json::Value::makeNull());
             }
         }
-        
+
         std::string result = svdb_json::Serializer::serialize(arr, false);
         char* out = static_cast<char*>(std::malloc(result.size() + 1));
         if (out) {
