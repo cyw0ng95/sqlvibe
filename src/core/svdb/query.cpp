@@ -848,7 +848,16 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
         /* json_remove(json, path) */
         if (eu.substr(0, 12) == "JSON_REMOVE(" && fn_paren_ok(12-1)) {
             std::string args = e.substr(12, e.size()-13);
-            size_t comma = args.find(',');
+            /* Find comma outside of string literals */
+            size_t comma = std::string::npos;
+            int depth = 0; bool in_str = false;
+            for (size_t i = 0; i < args.size(); ++i) {
+                char c = args[i];
+                if (c == '\'' && (i == 0 || args[i-1] != '\'')) { in_str = !in_str; continue; }
+                if (in_str) continue;
+                if (c == '(') ++depth; else if (c == ')') --depth;
+                else if (c == ',' && depth == 0) { comma = i; break; }
+            }
             if (comma != std::string::npos) {
                 SvdbVal json_val = eval_expr(args.substr(0, comma), row, col_order);
                 SvdbVal path_val = eval_expr(args.substr(comma+1), row, col_order);
@@ -3669,6 +3678,45 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 v_idx.type = SVDB_TYPE_TEXT; v_idx.sval = std::get<1>(entry);
                 v_stat.type = SVDB_TYPE_TEXT; v_stat.sval = std::get<2>(entry);
                 r->rows.push_back({v_tbl, v_idx, v_stat});
+            }
+            *rows_out = r;
+            return SVDB_OK;
+        }
+
+        /* sqlvibe_extensions virtual table */
+        auto se_pos = su_is.find(" FROM SQLVIBE_EXTENSIONS");
+        if (se_pos != std::string::npos) {
+            /* Parse WHERE clause */
+            std::string where_txt;
+            {
+                size_t wp = su_is.find(" WHERE ", se_pos);
+                if (wp != std::string::npos) {
+                    where_txt = qry_trim(sql.substr(wp + 7));
+                    /* Strip ORDER BY / GROUP BY / LIMIT / HAVING suffixes */
+                    static const char *stop_kws[] = {" ORDER BY "," GROUP BY "," LIMIT "," HAVING ", nullptr};
+                    std::string wtu = qry_upper(where_txt);
+                    for (const char **kw = stop_kws; *kw; ++kw) {
+                        size_t sp = wtu.find(*kw);
+                        if (sp != std::string::npos) { where_txt = qry_trim(where_txt.substr(0, sp)); wtu = qry_upper(where_txt); }
+                    }
+                }
+            }
+            svdb_rows_t *r = new (std::nothrow) svdb_rows_t();
+            if (!r) return SVDB_NOMEM;
+            r->col_names = {"name", "description"};
+            /* Built-in extensions */
+            struct ExtInfo { const char *name; const char *desc; };
+            ExtInfo exts[] = {
+                {"json", "JSON functions"},
+                {"math", "Math functions"},
+                {"fts5", "Full-text search"}
+            };
+            for (auto &ext : exts) {
+                Row rd;
+                rd["name"] = SvdbVal{SVDB_TYPE_TEXT,0,0,ext.name};
+                rd["description"] = SvdbVal{SVDB_TYPE_TEXT,0,0,ext.desc};
+                if (!where_txt.empty() && !qry_eval_where(rd, r->col_names, where_txt)) continue;
+                r->rows.push_back({rd["name"], rd["description"]});
             }
             *rows_out = r;
             return SVDB_OK;
