@@ -1484,7 +1484,82 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
         rc = do_delete(db, s, res);
     } else if (kw == "BEGIN") {
         /* SQL-level transaction: create snapshot */
+        if (db->in_transaction) {
+            rc = SVDB_ERR; /* Nested BEGIN is an error */
+        } else {
+            svdb_tx_t *t = new (std::nothrow) svdb_tx_t();
+            if (t) {
+                t->db = db;
+                t->data_snapshot  = db->data;
+                t->rowid_snapshot = db->rowid_counter;
+                db->sql_tx = t;
+                db->in_transaction = true;
+            }
+            rc = SVDB_OK;
+        }
+    } else if (kw == "COMMIT") {
+        if (db->in_transaction && db->sql_tx) {
+            delete db->sql_tx;
+            db->sql_tx = nullptr;
+            db->in_transaction = false;
+            rc = SVDB_OK;
+        } else {
+            rc = SVDB_ERR; /* COMMIT without BEGIN */
+        }
+    } else if (kw == "ROLLBACK") {
+        /* Could be ROLLBACK or ROLLBACK TO SAVEPOINT name */
+        std::string su2 = str_upper(s);
+        size_t to_pos = su2.find(" TO ");
+        if (to_pos != std::string::npos) {
+            if (db->in_transaction && db->sql_tx) {
+                /* ROLLBACK TO [SAVEPOINT] name */
+                std::string rest2 = str_trim(s.substr(to_pos + 4));
+                /* skip optional SAVEPOINT keyword */
+                std::string rest2u = str_upper(rest2);
+                if (rest2u.substr(0, 9) == "SAVEPOINT") rest2 = str_trim(rest2.substr(9));
+                /* remove trailing ; */
+                while (!rest2.empty() && (rest2.back() == ';' || isspace((unsigned char)rest2.back())))
+                    rest2.pop_back();
+                /* Find savepoint */
+                const std::string &n = rest2;
+                auto &sp_names = db->sql_tx->savepoints;
+                auto &sp_data  = db->sql_tx->sp_data;
+                auto &sp_rowid = db->sql_tx->sp_rowid;
+                bool found_sp = false;
+                for (int i = (int)sp_names.size() - 1; i >= 0; --i) {
+                    if (sp_names[i] == n) {
+                        if (i < (int)sp_data.size()) {
+                            db->data          = sp_data[i];
+                            db->rowid_counter = sp_rowid[i];
+                            sp_names.resize(i + 1);
+                            sp_data.resize(i + 1);
+                            sp_rowid.resize(i + 1);
+                        }
+                        found_sp = true;
+                        break;
+                    }
+                }
+                rc = found_sp ? SVDB_OK : SVDB_ERR; /* Unknown savepoint = error */
+            } else {
+                rc = SVDB_ERR; /* ROLLBACK TO without active transaction */
+            }
+        } else if (db->in_transaction && db->sql_tx) {
+            /* Full rollback */
+            db->data          = db->sql_tx->data_snapshot;
+            db->rowid_counter = db->sql_tx->rowid_snapshot;
+            delete db->sql_tx;
+            db->sql_tx = nullptr;
+            db->in_transaction = false;
+            rc = SVDB_OK;
+        } else {
+            rc = SVDB_ERR; /* ROLLBACK without BEGIN */
+        }
+    } else if (kw == "SAVEPOINT") {
+        std::string sp_name = str_trim(s.substr(9));
+        while (!sp_name.empty() && (sp_name.back() == ';' || isspace((unsigned char)sp_name.back())))
+            sp_name.pop_back();
         if (!db->in_transaction) {
+            /* Implicit transaction for SAVEPOINT without BEGIN (SQLite behaviour) */
             svdb_tx_t *t = new (std::nothrow) svdb_tx_t();
             if (t) {
                 t->db = db;
@@ -1494,58 +1569,7 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
                 db->in_transaction = true;
             }
         }
-        rc = SVDB_OK;
-    } else if (kw == "COMMIT") {
         if (db->in_transaction && db->sql_tx) {
-            delete db->sql_tx;
-            db->sql_tx = nullptr;
-            db->in_transaction = false;
-        }
-        rc = SVDB_OK;
-    } else if (kw == "ROLLBACK") {
-        /* Could be ROLLBACK or ROLLBACK TO SAVEPOINT name */
-        std::string su2 = str_upper(s);
-        size_t to_pos = su2.find(" TO ");
-        if (to_pos != std::string::npos && db->in_transaction && db->sql_tx) {
-            /* ROLLBACK TO [SAVEPOINT] name */
-            std::string rest2 = str_trim(s.substr(to_pos + 4));
-            /* skip optional SAVEPOINT keyword */
-            std::string rest2u = str_upper(rest2);
-            if (rest2u.substr(0, 9) == "SAVEPOINT") rest2 = str_trim(rest2.substr(9));
-            /* remove trailing ; */
-            while (!rest2.empty() && (rest2.back() == ';' || isspace((unsigned char)rest2.back())))
-                rest2.pop_back();
-            /* Find savepoint */
-            const std::string &n = rest2;
-            auto &sp_names = db->sql_tx->savepoints;
-            auto &sp_data  = db->sql_tx->sp_data;
-            auto &sp_rowid = db->sql_tx->sp_rowid;
-            for (int i = (int)sp_names.size() - 1; i >= 0; --i) {
-                if (sp_names[i] == n) {
-                    if (i < (int)sp_data.size()) {
-                        db->data          = sp_data[i];
-                        db->rowid_counter = sp_rowid[i];
-                        sp_names.resize(i + 1);
-                        sp_data.resize(i + 1);
-                        sp_rowid.resize(i + 1);
-                    }
-                    break;
-                }
-            }
-        } else if (db->in_transaction && db->sql_tx) {
-            /* Full rollback */
-            db->data          = db->sql_tx->data_snapshot;
-            db->rowid_counter = db->sql_tx->rowid_snapshot;
-            delete db->sql_tx;
-            db->sql_tx = nullptr;
-            db->in_transaction = false;
-        }
-        rc = SVDB_OK;
-    } else if (kw == "SAVEPOINT") {
-        if (db->in_transaction && db->sql_tx) {
-            std::string sp_name = str_trim(s.substr(9));
-            while (!sp_name.empty() && (sp_name.back() == ';' || isspace((unsigned char)sp_name.back())))
-                sp_name.pop_back();
             db->sql_tx->savepoints.push_back(sp_name);
             db->sql_tx->sp_data.push_back(db->data);
             db->sql_tx->sp_rowid.push_back(db->rowid_counter);
