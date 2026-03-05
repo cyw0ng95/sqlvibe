@@ -843,15 +843,24 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             std::string args = e.substr(8, e.size()-9);
             std::vector<std::string> parts;
             int rd = 0; size_t start2 = 0;
+            bool in_sq = false;
             for (size_t i = 0; i <= args.size(); ++i) {
                 char c = i < args.size() ? args[i] : ',';
+                if (c == '\'' && !in_sq) { in_sq = true; continue; }
+                if (c == '\'' && in_sq) { if (i+1<args.size()&&args[i+1]=='\''){++i;continue;} in_sq=false; continue; }
+                if (in_sq) continue;
                 if (c == '(') ++rd; else if (c == ')') --rd;
                 else if (c == ',' && rd == 0) { parts.push_back(args.substr(start2, i-start2)); start2 = i+1; }
             }
             if (parts.size() >= 3) {
-                std::string src = val_to_str(eval_expr(parts[0], row, col_order));
-                std::string old2 = val_to_str(eval_expr(parts[1], row, col_order));
-                std::string new2 = val_to_str(eval_expr(parts[2], row, col_order));
+                SvdbVal sv = eval_expr(parts[0], row, col_order);
+                SvdbVal ov = eval_expr(parts[1], row, col_order);
+                SvdbVal nv = eval_expr(parts[2], row, col_order);
+                /* Any NULL arg → NULL result (SQLite behavior) */
+                if (sv.type == SVDB_TYPE_NULL || ov.type == SVDB_TYPE_NULL || nv.type == SVDB_TYPE_NULL) return SvdbVal{};
+                std::string src = val_to_str(sv);
+                std::string old2 = val_to_str(ov);
+                std::string new2 = val_to_str(nv);
                 if (!old2.empty()) {
                     size_t pos2 = 0;
                     while ((pos2 = src.find(old2, pos2)) != std::string::npos) {
