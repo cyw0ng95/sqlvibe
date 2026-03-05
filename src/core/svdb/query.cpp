@@ -1804,6 +1804,54 @@ static bool qry_eval_where(const Row &row,
         }
     }
 
+    /* Quantified comparisons: expr op ALL/ANY/SOME (subquery) */
+    {
+        /* Patterns: `expr op ALL (`, `expr op ANY (`, `expr op SOME (` */
+        static const char *quants[] = {" ALL (", " ANY (", " SOME (", nullptr};
+        static const char *cmp_ops[] = {"!=", "<>", "<=", ">=", "=", "<", ">", nullptr};
+        for (int qi = 0; quants[qi]; ++qi) {
+            size_t q_pos = wu.find(quants[qi]);
+            if (q_pos == std::string::npos) continue;
+            bool is_all = (qi == 0);
+            /* Find the comparison operator just before quants[qi] */
+            size_t cmp_pos = std::string::npos; size_t cmp_len = 0;
+            for (int oi = 0; cmp_ops[oi]; ++oi) {
+                size_t ol = strlen(cmp_ops[oi]);
+                if (q_pos >= ol + 1 && wt.substr(q_pos - ol, ol) == cmp_ops[oi]) {
+                    cmp_pos = q_pos - ol; cmp_len = ol; break;
+                }
+            }
+            if (cmp_pos == std::string::npos) continue;
+            std::string lhs_s = qry_trim(wt.substr(0, cmp_pos));
+            std::string op_s  = wt.substr(cmp_pos, cmp_len);
+            size_t sub_start  = wt.find('(', q_pos);
+            size_t sub_end    = wt.rfind(')');
+            if (sub_start == std::string::npos || sub_end == std::string::npos) continue;
+            std::string sub_sql = qry_trim(wt.substr(sub_start+1, sub_end - sub_start - 1));
+            SvdbVal lhs = eval_expr(lhs_s, row, col_order);
+            if (lhs.type == SVDB_TYPE_NULL) return false;
+            svdb_rows_t *sub_rows = nullptr;
+            if (svdb_query_internal(g_query_db, sub_sql, &sub_rows) != SVDB_OK || !sub_rows) return false;
+            bool result = is_all; /* ALL: start true; ANY/SOME: start false */
+            for (auto &srow : sub_rows->rows) {
+                if (srow.empty() || srow[0].type == SVDB_TYPE_NULL) continue;
+                int cmp = val_cmp(lhs, srow[0]);
+                bool match = false;
+                if      (op_s == "=")  match = (cmp == 0);
+                else if (op_s == "!=") match = (cmp != 0);
+                else if (op_s == "<>") match = (cmp != 0);
+                else if (op_s == "<")  match = (cmp < 0);
+                else if (op_s == "<=") match = (cmp <= 0);
+                else if (op_s == ">")  match = (cmp > 0);
+                else if (op_s == ">=") match = (cmp >= 0);
+                if (is_all) { if (!match) { result = false; break; } }
+                else        { if ( match) { result = true;  break; } }
+            }
+            delete sub_rows;
+            return result;
+        }
+    }
+
     /* Comparison operators: !=, <>, <=, >=, =, <, > (depth-aware scan) */
     {
         const char *ops[] = {"!=", "<>", "<=", ">=", "=", "<", ">", nullptr};
