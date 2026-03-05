@@ -766,7 +766,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 SvdbVal path_val = eval_expr(args.substr(comma+1), row, col_order);
                 if (json_val.type == SVDB_TYPE_NULL) return SvdbVal{};
                 std::string json_str = val_to_str(json_val);
-                std::string path_str = path_val.type == SVDB_TYPE_NULL ? "" : val_to_str(path_val);
+                std::string path_str = path_val.type == SVDB_TYPE_NULL ? "$" : val_to_str(path_val);
                 char *result = svdb_json_type(json_str.c_str(), path_str.c_str());
                 if (result) {
                     std::string result_str(result);
@@ -775,6 +775,17 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 }
                 return SvdbVal{};
             }
+            /* No comma - single argument json_type(json) */
+            SvdbVal json_val = eval_expr(args, row, col_order);
+            if (json_val.type == SVDB_TYPE_NULL) return SvdbVal{};
+            std::string json_str = val_to_str(json_val);
+            char *result = svdb_json_type(json_str.c_str(), "$");
+            if (result) {
+                std::string result_str(result);
+                svdb_json_free(result);
+                SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = result_str; return v;
+            }
+            return SvdbVal{};
         }
         /* json_length(json, path) */
         if (eu.substr(0, 12) == "JSON_LENGTH(" && fn_paren_ok(12-1)) {
@@ -790,7 +801,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
             if (json_val.type == SVDB_TYPE_NULL) return SvdbVal{};
             std::string json_str = val_to_str(json_val);
-            std::string path_str = path_val.type == SVDB_TYPE_NULL ? "" : val_to_str(path_val);
+            std::string path_str = path_val.type == SVDB_TYPE_NULL ? "$" : val_to_str(path_val);
             int64_t len = svdb_json_length(json_str.c_str(), path_str.c_str());
             if (len < 0) return SvdbVal{}; /* Error case */
             SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = len; return v;
