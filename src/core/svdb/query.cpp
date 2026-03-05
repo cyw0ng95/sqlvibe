@@ -5267,6 +5267,7 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
         if (!parg.empty()) {
             std::string up = qry_upper(parg);
             db->foreign_keys_enabled = (up == "ON" || up == "1" || up == "TRUE");
+            return SVDB_OK; /* setter returns no rows (SQLite behavior) */
         }
         r->col_names = {"foreign_keys"};
         SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->foreign_keys_enabled ? 1 : 0;
