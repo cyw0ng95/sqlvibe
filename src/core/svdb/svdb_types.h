@@ -15,6 +15,7 @@ struct ColDef {
     std::string default_val;
     bool        not_null   = false;
     bool        primary_key = false;
+    bool        auto_increment = false; /* INTEGER PRIMARY KEY AUTOINCREMENT */
 };
 
 /* Table-level check constraint expression */

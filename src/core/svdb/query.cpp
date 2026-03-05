@@ -2216,6 +2216,10 @@ static AggState make_agg(const std::string &expr) {
                     a.distinct = true;
                     a.arg = qry_trim(a.arg.substr(9));
                 }
+                /* Strip ALL prefix (standard SQL: ALL is default, same as no DISTINCT) */
+                else if (arg_upper.size() > 4 && arg_upper.substr(0, 4) == "ALL ") {
+                    a.arg = qry_trim(a.arg.substr(4));
+                }
                 break;
             }
         }

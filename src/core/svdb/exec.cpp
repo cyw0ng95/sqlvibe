@@ -289,6 +289,8 @@ static void parse_column_defs(const std::string &sql, size_t pos,
                 cd.primary_key = true;
                 cd.not_null = true;
                 if (out_pk) out_pk->push_back(col_name);
+            } else if (ckw == "AUTOINCREMENT") {
+                cd.auto_increment = true;
             } else if (ckw == "UNIQUE") {
                 /* Column-level UNIQUE */
                 if (out_uniq) out_uniq->push_back({col_name});
@@ -1100,6 +1102,22 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         }
 
         /* ── Constraint checks ───────────────────────────────── */
+
+        /* Auto-assign values for INTEGER PRIMARY KEY (AUTOINCREMENT) columns that were omitted */
+        for (const auto &cn : col_order) {
+            auto cdit = db->schema[tname].find(cn);
+            if (cdit != db->schema[tname].end() && cdit->second.primary_key &&
+                (cdit->second.auto_increment ||
+                 str_upper(cdit->second.type) == "INTEGER")) {
+                auto rit = row.find(cn);
+                if (rit == row.end() || rit->second.type == SVDB_TYPE_NULL) {
+                    /* Peek at the next rowid_counter value (it gets incremented later) */
+                    SvdbVal v; v.type = SVDB_TYPE_INT;
+                    v.ival = db->rowid_counter[tname] + 1;
+                    row[cn] = v;
+                }
+            }
+        }
 
         /* NOT NULL check */
         for (const auto &cn : col_order) {
