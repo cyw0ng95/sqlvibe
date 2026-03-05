@@ -10,6 +10,8 @@
 #   -f              Run fuzz testing (seed-corpus run, not continuous fuzzing)
 #   -c              Collect coverage — works with -t and/or -b; generates
 #                   .build/coverage.out and .build/coverage.html
+#   -d              Debug build: enables SVDB_BUILD_DEBUG macro in C++ (assertions etc.)
+#   --sanitizer=X   Enable sanitizer X (e.g. address, thread, undefined, memory)
 #   --fuzz-time D   Duration per fuzz target during -f (default: 30s)
 #   -v              Verbose output (passes -v to go test)
 #   -h              Print this help message
@@ -22,14 +24,16 @@
 #   .build/coverage.html     — HTML coverage report (when -c is used)
 #
 # Examples:
-#   ./build.sh                # build with CGO (default)
-#   ./build.sh -t             # run all unit tests + SQL compliance tests + Regression
-#   ./build.sh -t -c          # run tests and generate coverage report
-#   ./build.sh -b             # run all benchmarks
-#   ./build.sh -t -b -c       # tests + benchmarks + merged coverage
-#   ./build.sh -f             # run fuzz seed corpus (30s per target)
-#   ./build.sh -f --fuzz-time 5m  # fuzz each target for 5 minutes
-#   ./build.sh -t -b -f -c    # everything
+#   ./build.sh                        # build (CGO always on)
+#   ./build.sh -d                     # debug build with SVDB_BUILD_DEBUG assertions
+#   ./build.sh --sanitizer=address    # build with AddressSanitizer
+#   ./build.sh -t                     # run all unit tests + SQL compliance tests + Regression
+#   ./build.sh -t -c                  # run tests and generate coverage report
+#   ./build.sh -b                     # run all benchmarks
+#   ./build.sh -t -b -c               # tests + benchmarks + merged coverage
+#   ./build.sh -f                     # run fuzz seed corpus (30s per target)
+#   ./build.sh -f --fuzz-time 5m      # fuzz each target for 5 minutes
+#   ./build.sh -t -b -f -c            # everything
 #
 # Note: CGO is always enabled. C++ libraries are built automatically.
 # Test suites included with -t:
@@ -44,8 +48,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/.build"
 
-# Build tags: CGO always enabled
-EXT_TAGS="SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_EXT_FTS5,SVDB_EXT_PROFILING,SVDB_ENABLE_CGO,SVDB_ENABLE_CGO_DS,SVDB_ENABLE_CGO_VM,SVDB_ENABLE_CGO_QP"
+# Build tags: extension features (CGO is always enabled — no CGO switch tags)
+EXT_TAGS="SVDB_EXT_JSON,SVDB_EXT_MATH,SVDB_EXT_FTS5,SVDB_EXT_PROFILING"
 
 # Defaults
 RUN_TESTS=0
@@ -54,6 +58,8 @@ RUN_FUZZ=0
 COVERAGE=0
 FUZZ_TIME="30s"
 VERBOSE=0
+DEBUG_BUILD=0
+SANITIZER=""
 
 usage() {
     sed -n '2,/^set -euo/{ /^set -euo/d; s/^# \{0,1\}//; p }' "$0"
@@ -65,7 +71,9 @@ while [[ $# -gt 0 ]]; do
         -b)           RUN_BENCH=1 ;;
         -f)           RUN_FUZZ=1 ;;
         -c)           COVERAGE=1 ;;
+        -d)           DEBUG_BUILD=1 ;;
         --fuzz-time)  FUZZ_TIME="${2:?'--fuzz-time requires an argument'}"; shift ;;
+        --sanitizer=*)SANITIZER="${1#--sanitizer=}" ;;
         -v)           VERBOSE=1 ;;
         -h|--help)    usage; exit 0 ;;
         *)            echo "Unknown option: $1" >&2; usage; exit 1 ;;
@@ -88,7 +96,10 @@ echo "      - Wrapper: Phase 4 invoke chain (hash+filter, batch compare, scan+ag
 if [[ -f "CMakeLists.txt" ]]; then
     mkdir -p "$BUILD_DIR/cmake"
     cd "$BUILD_DIR/cmake"
-    cmake "$SCRIPT_DIR" -DCMAKE_BUILD_TYPE=Release
+    CMAKE_ARGS=(-DCMAKE_BUILD_TYPE=Release)
+    [[ $DEBUG_BUILD -eq 1 ]] && CMAKE_ARGS=(-DCMAKE_BUILD_TYPE=Debug -DSVDB_BUILD_DEBUG=1)
+    [[ -n "$SANITIZER" ]] && CMAKE_ARGS+=(-DSVDB_SANITIZER="$SANITIZER")
+    cmake "$SCRIPT_DIR" "${CMAKE_ARGS[@]}"
     cmake --build . -- -j$(nproc)
     cd "$SCRIPT_DIR"
 fi

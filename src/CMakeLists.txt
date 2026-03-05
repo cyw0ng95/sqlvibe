@@ -186,6 +186,21 @@ if(SVDB_COMPILE_OPTS)
     target_compile_options(svdb PRIVATE ${SVDB_COMPILE_OPTS})
 endif()
 
+# Debug build: enable SVDB_BUILD_DEBUG and assertions
+if(SVDB_BUILD_DEBUG)
+    target_compile_definitions(svdb PUBLIC SVDB_BUILD_DEBUG=1)
+    target_compile_options(svdb PRIVATE -g -O0 -UNDEBUG)
+    message(STATUS "SVDB_BUILD_DEBUG enabled — debug assertions active")
+endif()
+
+# Sanitizer support
+if(SVDB_SANITIZER)
+    set(SVDB_SAN_FLAGS "-fsanitize=${SVDB_SANITIZER}" -fno-omit-frame-pointer -g)
+    target_compile_options(svdb PRIVATE ${SVDB_SAN_FLAGS})
+    target_link_options(svdb PUBLIC "-fsanitize=${SVDB_SANITIZER}")
+    message(STATUS "Sanitizer enabled: ${SVDB_SANITIZER}")
+endif()
+
 set_target_properties(svdb PROPERTIES
     OUTPUT_NAME "svdb"
     VERSION 1.0.0
