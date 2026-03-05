@@ -4670,6 +4670,40 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         }
         return std::string::npos;
     };
+    
+    /* Find implicit column alias (without AS keyword)
+     * e.g., "name employee_name" → alias is "employee_name"
+     * Looks for trailing identifier that's not a SQL keyword */
+    auto find_implicit_alias = [](const std::string &expr) -> std::string {
+        std::string cu = qry_upper(expr);
+        /* Find last space-separated token */
+        size_t last_space = cu.rfind(' ');
+        if (last_space == std::string::npos || last_space >= expr.size() - 1) return "";
+        
+        std::string last_token = cu.substr(last_space + 1);
+        /* Check if it's a simple identifier (alphanumeric + underscore) */
+        for (char c : last_token) {
+            if (!isalnum((unsigned char)c) && c != '_') return "";
+        }
+        /* Check it's not a SQL keyword */
+        static const char *reserved_kws[] = {
+            "FROM", "WHERE", "ORDER", "GROUP", "HAVING", "LIMIT", "UNION", "INTERSECT",
+            "EXCEPT", "JOIN", "INNER", "LEFT", "RIGHT", "CROSS", "ON", "ASC", "DESC",
+            "NULL", "TRUE", "FALSE", "CASE", "WHEN", "THEN", "ELSE", "END", "CAST",
+            "AS", "DISTINCT", "ALL", "BETWEEN", "IN", "LIKE", "IS", "NOT", "AND", "OR",
+            "NULLS", "FIRST", "LAST", "OFFSET", "FETCH", "OVER", "PARTITION", "BY",
+            "ROWS", "RANGE", "UNBOUNDED", "PRECEDING", "FOLLOWING", "CURRENT", "ROW",
+            nullptr
+        };
+        for (const char **kw = reserved_kws; *kw; ++kw) {
+            if (last_token == *kw) return "";
+        }
+        /* Make sure the expression before the alias is valid */
+        std::string expr_part = qry_trim(expr.substr(0, last_space));
+        if (expr_part.empty()) return "";
+        
+        return expr.substr(last_space + 1);
+    };
 
     /* ── Determine output columns ── */
     std::vector<std::string> out_cols;
@@ -4680,7 +4714,14 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
             /* Strip alias (AS name) — must be at top level, not inside parens */
             std::string cu = qry_upper(c);
             size_t as_pos = find_top_as(cu);
-            std::string col_expr = (as_pos != std::string::npos) ? c.substr(0, as_pos) : c;
+            std::string col_expr;
+            if (as_pos != std::string::npos) {
+                col_expr = c.substr(0, as_pos);
+            } else {
+                /* Try implicit alias (without AS keyword) */
+                std::string implicit = find_implicit_alias(c);
+                col_expr = implicit.empty() ? c : c.substr(0, c.rfind(' '));
+            }
             out_cols.push_back(qry_trim(col_expr));
         }
     }
@@ -4690,8 +4731,12 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     for (const auto &c : (star ? sel_cols : sel_cols)) {
         std::string cu = qry_upper(c);
         size_t as_pos = find_top_as(cu);
-        if (as_pos != std::string::npos) out_names.push_back(qry_trim(c.substr(as_pos + 4)));
-        else out_names.push_back(c);
+        if (as_pos != std::string::npos) {
+            out_names.push_back(qry_trim(c.substr(as_pos + 4)));
+        } else {
+            std::string implicit = find_implicit_alias(c);
+            out_names.push_back(implicit.empty() ? c : implicit);
+        }
     }
 
     /* Column names for output: use original column names or expression */
@@ -4702,9 +4747,15 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         for (size_t i = 0; i < sel_cols.size(); ++i) {
             std::string cu = qry_upper(sel_cols[i]);
             size_t as_pos = find_top_as(cu);
-            std::string col_name = (as_pos != std::string::npos)
-                ? qry_trim(sel_cols[i].substr(as_pos + 4))
-                : sel_cols[i];
+            std::string col_name;
+            if (as_pos != std::string::npos) {
+                /* Explicit AS alias */
+                col_name = qry_trim(sel_cols[i].substr(as_pos + 4));
+            } else {
+                /* Try implicit alias (without AS keyword) */
+                std::string implicit = find_implicit_alias(sel_cols[i]);
+                col_name = implicit.empty() ? sel_cols[i] : implicit;
+            }
             r->col_names.push_back(col_name);
         }
     }
