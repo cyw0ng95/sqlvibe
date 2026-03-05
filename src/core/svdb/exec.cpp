@@ -916,7 +916,10 @@ static svdb_code_t do_create_table(svdb_db_t *db, const std::string &sql) {
     /* IF NOT EXISTS: ignore if table already exists */
     std::string su = str_upper(sql);
     bool if_not_exists = su.find("IF NOT EXISTS") != std::string::npos;
-    if (db->schema.count(tname)) {
+    
+    /* Check for existing table (case-insensitive for unquoted identifiers) */
+    bool table_exists = contains_table_case_insensitive(db->schema, tname);
+    if (table_exists) {
         if (if_not_exists) return SVDB_OK;
         db->last_error = "table " + tname + " already exists";
         return SVDB_ERR;
@@ -1682,32 +1685,37 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         size_t ts = into_pos;
         while (into_pos < sql.size() && (isalnum((unsigned char)sql[into_pos]) || sql[into_pos] == '_')) ++into_pos;
         std::string tname2 = sql.substr(ts, into_pos - ts);
-        if (!db->schema.count(tname2)) { db->last_error = "no such table: " + tname2; return SVDB_ERR; }
-        const auto &col_order2 = db->col_order[tname2];
+        
+        /* Case-insensitive table lookup */
+        auto schema_it2 = find_table_case_insensitive(db->schema, tname2);
+        if (schema_it2 == db->schema.end()) { db->last_error = "no such table: " + tname2; return SVDB_ERR; }
+        std::string resolved_tname2 = schema_it2->first;
+        
+        const auto &col_order2 = db->col_order[resolved_tname2];
         Row row;
         for (const auto &cn : col_order2) {
-            auto dit = db->schema[tname2].find(cn);
-            if (dit != db->schema[tname2].end() && !dit->second.default_val.empty())
+            auto dit = db->schema[resolved_tname2].find(cn);
+            if (dit != db->schema[resolved_tname2].end() && !dit->second.default_val.empty())
                 row[cn] = svdb_eval_expr_in_row(dit->second.default_val, row, {});
             else
                 row[cn] = SvdbVal{};
         }
         /* Auto-assign INTEGER PRIMARY KEY if not set */
         for (const auto &cn2 : col_order2) {
-            auto cdit = db->schema[tname2].find(cn2);
-            if (cdit != db->schema[tname2].end() && cdit->second.primary_key &&
+            auto cdit = db->schema[resolved_tname2].find(cn2);
+            if (cdit != db->schema[resolved_tname2].end() && cdit->second.primary_key &&
                 str_upper(cdit->second.type) == "INTEGER") {
                 auto rit = row.find(cn2);
                 if (rit == row.end() || rit->second.type == SVDB_TYPE_NULL) {
                     SvdbVal v; v.type = SVDB_TYPE_INT;
-                    v.ival = db->rowid_counter[tname2] + 1;
+                    v.ival = db->rowid_counter[resolved_tname2] + 1;
                     row[cn2] = v;
                 }
             }
         }
-        db->rowid_counter[tname2]++;
-        row[SVDB_ROWID_COLUMN] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[tname2], 0.0, {}};
-        db->data[tname2].push_back(row);
+        db->rowid_counter[resolved_tname2]++;
+        row[SVDB_ROWID_COLUMN] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[resolved_tname2], 0.0, {}};
+        db->data[resolved_tname2].push_back(row);
         db->rows_affected = 1; db->last_insert_rowid = db->rowid_counter[tname2];
         if (res) { res->code = SVDB_OK; res->rows_affected = 1; res->last_insert_rowid = db->last_insert_rowid; }
         return SVDB_OK;
