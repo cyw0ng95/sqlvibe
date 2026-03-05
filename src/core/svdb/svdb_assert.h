@@ -80,7 +80,7 @@ static inline bool svdb_warn_on_helper(
 #define svdb_assert(cond)               ((void)0)
 #define svdb_assert_msg(cond, fmt, ...) ((void)0)
 #define SVDB_BUG_ON(cond)               ((void)0)
-#define SVDB_WARN_ON(cond)              (false)
+#define SVDB_WARN_ON(cond)              ((void)0)
 #define SVDB_BUG()                      ((void)0)
 
 #endif /* SVDB_BUILD_DEBUG */
