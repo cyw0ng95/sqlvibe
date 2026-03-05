@@ -786,6 +786,110 @@ static SvdbVal eval_expr_exec(const std::string &expr_in, const Row &row,
     return parse_literal(e);
 }
 
+/* Evaluate a boolean CHECK constraint expression against a row.
+ * Handles AND/OR, comparison operators, and arithmetic via eval_expr_exec. */
+static bool eval_check_constraint(const std::string &expr, const Row &row,
+                                   const std::vector<std::string> &col_order) {
+    std::string e = str_trim(expr);
+    if (e.empty()) return true;
+
+    /* Strip balanced outer parens */
+    if (e.size() >= 2 && e.front() == '(' && e.back() == ')') {
+        int d = 0; bool matched = true;
+        for (size_t i = 0; i < e.size(); ++i) {
+            if (e[i] == '(') ++d;
+            else if (e[i] == ')') { if (--d == 0 && i + 1 != e.size()) { matched = false; break; } }
+        }
+        if (matched) return eval_check_constraint(e.substr(1, e.size()-2), row, col_order);
+    }
+
+    /* Handle top-level AND */
+    {
+        std::string eu = str_upper(e);
+        int depth = 0;
+        for (size_t i = 0; i < eu.size(); ++i) {
+            if (eu[i] == '(') { ++depth; continue; }
+            if (eu[i] == ')') { if (depth > 0) --depth; continue; }
+            if (depth == 0 && i + 4 <= eu.size() && eu.substr(i, 4) == " AND") {
+                size_t after = i + 4;
+                if (after < eu.size() && (isalnum((unsigned char)eu[after]) || eu[after] == '_'))
+                    continue; /* not a word boundary — e.g. " ANDROID" */
+                return eval_check_constraint(e.substr(0, i), row, col_order) &&
+                       eval_check_constraint(e.substr(i + 4), row, col_order);
+            }
+        }
+    }
+
+    /* Handle top-level OR */
+    {
+        std::string eu = str_upper(e);
+        int depth = 0;
+        for (size_t i = 0; i < eu.size(); ++i) {
+            if (eu[i] == '(') { ++depth; continue; }
+            if (eu[i] == ')') { if (depth > 0) --depth; continue; }
+            if (depth == 0 && i + 3 <= eu.size() && eu.substr(i, 3) == " OR") {
+                size_t after = i + 3;
+                if (after < eu.size() && (isalnum((unsigned char)eu[after]) || eu[after] == '_'))
+                    continue; /* not a word boundary — e.g. " ORDER" */
+                return eval_check_constraint(e.substr(0, i), row, col_order) ||
+                       eval_check_constraint(e.substr(i + 3), row, col_order);
+            }
+        }
+    }
+
+    /* Find first top-level comparison operator (check 2-char ops before 1-char) */
+    {
+        int depth = 0; bool in_str = false;
+        for (size_t i = 0; i < e.size(); ++i) {
+            char c = e[i];
+            if (c == '\'') { in_str = !in_str; continue; }
+            if (in_str) continue;
+            if (c == '(') { ++depth; continue; }
+            if (c == ')') { if (depth > 0) --depth; continue; }
+            if (depth > 0) continue;
+            /* 2-char operators */
+            if (i + 1 < e.size()) {
+                std::string two = e.substr(i, 2);
+                if (two == ">=" || two == "<=" || two == "!=" || two == "<>") {
+                    SvdbVal lv = eval_expr_exec(str_trim(e.substr(0, i)), row, col_order);
+                    SvdbVal rv = eval_expr_exec(str_trim(e.substr(i + 2)), row, col_order);
+                    if (lv.type == SVDB_TYPE_NULL || rv.type == SVDB_TYPE_NULL) return true;
+                    if (lv.type == SVDB_TYPE_TEXT || rv.type == SVDB_TYPE_TEXT) {
+                        std::string ls = val_to_str_exec(lv), rs = val_to_str_exec(rv);
+                        if (two == ">=") return ls >= rs;
+                        if (two == "<=") return ls <= rs;
+                        return ls != rs; /* != or <> */
+                    }
+                    double l = (lv.type == SVDB_TYPE_INT) ? (double)lv.ival : lv.rval;
+                    double r = (rv.type == SVDB_TYPE_INT) ? (double)rv.ival : rv.rval;
+                    if (two == ">=") return l >= r;
+                    if (two == "<=") return l <= r;
+                    return l != r; /* != or <> */
+                }
+            }
+            /* 1-char operators (only if not part of a 2-char op) */
+            if (c == '>' || c == '<' || c == '=') {
+                if (i + 1 < e.size() && (e[i+1] == '=' || e[i+1] == '>')) continue;
+                SvdbVal lv = eval_expr_exec(str_trim(e.substr(0, i)), row, col_order);
+                SvdbVal rv = eval_expr_exec(str_trim(e.substr(i + 1)), row, col_order);
+                if (lv.type == SVDB_TYPE_NULL || rv.type == SVDB_TYPE_NULL) return true;
+                if (lv.type == SVDB_TYPE_TEXT || rv.type == SVDB_TYPE_TEXT) {
+                    std::string ls = val_to_str_exec(lv), rs = val_to_str_exec(rv);
+                    if (c == '>') return ls > rs;
+                    if (c == '<') return ls < rs;
+                    return ls == rs; /* = */
+                }
+                double l = (lv.type == SVDB_TYPE_INT) ? (double)lv.ival : lv.rval;
+                double r = (rv.type == SVDB_TYPE_INT) ? (double)rv.ival : rv.rval;
+                if (c == '>') return l > r;
+                if (c == '<') return l < r;
+                return l == r; /* = */
+            }
+        }
+    }
+    return true; /* unparseable expression — allow by default */
+}
+
 /* ── DDL handlers ───────────────────────────────────────────────── */
 
 static svdb_code_t do_create_table(svdb_db_t *db, const std::string &sql) {
@@ -1815,37 +1919,10 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
             if (conflict_handled) continue; /* skip or already updated */
         }
 
-        /* CHECK constraint evaluation (simple: skip for now, basic eval) */
+        /* CHECK constraint evaluation */
         if (db->check_constraints.count(tname)) {
             for (const auto &chk : db->check_constraints.at(tname)) {
-                /* Very basic: evaluate simple comparison like "score >= 0" */
-                std::string chk_upper = str_upper(chk);
-                /* Try to evaluate numerically */
-                bool ok = true;
-                /* Find operator */
-                for (const char *op : {">=", "<=", "!=", "<>", ">", "<", "="}) {
-                    size_t op_pos = chk.find(op);
-                    if (op_pos == std::string::npos) continue;
-                    std::string lhs = str_trim(chk.substr(0, op_pos));
-                    std::string rhs = str_trim(chk.substr(op_pos + strlen(op)));
-                    /* Look up lhs in row */
-                    auto it2 = row.find(lhs);
-                    if (it2 == row.end()) break;
-                    const SvdbVal &sv2 = it2->second;
-                    if (sv2.type == SVDB_TYPE_NULL) { ok = true; break; } /* NULLs pass */
-                    try {
-                        double rv = std::stod(rhs);
-                        double lv = (sv2.type == SVDB_TYPE_INT) ? (double)sv2.ival : sv2.rval;
-                        if (std::string(op) == ">=")      ok = lv >= rv;
-                        else if (std::string(op) == "<=") ok = lv <= rv;
-                        else if (std::string(op) == ">")  ok = lv > rv;
-                        else if (std::string(op) == "<")  ok = lv < rv;
-                        else if (std::string(op) == "=" || std::string(op) == "==") ok = lv == rv;
-                        else if (std::string(op) == "!=" || std::string(op) == "<>") ok = lv != rv;
-                    } catch (...) { ok = true; }
-                    break;
-                }
-                if (!ok) {
+                if (!eval_check_constraint(chk, row, col_order)) {
                     db->last_error = "CHECK constraint failed: " + tname;
                     svdb_ast_node_free(ast); svdb_parser_destroy(p);
                     return SVDB_ERR;
