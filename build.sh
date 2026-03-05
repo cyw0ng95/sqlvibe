@@ -60,6 +60,7 @@ FUZZ_TIME="30s"
 VERBOSE=0
 DEBUG_BUILD=0
 SANITIZER=""
+TEST_FAILURES=0
 
 usage() {
     sed -n '2,/^set -euo/{ /^set -euo/d; s/^# \{0,1\}//; p }' "$0"
@@ -190,53 +191,61 @@ if [[ $RUN_TESTS -eq 1 ]]; then
         COVER_PROFILES+=("$COVER_PROF_TESTS")
         # Export LD_LIBRARY_PATH for test binaries to find shared libraries
         export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
-        env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
+        if ! env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
             "${TEST_COVER_ARGS[@]}" \
             ${VERBOSE_FLAG} \
-            $TEST_PKGS 2>&1 | tee "$BUILD_DIR/test.log" || true
+            "$TEST_PKGS" 2>&1 | tee "$BUILD_DIR/test.log"; then
+            TEST_FAILURES=1
+        fi
     else
         # Export LD_LIBRARY_PATH for test binaries to find shared libraries
         export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
-        env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
+        if ! env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
             ${VERBOSE_FLAG} \
-            $TEST_PKGS 2>&1 | tee "$BUILD_DIR/test.log" || true
+            "$TEST_PKGS" 2>&1 | tee "$BUILD_DIR/test.log"; then
+            TEST_FAILURES=1
+        fi
     fi
     echo "====> Unit tests complete. Log: $BUILD_DIR/test.log"
     
     # ----- SQL:1999 Compliance Tests ------------------------------------------
     echo ""
     echo "====> Running SQL:1999 compliance tests..."
-    export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
-    env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
+    if ! env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
         ${VERBOSE_FLAG} \
-        ./tests/SQL1999/... 2>&1 | tee -a "$BUILD_DIR/test.log" || true
+        ./tests/SQL1999/... 2>&1 | tee -a "$BUILD_DIR/test.log"; then
+        TEST_FAILURES=1
+    fi
     echo "====> SQL:1999 tests complete."
-    
+
     # ----- SQL Logic Tests ----------------------------------------------------
     echo ""
     echo "====> Running SQL Logic tests..."
-    export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
-    env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
+    if ! env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
         ${VERBOSE_FLAG} \
-        ./tests/SQLLogic/... 2>&1 | tee -a "$BUILD_DIR/test.log" || true
+        ./tests/SQLLogic/... 2>&1 | tee -a "$BUILD_DIR/test.log"; then
+        TEST_FAILURES=1
+    fi
     echo "====> SQL Logic tests complete."
-    
+
     # ----- SQL Validator Tests ------------------------------------------------
     echo ""
     echo "====> Running SQL Validator tests..."
-    export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
-    env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
+    if ! env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
         ${VERBOSE_FLAG} \
-        ./tests/SQLValidator/... 2>&1 | tee -a "$BUILD_DIR/test.log" || true
+        ./tests/SQLValidator/... 2>&1 | tee -a "$BUILD_DIR/test.log"; then
+        TEST_FAILURES=1
+    fi
     echo "====> SQL Validator tests complete."
-    
+
     # ----- Regression Tests ---------------------------------------------------
     echo ""
     echo "====> Running Regression tests..."
-    export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
-    env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
+    if ! env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
         ${VERBOSE_FLAG} \
-        ./tests/Regression/... 2>&1 | tee -a "$BUILD_DIR/test.log" || true
+        ./tests/Regression/... 2>&1 | tee -a "$BUILD_DIR/test.log"; then
+        TEST_FAILURES=1
+    fi
     echo "====> Regression tests complete."
 fi
 
@@ -254,13 +263,15 @@ if [[ $RUN_BENCH -eq 1 ]]; then
         BENCH_COVER_ARGS+=(-coverprofile="$COVER_PROF_BENCH" -covermode=atomic -coverpkg="$COVERPKG")
         COVER_PROFILES+=("$COVER_PROF_BENCH")
     fi
-    go test -tags "$EXT_TAGS" \
+    if ! go test -tags "$EXT_TAGS" \
         -run '^$' \
         -bench '.' \
         -benchmem \
-        "${BENCH_COVER_ARGS[@]+"${BENCH_COVER_ARGS[@]}"}" \
+        "${BENCH_COVER_ARGS[@]}" \
         ${VERBOSE_FLAG} \
-        ./tests/Benchmark/... 2>&1 | tee "$BUILD_DIR/bench.log"
+        ./tests/Benchmark/... 2>&1 | tee "$BUILD_DIR/bench.log"; then
+        TEST_FAILURES=1
+    fi
     echo "====> Benchmarks complete. Log: $BUILD_DIR/bench.log"
 fi
 
@@ -271,25 +282,23 @@ if [[ $RUN_FUZZ -eq 1 ]]; then
     echo "====> Running fuzz tests (seed corpus, $FUZZ_TIME per target)..."
     mkdir -p "$BUILD_DIR/fuzz"
 
-    FUZZ_PKG=(
-        "github.com/cyw0ng95/sqlvibe/tests/PlainFuzzer"
-        "github.com/cyw0ng95/sqlvibe/tests/PlainFuzzer"
-    )
-    FUZZ_FUNC=(
-        "FuzzSQL"
-        "FuzzDBFile"
+    # Fuzz targets: package and function pairs
+    declare -A FUZZ_TARGETS=(
+        ["github.com/cyw0ng95/sqlvibe/tests/PlainFuzzer"]="FuzzSQL FuzzDBFile"
     )
 
-    for i in "${!FUZZ_PKG[@]}"; do
-        PKG="${FUZZ_PKG[$i]}"
-        FUNC="${FUZZ_FUNC[$i]}"
-        FUZZ_LOG="$BUILD_DIR/fuzz/${FUNC}.log"
-        echo "  -> Fuzzing $FUNC ($PKG) for $FUZZ_TIME..."
-        go test -tags "$EXT_TAGS" \
-            -run '^$' \
-            -fuzz "^${FUNC}$" \
-            -fuzztime "$FUZZ_TIME" \
-            "$PKG" 2>&1 | tee "$FUZZ_LOG" || true
+    for PKG in "${!FUZZ_TARGETS[@]}"; do
+        for FUNC in ${FUZZ_TARGETS[$PKG]}; do
+            FUZZ_LOG="$BUILD_DIR/fuzz/${FUNC}.log"
+            echo "  -> Fuzzing $FUNC ($PKG) for $FUZZ_TIME..."
+            if ! go test -tags "$EXT_TAGS" \
+                -run '^$' \
+                -fuzz "^${FUNC}$" \
+                -fuzztime "$FUZZ_TIME" \
+                "$PKG" 2>&1 | tee "$FUZZ_LOG"; then
+                TEST_FAILURES=1
+            fi
+        done
     done
     echo "====> Fuzz runs complete. Logs: $BUILD_DIR/fuzz/"
 fi
@@ -305,6 +314,9 @@ if [[ $COVERAGE -eq 1 && ${#COVER_PROFILES[@]} -gt 0 ]]; then
     if [[ ${#COVER_PROFILES[@]} -eq 1 ]]; then
         cp "${COVER_PROFILES[0]}" "$MERGED"
     else
+        # Merge coverage profiles correctly:
+        # All profiles use the same coverpkg (all packages), so we can safely
+        # concatenate data rows after the header from the first file
         {
             head -1 "${COVER_PROFILES[0]}"
             for p in "${COVER_PROFILES[@]}"; do
@@ -328,3 +340,10 @@ echo "     - SQL Logic:  tests/SQLLogic/"
 echo "     - Validator:  tests/SQLValidator/"
 echo "     - Regression: tests/Regression/"
 echo "====> Done. All output under: $BUILD_DIR/"
+
+# Exit with failure if any tests failed
+if [[ $TEST_FAILURES -eq 1 ]]; then
+    echo ""
+    echo "====> WARNING: Some tests failed. Check logs in $BUILD_DIR/"
+    exit 1
+fi
