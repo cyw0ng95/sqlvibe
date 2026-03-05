@@ -103,6 +103,9 @@ struct svdb_db_s {
     bool        read_uncommitted_val = false; /* read_uncommitted */
     int64_t     cache_spill_val  = 1;       /* cache_spill, default=1 */
 
+    /* sqlite_stat1: table_name -> {idx_name, stat} */
+    std::vector<std::tuple<std::string,std::string,std::string>> stat1;
+
     /* Transaction state */
     bool         in_transaction = false;
     svdb_tx_t   *sql_tx         = nullptr;  /* active SQL-level transaction */

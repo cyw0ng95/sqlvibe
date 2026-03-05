@@ -1555,6 +1555,118 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
         svdb_ast_node_free(ast); svdb_parser_destroy(p);
         return SVDB_ERR;
     }
+    /* Check for UPDATE ... FROM (PostgreSQL-style): detect top-level FROM after SET */
+    /* Find FROM at top level between SET and WHERE */
+    std::string from_table;
+    size_t update_from_pos = std::string::npos;
+    {
+        int depth = 0; bool in_s = false;
+        size_t search_start = set_pos + 3;
+        for (size_t i = search_start; i < sql.size(); ++i) {
+            char c = sql[i];
+            if (c == '\'' && !in_s) { in_s = true; continue; }
+            if (c == '\'' && in_s) { if (i+1<sql.size()&&sql[i+1]=='\''){++i;} else in_s=false; continue; }
+            if (in_s) continue;
+            if (c == '(') ++depth; else if (c == ')') --depth;
+            if (depth == 0 && i+4 <= sql.size() && str_upper(sql.substr(i,4)) == "FROM" &&
+                (i == 0 || !isalnum((unsigned char)sql[i-1]) && sql[i-1]!='_') &&
+                (i+4 >= sql.size() || (!isalnum((unsigned char)sql[i+4]) && sql[i+4]!='_'))) {
+                update_from_pos = i;
+                /* Extract table name after FROM */
+                size_t tp = i + 4;
+                while (tp < sql.size() && isspace((unsigned char)sql[tp])) ++tp;
+                size_t ts = tp;
+                while (tp < sql.size() && (isalnum((unsigned char)sql[tp]) || sql[tp]=='_')) ++tp;
+                from_table = sql.substr(ts, tp - ts);
+                break;
+            }
+        }
+    }
+    if (!from_table.empty() && db->schema.count(from_table)) {
+        /* UPDATE t SET col=expr FROM other WHERE cond — join-based update */
+        size_t where_pos2 = std::string::npos;
+        { int depth=0; bool in_s=false;
+          for (size_t i=update_from_pos+4; i<sql.size(); ++i) {
+            char c=sql[i]; if(c=='\''){in_s=!in_s;continue;} if(in_s)continue;
+            if(c=='(')++depth;else if(c==')')--depth;
+            if(depth==0&&i+5<=sql.size()&&str_upper(sql.substr(i,5))=="WHERE") { where_pos2=i; break; }
+          }
+        }
+        std::string where_clause = (where_pos2!=std::string::npos) ? str_trim(sql.substr(where_pos2+5)) : "";
+        std::string set_clause2 = str_trim(sql.substr(set_pos+3, update_from_pos - set_pos - 3));
+        /* Parse assignments */
+        std::vector<std::pair<std::string,std::string>> assignments;
+        size_t ap = 0;
+        while (ap < set_clause2.size()) {
+            while (ap < set_clause2.size() && isspace((unsigned char)set_clause2[ap])) ++ap;
+            std::string cn;
+            if (ap < set_clause2.size() && (set_clause2[ap]=='"'||set_clause2[ap]=='`')) {
+                char q=set_clause2[ap++]; size_t s=ap;
+                while(ap<set_clause2.size()&&set_clause2[ap]!=q)++ap;
+                cn=set_clause2.substr(s,ap-s); if(ap<set_clause2.size())++ap;
+            } else {
+                size_t s=ap;
+                while(ap<set_clause2.size()&&(isalnum((unsigned char)set_clause2[ap])||set_clause2[ap]=='_'))++ap;
+                cn=set_clause2.substr(s,ap-s);
+            }
+            if(cn.empty()){++ap;continue;}
+            while(ap<set_clause2.size()&&isspace((unsigned char)set_clause2[ap]))++ap;
+            if(ap<set_clause2.size()&&set_clause2[ap]=='=')++ap;
+            while(ap<set_clause2.size()&&isspace((unsigned char)set_clause2[ap]))++ap;
+            std::string vstr; size_t vs=ap; int vd=0; bool vsq=false;
+            while(ap<set_clause2.size()){
+                char vc=set_clause2[ap];
+                if(vc=='\''){vsq=!vsq;++ap;continue;} if(vsq){++ap;continue;}
+                if(vc=='(')++vd; else if(vc==')'){if(vd>0)--vd;} else if(vc==','&&vd==0)break;
+                ++ap;
+            }
+            vstr=str_trim(set_clause2.substr(vs,ap-vs));
+            assignments.push_back({cn,vstr});
+            while(ap<set_clause2.size()&&(isspace((unsigned char)set_clause2[ap])||set_clause2[ap]==','))++ap;
+        }
+        /* Build combined column order: target cols first, then from_table cols (prefixed) */
+        auto &tcols = db->col_order[tname];
+        auto &fcols = db->col_order[from_table];
+        Row combined_cols_order; /* Use string list */
+        std::vector<std::string> combined_order;
+        for (auto &cn : tcols) combined_order.push_back(cn);
+        for (auto &cn : fcols) {
+            combined_order.push_back(from_table + "." + cn);
+            combined_order.push_back(cn); /* also unqualified */
+        }
+        svdb_set_query_db(db);
+        int64_t updated = 0;
+        for (auto &trow : db->data[tname]) {
+            for (auto &frow : db->data[from_table]) {
+                /* Build combined row */
+                Row combined = trow;
+                /* Add target table's columns with qualified names */
+                for (auto &cn : tcols) combined[tname + "." + cn] = trow.count(cn) ? trow.at(cn) : SvdbVal{};
+                for (auto &cn : fcols) {
+                    combined[from_table + "." + cn] = frow.count(cn) ? frow.at(cn) : SvdbVal{};
+                    if (!combined.count(cn)) combined[cn] = frow.count(cn) ? frow.at(cn) : SvdbVal{};
+                }
+                std::vector<std::string> col_order_vec = combined_order;
+                if (where_clause.empty() || eval_where(combined, col_order_vec, where_clause)) {
+                    for (auto &asgn : assignments) {
+                        std::string simple_col = asgn.first;
+                        /* Strip table qualifier if present */
+                        auto dot = simple_col.find('.');
+                        if (dot != std::string::npos) simple_col = simple_col.substr(dot+1);
+                        if (trow.count(simple_col))
+                            trow[simple_col] = svdb_eval_expr_in_row(asgn.second, combined, col_order_vec);
+                    }
+                    ++updated;
+                    break; /* update target row only once (first match) */
+                }
+            }
+        }
+        svdb_set_query_db(nullptr);
+        db->rows_affected = updated;
+        if (res) { res->code = SVDB_OK; res->rows_affected = updated; }
+        svdb_ast_node_free(ast); svdb_parser_destroy(p);
+        return SVDB_OK;
+    }
     /* Find end of SET clause (WHERE or end) */
     size_t where_pos = su.find("WHERE", set_pos);
     std::string set_clause = sql.substr(set_pos + 3,
@@ -1649,6 +1761,71 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
     if (!db->schema.count(tname)) {
         db->last_error = "no such table: " + tname;
         return SVDB_ERR;
+    }
+
+    /* Check for DELETE FROM t USING other_table WHERE ... (PostgreSQL style) */
+    {
+        std::string su2 = str_upper(sql);
+        size_t using_pos = std::string::npos;
+        { int depth=0; bool in_s=false;
+          for (size_t i=0; i<sql.size(); ++i) {
+            char c=sql[i]; if(c=='\''){in_s=!in_s;continue;} if(in_s)continue;
+            if(c=='(')++depth; else if(c==')')--depth;
+            if(depth==0&&i+5<=sql.size()&&str_upper(sql.substr(i,5))=="USING"&&
+               (i==0||!isalnum((unsigned char)sql[i-1]))&&
+               (i+5>=sql.size()||!isalnum((unsigned char)sql[i+5]))) { using_pos=i; break; }
+          }
+        }
+        if (using_pos != std::string::npos) {
+            size_t tp = using_pos + 5;
+            while (tp < sql.size() && isspace((unsigned char)sql[tp])) ++tp;
+            size_t ts = tp;
+            while (tp < sql.size() && (isalnum((unsigned char)sql[tp])||sql[tp]=='_')) ++tp;
+            std::string using_table = sql.substr(ts, tp - ts);
+            if (!using_table.empty() && db->schema.count(using_table)) {
+                /* Find WHERE */
+                size_t where_pos2 = std::string::npos;
+                { int depth=0; bool in_s=false;
+                  for (size_t i=tp; i<sql.size(); ++i) {
+                    char c=sql[i]; if(c=='\''){in_s=!in_s;continue;} if(in_s)continue;
+                    if(c=='(')++depth; else if(c==')')--depth;
+                    if(depth==0&&i+5<=sql.size()&&str_upper(sql.substr(i,5))=="WHERE") { where_pos2=i; break; }
+                  }
+                }
+                std::string where_clause = (where_pos2!=std::string::npos)?str_trim(sql.substr(where_pos2+5)):"";
+                auto &tcols = db->col_order[tname];
+                auto &ucols = db->col_order[using_table];
+                auto &trows = db->data[tname];
+                int64_t deleted = 0;
+                /* Build set of target row indexes to delete */
+                std::vector<bool> to_delete(trows.size(), false);
+                for (size_t ti = 0; ti < trows.size(); ++ti) {
+                    for (auto &urow : db->data[using_table]) {
+                        Row combined = trows[ti];
+                        /* Add target table's columns with qualified names */
+                        for (auto &cn : tcols) combined[tname + "." + cn] = trows[ti].count(cn) ? trows[ti].at(cn) : SvdbVal{};
+                        for (auto &cn : ucols) {
+                            combined[using_table + "." + cn] = urow.count(cn) ? urow.at(cn) : SvdbVal{};
+                            if (!combined.count(cn)) combined[cn] = urow.count(cn) ? urow.at(cn) : SvdbVal{};
+                        }
+                        std::vector<std::string> co_vec; for (auto &cn:tcols) co_vec.push_back(cn);
+                        for (auto &cn:ucols) { co_vec.push_back(using_table+"."+cn); if(!combined.count(cn)) co_vec.push_back(cn); }
+                        if (where_clause.empty() || eval_where(combined, co_vec, where_clause)) {
+                            to_delete[ti] = true; break;
+                        }
+                    }
+                }
+                std::vector<Row> new_rows;
+                for (size_t i = 0; i < trows.size(); ++i) {
+                    if (to_delete[i]) ++deleted;
+                    else new_rows.push_back(trows[i]);
+                }
+                db->data[tname] = std::move(new_rows);
+                db->rows_affected = deleted;
+                if (res) { res->code = SVDB_OK; res->rows_affected = deleted; }
+                return SVDB_OK;
+            }
+        }
     }
 
     const auto &col_order = db->col_order[tname];
@@ -2032,6 +2209,18 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
     } else {
         /* Unknown: accept silently */
         rc = SVDB_OK;
+        /* Handle ANALYZE: populate sqlite_stat1 */
+        if (kw == "ANALYZE") {
+            db->stat1.clear();
+            for (auto &kv : db->data) {
+                size_t nrows = kv.second.size();
+                size_t ncols = db->col_order.count(kv.first) ? db->col_order.at(kv.first).size() : 0;
+                std::string stat = std::to_string(nrows);
+                if (ncols > 0) for (size_t c = 0; c < ncols; ++c) stat += " " + std::to_string(nrows);
+                db->stat1.emplace_back(kv.first, "", stat);
+            }
+            rc = SVDB_OK;
+        }
     }
 
     if (rc != SVDB_OK && res) {

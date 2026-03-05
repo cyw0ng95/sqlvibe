@@ -3372,9 +3372,25 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     g_query_db = db;
     struct DbGuard { svdb_db_t **p; svdb_db_t *v; ~DbGuard() { *p = v; } } db_guard{&g_query_db, prev_db};
 
-    /* ── information_schema / sqlite_master / sqlite_sequence intercept ── */
+    /* ── information_schema / sqlite_master / sqlite_sequence / sqlite_stat1 intercept ── */
     {
         std::string su_is = qry_upper(qry_trim(sql));
+
+        /* sqlite_stat1 virtual table */
+        if (su_is.find(" FROM SQLITE_STAT1") != std::string::npos) {
+            svdb_rows_t *r = new (std::nothrow) svdb_rows_t();
+            if (!r) return SVDB_NOMEM;
+            r->col_names = {"tbl", "idx", "stat"};
+            for (auto &entry : db->stat1) {
+                SvdbVal v_tbl, v_idx, v_stat;
+                v_tbl.type = SVDB_TYPE_TEXT; v_tbl.sval = std::get<0>(entry);
+                v_idx.type = SVDB_TYPE_TEXT; v_idx.sval = std::get<1>(entry);
+                v_stat.type = SVDB_TYPE_TEXT; v_stat.sval = std::get<2>(entry);
+                r->rows.push_back({v_tbl, v_idx, v_stat});
+            }
+            *rows_out = r;
+            return SVDB_OK;
+        }
 
         /* sqlite_master virtual table */
         auto sm_pos = su_is.find(" FROM SQLITE_MASTER");
