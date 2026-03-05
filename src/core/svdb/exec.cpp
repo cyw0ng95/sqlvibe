@@ -458,9 +458,17 @@ static bool eval_where(const Row &row,
 /* Parse a literal value string into an SvdbVal */
 static SvdbVal parse_literal(const std::string &v) {
     SvdbVal sv;
-    if (str_upper(v) == "NULL") {
+    std::string vu = str_upper(v);
+    if (vu == "NULL") {
         sv.type = SVDB_TYPE_NULL;
         return sv;
+    }
+    /* Boolean literals: TRUE → 1, FALSE → 0 (SQLite-compatible) */
+    if (vu == "TRUE") {
+        sv.type = SVDB_TYPE_INT; sv.ival = 1; return sv;
+    }
+    if (vu == "FALSE") {
+        sv.type = SVDB_TYPE_INT; sv.ival = 0; return sv;
     }
     if (v.empty()) {
         /* Empty string: parser stripped quotes from '' → return TEXT "" */

@@ -146,7 +146,8 @@ static bool val_is_true(const SvdbVal &v) {
 static bool like_match(const std::string &text, const std::string &pat, char esc = '\0') {
     /* Case-insensitive (SQLite LIKE behavior for ASCII) */
     if (pat.empty()) return text.empty();
-    if (esc != '\0' && !pat.empty() && pat[0] == esc && pat.size() >= 2) {
+    if (esc != '\0' && !pat.empty() && pat[0] == esc) {
+        if (pat.size() < 2) return false; /* trailing escape char → malformed → no match */
         /* Escaped character: treat literally */
         if (text.empty()) return false;
         if (tolower((unsigned char)pat[1]) != tolower((unsigned char)text[0])) return false;
@@ -1690,6 +1691,20 @@ static bool qry_eval_where(const Row &row,
                 if (val.type == SVDB_TYPE_NULL || low.type == SVDB_TYPE_NULL || high.type == SVDB_TYPE_NULL) return false;
                 return val_cmp(val, low) >= 0 && val_cmp(val, high) <= 0;
             }
+        }
+    }
+
+/* MATCH — case-insensitive substring search (FTS-style on regular tables) */
+    {
+        size_t match_pos = wu.find(" MATCH ");
+        if (match_pos != std::string::npos) {
+            SvdbVal lhs = eval_expr(wt.substr(0, match_pos), row, col_order);
+            SvdbVal rhs = eval_expr(wt.substr(match_pos + 7), row, col_order);
+            if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) return false;
+            std::string text = qry_upper(val_to_str(lhs));
+            std::string pat  = qry_upper(val_to_str(rhs));
+            /* MATCH is literal substring search (no wildcards) */
+            return text.find(pat) != std::string::npos;
         }
     }
 
