@@ -49,6 +49,41 @@ static std::string qry_trim(const std::string &s) {
     return s.substr(a, b-a);
 }
 
+/* UTF-8 helpers for Unicode-aware SUBSTR / LENGTH */
+static size_t utf8_char_count(const std::string &s) {
+    size_t n = 0;
+    for (size_t i = 0; i < s.size(); ) {
+        unsigned char c = (unsigned char)s[i];
+        if      (c < 0x80) i += 1;
+        else if (c < 0xE0) i += 2;
+        else if (c < 0xF0) i += 3;
+        else               i += 4;
+        ++n;
+    }
+    return n;
+}
+
+/* Return byte offset of char_pos (0-based). Returns s.size() if out of range. */
+static size_t utf8_byte_offset(const std::string &s, size_t char_pos) {
+    size_t i = 0;
+    for (size_t n = 0; n < char_pos && i < s.size(); ++n) {
+        unsigned char c = (unsigned char)s[i];
+        if      (c < 0x80) i += 1;
+        else if (c < 0xE0) i += 2;
+        else if (c < 0xF0) i += 3;
+        else               i += 4;
+    }
+    return i;
+}
+
+/* Return UTF-8 substring: start and len are character counts (0-based start). */
+static std::string utf8_substr(const std::string &s, size_t char_start, size_t char_len) {
+    size_t byte_start = utf8_byte_offset(s, char_start);
+    size_t byte_end   = utf8_byte_offset(s, char_start + char_len);
+    if (byte_start >= s.size()) return "";
+    return s.substr(byte_start, byte_end - byte_start);
+}
+
 static bool qry_iequal(const std::string &a, const char *b) {
     return qry_upper(a) == b;
 }
@@ -717,7 +752,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 SvdbVal str_v = eval_expr(parts[0], row, col_order);
                 if (str_v.type == SVDB_TYPE_NULL) return SvdbVal{};
                 std::string s2 = val_to_str(str_v);
-                int64_t slen = (int64_t)s2.size();
+                int64_t slen = (int64_t)utf8_char_count(s2);  /* character count */
                 int64_t off = parts.size() > 1 ? val_to_i64(eval_expr(parts[1], row, col_order)) : 1;
                 bool has_len = parts.size() > 2;
                 int64_t len2 = has_len ? val_to_i64(eval_expr(parts[2], row, col_order)) : -1;
@@ -747,7 +782,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 int64_t take = (!has_len) ? (slen - idx2) : std::min(len2, slen - idx2);
                 if (take < 0) take = 0;
                 SvdbVal v; v.type = SVDB_TYPE_TEXT;
-                v.sval = s2.substr((size_t)idx2, (size_t)take);
+                v.sval = utf8_substr(s2, (size_t)idx2, (size_t)take);
                 return v;
             }
         }
@@ -2413,8 +2448,7 @@ static SvdbVal agg_result(const AggState &a) {
         else { base_result.type = SVDB_TYPE_INT; base_result.ival = a.isum; }
     } else if (a.func == "AVG") {
         if (a.count == 0) base_result = SvdbVal{};
-        else if (a.is_real) { base_result.type = SVDB_TYPE_REAL; base_result.rval = a.sum / (double)a.count; }
-        else { base_result.type = SVDB_TYPE_REAL; base_result.rval = (double)a.isum / (double)a.count; }
+        else { base_result.type = SVDB_TYPE_REAL; base_result.rval = a.sum / (double)a.count; }
     } else if (a.func == "MIN") {
         base_result = a.has_min ? a.min_val : SvdbVal{};
     } else if (a.func == "MAX") {
