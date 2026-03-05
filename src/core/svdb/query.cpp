@@ -1024,6 +1024,69 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             if (n < 0) n = 0;
             SvdbVal v; v.type = SVDB_TYPE_BLOB; v.sval = std::string((size_t)n, '\0'); return v;
         }
+        /* UNHEX(str) — decode hex string to BLOB */
+        if (eu.substr(0, 7) == "UNHEX(" && fn_paren_ok(5)) {
+            /* Note: "UNHEX(" is 6 chars */
+        }
+        if (eu.substr(0, 6) == "UNHEX(" && fn_paren_ok(5)) {
+            SvdbVal inner = eval_expr(e.substr(6, e.size()-7), row, col_order);
+            if (inner.type == SVDB_TYPE_NULL) return SvdbVal{};
+            std::string hs = val_to_str(inner);
+            /* Strip spaces */
+            std::string hex;
+            for (char c : hs) if (!isspace((unsigned char)c)) hex += c;
+            if (hex.size() % 2 != 0) return SvdbVal{}; /* NULL for odd-length */
+            auto fh = [](char c2) -> int {
+                if (c2>='0'&&c2<='9') return c2-'0';
+                if (c2>='a'&&c2<='f') return c2-'a'+10;
+                if (c2>='A'&&c2<='F') return c2-'A'+10;
+                return -1;
+            };
+            std::string blob;
+            for (size_t i = 0; i < hex.size(); i += 2) {
+                int hi = fh(hex[i]), lo = fh(hex[i+1]);
+                if (hi < 0 || lo < 0) return SvdbVal{}; /* NULL for invalid hex */
+                blob += (char)((hi << 4) | lo);
+            }
+            SvdbVal v; v.type = SVDB_TYPE_BLOB; v.sval = blob; return v;
+        }
+        /* RANDOM() — random signed 64-bit integer */
+        if (eu == "RANDOM()") {
+            SvdbVal v; v.type = SVDB_TYPE_INT;
+            v.ival = (int64_t)(((uint64_t)rand() << 33) ^ ((uint64_t)rand() << 2) ^ (uint64_t)(rand() & 3));
+            return v;
+        }
+        /* RANDOMBLOB(N) — N random bytes as BLOB */
+        if (eu.substr(0, 11) == "RANDOMBLOB(" && fn_paren_ok(10)) {
+            SvdbVal nv = eval_expr(e.substr(11, e.size()-12), row, col_order);
+            int64_t n = (nv.type == SVDB_TYPE_INT) ? nv.ival : 0;
+            if (n < 1) n = 1;
+            std::string blob;
+            for (int64_t i = 0; i < n; ++i) blob += (char)(rand() & 0xFF);
+            SvdbVal v; v.type = SVDB_TYPE_BLOB; v.sval = blob; return v;
+        }
+        /* IIF(cond, true_val, false_val) — inline if */
+        if (eu.substr(0, 4) == "IIF(" && fn_paren_ok(3)) {
+            std::string args_str = e.substr(4, e.size()-5);
+            std::vector<std::string> parts;
+            int rd = 0; size_t start2 = 0;
+            bool in_sq = false;
+            for (size_t i = 0; i <= args_str.size(); ++i) {
+                char c = i < args_str.size() ? args_str[i] : ',';
+                if (c == '\'' && !in_sq) { in_sq = true; continue; }
+                if (c == '\'' && in_sq) { if (i+1<args_str.size()&&args_str[i+1]=='\''){++i;continue;} in_sq=false; continue; }
+                if (in_sq) continue;
+                if (c == '(') ++rd; else if (c == ')') --rd;
+                else if (c == ',' && rd == 0) { parts.push_back(args_str.substr(start2, i-start2)); start2 = i+1; }
+            }
+            if (parts.size() >= 3) {
+                SvdbVal cond = eval_expr(parts[0], row, col_order);
+                bool is_true = (cond.type == SVDB_TYPE_INT && cond.ival != 0) ||
+                               (cond.type == SVDB_TYPE_REAL && cond.rval != 0.0) ||
+                               (cond.type == SVDB_TYPE_TEXT && !cond.sval.empty());
+                return eval_expr(is_true ? parts[1] : parts[2], row, col_order);
+            }
+        }
         /* TYPEOF(expr) */
         if (eu.substr(0, 7) == "TYPEOF(" && fn_paren_ok(7-1)) {
             SvdbVal inner = eval_expr(e.substr(7, e.size()-8), row, col_order);
