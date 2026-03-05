@@ -43,6 +43,42 @@ static std::string str_trim(const std::string &s) {
     return s.substr(a, b - a);
 }
 
+/* Strip SQL line comments and block comments, preserving string literals */
+static std::string strip_sql_comments(const std::string &s) {
+    std::string out;
+    out.reserve(s.size());
+    size_t i = 0;
+    while (i < s.size()) {
+        /* String literal: copy as-is */
+        if (s[i] == '\'') {
+            out += s[i++];
+            while (i < s.size()) {
+                out += s[i];
+                if (s[i] == '\'' && (i + 1 >= s.size() || s[i+1] != '\'')) { ++i; break; }
+                if (s[i] == '\'' && i + 1 < s.size() && s[i+1] == '\'') { out += s[++i]; }
+                ++i;
+            }
+            continue;
+        }
+        /* Line comment: -- to end of line → replace with space */
+        if (i + 1 < s.size() && s[i] == '-' && s[i+1] == '-') {
+            while (i < s.size() && s[i] != '\n') ++i;
+            out += ' ';
+            continue;
+        }
+        /* Block comment: slash-star ... star-slash → replace with space */
+        if (i + 1 < s.size() && s[i] == '/' && s[i+1] == '*') {
+            i += 2;
+            while (i + 1 < s.size() && !(s[i] == '*' && s[i+1] == '/')) ++i;
+            if (i + 1 < s.size()) i += 2;
+            out += ' ';
+            continue;
+        }
+        out += s[i++];
+    }
+    return out;
+}
+
 static std::string first_keyword(const std::string &sql) {
     size_t i = 0;
     while (i < sql.size() && isspace((unsigned char)sql[i])) ++i;
@@ -1553,7 +1589,8 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
     db->last_error.clear();
     db->rows_affected = 0;
 
-    std::string s(sql);
+    std::string s = strip_sql_comments(std::string(sql));
+    s = str_trim(s);
     std::string kw = first_keyword(s);
 
     svdb_code_t rc = SVDB_OK;

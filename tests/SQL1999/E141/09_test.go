@@ -30,7 +30,7 @@ func TestSQL1999_F301_E14109_L1(t *testing.T) {
 		sql  string
 	}{
 		{"CreateTable", "CREATE TABLE test_nulls (id INTEGER, val INTEGER, text_val TEXT, real_val REAL)"},
-		{"InsertData", "INSERT INTO test_nulls VALUES (1, 10, hello, 1.5), (2, 20, world, 2.5), (3, 30, data, NULL), (4, NULL, test, 3.5), (5, 30, data, NULL), (6, 40, NULL, 4.0), (7, 50, more, NULL), (8, NULL, NULL, NULL)"},
+		{"InsertData", "INSERT INTO test_nulls VALUES (1, 10, 'hello', 1.5), (2, 20, 'world', 2.5), (3, 30, 'data', NULL), (4, NULL, 'test', 3.5), (5, 30, 'data', NULL), (6, 40, NULL, 4.0), (7, 50, 'more', NULL), (8, NULL, NULL, NULL)"},
 	}
 
 	for _, tt := range setup {

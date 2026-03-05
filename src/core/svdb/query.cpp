@@ -49,6 +49,37 @@ static std::string qry_trim(const std::string &s) {
     return s.substr(a, b-a);
 }
 
+/* Strip SQL line comments (-- ...) and block comments preserving string literals */
+static std::string strip_sql_comments_q(const std::string &s) {
+    std::string out;
+    out.reserve(s.size());
+    size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] == '\'') {
+            out += s[i++];
+            while (i < s.size()) {
+                out += s[i];
+                if (s[i] == '\'' && (i+1 >= s.size() || s[i+1] != '\'')) { ++i; break; }
+                if (s[i] == '\'' && i+1 < s.size() && s[i+1] == '\'') { out += s[++i]; }
+                ++i;
+            }
+            continue;
+        }
+        if (i+1 < s.size() && s[i] == '-' && s[i+1] == '-') {
+            while (i < s.size() && s[i] != '\n') ++i;
+            out += ' '; continue;
+        }
+        if (i+1 < s.size() && s[i] == '/' && s[i+1] == '*') {
+            i += 2;
+            while (i+1 < s.size() && !(s[i] == '*' && s[i+1] == '/')) ++i;
+            if (i+1 < s.size()) i += 2;
+            out += ' '; continue;
+        }
+        out += s[i++];
+    }
+    return out;
+}
+
 /* UTF-8 helpers for Unicode-aware SUBSTR / LENGTH */
 static size_t utf8_char_count(const std::string &s) {
     size_t n = 0;
@@ -673,18 +704,22 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 if (args[i] == '(') ++rd; else if (args[i] == ')') --rd;
                 else if (args[i] == ',' && rd == 0) { comma_pos = i; break; }
             }
-            SvdbVal v; v.type = SVDB_TYPE_REAL;
             if (comma_pos == std::string::npos) {
                 SvdbVal inner = eval_expr(args, row, col_order);
+                if (inner.type == SVDB_TYPE_NULL) return SvdbVal{};
+                SvdbVal v; v.type = SVDB_TYPE_REAL;
                 v.rval = std::round(val_to_dbl(inner));
+                return v;
             } else {
                 SvdbVal inner = eval_expr(args.substr(0, comma_pos), row, col_order);
+                if (inner.type == SVDB_TYPE_NULL) return SvdbVal{};
                 SvdbVal digits = eval_expr(args.substr(comma_pos+1), row, col_order);
                 int64_t n = val_to_i64(digits);
                 double factor = std::pow(10.0, (double)n);
+                SvdbVal v; v.type = SVDB_TYPE_REAL;
                 v.rval = std::round(val_to_dbl(inner) * factor) / factor;
+                return v;
             }
-            return v;
         }
         /* SQRT(expr) */
         if (eu.substr(0, 5) == "SQRT(" && fn_paren_ok(5-1)) {
@@ -4479,7 +4514,7 @@ svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
     std::unique_lock<std::mutex> lk(db->mu);
     db->last_error.clear();
     /* Dispatch PRAGMA to dedicated handler */
-    std::string s = qry_trim(std::string(sql));
+    std::string s = qry_trim(strip_sql_comments_q(std::string(sql)));
     if (s.size() >= 6) {
         std::string su = qry_upper(s.substr(0, 6));
         if (su == "PRAGMA") return svdb_query_pragma(db, s, rows);
