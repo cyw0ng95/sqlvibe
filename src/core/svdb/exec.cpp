@@ -1672,6 +1672,12 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
     /* Validate column count: number of VALUES per row must match number of target columns */
     if (nrows > 0) {
         int nv0 = svdb_ast_get_value_count(ast, 0);
+        /* VALUES() with empty parentheses is a syntax error; use DEFAULT VALUES */
+        if (nv0 == 0) {
+            db->last_error = "near ')': syntax error";
+            svdb_ast_node_free(ast); svdb_parser_destroy(p);
+            return SVDB_ERR;
+        }
         if (nv0 > (int)ins_cols.size()) {
             db->last_error = std::to_string(nv0) + " values for " + std::to_string(ins_cols.size()) + " columns";
             svdb_ast_node_free(ast); svdb_parser_destroy(p);
