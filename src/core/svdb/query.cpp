@@ -2433,8 +2433,19 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                     }
                     Row combined_row = lrow_prefixed;
                     for (auto &kv : rrow_prefixed) combined_row[kv.first] = kv.second;
-                    SvdbVal lv = eval_expr(join.on_left,  combined_row, merged_col_order);
-                    SvdbVal rv = eval_expr(join.on_right, combined_row, merged_col_order);
+
+                    SvdbVal lv, rv;
+                    if (!join.using_col.empty()) {
+                        /* USING (col): compare left.col vs right.col using prefixed
+                         * names to avoid the right table's value overwriting the left */
+                        std::string lk = (!left_alias.empty() ? left_alias : tname) + "." + join.using_col;
+                        std::string rk = (!right_alias.empty() ? right_alias : right_tname) + "." + join.using_col;
+                        lv = eval_expr(lk, combined_row, merged_col_order);
+                        rv = eval_expr(rk, combined_row, merged_col_order);
+                    } else {
+                        lv = eval_expr(join.on_left,  combined_row, merged_col_order);
+                        rv = eval_expr(join.on_right, combined_row, merged_col_order);
+                    }
                     /* NULL = NULL is false in joins */
                     if (lv.type != SVDB_TYPE_NULL && rv.type != SVDB_TYPE_NULL)
                         on_match = (val_cmp(lv, rv) == 0);
