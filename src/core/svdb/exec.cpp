@@ -1050,6 +1050,67 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
 
     const auto &col_order = db->col_order[tname];
 
+    /* ── INSERT ... SELECT ─────────────────────────────────────────── */
+    if (nrows == 0) {
+        /* Check if SQL contains a SELECT after column list / INTO clause */
+        std::string su2 = str_upper(sql);
+        /* Find SELECT keyword (must follow INTO table_name [(cols)]) */
+        /* Simple detection: after "INTO tablename [(...)]" look for "SELECT" */
+        size_t sel_pos = std::string::npos;
+        {
+            size_t p2 = su2.find("SELECT");
+            while (p2 != std::string::npos) {
+                /* Make sure it's at word boundary */
+                bool before_ok = (p2 == 0 || !isalnum((unsigned char)su2[p2-1]));
+                bool after_ok  = (p2 + 6 >= su2.size() || !isalnum((unsigned char)su2[p2+6]));
+                if (before_ok && after_ok) { sel_pos = p2; break; }
+                p2 = su2.find("SELECT", p2 + 1);
+            }
+        }
+        if (sel_pos != std::string::npos) {
+            /* Extract SELECT SQL and execute it */
+            std::string sel_sql = sql.substr(sel_pos);
+            /* Extract target columns from ncols (if explicit column list given) */
+            std::vector<std::string> ins_cols2;
+            if (ncols > 0) {
+                for (int i = 0; i < ncols; ++i) ins_cols2.push_back(svdb_ast_get_column(ast, i));
+            } else {
+                ins_cols2 = col_order;
+            }
+            svdb_rows_t *sel_rows = nullptr;
+            svdb_code_t rc2 = svdb_query_internal(db, sel_sql, &sel_rows);
+            if (rc2 != SVDB_OK || !sel_rows) {
+                svdb_ast_node_free(ast); svdb_parser_destroy(p);
+                return rc2;
+            }
+            int64_t inserted2 = 0;
+            for (const auto &sel_row : sel_rows->rows) {
+                Row row2;
+                for (size_t ci = 0; ci < ins_cols2.size() && ci < sel_row.size(); ++ci)
+                    row2[ins_cols2[ci]] = sel_row[ci];
+                /* Fill missing columns with defaults */
+                for (const auto &cn : col_order) {
+                    if (!row2.count(cn)) {
+                        auto dit = db->schema[tname].find(cn);
+                        if (dit != db->schema[tname].end() && !dit->second.default_val.empty())
+                            row2[cn] = parse_literal(dit->second.default_val);
+                        else row2[cn] = SvdbVal{};
+                    }
+                }
+                db->rowid_counter[tname]++;
+                row2[SVDB_ROWID_COLUMN] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[tname], 0.0, {}};
+                db->data[tname].push_back(row2);
+                ++inserted2;
+            }
+            delete sel_rows;
+            db->rows_affected = inserted2;
+            db->last_insert_rowid = db->rowid_counter[tname];
+            if (res) { res->code = SVDB_OK; res->rows_affected = inserted2; res->last_insert_rowid = db->last_insert_rowid; }
+            svdb_ast_node_free(ast); svdb_parser_destroy(p);
+            return SVDB_OK;
+        }
+    }
+
     /* Determine insertion columns */
     std::vector<std::string> ins_cols;
     if (ncols > 0) {
@@ -1081,6 +1142,16 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
     if (su_sql.find("INSERT OR REPLACE") != std::string::npos ||
         su_sql.find("REPLACE INTO") != std::string::npos) {
         on_conflict_update = true;
+    }
+
+    /* Validate column count: number of VALUES per row must match number of target columns */
+    if (nrows > 0) {
+        int nv0 = svdb_ast_get_value_count(ast, 0);
+        if (nv0 > (int)ins_cols.size()) {
+            db->last_error = std::to_string(nv0) + " values for " + std::to_string(ins_cols.size()) + " columns";
+            svdb_ast_node_free(ast); svdb_parser_destroy(p);
+            return SVDB_ERR;
+        }
     }
 
     int64_t inserted = 0;

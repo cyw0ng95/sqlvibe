@@ -3645,6 +3645,12 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         Row agg_virtual_row;
         for (size_t j = 0; j < extra_agg_exprs.size(); ++j)
             agg_virtual_row[extra_agg_exprs[j]] = agg_result(extra_aggs[j]);
+        /* Also find the first matching row for evaluating non-aggregate constants */
+        Row first_row;
+        for (const auto &row : all_rows) {
+            if (!qry_eval_where(row, merged_col_order, where_txt)) continue;
+            first_row = row; break;
+        }
         std::vector<SvdbVal> res_row;
         for (size_t i = 0; i < aggs.size(); ++i) {
             if (!aggs[i].func.empty()) {
@@ -3652,6 +3658,13 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
             } else if (!star && is_agg_expr(sel_cols[i])) {
                 /* Compound aggregate expression: evaluate against virtual row */
                 res_row.push_back(eval_expr(sel_cols[i], agg_virtual_row, {}));
+            } else if (!star) {
+                /* Non-aggregate expression: evaluate against first matching row */
+                SvdbVal v = eval_expr(sel_cols[i], first_row, merged_col_order);
+                /* Also try agg_virtual_row for sub-agg references */
+                if (v.type == SVDB_TYPE_NULL && agg_virtual_row.count(sel_cols[i]))
+                    v = agg_virtual_row[sel_cols[i]];
+                res_row.push_back(v);
             } else {
                 res_row.push_back(agg_result(aggs[i]));
             }
