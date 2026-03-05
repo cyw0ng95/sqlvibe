@@ -1116,6 +1116,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 std::string dt_str = resolve_dt_arg(dt_arg);
                 if (!dt_str.empty()) {
                     std::tm tm_buf{}; if (parse_datetime_str(dt_str, tm_buf)) {
+                        tm_buf.tm_isdst = -1; mktime(&tm_buf); /* fills tm_wday, tm_yday */
                         char buf[64]; strftime(buf, sizeof(buf), fmt_str.c_str(), &tm_buf);
                         SvdbVal v; v.type=SVDB_TYPE_TEXT; v.sval=buf; return v;
                     }
@@ -1177,14 +1178,30 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 }
             }
         };
+        /* Helper: compute Julian Day Number from tm (proleptic Gregorian) */
+        auto tm_to_julianday = [](const std::tm &tm_in, double frac_day) -> double {
+            int Y = tm_in.tm_year + 1900;
+            int M = tm_in.tm_mon + 1;
+            int D = tm_in.tm_mday;
+            int a = (14 - M) / 12;
+            int y = Y + 4800 - a;
+            int m = M + 12 * a - 3;
+            int JDN = D + (153 * m + 2) / 5 + 365 * y + y / 4 - y / 100 + y / 400 - 32045;
+            /* Julian Day starts at noon; a calendar date with time 0:00 is JDN - 0.5 */
+            return (double)JDN - 0.5 + frac_day;
+        };
         if ((eu.substr(0, 5) == "DATE(" && fn_paren_ok(4)) || (eu.substr(0, 10) == "JULIANDAY(" && fn_paren_ok(9))) {
-            bool is_julian = (eu[0] == 'J');
+            bool is_julian = (eu.size() >= 10 && eu.substr(0, 10) == "JULIANDAY(");
             std::string args_str = qry_trim(e.substr(is_julian?10:5, e.size()-(is_julian?10:5)-1));
             std::string base_arg; std::vector<std::string> mods;
             parse_dt_args(args_str, base_arg, mods);
             if (is_now_arg(base_arg)) {
                 std::time_t now = std::time(nullptr); std::tm tm_buf{}; gmtime_r(&now, &tm_buf);
                 for (auto &mod : mods) apply_date_modifier(tm_buf, mod);
+                if (is_julian) {
+                    double frac = (tm_buf.tm_hour * 3600 + tm_buf.tm_min * 60 + tm_buf.tm_sec) / 86400.0;
+                    SvdbVal v; v.type = SVDB_TYPE_REAL; v.rval = tm_to_julianday(tm_buf, frac); return v;
+                }
                 char buf[12]; strftime(buf, sizeof(buf), "%Y-%m-%d", &tm_buf);
                 SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
             }
@@ -1193,8 +1210,42 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 std::tm tm_buf{}; if (parse_datetime_str(dt_str, tm_buf)) {
                     tm_buf.tm_isdst = -1; mktime(&tm_buf);
                     for (auto &mod : mods) apply_date_modifier(tm_buf, mod);
+                    if (is_julian) {
+                        double frac = (tm_buf.tm_hour * 3600 + tm_buf.tm_min * 60 + tm_buf.tm_sec) / 86400.0;
+                        SvdbVal v; v.type = SVDB_TYPE_REAL; v.rval = tm_to_julianday(tm_buf, frac); return v;
+                    }
                     char buf[12]; strftime(buf, sizeof(buf), "%Y-%m-%d", &tm_buf);
                     SvdbVal v; v.type=SVDB_TYPE_TEXT; v.sval=buf; return v;
+                }
+            }
+            return SvdbVal{};
+        }
+        /* UNIXEPOCH(datetime) — seconds since 1970-01-01 00:00:00 UTC */
+        if (eu.substr(0, 10) == "UNIXEPOCH(" && fn_paren_ok(9)) {
+            std::string args_str = qry_trim(e.substr(10, e.size()-11));
+            std::string base_arg; std::vector<std::string> mods;
+            parse_dt_args(args_str, base_arg, mods);
+            auto to_epoch = [&](std::tm &tm_buf) -> int64_t {
+                for (auto &mod : mods) apply_date_modifier(tm_buf, mod);
+                /* Portable UTC→epoch: timegm or manual calculation */
+                int Y = tm_buf.tm_year + 1900;
+                int M = tm_buf.tm_mon + 1;
+                int D = tm_buf.tm_mday;
+                /* Days since 1970-01-01 via JDN method */
+                int a = (14-M)/12, y2 = Y+4800-a, m2 = M+12*a-3;
+                int64_t jdn = D + (153*m2+2)/5 + 365*y2 + y2/4 - y2/100 + y2/400 - 32045;
+                int64_t jdn_epoch = 2440588; /* JDN of 1970-01-01 */
+                int64_t days = jdn - jdn_epoch;
+                return days * 86400 + tm_buf.tm_hour * 3600 + tm_buf.tm_min * 60 + tm_buf.tm_sec;
+            };
+            if (is_now_arg(base_arg)) {
+                std::time_t now = std::time(nullptr); std::tm tm_buf{}; gmtime_r(&now, &tm_buf);
+                SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = to_epoch(tm_buf); return v;
+            }
+            std::string dt_str = resolve_dt_arg(base_arg);
+            if (!dt_str.empty()) {
+                std::tm tm_buf{}; if (parse_datetime_str(dt_str, tm_buf)) {
+                    SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = to_epoch(tm_buf); return v;
                 }
             }
             return SvdbVal{};
