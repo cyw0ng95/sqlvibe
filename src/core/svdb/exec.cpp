@@ -705,6 +705,13 @@ static svdb_code_t do_create_table(svdb_db_t *db, const std::string &sql) {
 
     db->schema[tname]    = td;
     db->col_order[tname] = order;
+
+    /* Empty column list is not valid */
+    if (order.empty()) {
+        db->last_error = "near \")\"" ": syntax error";
+        return SVDB_ERR;
+    }
+
     db->data[tname]      = {};
     db->rowid_counter[tname] = 0;
     db->create_sql[tname] = sql;
@@ -1099,7 +1106,7 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         for (const auto &cn : col_order2) {
             auto dit = db->schema[tname2].find(cn);
             if (dit != db->schema[tname2].end() && !dit->second.default_val.empty())
-                row[cn] = parse_literal(dit->second.default_val);
+                row[cn] = svdb_eval_expr_in_row(dit->second.default_val, row, {});
             else
                 row[cn] = SvdbVal{};
         }
@@ -1175,7 +1182,7 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
                     if (!row2.count(cn)) {
                         auto dit = db->schema[tname].find(cn);
                         if (dit != db->schema[tname].end() && !dit->second.default_val.empty())
-                            row2[cn] = parse_literal(dit->second.default_val);
+                            row2[cn] = svdb_eval_expr_in_row(dit->second.default_val, row2, {});
                         else row2[cn] = SvdbVal{};
                     }
                 }
@@ -1198,6 +1205,15 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
     if (ncols > 0) {
         for (int i = 0; i < ncols; ++i)
             ins_cols.push_back(svdb_ast_get_column(ast, i));
+        /* Validate: all specified column names must exist in the table */
+        for (const auto &ic : ins_cols) {
+            if (db->schema[tname].find(ic) == db->schema[tname].end() &&
+                str_upper(ic) != "ROWID" && str_upper(ic) != "_SVDB_ROWID_") {
+                db->last_error = "table " + tname + " has no column named " + ic;
+                svdb_ast_node_free(ast); svdb_parser_destroy(p);
+                return SVDB_ERR;
+            }
+        }
     } else {
         ins_cols = col_order;
     }
@@ -1243,7 +1259,7 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         for (const auto &cn : col_order) {
             auto dit = db->schema[tname].find(cn);
             if (dit != db->schema[tname].end() && !dit->second.default_val.empty())
-                row[cn] = parse_literal(dit->second.default_val);
+                row[cn] = svdb_eval_expr_in_row(dit->second.default_val, row, {});
             else
                 row[cn] = SvdbVal{};
         }
