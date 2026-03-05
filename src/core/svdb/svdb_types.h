@@ -26,7 +26,23 @@ struct FKDef {
     std::string child_col;
     std::string parent_table;
     std::string parent_col;
-    std::string on_delete; /* "CASCADE", "SET NULL", "RESTRICT", or "" */
+    std::string on_delete; /* "CASCADE", "SET NULL", "RESTRICT", "NO ACTION", or "" */
+    std::string on_update; /* "CASCADE", "SET NULL", "RESTRICT", "NO ACTION", or "" */
+};
+
+/* Trigger timing */
+enum TriggerTiming { TRIGGER_BEFORE, TRIGGER_AFTER, TRIGGER_INSTEAD_OF };
+/* Trigger event */
+enum TriggerEvent { TRIGGER_INSERT, TRIGGER_UPDATE, TRIGGER_DELETE };
+
+/* Trigger definition */
+struct TriggerDef {
+    std::string name;
+    TriggerTiming timing = TRIGGER_AFTER;
+    TriggerEvent  event  = TRIGGER_INSERT;
+    std::string   table;         /* target table */
+    std::string   when_expr;     /* optional WHEN condition */
+    std::string   body;          /* raw SQL of BEGIN ... END body */
 };
 
 /* Table schema: column name -> ColDef */
@@ -64,6 +80,8 @@ struct svdb_db_s {
     std::unordered_map<std::string, CheckList>                         check_constraints;
     /* Foreign key constraints per table */
     std::unordered_map<std::string, std::vector<FKDef>>                fk_constraints;
+    /* Trigger definitions: name -> TriggerDef */
+    std::unordered_map<std::string, TriggerDef>                        triggers;
     /* CREATE TABLE original SQL for each table/view */
     std::unordered_map<std::string, std::string>                       create_sql;
 
