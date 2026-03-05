@@ -826,20 +826,30 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
             return v;
         }
+        /* Helper: thread-safe UTC time formatting */
+        auto fmt_utc = [](const char *fmt, char *buf, size_t bufsz) {
+            std::time_t now = std::time(nullptr);
+            std::tm tm_buf{};
+#if defined(_POSIX_VERSION) || defined(__linux__) || defined(__APPLE__)
+            gmtime_r(&now, &tm_buf);
+#elif defined(_MSC_VER)
+            gmtime_s(&tm_buf, &now);
+#else
+            tm_buf = *std::gmtime(&now); /* fallback: not thread-safe */
+#endif
+            std::strftime(buf, bufsz, fmt, &tm_buf);
+        };
         /* CURRENT_DATE / CURRENT_TIME / CURRENT_TIMESTAMP literals */
         if (eu == "CURRENT_DATE") {
-            auto now = std::time(nullptr); auto *tm = std::gmtime(&now);
-            char buf[12]; std::strftime(buf, sizeof(buf), "%Y-%m-%d", tm);
+            char buf[12]; fmt_utc("%Y-%m-%d", buf, sizeof(buf));
             SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
         }
         if (eu == "CURRENT_TIME") {
-            auto now = std::time(nullptr); auto *tm = std::gmtime(&now);
-            char buf[10]; std::strftime(buf, sizeof(buf), "%H:%M:%S", tm);
+            char buf[10]; fmt_utc("%H:%M:%S", buf, sizeof(buf));
             SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
         }
         if (eu == "CURRENT_TIMESTAMP") {
-            auto now = std::time(nullptr); auto *tm = std::gmtime(&now);
-            char buf[24]; std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+            char buf[24]; fmt_utc("%Y-%m-%d %H:%M:%S", buf, sizeof(buf));
             SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
         }
         /* DATE('now') / TIME('now') / DATETIME('now') / STRFTIME(fmt, 'now') */
@@ -851,24 +861,21 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
         if ((eu.substr(0, 5) == "DATE(" && fn_paren_ok(4)) || (eu.substr(0, 9) == "JULIANDAY(" && fn_paren_ok(9))) {
             std::string arg = qry_trim(e.substr(eu[0]=='D'?5:10, e.size()-(eu[0]=='D'?5:10)-1));
             if (is_now_arg(arg)) {
-                auto now = std::time(nullptr); auto *tm = std::gmtime(&now);
-                char buf[12]; std::strftime(buf, sizeof(buf), "%Y-%m-%d", tm);
+                char buf[12]; fmt_utc("%Y-%m-%d", buf, sizeof(buf));
                 SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
             }
         }
         if (eu.substr(0, 5) == "TIME(" && fn_paren_ok(4)) {
             std::string arg = qry_trim(e.substr(5, e.size()-6));
             if (is_now_arg(arg)) {
-                auto now = std::time(nullptr); auto *tm = std::gmtime(&now);
-                char buf[10]; std::strftime(buf, sizeof(buf), "%H:%M:%S", tm);
+                char buf[10]; fmt_utc("%H:%M:%S", buf, sizeof(buf));
                 SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
             }
         }
         if (eu.substr(0, 9) == "DATETIME(" && fn_paren_ok(8)) {
             std::string arg = qry_trim(e.substr(9, e.size()-10));
             if (is_now_arg(arg)) {
-                auto now = std::time(nullptr); auto *tm = std::gmtime(&now);
-                char buf[24]; std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+                char buf[24]; fmt_utc("%Y-%m-%d %H:%M:%S", buf, sizeof(buf));
                 SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
             }
         }
@@ -2661,8 +2668,8 @@ compute_window_functions(const std::vector<Row> &rows,
                 try { buckets = std::stoll(wf.args); } catch (...) {}
                 if (buckets < 1) buckets = 1;
                 for (size_t i = 0; i < n; ++i) {
-                    /* Standard NTILE: ceil distribution */
-                    int64_t tile = (int64_t)(i * buckets / n) + 1;
+                    /* Standard NTILE: even distribution with larger buckets first */
+                    int64_t tile = (int64_t)(((int64_t)i * buckets) / (int64_t)n) + 1;
                     SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = tile;
                     result[ci][idxs[i]] = v;
                 }
