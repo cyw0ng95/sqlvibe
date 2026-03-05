@@ -1189,14 +1189,14 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                     /* Handle COLLATE NOCASE/BINARY suffixes */
                     bool nocase = false;
                     std::string lhs_u = qry_upper(lhs_s), rhs_u = qry_upper(rhs_s);
-                    if (lhs_u.size() > 14 && lhs_u.substr(lhs_u.size()-15) == " COLLATE NOCASE") {
+                    if (lhs_u.size() >= 15 && lhs_u.substr(lhs_u.size()-15) == " COLLATE NOCASE") {
                         lhs_s = qry_trim(lhs_s.substr(0, lhs_s.size()-15)); nocase = true;
-                    } else if (lhs_u.size() > 15 && lhs_u.substr(lhs_u.size()-15) == " COLLATE BINARY") {
+                    } else if (lhs_u.size() >= 15 && lhs_u.substr(lhs_u.size()-15) == " COLLATE BINARY") {
                         lhs_s = qry_trim(lhs_s.substr(0, lhs_s.size()-15));
                     }
-                    if (rhs_u.size() > 14 && rhs_u.substr(rhs_u.size()-15) == " COLLATE NOCASE") {
+                    if (rhs_u.size() >= 15 && rhs_u.substr(rhs_u.size()-15) == " COLLATE NOCASE") {
                         rhs_s = qry_trim(rhs_s.substr(0, rhs_s.size()-15)); nocase = true;
-                    } else if (rhs_u.size() > 15 && rhs_u.substr(rhs_u.size()-15) == " COLLATE BINARY") {
+                    } else if (rhs_u.size() >= 15 && rhs_u.substr(rhs_u.size()-15) == " COLLATE BINARY") {
                         rhs_s = qry_trim(rhs_s.substr(0, rhs_s.size()-15));
                     }
                     if (!lhs_s.empty()) {
@@ -1686,14 +1686,14 @@ static bool qry_eval_where(const Row &row,
             {
                 std::string lhs_u = qry_upper(lhs_s);
                 std::string rhs_u = qry_upper(rhs_s);
-                if (lhs_u.size() > 14 && lhs_u.substr(lhs_u.size()-15) == " COLLATE NOCASE") {
+                if (lhs_u.size() >= 15 && lhs_u.substr(lhs_u.size()-15) == " COLLATE NOCASE") {
                     lhs_s = qry_trim(lhs_s.substr(0, lhs_s.size()-15)); nocase = true;
-                } else if (lhs_u.size() > 15 && lhs_u.substr(lhs_u.size()-15) == " COLLATE BINARY") {
+                } else if (lhs_u.size() >= 15 && lhs_u.substr(lhs_u.size()-15) == " COLLATE BINARY") {
                     lhs_s = qry_trim(lhs_s.substr(0, lhs_s.size()-15));
                 }
-                if (rhs_u.size() > 14 && rhs_u.substr(rhs_u.size()-15) == " COLLATE NOCASE") {
+                if (rhs_u.size() >= 15 && rhs_u.substr(rhs_u.size()-15) == " COLLATE NOCASE") {
                     rhs_s = qry_trim(rhs_s.substr(0, rhs_s.size()-15)); nocase = true;
-                } else if (rhs_u.size() > 15 && rhs_u.substr(rhs_u.size()-15) == " COLLATE BINARY") {
+                } else if (rhs_u.size() >= 15 && rhs_u.substr(rhs_u.size()-15) == " COLLATE BINARY") {
                     rhs_s = qry_trim(rhs_s.substr(0, rhs_s.size()-15));
                 }
             }
@@ -1812,9 +1812,9 @@ static std::vector<OrderCol> parse_order_by(const std::string &sql) {
         }
         tu = qry_upper(token);
         /* Strip COLLATE NOCASE / COLLATE BINARY */
-        if (tu.size() > 14 && tu.substr(tu.size()-15) == " COLLATE NOCASE") {
+        if (tu.size() >= 15 && tu.substr(tu.size()-15) == " COLLATE NOCASE") {
             token = qry_trim(token.substr(0, token.size()-15)); nocase = true;
-        } else if (tu.size() > 15 && tu.substr(tu.size()-15) == " COLLATE BINARY") {
+        } else if (tu.size() >= 15 && tu.substr(tu.size()-15) == " COLLATE BINARY") {
             token = qry_trim(token.substr(0, token.size()-15));
         }
         result.push_back({token, desc, nocase});
