@@ -414,10 +414,26 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
         }
     }
 
+    /* Helper: check that a function call "FUNC(...)" has its closing ')' properly matching
+     * the opening '(' at 'open_paren_pos'. Prevents "LOWER(x) IN (...)" from matching LOWER. */
+    auto fn_paren_ok = [&](size_t open_paren_pos) -> bool {
+        if (e.back() != ')') return false;
+        int d = 0;
+        bool in_s = false;
+        for (size_t i = open_paren_pos; i < e.size(); ++i) {
+            char c = e[i];
+            if (c == '\'') { in_s = !in_s; continue; }
+            if (in_s) continue;
+            if (c == '(') ++d;
+            else if (c == ')') { --d; if (d == 0) return i == e.size()-1; }
+        }
+        return false;
+    };
+
     /* COALESCE(a, b, ...) */
     {
         std::string eu = qry_upper(e);
-        if (eu.substr(0, 9) == "COALESCE(" && e.back() == ')') {
+        if (eu.substr(0, 9) == "COALESCE(" && fn_paren_ok(9-1)) {
             std::string args = e.substr(9, e.size()-10);
             /* Split by top-level comma */
             int depth = 0;
@@ -436,7 +452,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             return SvdbVal{};
         }
         /* IFNULL(a, b) */
-        if (eu.substr(0, 7) == "IFNULL(" && e.back() == ')') {
+        if (eu.substr(0, 7) == "IFNULL(" && fn_paren_ok(7-1)) {
             std::string args = e.substr(7, e.size()-8);
             size_t comma = args.find(',');
             if (comma != std::string::npos) {
@@ -446,7 +462,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
         }
         /* NULLIF(a, b) */
-        if (eu.substr(0, 7) == "NULLIF(" && e.back() == ')') {
+        if (eu.substr(0, 7) == "NULLIF(" && fn_paren_ok(7-1)) {
             std::string args = e.substr(7, e.size()-8);
             size_t comma = args.find(',');
             if (comma != std::string::npos) {
@@ -457,7 +473,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
         }
         /* LENGTH(expr) — returns byte count for BLOB, Unicode code-point count for TEXT */
-        if (eu.substr(0, 7) == "LENGTH(" && e.back() == ')') {
+        if (eu.substr(0, 7) == "LENGTH(" && fn_paren_ok(7-1)) {
             SvdbVal inner = eval_expr(e.substr(7, e.size()-8), row, col_order);
             if (inner.type == SVDB_TYPE_NULL) return SvdbVal{};
             if (inner.type == SVDB_TYPE_BLOB) {
@@ -474,14 +490,14 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = len; return v;
         }
         /* UPPER(expr) */
-        if (eu.substr(0, 6) == "UPPER(" && e.back() == ')') {
+        if (eu.substr(0, 6) == "UPPER(" && fn_paren_ok(6-1)) {
             SvdbVal inner = eval_expr(e.substr(6, e.size()-7), row, col_order);
             if (inner.type == SVDB_TYPE_NULL) return SvdbVal{};
             SvdbVal v; v.type = SVDB_TYPE_TEXT;
             v.sval = qry_upper(val_to_str(inner)); return v;
         }
         /* LOWER(expr) */
-        if (eu.substr(0, 6) == "LOWER(" && e.back() == ')') {
+        if (eu.substr(0, 6) == "LOWER(" && fn_paren_ok(6-1)) {
             SvdbVal inner = eval_expr(e.substr(6, e.size()-7), row, col_order);
             if (inner.type == SVDB_TYPE_NULL) return SvdbVal{};
             SvdbVal v; v.type = SVDB_TYPE_TEXT;
@@ -490,7 +506,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             v.sval = s; return v;
         }
         /* TRIM([LEADING|TRAILING|BOTH] [chars FROM] expr) or TRIM(expr[, chars]) */
-        if (eu.substr(0, 5) == "TRIM(" && e.back() == ')') {
+        if (eu.substr(0, 5) == "TRIM(" && fn_paren_ok(5-1)) {
             std::string args_str = e.substr(5, e.size()-6);
             /* Check for 2-arg form: TRIM(str, chars) */
             /* Find top-level comma */
@@ -521,7 +537,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = s; return v;
         }
         /* LTRIM(expr[, chars]) */
-        if (eu.substr(0, 6) == "LTRIM(" && e.back() == ')') {
+        if (eu.substr(0, 6) == "LTRIM(" && fn_paren_ok(6-1)) {
             std::string args_str = e.substr(6, e.size()-7);
             int td = 0; size_t tcomma = std::string::npos;
             for (size_t i = 0; i < args_str.size(); ++i) {
@@ -537,7 +553,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = s.substr(b2); return v;
         }
         /* RTRIM(expr[, chars]) */
-        if (eu.substr(0, 6) == "RTRIM(" && e.back() == ')') {
+        if (eu.substr(0, 6) == "RTRIM(" && fn_paren_ok(6-1)) {
             std::string args_str = e.substr(6, e.size()-7);
             int td = 0; size_t tcomma = std::string::npos;
             for (size_t i = 0; i < args_str.size(); ++i) {
@@ -553,7 +569,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = s.substr(0, e2); return v;
         }
         /* CAST(expr AS type) */
-        if (eu.substr(0, 5) == "CAST(" && e.back() == ')') {
+        if (eu.substr(0, 5) == "CAST(" && fn_paren_ok(5-1)) {
             std::string inside = e.substr(5, e.size()-6);
             std::string iupper = qry_upper(inside);
             size_t as_pos = iupper.rfind(" AS ");
@@ -572,25 +588,25 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
         }
         /* ABS(expr) */
-        if (eu.substr(0, 4) == "ABS(" && e.back() == ')') {
+        if (eu.substr(0, 4) == "ABS(" && fn_paren_ok(4-1)) {
             SvdbVal inner = eval_expr(e.substr(4, e.size()-5), row, col_order);
             if (inner.type == SVDB_TYPE_INT)  { inner.ival = inner.ival < 0 ? -inner.ival : inner.ival; }
             else if (inner.type == SVDB_TYPE_REAL) { inner.rval = std::abs(inner.rval); }
             return inner;
         }
         /* CEIL / CEILING(expr) */
-        if ((eu.substr(0, 5) == "CEIL(" || eu.substr(0, 8) == "CEILING(") && e.back() == ')') {
+        if ((eu.substr(0, 5) == "CEIL(" && fn_paren_ok(4)) || (eu.substr(0, 8) == "CEILING(" && fn_paren_ok(7))) {
             size_t start = (eu[4] == '(') ? 5 : 8;
             SvdbVal inner = eval_expr(e.substr(start, e.size()-start-1), row, col_order);
             SvdbVal v; v.type = SVDB_TYPE_REAL; v.rval = std::ceil(val_to_dbl(inner)); return v;
         }
         /* FLOOR(expr) */
-        if (eu.substr(0, 6) == "FLOOR(" && e.back() == ')') {
+        if (eu.substr(0, 6) == "FLOOR(" && fn_paren_ok(6-1)) {
             SvdbVal inner = eval_expr(e.substr(6, e.size()-7), row, col_order);
             SvdbVal v; v.type = SVDB_TYPE_REAL; v.rval = std::floor(val_to_dbl(inner)); return v;
         }
         /* ROUND(expr) or ROUND(expr, digits) */
-        if (eu.substr(0, 6) == "ROUND(" && e.back() == ')') {
+        if (eu.substr(0, 6) == "ROUND(" && fn_paren_ok(6-1)) {
             std::string args = e.substr(6, e.size()-7);
             /* find top-level comma */
             int rd = 0; size_t comma_pos = std::string::npos;
@@ -612,12 +628,12 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             return v;
         }
         /* SQRT(expr) */
-        if (eu.substr(0, 5) == "SQRT(" && e.back() == ')') {
+        if (eu.substr(0, 5) == "SQRT(" && fn_paren_ok(5-1)) {
             SvdbVal inner = eval_expr(e.substr(5, e.size()-6), row, col_order);
             SvdbVal v; v.type = SVDB_TYPE_REAL; v.rval = std::sqrt(val_to_dbl(inner)); return v;
         }
         /* POW(a, b) / POWER(a, b) */
-        if ((eu.substr(0, 4) == "POW(" || eu.substr(0, 6) == "POWER(") && e.back() == ')') {
+        if ((eu.substr(0, 4) == "POW(" && fn_paren_ok(3)) || (eu.substr(0, 6) == "POWER(" && fn_paren_ok(5))) {
             size_t start = (eu[3] == '(') ? 4 : 6;
             std::string args = e.substr(start, e.size()-start-1);
             int rd = 0; size_t comma_pos = std::string::npos;
@@ -632,13 +648,13 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
         }
         /* SIGN(expr) */
-        if (eu.substr(0, 5) == "SIGN(" && e.back() == ')') {
+        if (eu.substr(0, 5) == "SIGN(" && fn_paren_ok(5-1)) {
             SvdbVal inner = eval_expr(e.substr(5, e.size()-6), row, col_order);
             double d = val_to_dbl(inner);
             SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = (d > 0) ? 1 : (d < 0 ? -1 : 0); return v;
         }
         /* MAX(a, b) and MIN(a, b) as scalar functions */
-        if ((eu.substr(0, 4) == "MAX(" || eu.substr(0, 4) == "MIN(") && e.back() == ')') {
+        if (((eu.substr(0, 4) == "MAX(" || eu.substr(0, 4) == "MIN(") && fn_paren_ok(3))) {
             bool is_max = (eu[1] == 'A');
             std::string args = e.substr(4, e.size()-5);
             int rd = 0; size_t comma_pos = std::string::npos;
@@ -660,7 +676,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
         }
         /* SUBSTR(str, start) or SUBSTR(str, start, len) */
-        if ((eu.substr(0, 7) == "SUBSTR(" || eu.substr(0, 10) == "SUBSTRING(") && e.back() == ')') {
+        if ((eu.substr(0, 7) == "SUBSTR(" && fn_paren_ok(6)) || (eu.substr(0, 10) == "SUBSTRING(" && fn_paren_ok(9))) {
             size_t pref = (eu.substr(0, 10) == "SUBSTRING(") ? 10 : 7;
             std::string args = e.substr(pref, e.size() - pref - 1);
             /* split by top-level comma */
@@ -680,37 +696,40 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 std::string s2 = val_to_str(str_v);
                 int64_t slen = (int64_t)s2.size();
                 int64_t off = parts.size() > 1 ? val_to_i64(eval_expr(parts[1], row, col_order)) : 1;
-                int64_t len2 = -1; /* -1 = to end */
-                if (parts.size() > 2) len2 = val_to_i64(eval_expr(parts[2], row, col_order));
+                bool has_len = parts.size() > 2;
+                int64_t len2 = has_len ? val_to_i64(eval_expr(parts[2], row, col_order)) : -1;
                 /* SQLite semantics: negative off counts from end */
                 if (off < 0) {
                     off = slen + off + 1;
                     if (off < 1) off = 1;
                 } else if (off == 0) {
                     /* position 0: adjust length down by 1, start at 1 */
-                    if (len2 > 0) len2 = len2 - 1;
-                    else if (len2 == 0) { SvdbVal v; v.type = SVDB_TYPE_TEXT; return v; }
+                    if (has_len) {
+                        if (len2 > 0) len2 = len2 - 1;
+                        else if (len2 == 0) { SvdbVal v; v.type = SVDB_TYPE_TEXT; return v; }
+                    }
                     off = 1;
                 }
                 /* Negative length: abs(len2) chars preceding position off */
-                if (len2 < 0) {
+                if (has_len && len2 < 0) {
                     int64_t new_start = off + len2;
                     int64_t new_len   = -len2;
                     off  = (new_start < 1) ? 1 : new_start;
                     len2 = (new_start < 1) ? new_len + new_start - 1 : new_len;
                 }
-                if (len2 < 0) len2 = 0;
+                if (has_len && len2 < 0) len2 = 0;
                 int64_t idx2 = off - 1;
                 if (idx2 < 0) idx2 = 0;
                 if (idx2 >= slen) { SvdbVal v; v.type = SVDB_TYPE_TEXT; return v; }
-                int64_t take = (len2 < 0) ? (slen - idx2) : std::min(len2, slen - idx2);
+                int64_t take = (!has_len) ? (slen - idx2) : std::min(len2, slen - idx2);
+                if (take < 0) take = 0;
                 SvdbVal v; v.type = SVDB_TYPE_TEXT;
                 v.sval = s2.substr((size_t)idx2, (size_t)take);
                 return v;
             }
         }
         /* REPLACE(str, old, new) */
-        if (eu.substr(0, 8) == "REPLACE(" && e.back() == ')') {
+        if (eu.substr(0, 8) == "REPLACE(" && fn_paren_ok(8-1)) {
             std::string args = e.substr(8, e.size()-9);
             std::vector<std::string> parts;
             int rd = 0; size_t start2 = 0;
@@ -734,7 +753,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
         }
         /* INSTR(str, substr) — returns 1-based position or 0 if not found */
-        if (eu.substr(0, 6) == "INSTR(" && e.back() == ')') {
+        if (eu.substr(0, 6) == "INSTR(" && fn_paren_ok(6-1)) {
             std::string args = e.substr(6, e.size()-7);
             int rd = 0; size_t comma_p = std::string::npos;
             for (size_t i = 0; i < args.size(); ++i) {
@@ -753,7 +772,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
         }
         /* HEX(expr) */
-        if (eu.substr(0, 4) == "HEX(" && e.back() == ')') {
+        if (eu.substr(0, 4) == "HEX(" && fn_paren_ok(4-1)) {
             SvdbVal inner = eval_expr(e.substr(4, e.size()-5), row, col_order);
             if (inner.type == SVDB_TYPE_NULL) return SvdbVal{};
             static const char *hexchars = "0123456789ABCDEF";
@@ -766,14 +785,14 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = hex; return v;
         }
         /* ZEROBLOB(N) — returns a BLOB of N zero bytes */
-        if (eu.substr(0, 9) == "ZEROBLOB(" && e.back() == ')') {
+        if (eu.substr(0, 9) == "ZEROBLOB(" && fn_paren_ok(9-1)) {
             SvdbVal nv = eval_expr(e.substr(9, e.size()-10), row, col_order);
             int64_t n = (nv.type == SVDB_TYPE_INT) ? nv.ival : 0;
             if (n < 0) n = 0;
             SvdbVal v; v.type = SVDB_TYPE_BLOB; v.sval = std::string((size_t)n, '\0'); return v;
         }
         /* TYPEOF(expr) */
-        if (eu.substr(0, 7) == "TYPEOF(" && e.back() == ')') {
+        if (eu.substr(0, 7) == "TYPEOF(" && fn_paren_ok(7-1)) {
             SvdbVal inner = eval_expr(e.substr(7, e.size()-8), row, col_order);
             SvdbVal v; v.type = SVDB_TYPE_TEXT;
             switch (inner.type) {
@@ -786,11 +805,11 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             return v;
         }
         /* ISNULL(expr) / NOTNULL(expr) */
-        if (eu.substr(0, 7) == "ISNULL(" && e.back() == ')') {
+        if (eu.substr(0, 7) == "ISNULL(" && fn_paren_ok(7-1)) {
             SvdbVal inner = eval_expr(e.substr(7, e.size()-8), row, col_order);
             SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = (inner.type == SVDB_TYPE_NULL) ? 1 : 0; return v;
         }
-        if (eu.substr(0, 8) == "NOTNULL(" && e.back() == ')') {
+        if (eu.substr(0, 8) == "NOTNULL(" && fn_paren_ok(8-1)) {
             SvdbVal inner = eval_expr(e.substr(8, e.size()-9), row, col_order);
             SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = (inner.type != SVDB_TYPE_NULL) ? 1 : 0; return v;
         }
@@ -1131,20 +1150,31 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
         }
 
         /* Comparison operators (=, <>, !=, <, >, <=, >=) */
+        /* Scan right-to-left to find the rightmost operator, */
+        /* but first do a forward pre-pass to find in-string positions */
         {
+            /* Pre-compute string regions by scanning left-to-right */
+            std::vector<bool> in_str_map(e.size(), false);
+            {
+                bool in_s = false;
+                for (size_t i = 0; i < e.size(); ++i) {
+                    if (e[i] == '\'') in_s = !in_s;
+                    in_str_map[i] = in_s;
+                }
+            }
             static const char* cmp_ops[] = {"!=", "<>", "<=", ">=", "<", ">", "=", nullptr};
             for (int oi = 0; cmp_ops[oi]; ++oi) {
                 std::string op = cmp_ops[oi];
-                int depth_c = 0; bool in_str_c = false;
+                size_t osz = op.size();
+                int depth_c = 0;
                 size_t found_c = std::string::npos;
-                for (int i = (int)e.size() - (int)op.size(); i >= 0; --i) {
-                    char c = e[i];
-                    if (c == '\'') { in_str_c = !in_str_c; continue; }
-                    if (in_str_c) continue;
+                for (int i = (int)e.size() - (int)osz; i >= 0; --i) {
+                    if ((size_t)i < e.size() && in_str_map[(size_t)i]) continue;
+                    char c = e[(size_t)i];
                     if (c == ')') ++depth_c;
                     else if (c == '(') { if (depth_c > 0) --depth_c; }
                     if (depth_c > 0) continue;
-                    if (e.substr(i, op.size()) == op) {
+                    if (e.substr((size_t)i, osz) == op) {
                         bool ok = true;
                         if (op == "=" && i > 0) {
                             char prev = e[i-1];
@@ -1155,12 +1185,25 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 }
                 if (found_c != std::string::npos) {
                     std::string lhs_s = qry_trim(e.substr(0, found_c));
-                    std::string rhs_s = qry_trim(e.substr(found_c + op.size()));
+                    std::string rhs_s = qry_trim(e.substr(found_c + osz));
+                    /* Handle COLLATE NOCASE/BINARY suffixes */
+                    bool nocase = false;
+                    std::string lhs_u = qry_upper(lhs_s), rhs_u = qry_upper(rhs_s);
+                    if (lhs_u.size() > 14 && lhs_u.substr(lhs_u.size()-15) == " COLLATE NOCASE") {
+                        lhs_s = qry_trim(lhs_s.substr(0, lhs_s.size()-15)); nocase = true;
+                    } else if (lhs_u.size() > 15 && lhs_u.substr(lhs_u.size()-15) == " COLLATE BINARY") {
+                        lhs_s = qry_trim(lhs_s.substr(0, lhs_s.size()-15));
+                    }
+                    if (rhs_u.size() > 14 && rhs_u.substr(rhs_u.size()-15) == " COLLATE NOCASE") {
+                        rhs_s = qry_trim(rhs_s.substr(0, rhs_s.size()-15)); nocase = true;
+                    } else if (rhs_u.size() > 15 && rhs_u.substr(rhs_u.size()-15) == " COLLATE BINARY") {
+                        rhs_s = qry_trim(rhs_s.substr(0, rhs_s.size()-15));
+                    }
                     if (!lhs_s.empty()) {
                         SvdbVal lhs = eval_expr(lhs_s, row, col_order);
                         SvdbVal rhs = eval_expr(rhs_s, row, col_order);
                         if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) return SvdbVal{};
-                        int c = val_cmp(lhs, rhs);
+                        int c = nocase ? qry_upper(val_to_str(lhs)).compare(qry_upper(val_to_str(rhs))) : val_cmp(lhs, rhs);
                         SvdbVal v; v.type = SVDB_TYPE_INT;
                         if (op == "=" || op == "==") v.ival = (c == 0) ? 1 : 0;
                         else if (op == "!=" || op == "<>") v.ival = (c != 0) ? 1 : 0;
