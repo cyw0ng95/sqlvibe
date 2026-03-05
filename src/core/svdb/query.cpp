@@ -2216,6 +2216,16 @@ static std::vector<JoinSpec> parse_comma_joins(const std::string &sql) {
     return result;
 }
 
+/* Return the position of a FETCH FIRST/NEXT clause in an upper-cased string,
+ * or std::string::npos if absent. */
+static size_t find_fetch_clause(const std::string &su_upper, size_t from = 0) {
+    size_t fp = su_upper.find("FETCH FIRST ", from);
+    size_t fn = su_upper.find("FETCH NEXT ",  from);
+    if (fp == std::string::npos) return fn;
+    if (fn == std::string::npos) return fp;
+    return (fp < fn) ? fp : fn;
+}
+
 /* Extract ORDER BY clause */
 static std::vector<OrderCol> parse_order_by(const std::string &sql) {
     std::vector<OrderCol> result;
@@ -2234,8 +2244,9 @@ static std::vector<OrderCol> parse_order_by(const std::string &sql) {
         }
     }
     if (pos == std::string::npos) return result;
-    /* End at LIMIT or end of string */
+    /* End at LIMIT / FETCH FIRST / FETCH NEXT or end of string */
     size_t end = su.find("LIMIT ", pos);
+    if (end == std::string::npos) end = find_fetch_clause(su, pos);
     std::string ob_text = (end != std::string::npos)
         ? sql.substr(pos + 9, end - pos - 9)
         : sql.substr(pos + 9);
@@ -2277,7 +2288,21 @@ static void parse_limit_offset(const std::string &sql, int64_t &limit, int64_t &
     limit = -1; offset = 0;
     std::string su = qry_upper(sql);
     size_t lpos = su.find("LIMIT ");
-    if (lpos == std::string::npos) return;
+    if (lpos == std::string::npos) {
+        /* Also handle FETCH FIRST/NEXT n ROWS ONLY */
+        size_t fpos = find_fetch_clause(su);
+        if (fpos != std::string::npos) {
+            /* Advance past the keyword ("FETCH FIRST " or "FETCH NEXT ") */
+            size_t ns = fpos + (su.substr(fpos, 12) == "FETCH FIRST " ? 12 : 11);
+            while (ns < su.size() && isspace((unsigned char)su[ns])) ++ns;
+            size_t ne = ns;
+            while (ne < su.size() && isdigit((unsigned char)su[ne])) ++ne;
+            if (ne > ns) {
+                try { limit = std::stoll(su.substr(ns, ne - ns)); } catch (...) {}
+            }
+        }
+        return;
+    }
     std::string after = qry_trim(sql.substr(lpos + 6));
     /* Check for OFFSET */
     std::string au = qry_upper(after);
@@ -2306,6 +2331,7 @@ static std::vector<std::string> parse_group_by(const std::string &sql) {
     size_t end = su.find("HAVING ", pos);
     if (end == std::string::npos) end = su.find("ORDER BY ", pos);
     if (end == std::string::npos) end = su.find("LIMIT ", pos);
+    if (end == std::string::npos) end = find_fetch_clause(su, pos);
     std::string gb_text = (end != std::string::npos)
         ? sql.substr(pos + 9, end - pos - 9)
         : sql.substr(pos + 9);
@@ -2322,6 +2348,7 @@ static std::string parse_having(const std::string &sql) {
     if (pos == std::string::npos) return "";
     size_t end = su.find("ORDER BY ", pos);
     if (end == std::string::npos) end = su.find("LIMIT ", pos);
+    if (end == std::string::npos) end = find_fetch_clause(su, pos);
     return (end != std::string::npos) ? sql.substr(pos+7, end-pos-7) : sql.substr(pos+7);
 }
 
@@ -3480,6 +3507,60 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         }
     }
 
+    /* ── Standalone VALUES statement ── */
+    {
+        std::string su_v = qry_upper(qry_trim(sql));
+        if (su_v.size() >= 7 && su_v.substr(0, 7) == "VALUES ") {
+            svdb_rows_t *r = new (std::nothrow) svdb_rows_t();
+            if (!r) return SVDB_NOMEM;
+            const std::string &raw = sql;
+            /* Skip leading whitespace then "VALUES" (6 chars) */
+            size_t pos = raw.find_first_not_of(" \t\r\n");
+            pos += 6; /* len("VALUES") */
+            while (pos < raw.size() && isspace((unsigned char)raw[pos])) ++pos;
+            bool first_row = true;
+            while (pos < raw.size()) {
+                if (raw[pos] != '(') break;
+                int depth = 0;
+                size_t row_end = std::string::npos;
+                for (size_t i = pos; i < raw.size(); ++i) {
+                    if (raw[i] == '(') ++depth;
+                    else if (raw[i] == ')') { if (--depth == 0) { row_end = i; break; } }
+                }
+                if (row_end == std::string::npos) break;
+                std::string row_str = raw.substr(pos + 1, row_end - pos - 1);
+                /* Split by commas (respecting nesting and string literals) */
+                std::vector<std::string> elems;
+                std::string cur; int nesting_depth = 0; bool in_string_literal = false;
+                for (char c : row_str) {
+                    if (c == '\'') { in_string_literal = !in_string_literal; cur += c; continue; }
+                    if (in_string_literal) { cur += c; continue; }
+                    if (c == '(') { ++nesting_depth; cur += c; }
+                    else if (c == ')') { --nesting_depth; cur += c; }
+                    else if (c == ',' && nesting_depth == 0) { elems.push_back(qry_trim(cur)); cur.clear(); }
+                    else cur += c;
+                }
+                if (!qry_trim(cur).empty()) elems.push_back(qry_trim(cur));
+                if (first_row) {
+                    for (size_t i = 0; i < elems.size(); ++i)
+                        r->col_names.push_back("column" + std::to_string(i + 1));
+                    first_row = false;
+                }
+                std::vector<SvdbVal> data_row;
+                Row empty_row; std::vector<std::string> empty_order;
+                for (const auto &e : elems)
+                    data_row.push_back(eval_expr(e, empty_row, empty_order));
+                r->rows.push_back(data_row);
+                pos = row_end + 1;
+                while (pos < raw.size() && isspace((unsigned char)raw[pos])) ++pos;
+                if (pos < raw.size() && raw[pos] == ',') { ++pos; while (pos < raw.size() && isspace((unsigned char)raw[pos])) ++pos; }
+                else break;
+            }
+            *rows_out = r;
+            return SVDB_OK;
+        }
+    }
+
     /* ── Set-operation detection (UNION / INTERSECT / EXCEPT) ── */
     /* Find top-level UNION/INTERSECT/EXCEPT outside parentheses and string literals */
     {
@@ -3556,18 +3637,47 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                         for (auto &r : left->rows)  add_row(r);
                         for (auto &r : right->rows) add_row(r);
                     } else if (is_intersect) {
-                        std::set<std::string> right_keys;
-                        for (auto &r : right->rows) right_keys.insert(row_key(r));
-                        for (auto &r : left->rows) {
-                            std::string k = row_key(r);
-                            if (right_keys.count(k)) add_row(r);
+                        if (all_mode) {
+                            /* INTERSECT ALL: emit min(count_left, count_right) occurrences */
+                            std::map<std::string, int64_t> right_counts;
+                            for (auto &r : right->rows) right_counts[row_key(r)]++;
+                            for (auto &r : left->rows) {
+                                std::string k = row_key(r);
+                                auto it = right_counts.find(k);
+                                if (it != right_counts.end() && it->second > 0) {
+                                    --it->second;
+                                    result->rows.push_back(r);
+                                }
+                            }
+                        } else {
+                            std::set<std::string> right_keys;
+                            for (auto &r : right->rows) right_keys.insert(row_key(r));
+                            for (auto &r : left->rows) {
+                                std::string k = row_key(r);
+                                if (right_keys.count(k)) add_row(r);
+                            }
                         }
                     } else if (is_except) {
-                        std::set<std::string> right_keys;
-                        for (auto &r : right->rows) right_keys.insert(row_key(r));
-                        for (auto &r : left->rows) {
-                            std::string k = row_key(r);
-                            if (!right_keys.count(k)) add_row(r);
+                        if (all_mode) {
+                            /* EXCEPT ALL: multiset – subtract one occurrence per right-side match */
+                            std::map<std::string, int64_t> right_counts;
+                            for (auto &r : right->rows) right_counts[row_key(r)]++;
+                            for (auto &r : left->rows) {
+                                std::string k = row_key(r);
+                                auto it = right_counts.find(k);
+                                if (it != right_counts.end() && it->second > 0) {
+                                    --it->second;
+                                } else {
+                                    result->rows.push_back(r);
+                                }
+                            }
+                        } else {
+                            std::set<std::string> right_keys;
+                            for (auto &r : right->rows) right_keys.insert(row_key(r));
+                            for (auto &r : left->rows) {
+                                std::string k = row_key(r);
+                                if (!right_keys.count(k)) add_row(r);
+                            }
                         }
                     }
 
@@ -4240,12 +4350,26 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         for (const auto &c : (star ? std::vector<std::string>{} : sel_cols))
             proto.push_back(make_agg(c));
 
+        /* Build alias → underlying-expression map for GROUP BY alias resolution */
+        std::map<std::string, std::string> sel_alias_map;
+        for (size_t i = 0; i < sel_cols.size() && i < out_cols.size(); ++i) {
+            std::string cu = qry_upper(sel_cols[i]);
+            size_t as_pos = find_top_as(cu);
+            if (as_pos != std::string::npos) {
+                std::string alias = qry_trim(sel_cols[i].substr(as_pos + 4));
+                sel_alias_map[qry_upper(alias)] = out_cols[i];
+            }
+        }
+
         for (const auto &row : all_rows) {
             if (!qry_eval_where(row, merged_col_order, where_txt)) continue;
             /* Build group key */
             std::string key;
             for (const auto &gc : group_cols) {
-                SvdbVal v = eval_expr(gc, row, merged_col_order);
+                /* Resolve alias references in GROUP BY */
+                auto alias_it = sel_alias_map.find(qry_upper(gc));
+                const std::string &gc_expr = (alias_it != sel_alias_map.end()) ? alias_it->second : gc;
+                SvdbVal v = eval_expr(gc_expr, row, merged_col_order);
                 key += val_to_str(v) + "\x01";
             }
             if (!key_rows.count(key)) {

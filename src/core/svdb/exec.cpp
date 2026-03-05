@@ -994,6 +994,9 @@ static svdb_code_t do_alter_table(svdb_db_t *db, const std::string &sql) {
         if (!db->schema[tname].count(col_name)) {
             db->last_error = "no such column: " + col_name; return SVDB_ERR;
         }
+        if (db->schema[tname][col_name].primary_key) {
+            db->last_error = "cannot drop PRIMARY KEY column: " + col_name; return SVDB_ERR;
+        }
         db->schema[tname].erase(col_name);
         auto &co = db->col_order[tname];
         co.erase(std::remove(co.begin(), co.end(), col_name), co.end());
