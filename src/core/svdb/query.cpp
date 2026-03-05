@@ -792,6 +792,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             std::string json_str = val_to_str(json_val);
             std::string path_str = path_val.type == SVDB_TYPE_NULL ? "" : val_to_str(path_val);
             int64_t len = svdb_json_length(json_str.c_str(), path_str.c_str());
+            if (len < 0) return SvdbVal{}; /* Error case */
             SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = len; return v;
         }
         /* json_valid(json) / json_isvalid(json) */
