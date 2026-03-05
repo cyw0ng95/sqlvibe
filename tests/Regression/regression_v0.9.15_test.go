@@ -1,9 +1,11 @@
 package Regression
 
 import (
+	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestRegression_DistinctWithOrderByExtraCol_L1 tests SELECT DISTINCT with ORDER BY
@@ -13,25 +15,22 @@ import (
 // projected SELECT column but had different ORDER BY column values were not deduplicated.
 // Fixed in SQLValidator run (2026-02-25) by deferring DISTINCT to after sort+strip.
 func TestRegression_DistinctWithOrderByExtraCol_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	db.MustExec("CREATE TABLE t (id INTEGER PRIMARY KEY, grp INTEGER NOT NULL, val INTEGER NOT NULL)")
-	db.MustExec("INSERT INTO t VALUES (1, 1, 10)")
-	db.MustExec("INSERT INTO t VALUES (2, 1, 20)")
-	db.MustExec("INSERT INTO t VALUES (3, 2, 30)")
-	db.MustExec("INSERT INTO t VALUES (4, 2, 40)")
-	db.MustExec("INSERT INTO t VALUES (5, 3, 50)")
+	mustExec(t, db, "CREATE TABLE t (id INTEGER PRIMARY KEY, grp INTEGER NOT NULL, val INTEGER NOT NULL)")
+	mustExec(t, db, "INSERT INTO t VALUES (1, 1, 10)")
+	mustExec(t, db, "INSERT INTO t VALUES (2, 1, 20)")
+	mustExec(t, db, "INSERT INTO t VALUES (3, 2, 30)")
+	mustExec(t, db, "INSERT INTO t VALUES (4, 2, 40)")
+	mustExec(t, db, "INSERT INTO t VALUES (5, 3, 50)")
 
 	// ORDER BY uses 'val' which is NOT in the SELECT DISTINCT list.
 	// DISTINCT should produce {1,2,3} regardless of ORDER BY column ordering.
-	rows, err := db.Query("SELECT DISTINCT grp FROM t ORDER BY val ASC")
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
+	rows := qDB(t, db, "SELECT DISTINCT grp FROM t ORDER BY val ASC")
 
 	if len(rows.Data) != 3 {
 		t.Fatalf("expected 3 distinct grp values, got %d: %v", len(rows.Data), rows.Data)
@@ -50,26 +49,23 @@ func TestRegression_DistinctWithOrderByExtraCol_L1(t *testing.T) {
 // non-SELECT cols + LIMIT. The LIMIT must apply to the deduplicated result, not the
 // pre-dedup sorted stream.
 func TestRegression_DistinctOrderByExtraColWithLimit_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	db.MustExec("CREATE TABLE ol (o_id INTEGER, d_id INTEGER, w_id INTEGER, number INTEGER)")
-	db.MustExec("INSERT INTO ol VALUES (1,1,1,1)")
-	db.MustExec("INSERT INTO ol VALUES (1,1,1,2)")
-	db.MustExec("INSERT INTO ol VALUES (1,1,1,3)")
-	db.MustExec("INSERT INTO ol VALUES (2,2,1,1)")
-	db.MustExec("INSERT INTO ol VALUES (2,2,1,2)")
+	mustExec(t, db, "CREATE TABLE ol (o_id INTEGER, d_id INTEGER, w_id INTEGER, number INTEGER)")
+	mustExec(t, db, "INSERT INTO ol VALUES (1,1,1,1)")
+	mustExec(t, db, "INSERT INTO ol VALUES (1,1,1,2)")
+	mustExec(t, db, "INSERT INTO ol VALUES (1,1,1,3)")
+	mustExec(t, db, "INSERT INTO ol VALUES (2,2,1,1)")
+	mustExec(t, db, "INSERT INTO ol VALUES (2,2,1,2)")
 
 	// ORDER BY contains o_id, d_id, w_id, number – none of which are in SELECT.
 	// DISTINCT on d_id should give 2 unique values {1, 2}.
 	// LIMIT 4 should be applied AFTER deduplication, so we get 2 rows (not 4).
-	rows, err := db.Query("SELECT DISTINCT d_id FROM ol ORDER BY o_id ASC, d_id ASC, w_id ASC, number ASC LIMIT 4")
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
+	rows := qDB(t, db, "SELECT DISTINCT d_id FROM ol ORDER BY o_id ASC, d_id ASC, w_id ASC, number ASC LIMIT 4")
 
 	if len(rows.Data) != 2 {
 		t.Fatalf("expected 2 distinct d_id values, got %d: %v", len(rows.Data), rows.Data)

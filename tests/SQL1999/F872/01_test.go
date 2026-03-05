@@ -1,13 +1,15 @@
 package F872
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
-func openDB(t *testing.T) *sqlvibe.Database {
-	db, err := sqlvibe.Open(":memory:")
+func openDB(t *testing.T) *sql.DB {
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}
@@ -19,10 +21,7 @@ func TestSQL1999_F872_Unhex_L1(t *testing.T) {
 	db := openDB(t)
 	defer db.Close()
 
-	rows, err := db.Query("SELECT UNHEX('48656C6C6F')")
-	if err != nil {
-		t.Fatalf("UNHEX error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT UNHEX('48656C6C6F')")
 	if len(rows.Data) == 0 {
 		t.Fatal("No rows returned")
 	}
@@ -41,10 +40,7 @@ func TestSQL1999_F872_UnhexNull_L1(t *testing.T) {
 	db := openDB(t)
 	defer db.Close()
 
-	rows, err := db.Query("SELECT UNHEX(NULL)")
-	if err != nil {
-		t.Fatalf("UNHEX(NULL) error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT UNHEX(NULL)")
 	if len(rows.Data) == 0 {
 		t.Fatal("No rows")
 	}
@@ -58,10 +54,7 @@ func TestSQL1999_F872_Random_L1(t *testing.T) {
 	db := openDB(t)
 	defer db.Close()
 
-	rows, err := db.Query("SELECT RANDOM()")
-	if err != nil {
-		t.Fatalf("RANDOM() error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT RANDOM()")
 	if len(rows.Data) == 0 {
 		t.Fatal("No rows")
 	}
@@ -76,10 +69,7 @@ func TestSQL1999_F872_Randomblob_L1(t *testing.T) {
 	db := openDB(t)
 	defer db.Close()
 
-	rows, err := db.Query("SELECT RANDOMBLOB(8)")
-	if err != nil {
-		t.Fatalf("RANDOMBLOB error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT RANDOMBLOB(8)")
 	if len(rows.Data) == 0 {
 		t.Fatal("No rows")
 	}
@@ -97,10 +87,7 @@ func TestSQL1999_F872_Zeroblob_L1(t *testing.T) {
 	db := openDB(t)
 	defer db.Close()
 
-	rows, err := db.Query("SELECT ZEROBLOB(5)")
-	if err != nil {
-		t.Fatalf("ZEROBLOB error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT ZEROBLOB(5)")
 	if len(rows.Data) == 0 {
 		t.Fatal("No rows")
 	}
@@ -135,10 +122,7 @@ func TestSQL1999_F872_IIF_L1(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		rows, err := db.Query(tt.sql)
-		if err != nil {
-			t.Fatalf("IIF query %q error: %v", tt.sql, err)
-		}
+		rows := SQL1999.QueryRows(t, db, tt.sql)
 		if len(rows.Data) == 0 {
 			t.Fatalf("No rows for %q", tt.sql)
 		}

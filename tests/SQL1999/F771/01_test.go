@@ -2,13 +2,14 @@ package F771
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
-func setupEmpTable(t *testing.T, svDB *sqlvibe.Database, litDB *sql.DB) {
+func setupEmpTable(t *testing.T, svDB *sql.DB, litDB *sql.DB) {
 	t.Helper()
 	for _, q := range []string{
 		"CREATE TABLE emp (id INTEGER, name TEXT, dept TEXT, salary REAL)",
@@ -24,7 +25,7 @@ func setupEmpTable(t *testing.T, svDB *sqlvibe.Database, litDB *sql.DB) {
 }
 
 func TestSQL1999_F771_RowNumber_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("sqlvibe: %v", err)
 	}
@@ -52,7 +53,7 @@ func TestSQL1999_F771_RowNumber_L1(t *testing.T) {
 }
 
 func TestSQL1999_F771_Rank_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("sqlvibe: %v", err)
 	}
@@ -79,7 +80,7 @@ func TestSQL1999_F771_Rank_L1(t *testing.T) {
 }
 
 func TestSQL1999_F771_LagLead_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("sqlvibe: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestSQL1999_F771_LagLead_L1(t *testing.T) {
 }
 
 func TestSQL1999_F771_Ntile_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("sqlvibe: %v", err)
 	}
@@ -132,7 +133,7 @@ func TestSQL1999_F771_Ntile_L1(t *testing.T) {
 }
 
 func TestSQL1999_F771_GroupConcat_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("sqlvibe: %v", err)
 	}
@@ -166,7 +167,7 @@ func TestSQL1999_F771_GroupConcat_L1(t *testing.T) {
 }
 
 func TestSQL1999_F771_RecursiveCTE_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("sqlvibe: %v", err)
 	}
@@ -190,7 +191,7 @@ func TestSQL1999_F771_RecursiveCTE_L1(t *testing.T) {
 }
 
 func TestSQL1999_F771_CTEColumnList_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("sqlvibe: %v", err)
 	}
@@ -214,7 +215,7 @@ func TestSQL1999_F771_CTEColumnList_L1(t *testing.T) {
 }
 
 func TestSQL1999_F771_WindowFrameSpec_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("sqlvibe: %v", err)
 	}

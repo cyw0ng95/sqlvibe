@@ -2,15 +2,16 @@ package F875
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F875_InsertOrReplace_L1 validates INSERT OR REPLACE behaviour.
 func TestSQL1999_F875_InsertOrReplace_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestSQL1999_F875_InsertOrReplace_L1(t *testing.T) {
 
 // TestSQL1999_F875_InsertOrIgnore_L1 validates INSERT OR IGNORE behaviour.
 func TestSQL1999_F875_InsertOrIgnore_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -126,7 +127,7 @@ func TestSQL1999_F875_InsertOrIgnore_L1(t *testing.T) {
 
 // TestSQL1999_F875_Upsert_L1 validates UPSERT (INSERT ... ON CONFLICT DO UPDATE).
 func TestSQL1999_F875_Upsert_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -187,7 +188,7 @@ func TestSQL1999_F875_Upsert_L1(t *testing.T) {
 
 // TestSQL1999_F875_StringFunctions_L1 validates REPLACE, SUBSTR, TRIM.
 func TestSQL1999_F875_StringFunctions_L1(t *testing.T) {
-	svDB, err := sqlvibe.Open(":memory:")
+	svDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}

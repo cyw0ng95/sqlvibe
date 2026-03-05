@@ -2,15 +2,16 @@ package F631
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F631_AutoIncrement_L1 tests AUTOINCREMENT column behavior.
 func TestSQL1999_F631_AutoIncrement_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -41,7 +42,7 @@ func TestSQL1999_F631_AutoIncrement_L1(t *testing.T) {
 
 // TestSQL1999_F631_AutoIncrementSequential_L1 verifies IDs don't reuse after DELETE.
 func TestSQL1999_F631_AutoIncrementSequential_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}
@@ -58,10 +59,7 @@ func TestSQL1999_F631_AutoIncrementSequential_L1(t *testing.T) {
 	// Insert a new row - should get id=4, not reuse id=2
 	db.Exec("INSERT INTO seq_test (v) VALUES ('d')")
 
-	rows, err := db.Query("SELECT id FROM seq_test ORDER BY id")
-	if err != nil {
-		t.Fatalf("Query error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id FROM seq_test ORDER BY id")
 	if len(rows.Data) != 3 {
 		t.Fatalf("Expected 3 rows, got %d", len(rows.Data))
 	}
@@ -81,7 +79,7 @@ func TestSQL1999_F631_AutoIncrementSequential_L1(t *testing.T) {
 
 // TestSQL1999_F631_PragmaSQLiteSequence_L1 tests PRAGMA sqlite_sequence.
 func TestSQL1999_F631_PragmaSQLiteSequence_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}
@@ -92,10 +90,7 @@ func TestSQL1999_F631_PragmaSQLiteSequence_L1(t *testing.T) {
 	db.Exec("INSERT INTO seq_tbl (name) VALUES ('y')")
 	db.Exec("INSERT INTO seq_tbl (name) VALUES ('z')")
 
-	rows, err := db.Query("PRAGMA sqlite_sequence")
-	if err != nil {
-		t.Fatalf("PRAGMA sqlite_sequence error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "PRAGMA sqlite_sequence")
 	if len(rows.Data) == 0 {
 		t.Error("Expected at least 1 row from PRAGMA sqlite_sequence")
 		return

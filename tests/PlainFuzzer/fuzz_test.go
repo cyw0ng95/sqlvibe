@@ -1,13 +1,14 @@
 package PlainFuzzer
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"fmt"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 	_ "github.com/glebarez/go-sqlite"
 )
 
@@ -25,7 +26,7 @@ func NewDBSchemaTracker() *DBSchemaTracker {
 	}
 }
 
-func (t *DBSchemaTracker) UpdateFromDB(db *sqlvibe.Database) error {
+func (t *DBSchemaTracker) UpdateFromDB(db *sql.DB) error {
 	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table'")
 	if err != nil {
 		return err
@@ -561,7 +562,7 @@ func FuzzSQL(f *testing.F) {
 			t.Skip()
 		}
 
-		db, err := sqlvibe.Open(":memory:")
+		db, err := sql.Open("sqlvibe", ":memory:")
 		if err != nil {
 			t.Fatalf("Failed to open sqlvibe: %v", err)
 		}
@@ -639,7 +640,7 @@ func splitStatements(sql string) []string {
 	return statements
 }
 
-func executeSQL(db *sqlvibe.Database, query string) (err error) {
+func executeSQL(db *sql.DB, query string) (err error) {
 	type result struct {
 		err error
 	}

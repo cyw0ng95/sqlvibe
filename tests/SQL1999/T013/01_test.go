@@ -1,15 +1,17 @@
 package T013
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"fmt"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
-func openDB(t *testing.T) *sqlvibe.Database {
+func openDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
@@ -29,10 +31,7 @@ func TestSQL1999_T013_AutocommitBasic_L1(t *testing.T) {
 		t.Fatalf("INSERT: %v", err)
 	}
 
-	rows, err := db.Query("SELECT id, val FROM t")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id, val FROM t")
 	if len(rows.Data) != 1 {
 		t.Errorf("expected 1 row in autocommit mode, got %d", len(rows.Data))
 	}
@@ -57,10 +56,7 @@ func TestSQL1999_T013_MultipleInsertsAutocommit_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT id FROM t ORDER BY id")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id FROM t ORDER BY id")
 	if len(rows.Data) != 3 {
 		t.Errorf("expected 3 rows in autocommit mode, got %d: %v", len(rows.Data), rows.Data)
 	}
@@ -80,10 +76,7 @@ func TestSQL1999_T013_ImmediateVisibility_L1(t *testing.T) {
 		t.Fatalf("INSERT: %v", err)
 	}
 
-	rows, err := db.Query("SELECT val FROM t WHERE id = 99")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT val FROM t WHERE id = 99")
 	if len(rows.Data) != 1 {
 		t.Errorf("expected 1 row, got %d", len(rows.Data))
 		return

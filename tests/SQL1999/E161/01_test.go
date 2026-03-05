@@ -2,10 +2,11 @@ package E161
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_E161_01_L1 tests SQL comments using double minus (--)
@@ -13,7 +14,7 @@ func TestSQL1999_E161_01_L1(t *testing.T) {
 	sqlvibePath := ":memory:"
 	sqlitePath := ":memory:"
 
-	sqlvibeDB, _ := sqlvibe.Open(sqlvibePath)
+	sqlvibeDB, _ := sql.Open("sqlvibe", sqlvibePath)
 	defer sqlvibeDB.Close()
 	sqliteDB, _ := sql.Open("sqlite", sqlitePath)
 	defer sqliteDB.Close()

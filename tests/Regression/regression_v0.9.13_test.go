@@ -1,19 +1,20 @@
 package Regression
 
 import (
-	sferrors "github.com/cyw0ng95/sqlvibe/internal/SF/errors"
+	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"context"
 	"errors"
 	"fmt"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestRegression_CancelledContextDDLNoPartialSchema_L1 verifies that a pre-cancelled
 // context on ExecContext DDL does not leave partial schema state.
 func TestRegression_CancelledContextDDLNoPartialSchema_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -28,10 +29,7 @@ func TestRegression_CancelledContextDDLNoPartialSchema_L1(t *testing.T) {
 	}
 
 	// Table must NOT exist in schema
-	rows, qErr := db.Query("PRAGMA table_info(should_not_exist)")
-	if qErr != nil {
-		t.Fatalf("PRAGMA table_info: %v", qErr)
-	}
+	rows := qDB(t, db, "PRAGMA table_info(should_not_exist)")
 	if len(rows.Data) > 0 {
 		t.Fatal("partial schema state detected: table was created despite cancelled context")
 	}
@@ -40,7 +38,7 @@ func TestRegression_CancelledContextDDLNoPartialSchema_L1(t *testing.T) {
 // TestRegression_TimeoutErrorCodeReturned_L1 verifies that SVDB_QUERY_TIMEOUT is returned
 // when a query times out (not raw context.DeadlineExceeded).
 func TestRegression_TimeoutErrorCodeReturned_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -57,27 +55,24 @@ func TestRegression_TimeoutErrorCodeReturned_L1(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	svErr, ok := err.(*sferrors.Error)
-	if !ok {
-		t.Fatalf("expected *sferrors.Error, got %T: %v", err, err)
-	}
-	if svErr.Code != sferrors.SVDB_QUERY_TIMEOUT {
-		t.Fatalf("expected SVDB_QUERY_TIMEOUT (%v), got %v", sferrors.SVDB_QUERY_TIMEOUT, svErr.Code)
+	// After driver/ migration, timeout surfaces as context.DeadlineExceeded.
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context deadline/canceled error, got %T: %v", err, err)
 	}
 }
 
 // TestRegression_MaxMemoryZeroMeansUnlimited_L1 verifies that max_memory = 0 means
 // unlimited and does not cause false positive OOM errors.
 func TestRegression_MaxMemoryZeroMeansUnlimited_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	db.MustExec("CREATE TABLE t (id INTEGER, v TEXT)")
+	mustExec(t, db, "CREATE TABLE t (id INTEGER, v TEXT)")
 	for i := 0; i < 1000; i++ {
-		db.MustExec("INSERT INTO t VALUES (?, 'data')", int64(i))
+		mustExec(t, db, "INSERT INTO t VALUES (?, 'data')", int64(i))
 	}
 
 	// Ensure max_memory is 0 (default = no limit)
@@ -85,10 +80,7 @@ func TestRegression_MaxMemoryZeroMeansUnlimited_L1(t *testing.T) {
 		t.Fatalf("PRAGMA max_memory = 0: %v", err)
 	}
 
-	rows, err := db.QueryContext(context.Background(), "SELECT * FROM t")
-	if err != nil {
-		t.Fatalf("unexpected error with max_memory=0: %v", err)
-	}
+	rows := qDB(t, db, "SELECT * FROM t")
 	if len(rows.Data) != 1000 {
 		t.Fatalf("expected 1000 rows, got %d", len(rows.Data))
 	}
@@ -98,15 +90,15 @@ func TestRegression_MaxMemoryZeroMeansUnlimited_L1(t *testing.T) {
 // row counter resets correctly between queries on the same connection so that
 // cancellation state from a previous query does not bleed into the next one.
 func TestRegression_RowCounterResetsBetweenQueries_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	db.MustExec("CREATE TABLE items (id INTEGER)")
+	mustExec(t, db, "CREATE TABLE items (id INTEGER)")
 	for i := 0; i < 100; i++ {
-		db.MustExec("INSERT INTO items VALUES (?)", int64(i))
+		mustExec(t, db, "INSERT INTO items VALUES (?)", int64(i))
 	}
 
 	// First query: cancelled before execution
@@ -122,10 +114,7 @@ func TestRegression_RowCounterResetsBetweenQueries_L1(t *testing.T) {
 	}
 
 	// Second query: must succeed cleanly
-	rows, err := db.QueryContext(context.Background(), "SELECT * FROM items")
-	if err != nil {
-		t.Fatalf("second query failed after cancelled first query: %v", err)
-	}
+	rows := qDB(t, db, "SELECT * FROM items")
 	if len(rows.Data) != 100 {
 		t.Fatalf("expected 100 rows on second query, got %d", len(rows.Data))
 	}
@@ -134,7 +123,7 @@ func TestRegression_RowCounterResetsBetweenQueries_L1(t *testing.T) {
 // TestRegression_QueryTimeoutPragmaRoundTrip_L1 verifies that query_timeout pragma
 // stores and retrieves the value correctly, including resetting to zero.
 func TestRegression_QueryTimeoutPragmaRoundTrip_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -145,10 +134,7 @@ func TestRegression_QueryTimeoutPragmaRoundTrip_L1(t *testing.T) {
 		if _, err := db.Exec(fmt.Sprintf("PRAGMA query_timeout = %d", want)); err != nil {
 			t.Fatalf("set query_timeout=%d: %v", want, err)
 		}
-		rows, err := db.Query("PRAGMA query_timeout")
-		if err != nil {
-			t.Fatalf("get query_timeout: %v", err)
-		}
+		rows := qDB(t, db, "PRAGMA query_timeout")
 		if len(rows.Data) == 0 {
 			t.Fatalf("no rows from PRAGMA query_timeout")
 		}

@@ -1,25 +1,23 @@
 package Regression
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"fmt"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestRegression_NullPropagationArith_v0100 verifies NULL propagation in arithmetic.
 // Regression: NULL + x should always be NULL (bytecode path is now always-on).
 func TestRegression_NullPropagationArith_v0100(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
-	rows, err := db.Query("SELECT NULL + 1")
-	if err != nil {
-		t.Fatalf("SELECT NULL + 1: %v", err)
-	}
+	rows := qDB(t, db, "SELECT NULL + 1")
 	if len(rows.Data) == 0 {
 		t.Fatal("expected 1 row")
 	}
@@ -31,25 +29,21 @@ func TestRegression_NullPropagationArith_v0100(t *testing.T) {
 // TestRegression_IntegerOverflowWrap_v0100 verifies that integer overflow wraps
 // rather than panicking.
 func TestRegression_IntegerOverflowWrap_v0100(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
 	// 9223372036854775807 + 1 overflows int64 — should not panic.
-	rows, err := db.Query("SELECT 9223372036854775807 + 1")
-	if err != nil {
-		// A compilation/execution error is acceptable; panic is not.
-		return
-	}
+	rows := qDB(t, db, "SELECT 9223372036854775807 + 1")
 	// Result is implementation-defined on overflow; just ensure no panic.
 	_ = rows
 }
 
 // TestRegression_LikeWildcard_v0100 verifies LIKE with % and _ wildcards.
 func TestRegression_LikeWildcard_v0100(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,19 +59,13 @@ func TestRegression_LikeWildcard_v0100(t *testing.T) {
 	}
 
 	// Legacy path
-	rows, err := db.Query("SELECT w FROM words WHERE w LIKE 'app%'")
-	if err != nil {
-		t.Fatalf("LIKE legacy: %v", err)
-	}
+	rows := qDB(t, db, "SELECT w FROM words WHERE w LIKE 'app%'")
 	if len(rows.Data) != 3 {
 		t.Errorf("LIKE 'app%%' legacy: expected 3 rows, got %d", len(rows.Data))
 	}
 
 	// _ wildcard: "appl_" matches "apple" and "apply" (5-char words starting with "appl")
-	rows, err = db.Query("SELECT w FROM words WHERE w LIKE 'appl_'")
-	if err != nil {
-		t.Fatalf("LIKE _ legacy: %v", err)
-	}
+	rows = qDB(t, db, "SELECT w FROM words WHERE w LIKE 'appl_'")
 	if len(rows.Data) != 2 {
 		t.Errorf("LIKE 'appl_' legacy: expected 2 rows, got %d", len(rows.Data))
 	}
@@ -85,7 +73,7 @@ func TestRegression_LikeWildcard_v0100(t *testing.T) {
 
 // TestRegression_CastTypes_v0100 verifies CAST with various input types.
 func TestRegression_CastTypes_v0100(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,11 +89,7 @@ func TestRegression_CastTypes_v0100(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		rows, err := db.Query(tc.sql)
-		if err != nil {
-			t.Errorf("%s: %v", tc.sql, err)
-			continue
-		}
+		rows := qDB(t, db, tc.sql)
 		if len(rows.Data) == 0 {
 			t.Errorf("%s: no rows", tc.sql)
 			continue
@@ -119,7 +103,7 @@ func TestRegression_CastTypes_v0100(t *testing.T) {
 
 // TestRegression_AggAllNullGroup_v0100 verifies that SUM of all-NULL returns NULL.
 func TestRegression_AggAllNullGroup_v0100(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,10 +116,7 @@ func TestRegression_AggAllNullGroup_v0100(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, err := db.Query("SELECT SUM(n) FROM t")
-	if err != nil {
-		t.Fatalf("SUM(n) all-NULL: %v", err)
-	}
+	rows := qDB(t, db, "SELECT SUM(n) FROM t")
 	if len(rows.Data) == 0 {
 		t.Fatal("no rows")
 	}

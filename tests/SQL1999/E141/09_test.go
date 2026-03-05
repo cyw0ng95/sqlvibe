@@ -2,17 +2,18 @@ package E141
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 func TestSQL1999_F301_E14109_L1(t *testing.T) {
 	sqlvibePath := ":memory:"
 	sqlitePath := ":memory:"
 
-	sqlvibeDB, err := sqlvibe.Open(sqlvibePath)
+	sqlvibeDB, err := sql.Open("sqlvibe", sqlvibePath)
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -29,7 +30,7 @@ func TestSQL1999_F301_E14109_L1(t *testing.T) {
 		sql  string
 	}{
 		{"CreateTable", "CREATE TABLE test_nulls (id INTEGER, val INTEGER, text_val TEXT, real_val REAL)"},
-		{"InsertData", "INSERT INTO test_nulls VALUES (1, 10, hello, 1.5), (2, 20, world, 2.5), (3, 30, data, NULL), (4, NULL, test, 3.5), (5, 30, data, NULL), (6, 40, NULL, 4.0), (7, 50, more, NULL), (8, NULL, NULL, NULL)"},
+		{"InsertData", "INSERT INTO test_nulls VALUES (1, 10, 'hello', 1.5), (2, 20, 'world', 2.5), (3, 30, 'data', NULL), (4, NULL, 'test', 3.5), (5, 30, 'data', NULL), (6, 40, NULL, 4.0), (7, 50, 'more', NULL), (8, NULL, NULL, NULL)"},
 	}
 
 	for _, tt := range setup {

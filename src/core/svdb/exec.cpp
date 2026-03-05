@@ -9,6 +9,7 @@
 #include "svdb.h"
 #include "svdb_types.h"
 #include "svdb_util.h"
+#include "../SF/svdb_assert.h"
 #include "QP/parser.h"
 
 #include <cctype>
@@ -22,6 +23,11 @@
 /* Implemented in query.cpp */
 extern svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                                         svdb_rows_t **rows_out);
+extern svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
+                                      svdb_rows_t **rows_out);
+extern SvdbVal svdb_eval_expr_in_row(const std::string &expr, const Row &row,
+                                      const std::vector<std::string> &col_order);
+extern void svdb_set_query_db(svdb_db_t *db);
 
 /* ── helpers ────────────────────────────────────────────────────── */
 
@@ -35,6 +41,42 @@ static std::string str_trim(const std::string &s) {
     while (a < b && isspace((unsigned char)s[a])) ++a;
     while (b > a && isspace((unsigned char)s[b-1])) --b;
     return s.substr(a, b - a);
+}
+
+/* Strip SQL line comments and block comments, preserving string literals */
+static std::string strip_sql_comments(const std::string &s) {
+    std::string out;
+    out.reserve(s.size());
+    size_t i = 0;
+    while (i < s.size()) {
+        /* String literal: copy as-is */
+        if (s[i] == '\'') {
+            out += s[i++];
+            while (i < s.size()) {
+                out += s[i];
+                if (s[i] == '\'' && (i + 1 >= s.size() || s[i+1] != '\'')) { ++i; break; }
+                if (s[i] == '\'' && i + 1 < s.size() && s[i+1] == '\'') { out += s[++i]; }
+                ++i;
+            }
+            continue;
+        }
+        /* Line comment: -- to end of line → replace with space */
+        if (i + 1 < s.size() && s[i] == '-' && s[i+1] == '-') {
+            while (i < s.size() && s[i] != '\n') ++i;
+            out += ' ';
+            continue;
+        }
+        /* Block comment: slash-star ... star-slash → replace with space */
+        if (i + 1 < s.size() && s[i] == '/' && s[i+1] == '*') {
+            i += 2;
+            while (i + 1 < s.size() && !(s[i] == '*' && s[i+1] == '/')) ++i;
+            if (i + 1 < s.size()) i += 2;
+            out += ' ';
+            continue;
+        }
+        out += s[i++];
+    }
+    return out;
 }
 
 static std::string first_keyword(const std::string &sql) {
@@ -196,6 +238,39 @@ static void parse_column_defs(const std::string &sql, size_t pos,
                 fk.child_col = child_col;
                 fk.parent_table = parent_table;
                 fk.parent_col = parent_col;
+                /* Parse optional ON DELETE / ON UPDATE action(s) */
+                auto parse_fk_action = [&](const std::string &clause, std::string &target) {
+                    while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                    size_t peek = pos;
+                    while (peek < sql.size() && isalpha((unsigned char)sql[peek])) ++peek;
+                    std::string action = str_upper(sql.substr(pos, peek - pos));
+                    pos = peek;
+                    if (action == "SET" || action == "NO") {
+                        while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                        peek = pos;
+                        while (peek < sql.size() && isalpha((unsigned char)sql[peek])) ++peek;
+                        std::string action2 = str_upper(sql.substr(pos, peek - pos));
+                        pos = peek;
+                        action = action + " " + action2;
+                    }
+                    target = action;
+                };
+                while (true) {
+                    while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                    size_t peek = pos;
+                    while (peek < sql.size() && isalpha((unsigned char)sql[peek])) ++peek;
+                    std::string w1 = str_upper(sql.substr(pos, peek - pos));
+                    if (w1 != "ON") break;
+                    pos = peek;
+                    while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                    peek = pos;
+                    while (peek < sql.size() && isalpha((unsigned char)sql[peek])) ++peek;
+                    std::string w2 = str_upper(sql.substr(pos, peek - pos));
+                    pos = peek;
+                    if (w2 == "DELETE") parse_fk_action(w2, fk.on_delete);
+                    else if (w2 == "UPDATE") parse_fk_action(w2, fk.on_update);
+                    else break;
+                }
                 out_fks->push_back(fk);
             }
             while (pos < sql.size() && sql[pos] != ',' && sql[pos] != ')') ++pos;
@@ -287,6 +362,8 @@ static void parse_column_defs(const std::string &sql, size_t pos,
                 cd.primary_key = true;
                 cd.not_null = true;
                 if (out_pk) out_pk->push_back(col_name);
+            } else if (ckw == "AUTOINCREMENT") {
+                cd.auto_increment = true;
             } else if (ckw == "UNIQUE") {
                 /* Column-level UNIQUE */
                 if (out_uniq) out_uniq->push_back({col_name});
@@ -312,6 +389,36 @@ static void parse_column_defs(const std::string &sql, size_t pos,
                     fk.child_col = col_name;
                     fk.parent_table = parent_tbl;
                     fk.parent_col = parent_c;
+                    /* Parse optional ON DELETE / ON UPDATE action(s) */
+                    while (true) {
+                        while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                        size_t peek2 = pos;
+                        while (peek2 < sql.size() && isalpha((unsigned char)sql[peek2])) ++peek2;
+                        std::string kw2 = str_upper(sql.substr(pos, peek2 - pos));
+                        if (kw2 != "ON") break;
+                        pos = peek2;
+                        while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                        peek2 = pos;
+                        while (peek2 < sql.size() && isalpha((unsigned char)sql[peek2])) ++peek2;
+                        std::string evt = str_upper(sql.substr(pos, peek2 - pos));
+                        pos = peek2;
+                        while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                        peek2 = pos;
+                        while (peek2 < sql.size() && isalpha((unsigned char)sql[peek2])) ++peek2;
+                        std::string act = str_upper(sql.substr(pos, peek2 - pos));
+                        pos = peek2;
+                        if (act == "SET" || act == "NO") {
+                            while (pos < sql.size() && isspace((unsigned char)sql[pos])) ++pos;
+                            peek2 = pos;
+                            while (peek2 < sql.size() && isalpha((unsigned char)sql[peek2])) ++peek2;
+                            std::string act2 = str_upper(sql.substr(pos, peek2 - pos));
+                            pos = peek2;
+                            act = act + " " + act2;
+                        }
+                        if (evt == "DELETE") fk.on_delete = act;
+                        else if (evt == "UPDATE") fk.on_update = act;
+                        else break;
+                    }
                     out_fks->push_back(fk);
                 }
             } else if (ckw == "CHECK") {
@@ -417,11 +524,66 @@ static bool eval_where(const Row &row,
         val_str = wt.substr(s, p - s);
     }
 
-    /* Look up column in row */
+    /* Look up LHS column in row */
     auto it = row.find(col);
+    if (it == row.end()) {
+        /* Case-insensitive fallback */
+        std::string col_up = str_upper(col);
+        for (auto &kv : row) {
+            if (str_upper(kv.first) == col_up) { it = row.find(kv.first); break; }
+        }
+    }
     if (it == row.end()) return false;
 
     const SvdbVal &sv = it->second;
+
+    /* Check if val_str is a column reference (not a quoted string, not a number).
+     * A column reference looks like an identifier (letters/digits/_) with optional
+     * table prefix (table.col). When found in the row, compare column-to-column. */
+    if (!is_text) {
+        /* Try to look val_str up as a column (qualified or unqualified) */
+        auto vit = row.find(val_str);
+        if (vit == row.end()) {
+            /* Try stripping table qualifier */
+            auto vdot = val_str.find('.');
+            std::string val_col = (vdot != std::string::npos) ? val_str.substr(vdot + 1) : val_str;
+            std::string val_col_up = str_upper(val_col);
+            for (auto &kv : row) {
+                std::string k = kv.first;
+                auto kdot = k.find('.');
+                if (kdot != std::string::npos) k = k.substr(kdot + 1);
+                if (str_upper(k) == val_col_up) { vit = row.find(kv.first); break; }
+            }
+        }
+        /* Only treat as column ref if it looks like an identifier (letters/digits/underscore, not a number) */
+        bool looks_like_ident = !val_str.empty() &&
+            (isalpha((unsigned char)val_str[0]) || val_str[0] == '_');
+        if (looks_like_ident && vit != row.end()) {
+            /* Column-to-column comparison */
+            const SvdbVal &sv2 = vit->second;
+            if (sv.type == SVDB_TYPE_NULL || sv2.type == SVDB_TYPE_NULL) return false;
+            double lv = (sv.type == SVDB_TYPE_INT) ? (double)sv.ival : sv.rval;
+            double rv = (sv2.type == SVDB_TYPE_INT) ? (double)sv2.ival : sv2.rval;
+            if (sv.type == SVDB_TYPE_TEXT || sv2.type == SVDB_TYPE_TEXT) {
+                std::string ls = (sv.type == SVDB_TYPE_TEXT) ? sv.sval : std::to_string(sv.ival);
+                std::string rs = (sv2.type == SVDB_TYPE_TEXT) ? sv2.sval : std::to_string(sv2.ival);
+                if (op == "="  || op == "==") return ls == rs;
+                if (op == "!=" || op == "<>") return ls != rs;
+                if (op == "<")                return ls < rs;
+                if (op == ">")                return ls > rs;
+                if (op == "<=")               return ls <= rs;
+                if (op == ">=")               return ls >= rs;
+            } else {
+                if (op == "="  || op == "==") return lv == rv;
+                if (op == "!=" || op == "<>") return lv != rv;
+                if (op == "<")                return lv < rv;
+                if (op == ">")                return lv > rv;
+                if (op == "<=")               return lv <= rv;
+                if (op == ">=")               return lv >= rv;
+            }
+            return true;
+        }
+    }
 
     if (is_text || sv.type == SVDB_TYPE_TEXT) {
         std::string row_val = (sv.type == SVDB_TYPE_TEXT) ? sv.sval :
@@ -453,13 +615,41 @@ static bool eval_where(const Row &row,
 /* Parse a literal value string into an SvdbVal */
 static SvdbVal parse_literal(const std::string &v) {
     SvdbVal sv;
-    if (str_upper(v) == "NULL") {
+    std::string vu = str_upper(v);
+    if (vu == "NULL") {
         sv.type = SVDB_TYPE_NULL;
         return sv;
+    }
+    /* Boolean literals: TRUE → 1, FALSE → 0 (SQLite-compatible) */
+    if (vu == "TRUE") {
+        sv.type = SVDB_TYPE_INT; sv.ival = 1; return sv;
+    }
+    if (vu == "FALSE") {
+        sv.type = SVDB_TYPE_INT; sv.ival = 0; return sv;
     }
     if (v.empty()) {
         /* Empty string: parser stripped quotes from '' → return TEXT "" */
         sv.type = SVDB_TYPE_TEXT;
+        return sv;
+    }
+    /* Hex blob literal: x'HEXHEX...' or X'HEXHEX...' (SQLite-compatible) */
+    if (v.size() >= 3 && (v[0] == 'x' || v[0] == 'X') && v[1] == '\'') {
+        sv.type = SVDB_TYPE_BLOB;
+        size_t end = v.rfind('\'');
+        if (end > 1) {
+            std::string hex = v.substr(2, end - 2);
+            std::string binary;
+            for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+                auto fromhex = [](char c) -> unsigned char {
+                    if (c >= '0' && c <= '9') return (unsigned char)(c - '0');
+                    if (c >= 'a' && c <= 'f') return (unsigned char)(c - 'a' + 10);
+                    if (c >= 'A' && c <= 'F') return (unsigned char)(c - 'A' + 10);
+                    return 0;
+                };
+                binary += (char)((fromhex(hex[i]) << 4) | fromhex(hex[i + 1]));
+            }
+            sv.sval = binary;
+        }
         return sv;
     }
     if (v[0] == '\'') {
@@ -491,6 +681,213 @@ static SvdbVal parse_literal(const std::string &v) {
         sv.sval = v;
     }
     return sv;
+}
+
+/* Evaluate a simple expression for UPDATE SET clause values.
+ * Handles: column refs, integer/float/string/NULL literals, arithmetic ops.
+ * E.g. "v + 1", "price * 1.1", "col", "'hello'" */
+static SvdbVal eval_expr_exec(const std::string &expr_in, const Row &row,
+                               const std::vector<std::string> &col_order);
+
+/* String conversion for eval_expr_exec */
+static std::string val_to_str_exec(const SvdbVal &v) {
+    if (v.type == SVDB_TYPE_TEXT || v.type == SVDB_TYPE_BLOB) return v.sval;
+    if (v.type == SVDB_TYPE_INT)  return std::to_string(v.ival);
+    if (v.type == SVDB_TYPE_REAL) {
+        char buf[64]; snprintf(buf, sizeof(buf), "%.17g", v.rval); return buf;
+    }
+    return "";
+}
+
+static SvdbVal eval_expr_exec(const std::string &expr_in, const Row &row,
+                               const std::vector<std::string> &col_order) {
+    (void)col_order;
+    std::string e = str_trim(expr_in);
+    if (e.empty()) return SvdbVal{};
+
+    /* Strip balanced outer parens */
+    if (e.size() >= 2 && e.front() == '(' && e.back() == ')') {
+        int d = 0; bool matched = true;
+        for (size_t i = 0; i < e.size(); ++i) {
+            if (e[i] == '(') ++d;
+            else if (e[i] == ')') { if (--d == 0 && i + 1 != e.size()) { matched = false; break; } }
+        }
+        if (matched) return eval_expr_exec(e.substr(1, e.size()-2), row, col_order);
+    }
+
+    /* Find rightmost top-level || (string concatenation, lowest precedence) */
+    int depth2 = 0; bool in_str2 = false;
+    for (size_t i = e.size(); i >= 2; --i) {
+        char c1 = e[i-2], c2 = e[i-1];
+        if (c2 == '\'') { in_str2 = !in_str2; continue; }
+        if (in_str2) continue;
+        if (c2 == ')') ++depth2;
+        if (c2 == '(') { if (depth2 > 0) --depth2; }
+        if (depth2 > 0) continue;
+        if (c1 == '|' && c2 == '|' && i >= 2) {
+            SvdbVal lhs = eval_expr_exec(e.substr(0, i-2), row, col_order);
+            SvdbVal rhs = eval_expr_exec(e.substr(i), row, col_order);
+            if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) return SvdbVal{};
+            SvdbVal res; res.type = SVDB_TYPE_TEXT;
+            res.sval = val_to_str_exec(lhs) + val_to_str_exec(rhs);
+            return res;
+        }
+    }
+
+    /* Find rightmost top-level + or - (for left-associative parsing) */
+    depth2 = 0; in_str2 = false;
+    for (size_t i = e.size(); i > 0; --i) {
+        char c = e[i-1];
+        if (c == '\'') { in_str2 = !in_str2; continue; }
+        if (in_str2) continue;
+        if (c == ')') ++depth2;
+        if (c == '(') { if (depth2 > 0) --depth2; }
+        if (depth2 > 0) continue;
+        if ((c == '+' || c == '-') && i > 1) {
+            SvdbVal lhs = eval_expr_exec(e.substr(0, i-1), row, col_order);
+            SvdbVal rhs = eval_expr_exec(e.substr(i), row, col_order);
+            if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) return SvdbVal{};
+            bool int_res = (lhs.type == SVDB_TYPE_INT && rhs.type == SVDB_TYPE_INT);
+            double lv = (lhs.type == SVDB_TYPE_INT) ? (double)lhs.ival : lhs.rval;
+            double rv = (rhs.type == SVDB_TYPE_INT) ? (double)rhs.ival : rhs.rval;
+            double res = (c == '+') ? lv + rv : lv - rv;
+            if (int_res) return SvdbVal{SVDB_TYPE_INT, (int64_t)res, 0.0, {}};
+            return SvdbVal{SVDB_TYPE_REAL, 0, res, {}};
+        }
+    }
+    /* Find rightmost top-level * or / */
+    depth2 = 0; in_str2 = false;
+    for (size_t i = e.size(); i > 0; --i) {
+        char c = e[i-1];
+        if (c == '\'') { in_str2 = !in_str2; continue; }
+        if (in_str2) continue;
+        if (c == ')') ++depth2;
+        if (c == '(') { if (depth2 > 0) --depth2; }
+        if (depth2 > 0) continue;
+        if (c == '*' || c == '/') {
+            SvdbVal lhs = eval_expr_exec(e.substr(0, i-1), row, col_order);
+            SvdbVal rhs = eval_expr_exec(e.substr(i), row, col_order);
+            if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) return SvdbVal{};
+            bool int_res = (lhs.type == SVDB_TYPE_INT && rhs.type == SVDB_TYPE_INT && c != '/');
+            double lv = (lhs.type == SVDB_TYPE_INT) ? (double)lhs.ival : lhs.rval;
+            double rv = (rhs.type == SVDB_TYPE_INT) ? (double)rhs.ival : rhs.rval;
+            if (c == '/' && rv == 0.0) return SvdbVal{};
+            double res = (c == '*') ? lv * rv : lv / rv;
+            if (int_res) return SvdbVal{SVDB_TYPE_INT, (int64_t)res, 0.0, {}};
+            return SvdbVal{SVDB_TYPE_REAL, 0, res, {}};
+        }
+    }
+
+    /* Column reference */
+    auto it = row.find(e);
+    if (it != row.end()) return it->second;
+
+    /* Fall back to literal parsing */
+    return parse_literal(e);
+}
+
+/* Evaluate a boolean CHECK constraint expression against a row.
+ * Handles AND/OR, comparison operators, and arithmetic via eval_expr_exec. */
+static bool eval_check_constraint(const std::string &expr, const Row &row,
+                                   const std::vector<std::string> &col_order) {
+    std::string e = str_trim(expr);
+    if (e.empty()) return true;
+
+    /* Strip balanced outer parens */
+    if (e.size() >= 2 && e.front() == '(' && e.back() == ')') {
+        int d = 0; bool matched = true;
+        for (size_t i = 0; i < e.size(); ++i) {
+            if (e[i] == '(') ++d;
+            else if (e[i] == ')') { if (--d == 0 && i + 1 != e.size()) { matched = false; break; } }
+        }
+        if (matched) return eval_check_constraint(e.substr(1, e.size()-2), row, col_order);
+    }
+
+    /* Handle top-level AND */
+    {
+        std::string eu = str_upper(e);
+        int depth = 0;
+        for (size_t i = 0; i < eu.size(); ++i) {
+            if (eu[i] == '(') { ++depth; continue; }
+            if (eu[i] == ')') { if (depth > 0) --depth; continue; }
+            if (depth == 0 && i + 4 <= eu.size() && eu.substr(i, 4) == " AND") {
+                size_t after = i + 4;
+                if (after < eu.size() && (isalnum((unsigned char)eu[after]) || eu[after] == '_'))
+                    continue; /* not a word boundary — e.g. " ANDROID" */
+                return eval_check_constraint(e.substr(0, i), row, col_order) &&
+                       eval_check_constraint(e.substr(i + 4), row, col_order);
+            }
+        }
+    }
+
+    /* Handle top-level OR */
+    {
+        std::string eu = str_upper(e);
+        int depth = 0;
+        for (size_t i = 0; i < eu.size(); ++i) {
+            if (eu[i] == '(') { ++depth; continue; }
+            if (eu[i] == ')') { if (depth > 0) --depth; continue; }
+            if (depth == 0 && i + 3 <= eu.size() && eu.substr(i, 3) == " OR") {
+                size_t after = i + 3;
+                if (after < eu.size() && (isalnum((unsigned char)eu[after]) || eu[after] == '_'))
+                    continue; /* not a word boundary — e.g. " ORDER" */
+                return eval_check_constraint(e.substr(0, i), row, col_order) ||
+                       eval_check_constraint(e.substr(i + 3), row, col_order);
+            }
+        }
+    }
+
+    /* Find first top-level comparison operator (check 2-char ops before 1-char) */
+    {
+        int depth = 0; bool in_str = false;
+        for (size_t i = 0; i < e.size(); ++i) {
+            char c = e[i];
+            if (c == '\'') { in_str = !in_str; continue; }
+            if (in_str) continue;
+            if (c == '(') { ++depth; continue; }
+            if (c == ')') { if (depth > 0) --depth; continue; }
+            if (depth > 0) continue;
+            /* 2-char operators */
+            if (i + 1 < e.size()) {
+                std::string two = e.substr(i, 2);
+                if (two == ">=" || two == "<=" || two == "!=" || two == "<>") {
+                    SvdbVal lv = eval_expr_exec(str_trim(e.substr(0, i)), row, col_order);
+                    SvdbVal rv = eval_expr_exec(str_trim(e.substr(i + 2)), row, col_order);
+                    if (lv.type == SVDB_TYPE_NULL || rv.type == SVDB_TYPE_NULL) return true;
+                    if (lv.type == SVDB_TYPE_TEXT || rv.type == SVDB_TYPE_TEXT) {
+                        std::string ls = val_to_str_exec(lv), rs = val_to_str_exec(rv);
+                        if (two == ">=") return ls >= rs;
+                        if (two == "<=") return ls <= rs;
+                        return ls != rs; /* != or <> */
+                    }
+                    double l = (lv.type == SVDB_TYPE_INT) ? (double)lv.ival : lv.rval;
+                    double r = (rv.type == SVDB_TYPE_INT) ? (double)rv.ival : rv.rval;
+                    if (two == ">=") return l >= r;
+                    if (two == "<=") return l <= r;
+                    return l != r; /* != or <> */
+                }
+            }
+            /* 1-char operators (only if not part of a 2-char op) */
+            if (c == '>' || c == '<' || c == '=') {
+                if (i + 1 < e.size() && (e[i+1] == '=' || e[i+1] == '>')) continue;
+                SvdbVal lv = eval_expr_exec(str_trim(e.substr(0, i)), row, col_order);
+                SvdbVal rv = eval_expr_exec(str_trim(e.substr(i + 1)), row, col_order);
+                if (lv.type == SVDB_TYPE_NULL || rv.type == SVDB_TYPE_NULL) return true;
+                if (lv.type == SVDB_TYPE_TEXT || rv.type == SVDB_TYPE_TEXT) {
+                    std::string ls = val_to_str_exec(lv), rs = val_to_str_exec(rv);
+                    if (c == '>') return ls > rs;
+                    if (c == '<') return ls < rs;
+                    return ls == rs; /* = */
+                }
+                double l = (lv.type == SVDB_TYPE_INT) ? (double)lv.ival : lv.rval;
+                double r = (rv.type == SVDB_TYPE_INT) ? (double)rv.ival : rv.rval;
+                if (c == '>') return l > r;
+                if (c == '<') return l < r;
+                return l == r; /* = */
+            }
+        }
+    }
+    return true; /* unparseable expression — allow by default */
 }
 
 /* ── DDL handlers ───────────────────────────────────────────────── */
@@ -530,6 +927,13 @@ static svdb_code_t do_create_table(svdb_db_t *db, const std::string &sql) {
 
     db->schema[tname]    = td;
     db->col_order[tname] = order;
+
+    /* Empty column list is not valid */
+    if (order.empty()) {
+        db->last_error = "near \")\"" ": syntax error";
+        return SVDB_ERR;
+    }
+
     db->data[tname]      = {};
     db->rowid_counter[tname] = 0;
     db->create_sql[tname] = sql;
@@ -812,6 +1216,9 @@ static svdb_code_t do_alter_table(svdb_db_t *db, const std::string &sql) {
         if (!db->schema[tname].count(col_name)) {
             db->last_error = "no such column: " + col_name; return SVDB_ERR;
         }
+        if (db->schema[tname][col_name].primary_key) {
+            db->last_error = "cannot drop PRIMARY KEY column: " + col_name; return SVDB_ERR;
+        }
         db->schema[tname].erase(col_name);
         auto &co = db->col_order[tname];
         co.erase(std::remove(co.begin(), co.end(), col_name), co.end());
@@ -901,10 +1308,305 @@ static svdb_code_t do_alter_table(svdb_db_t *db, const std::string &sql) {
 }
 
 
+/* ── Trigger handlers ───────────────────────────────────────────── */
+
+/* Parse and store a CREATE TRIGGER statement */
+static svdb_code_t do_create_trigger(svdb_db_t *db, const std::string &sql) {
+    std::string su = str_upper(sql);
+
+    /* Check IF NOT EXISTS */
+    bool if_not_exists = su.find("IF NOT EXISTS") != std::string::npos;
+
+    /* Find trigger name: CREATE TRIGGER [IF NOT EXISTS] <name> */
+    size_t p = su.find("TRIGGER");
+    if (p == std::string::npos) return SVDB_ERR;
+    p += 7;
+    while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+    if (su.substr(p, 13) == "IF NOT EXISTS") {
+        p += 13;
+        while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+    }
+    /* Extract trigger name (possibly quoted) */
+    std::string trig_name;
+    if (p < sql.size() && (sql[p] == '"' || sql[p] == '`')) {
+        char q = sql[p++]; size_t s = p;
+        while (p < sql.size() && sql[p] != q) ++p;
+        trig_name = sql.substr(s, p - s);
+        if (p < sql.size()) ++p;
+    } else {
+        size_t s = p;
+        while (p < su.size() && (isalnum((unsigned char)su[p]) || su[p] == '_')) ++p;
+        trig_name = sql.substr(s, p - s);
+    }
+    if (trig_name.empty()) { db->last_error = "CREATE TRIGGER: missing trigger name"; return SVDB_ERR; }
+
+    /* Check duplicate */
+    if (db->triggers.count(trig_name)) {
+        if (if_not_exists) return SVDB_OK;
+        db->last_error = "trigger " + trig_name + " already exists";
+        return SVDB_ERR;
+    }
+
+    while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+
+    /* Parse timing: BEFORE | AFTER | INSTEAD OF */
+    TriggerTiming timing = TRIGGER_AFTER;
+    size_t s2 = p;
+    while (p < su.size() && isalpha((unsigned char)su[p])) ++p;
+    std::string timing_kw = su.substr(s2, p - s2);
+    if (timing_kw == "BEFORE") {
+        timing = TRIGGER_BEFORE;
+    } else if (timing_kw == "AFTER") {
+        timing = TRIGGER_AFTER;
+    } else if (timing_kw == "INSTEAD") {
+        timing = TRIGGER_INSTEAD_OF;
+        while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+        while (p < su.size() && isalpha((unsigned char)su[p])) ++p; /* skip OF */
+    }
+    while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+
+    /* Parse event: INSERT | UPDATE | DELETE */
+    TriggerEvent event = TRIGGER_INSERT;
+    s2 = p;
+    while (p < su.size() && isalpha((unsigned char)su[p])) ++p;
+    std::string event_kw = su.substr(s2, p - s2);
+    if (event_kw == "INSERT")      event = TRIGGER_INSERT;
+    else if (event_kw == "UPDATE") event = TRIGGER_UPDATE;
+    else if (event_kw == "DELETE") event = TRIGGER_DELETE;
+
+    /* Skip optional "OF col" for UPDATE triggers */
+    while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+    if (su.substr(p, 2) == "OF") {
+        p += 2;
+        while (p < su.size() && (isalnum((unsigned char)su[p]) || su[p] == '_' || isspace((unsigned char)su[p]) || su[p] == ',')) ++p;
+    }
+
+    /* Skip ON keyword */
+    while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+    while (p < su.size() && isalpha((unsigned char)su[p])) ++p; /* ON */
+    while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+
+    /* Extract table name */
+    std::string trig_table;
+    if (p < sql.size() && (sql[p] == '"' || sql[p] == '`')) {
+        char q = sql[p++]; size_t s = p;
+        while (p < sql.size() && sql[p] != q) ++p;
+        trig_table = sql.substr(s, p - s);
+        if (p < sql.size()) ++p;
+    } else {
+        size_t s = p;
+        while (p < su.size() && (isalnum((unsigned char)su[p]) || su[p] == '_')) ++p;
+        trig_table = sql.substr(s, p - s);
+    }
+    while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+
+    /* Skip optional FOR EACH ROW */
+    if (su.substr(p, 3) == "FOR") {
+        while (p < su.size() && (isalpha((unsigned char)su[p]) || isspace((unsigned char)su[p]))) ++p;
+    }
+    while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+
+    /* Optional WHEN condition */
+    std::string when_expr;
+    if (su.substr(p, 4) == "WHEN") {
+        p += 4;
+        while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+        /* Read until BEGIN */
+        size_t begin_pos = su.find("BEGIN", p);
+        if (begin_pos != std::string::npos) {
+            when_expr = str_trim(sql.substr(p, begin_pos - p));
+            p = begin_pos;
+        }
+    }
+
+    /* Find BEGIN...END body */
+    size_t begin_pos = su.find("BEGIN", p);
+    if (begin_pos == std::string::npos) { db->last_error = "CREATE TRIGGER: missing BEGIN"; return SVDB_ERR; }
+    begin_pos += 5; /* skip BEGIN */
+
+    /* Find the matching END: track nested BEGIN...END */
+    size_t end_pos = std::string::npos;
+    {
+        int depth = 1;
+        size_t q = begin_pos;
+        while (q < su.size() && depth > 0) {
+            if (su.substr(q, 5) == "BEGIN") { ++depth; q += 5; continue; }
+            if (su.substr(q, 3) == "END" &&
+                (q + 3 >= su.size() || (!isalnum((unsigned char)su[q+3]) && su[q+3] != '_'))) {
+                --depth;
+                if (depth == 0) { end_pos = q; break; }
+                q += 3; continue;
+            }
+            ++q;
+        }
+    }
+    if (end_pos == std::string::npos) { db->last_error = "CREATE TRIGGER: missing END"; return SVDB_ERR; }
+
+    std::string body = str_trim(sql.substr(begin_pos, end_pos - begin_pos));
+
+    TriggerDef td;
+    td.name      = trig_name;
+    td.timing    = timing;
+    td.event     = event;
+    td.table     = trig_table;
+    td.when_expr = when_expr;
+    td.body      = body;
+    db->triggers[trig_name] = td;
+    return SVDB_OK;
+}
+
+/* DROP TRIGGER [IF EXISTS] <name> */
+static svdb_code_t do_drop_trigger(svdb_db_t *db, const std::string &sql) {
+    std::string su = str_upper(sql);
+    bool if_exists = su.find("IF EXISTS") != std::string::npos;
+    size_t p = su.find("TRIGGER");
+    if (p == std::string::npos) return SVDB_ERR;
+    p += 7;
+    while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+    if (su.substr(p, 9) == "IF EXISTS") {
+        p += 9;
+        while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+    }
+    std::string name;
+    if (p < sql.size() && (sql[p] == '"' || sql[p] == '`')) {
+        char q = sql[p++]; size_t s = p;
+        while (p < sql.size() && sql[p] != q) ++p;
+        name = sql.substr(s, p - s);
+    } else {
+        size_t s = p;
+        while (p < su.size() && (isalnum((unsigned char)su[p]) || su[p] == '_')) ++p;
+        name = sql.substr(s, p - s);
+    }
+    /* strip trailing semicolons/spaces */
+    while (!name.empty() && (name.back() == ';' || isspace((unsigned char)name.back())))
+        name.pop_back();
+    if (name.empty()) { db->last_error = "DROP TRIGGER: missing name"; return SVDB_ERR; }
+
+    auto it = db->triggers.find(name);
+    if (it == db->triggers.end()) {
+        if (if_exists) return SVDB_OK;
+        db->last_error = "no such trigger: " + name;
+        return SVDB_ERR;
+    }
+    db->triggers.erase(it);
+    return SVDB_OK;
+}
+
+/* Substitute NEW.col and OLD.col references in trigger body SQL */
+static std::string trigger_substitute_row(const std::string &sql_tpl,
+                                           const Row *new_row,
+                                           const Row *old_row) {
+    std::string out = sql_tpl;
+    /* Replace NEW.col and OLD.col with their literal values */
+    auto substitute = [&](const std::string &prefix, const Row *row) {
+        if (!row) return;
+        /* For each col in the row, replace prefix.col with its value */
+        for (auto &kv : *row) {
+            const std::string &col = kv.first;
+            /* skip rowid column */
+            if (col.empty() || col[0] == '_') continue;
+            std::string placeholder = prefix + "." + col;
+            std::string val_str;
+            if (kv.second.type == SVDB_TYPE_NULL)      val_str = "NULL";
+            else if (kv.second.type == SVDB_TYPE_INT)  val_str = std::to_string(kv.second.ival);
+            else if (kv.second.type == SVDB_TYPE_REAL) {
+                char buf[64]; snprintf(buf, sizeof(buf), "%.17g", kv.second.rval); val_str = buf;
+            } else {
+                /* TEXT/BLOB: escape single quotes */
+                std::string escaped;
+                for (char c : kv.second.sval) {
+                    if (c == '\'') escaped += "''";
+                    else escaped += c;
+                }
+                val_str = "'" + escaped + "'";
+            }
+            /* Replace all occurrences (case-insensitive for NEW/OLD prefix) */
+            std::string ph_upper = str_upper(placeholder);
+            std::string out_upper = str_upper(out);
+            for (size_t pos = out_upper.find(ph_upper); pos != std::string::npos;
+                 pos = out_upper.find(ph_upper, pos)) {
+                bool lb = (pos == 0 || !isalnum((unsigned char)out[pos-1]) && out[pos-1] != '_');
+                bool rb = (pos + placeholder.size() >= out.size() ||
+                           (!isalnum((unsigned char)out[pos+placeholder.size()]) &&
+                            out[pos+placeholder.size()] != '_'));
+                if (lb && rb) {
+                    out.replace(pos, placeholder.size(), val_str);
+                    out_upper.replace(pos, placeholder.size(), str_upper(val_str));
+                    pos += val_str.size();
+                } else {
+                    pos += placeholder.size();
+                }
+            }
+        }
+    };
+    substitute("NEW", new_row);
+    substitute("OLD", old_row);
+    return out;
+}
+
+/* Forward declaration */
+static svdb_code_t svdb_exec_internal(svdb_db_t *db, const std::string &sql, svdb_result_t *res);
+
+/* Fire triggers for a given event on a table.
+ * new_row: the new row (for INSERT/UPDATE), null for DELETE
+ * old_row: the old row (for DELETE/UPDATE), null for INSERT */
+static svdb_code_t fire_triggers(svdb_db_t *db, TriggerTiming timing, TriggerEvent event,
+                                   const std::string &tname,
+                                   const Row *new_row, const Row *old_row) {
+    for (auto &kv : db->triggers) {
+        const TriggerDef &td = kv.second;
+        if (td.timing != timing || td.event != event) continue;
+        if (str_upper(td.table) != str_upper(tname)) continue;
+
+        /* Evaluate WHEN condition if present.
+         * After substituting NEW/OLD refs, the expression is a pure value comparison
+         * (e.g. "1 != 0" or "'foo' != 'inserts'"). eval_where handles simple cases. */
+        if (!td.when_expr.empty()) {
+            std::string when_sub = trigger_substitute_row(td.when_expr, new_row, old_row);
+            /* Use a dummy row; after substitution the condition only contains literals */
+            Row dummy_row;
+            std::vector<std::string> dummy_order;
+            if (!eval_where(dummy_row, dummy_order, when_sub))
+                continue; /* WHEN is false: skip this trigger */
+        }
+
+        /* Substitute NEW/OLD refs and execute the body */
+        std::string body = trigger_substitute_row(td.body, new_row, old_row);
+
+        /* Execute each statement in the body (split on ;) */
+        size_t pos = 0;
+        while (pos < body.size()) {
+            while (pos < body.size() && isspace((unsigned char)body[pos])) ++pos;
+            if (pos >= body.size()) break;
+            /* Find statement end (;) at depth 0 */
+            size_t stmt_start = pos;
+            int depth = 0; bool in_str = false;
+            while (pos < body.size()) {
+                char c = body[pos];
+                if (c == '\'') { in_str = !in_str; ++pos; continue; }
+                if (in_str) { ++pos; continue; }
+                if (c == '(') ++depth;
+                else if (c == ')') { if (depth > 0) --depth; }
+                else if (c == ';' && depth == 0) { ++pos; break; }
+                ++pos;
+            }
+            std::string stmt = str_trim(body.substr(stmt_start, pos - stmt_start - (pos > 0 && body[pos-1] == ';' ? 1 : 0)));
+            if (!stmt.empty()) {
+                svdb_code_t rc = svdb_exec_internal(db, stmt, nullptr);
+                if (rc != SVDB_OK) return rc;
+            }
+        }
+    }
+    return SVDB_OK;
+}
+
+
 /* ── DML handlers ───────────────────────────────────────────────── */
 
 static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
                               svdb_result_t *res) {
+    svdb_assert(db != nullptr);
+    svdb_assert(!sql.empty());
     /* Handle INSERT INTO t DEFAULT VALUES */
     std::string su_pre = str_upper(sql);
     if (su_pre.find("DEFAULT VALUES") != std::string::npos) {
@@ -922,9 +1624,22 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         for (const auto &cn : col_order2) {
             auto dit = db->schema[tname2].find(cn);
             if (dit != db->schema[tname2].end() && !dit->second.default_val.empty())
-                row[cn] = parse_literal(dit->second.default_val);
+                row[cn] = svdb_eval_expr_in_row(dit->second.default_val, row, {});
             else
                 row[cn] = SvdbVal{};
+        }
+        /* Auto-assign INTEGER PRIMARY KEY if not set */
+        for (const auto &cn2 : col_order2) {
+            auto cdit = db->schema[tname2].find(cn2);
+            if (cdit != db->schema[tname2].end() && cdit->second.primary_key &&
+                str_upper(cdit->second.type) == "INTEGER") {
+                auto rit = row.find(cn2);
+                if (rit == row.end() || rit->second.type == SVDB_TYPE_NULL) {
+                    SvdbVal v; v.type = SVDB_TYPE_INT;
+                    v.ival = db->rowid_counter[tname2] + 1;
+                    row[cn2] = v;
+                }
+            }
         }
         db->rowid_counter[tname2]++;
         row[SVDB_ROWID_COLUMN] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[tname2], 0.0, {}};
@@ -955,11 +1670,81 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
 
     const auto &col_order = db->col_order[tname];
 
+    /* ── INSERT ... SELECT ─────────────────────────────────────────── */
+    if (nrows == 0) {
+        /* Check if SQL contains a SELECT after column list / INTO clause */
+        std::string su2 = str_upper(sql);
+        /* Find SELECT keyword (must follow INTO table_name [(cols)]) */
+        /* Simple detection: after "INTO tablename [(...)]" look for "SELECT" */
+        size_t sel_pos = std::string::npos;
+        {
+            size_t p2 = su2.find("SELECT");
+            while (p2 != std::string::npos) {
+                /* Make sure it's at word boundary */
+                bool before_ok = (p2 == 0 || !isalnum((unsigned char)su2[p2-1]));
+                bool after_ok  = (p2 + 6 >= su2.size() || !isalnum((unsigned char)su2[p2+6]));
+                if (before_ok && after_ok) { sel_pos = p2; break; }
+                p2 = su2.find("SELECT", p2 + 1);
+            }
+        }
+        if (sel_pos != std::string::npos) {
+            /* Extract SELECT SQL and execute it */
+            std::string sel_sql = sql.substr(sel_pos);
+            /* Extract target columns from ncols (if explicit column list given) */
+            std::vector<std::string> ins_cols2;
+            if (ncols > 0) {
+                for (int i = 0; i < ncols; ++i) ins_cols2.push_back(svdb_ast_get_column(ast, i));
+            } else {
+                ins_cols2 = col_order;
+            }
+            svdb_rows_t *sel_rows = nullptr;
+            svdb_code_t rc2 = svdb_query_internal(db, sel_sql, &sel_rows);
+            if (rc2 != SVDB_OK || !sel_rows) {
+                svdb_ast_node_free(ast); svdb_parser_destroy(p);
+                return rc2;
+            }
+            int64_t inserted2 = 0;
+            for (const auto &sel_row : sel_rows->rows) {
+                Row row2;
+                for (size_t ci = 0; ci < ins_cols2.size() && ci < sel_row.size(); ++ci)
+                    row2[ins_cols2[ci]] = sel_row[ci];
+                /* Fill missing columns with defaults */
+                for (const auto &cn : col_order) {
+                    if (!row2.count(cn)) {
+                        auto dit = db->schema[tname].find(cn);
+                        if (dit != db->schema[tname].end() && !dit->second.default_val.empty())
+                            row2[cn] = svdb_eval_expr_in_row(dit->second.default_val, row2, {});
+                        else row2[cn] = SvdbVal{};
+                    }
+                }
+                db->rowid_counter[tname]++;
+                row2[SVDB_ROWID_COLUMN] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[tname], 0.0, {}};
+                db->data[tname].push_back(row2);
+                ++inserted2;
+            }
+            delete sel_rows;
+            db->rows_affected = inserted2;
+            db->last_insert_rowid = db->rowid_counter[tname];
+            if (res) { res->code = SVDB_OK; res->rows_affected = inserted2; res->last_insert_rowid = db->last_insert_rowid; }
+            svdb_ast_node_free(ast); svdb_parser_destroy(p);
+            return SVDB_OK;
+        }
+    }
+
     /* Determine insertion columns */
     std::vector<std::string> ins_cols;
     if (ncols > 0) {
         for (int i = 0; i < ncols; ++i)
             ins_cols.push_back(svdb_ast_get_column(ast, i));
+        /* Validate: all specified column names must exist in the table */
+        for (const auto &ic : ins_cols) {
+            if (db->schema[tname].find(ic) == db->schema[tname].end() &&
+                str_upper(ic) != "ROWID" && str_upper(ic) != "_SVDB_ROWID_") {
+                db->last_error = "table " + tname + " has no column named " + ic;
+                svdb_ast_node_free(ast); svdb_parser_destroy(p);
+                return SVDB_ERR;
+            }
+        }
     } else {
         ins_cols = col_order;
     }
@@ -988,6 +1773,22 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         on_conflict_update = true;
     }
 
+    /* Validate column count: number of VALUES per row must match number of target columns */
+    if (nrows > 0) {
+        int nv0 = svdb_ast_get_value_count(ast, 0);
+        /* VALUES() with empty parentheses is a syntax error; use DEFAULT VALUES */
+        if (nv0 == 0) {
+            db->last_error = "near ')': syntax error";
+            svdb_ast_node_free(ast); svdb_parser_destroy(p);
+            return SVDB_ERR;
+        }
+        if (nv0 > (int)ins_cols.size()) {
+            db->last_error = std::to_string(nv0) + " values for " + std::to_string(ins_cols.size()) + " columns";
+            svdb_ast_node_free(ast); svdb_parser_destroy(p);
+            return SVDB_ERR;
+        }
+    }
+
     int64_t inserted = 0;
     for (int ri = 0; ri < nrows; ++ri) {
         Row row;
@@ -995,7 +1796,7 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         for (const auto &cn : col_order) {
             auto dit = db->schema[tname].find(cn);
             if (dit != db->schema[tname].end() && !dit->second.default_val.empty())
-                row[cn] = parse_literal(dit->second.default_val);
+                row[cn] = svdb_eval_expr_in_row(dit->second.default_val, row, {});
             else
                 row[cn] = SvdbVal{};
         }
@@ -1008,13 +1809,29 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
 
         /* ── Constraint checks ───────────────────────────────── */
 
+        /* Auto-assign values for INTEGER PRIMARY KEY (AUTOINCREMENT) columns that were omitted */
+        for (const auto &cn : col_order) {
+            auto cdit = db->schema[tname].find(cn);
+            if (cdit != db->schema[tname].end() && cdit->second.primary_key &&
+                (cdit->second.auto_increment ||
+                 str_upper(cdit->second.type) == "INTEGER")) {
+                auto rit = row.find(cn);
+                if (rit == row.end() || rit->second.type == SVDB_TYPE_NULL) {
+                    /* Peek at the next rowid_counter value (it gets incremented later) */
+                    SvdbVal v; v.type = SVDB_TYPE_INT;
+                    v.ival = db->rowid_counter[tname] + 1;
+                    row[cn] = v;
+                }
+            }
+        }
+
         /* NOT NULL check */
         for (const auto &cn : col_order) {
             auto cdit = db->schema[tname].find(cn);
             if (cdit != db->schema[tname].end() && cdit->second.not_null) {
                 auto rit = row.find(cn);
                 if (rit == row.end() || rit->second.type == SVDB_TYPE_NULL) {
-                    if (on_conflict_nothing) { continue; }
+                    /* INSERT OR IGNORE only suppresses UNIQUE conflicts, not NOT NULL */
                     db->last_error = "NOT NULL constraint failed: " + tname + "." + cn;
                     svdb_ast_node_free(ast); svdb_parser_destroy(p);
                     return SVDB_ERR;
@@ -1102,37 +1919,10 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
             if (conflict_handled) continue; /* skip or already updated */
         }
 
-        /* CHECK constraint evaluation (simple: skip for now, basic eval) */
+        /* CHECK constraint evaluation */
         if (db->check_constraints.count(tname)) {
             for (const auto &chk : db->check_constraints.at(tname)) {
-                /* Very basic: evaluate simple comparison like "score >= 0" */
-                std::string chk_upper = str_upper(chk);
-                /* Try to evaluate numerically */
-                bool ok = true;
-                /* Find operator */
-                for (const char *op : {">=", "<=", "!=", "<>", ">", "<", "="}) {
-                    size_t op_pos = chk.find(op);
-                    if (op_pos == std::string::npos) continue;
-                    std::string lhs = str_trim(chk.substr(0, op_pos));
-                    std::string rhs = str_trim(chk.substr(op_pos + strlen(op)));
-                    /* Look up lhs in row */
-                    auto it2 = row.find(lhs);
-                    if (it2 == row.end()) break;
-                    const SvdbVal &sv2 = it2->second;
-                    if (sv2.type == SVDB_TYPE_NULL) { ok = true; break; } /* NULLs pass */
-                    try {
-                        double rv = std::stod(rhs);
-                        double lv = (sv2.type == SVDB_TYPE_INT) ? (double)sv2.ival : sv2.rval;
-                        if (std::string(op) == ">=")      ok = lv >= rv;
-                        else if (std::string(op) == "<=") ok = lv <= rv;
-                        else if (std::string(op) == ">")  ok = lv > rv;
-                        else if (std::string(op) == "<")  ok = lv < rv;
-                        else if (std::string(op) == "=" || std::string(op) == "==") ok = lv == rv;
-                        else if (std::string(op) == "!=" || std::string(op) == "<>") ok = lv != rv;
-                    } catch (...) { ok = true; }
-                    break;
-                }
-                if (!ok) {
+                if (!eval_check_constraint(chk, row, col_order)) {
                     db->last_error = "CHECK constraint failed: " + tname;
                     svdb_ast_node_free(ast); svdb_parser_destroy(p);
                     return SVDB_ERR;
@@ -1141,15 +1931,54 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         }
 
         /* FK constraint check */
-        /* FK enforcement is disabled at insert-time (like SQLite default).
-         * Use PRAGMA foreign_key_check to detect violations. */
+        if (db->foreign_keys_enabled && db->fk_constraints.count(tname)) {
+            for (const auto &fk : db->fk_constraints.at(tname)) {
+                auto child_it = row.find(fk.child_col);
+                if (child_it == row.end() || child_it->second.type == SVDB_TYPE_NULL)
+                    continue; /* NULL values don't violate FK */
+                std::string parent_up = str_upper(fk.parent_table);
+                std::string resolved_parent;
+                for (auto &kv : db->schema)
+                    if (str_upper(kv.first) == parent_up) { resolved_parent = kv.first; break; }
+                if (resolved_parent.empty() || !db->data.count(resolved_parent))
+                    continue;
+                bool found = false;
+                for (const auto &prow : db->data.at(resolved_parent)) {
+                    auto pit = prow.find(fk.parent_col);
+                    if (pit == prow.end()) continue;
+                    if (pit->second.type == child_it->second.type) {
+                        bool match = false;
+                        switch (pit->second.type) {
+                            case SVDB_TYPE_INT:  match = (pit->second.ival == child_it->second.ival); break;
+                            case SVDB_TYPE_REAL: match = (pit->second.rval == child_it->second.rval); break;
+                            case SVDB_TYPE_TEXT: match = (pit->second.sval == child_it->second.sval); break;
+                            default: break;
+                        }
+                        if (match) { found = true; break; }
+                    }
+                }
+                if (!found) {
+                    db->last_error = "FOREIGN KEY constraint failed";
+                    svdb_ast_node_free(ast); svdb_parser_destroy(p);
+                    return SVDB_ERR;
+                }
+            }
+        }
 
         /* Auto-increment rowid */
         db->rowid_counter[tname]++;
         row[SVDB_ROWID_COLUMN] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[tname], 0.0, {}};
 
+        /* Fire BEFORE INSERT triggers */
+        if (!db->triggers.empty())
+            fire_triggers(db, TRIGGER_BEFORE, TRIGGER_INSERT, tname, &row, nullptr);
+
         db->data[tname].push_back(row);
         ++inserted;
+
+        /* Fire AFTER INSERT triggers */
+        if (!db->triggers.empty())
+            fire_triggers(db, TRIGGER_AFTER, TRIGGER_INSERT, tname, &row, nullptr);
     }
 
     db->rows_affected     = inserted;
@@ -1166,8 +1995,22 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
     return SVDB_OK;
 }
 
+/* Helper: compare two SvdbVal for FK matching (ignoring NULL) */
+static bool fk_vals_equal(const SvdbVal &a, const SvdbVal &b) {
+    if (a.type == SVDB_TYPE_NULL || b.type == SVDB_TYPE_NULL) return false;
+    if (a.type != b.type) return false;
+    switch (a.type) {
+        case SVDB_TYPE_INT:  return a.ival == b.ival;
+        case SVDB_TYPE_REAL: return a.rval == b.rval;
+        case SVDB_TYPE_TEXT: return a.sval == b.sval;
+        default: return false;
+    }
+}
+
 static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
                               svdb_result_t *res) {
+    svdb_assert(db != nullptr);
+    svdb_assert(!sql.empty());
     svdb_parser_t *p = svdb_parser_create(sql.c_str(), sql.size());
     if (!p) return SVDB_NOMEM;
     svdb_ast_node_t *ast = svdb_parser_parse(p);
@@ -1194,6 +2037,118 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
         db->last_error = "UPDATE: missing SET";
         svdb_ast_node_free(ast); svdb_parser_destroy(p);
         return SVDB_ERR;
+    }
+    /* Check for UPDATE ... FROM (PostgreSQL-style): detect top-level FROM after SET */
+    /* Find FROM at top level between SET and WHERE */
+    std::string from_table;
+    size_t update_from_pos = std::string::npos;
+    {
+        int depth = 0; bool in_s = false;
+        size_t search_start = set_pos + 3;
+        for (size_t i = search_start; i < sql.size(); ++i) {
+            char c = sql[i];
+            if (c == '\'' && !in_s) { in_s = true; continue; }
+            if (c == '\'' && in_s) { if (i+1<sql.size()&&sql[i+1]=='\''){++i;} else in_s=false; continue; }
+            if (in_s) continue;
+            if (c == '(') ++depth; else if (c == ')') --depth;
+            if (depth == 0 && i+4 <= sql.size() && str_upper(sql.substr(i,4)) == "FROM" &&
+                (i == 0 || !isalnum((unsigned char)sql[i-1]) && sql[i-1]!='_') &&
+                (i+4 >= sql.size() || (!isalnum((unsigned char)sql[i+4]) && sql[i+4]!='_'))) {
+                update_from_pos = i;
+                /* Extract table name after FROM */
+                size_t tp = i + 4;
+                while (tp < sql.size() && isspace((unsigned char)sql[tp])) ++tp;
+                size_t ts = tp;
+                while (tp < sql.size() && (isalnum((unsigned char)sql[tp]) || sql[tp]=='_')) ++tp;
+                from_table = sql.substr(ts, tp - ts);
+                break;
+            }
+        }
+    }
+    if (!from_table.empty() && db->schema.count(from_table)) {
+        /* UPDATE t SET col=expr FROM other WHERE cond — join-based update */
+        size_t where_pos2 = std::string::npos;
+        { int depth=0; bool in_s=false;
+          for (size_t i=update_from_pos+4; i<sql.size(); ++i) {
+            char c=sql[i]; if(c=='\''){in_s=!in_s;continue;} if(in_s)continue;
+            if(c=='(')++depth;else if(c==')')--depth;
+            if(depth==0&&i+5<=sql.size()&&str_upper(sql.substr(i,5))=="WHERE") { where_pos2=i; break; }
+          }
+        }
+        std::string where_clause = (where_pos2!=std::string::npos) ? str_trim(sql.substr(where_pos2+5)) : "";
+        std::string set_clause2 = str_trim(sql.substr(set_pos+3, update_from_pos - set_pos - 3));
+        /* Parse assignments */
+        std::vector<std::pair<std::string,std::string>> assignments;
+        size_t ap = 0;
+        while (ap < set_clause2.size()) {
+            while (ap < set_clause2.size() && isspace((unsigned char)set_clause2[ap])) ++ap;
+            std::string cn;
+            if (ap < set_clause2.size() && (set_clause2[ap]=='"'||set_clause2[ap]=='`')) {
+                char q=set_clause2[ap++]; size_t s=ap;
+                while(ap<set_clause2.size()&&set_clause2[ap]!=q)++ap;
+                cn=set_clause2.substr(s,ap-s); if(ap<set_clause2.size())++ap;
+            } else {
+                size_t s=ap;
+                while(ap<set_clause2.size()&&(isalnum((unsigned char)set_clause2[ap])||set_clause2[ap]=='_'))++ap;
+                cn=set_clause2.substr(s,ap-s);
+            }
+            if(cn.empty()){++ap;continue;}
+            while(ap<set_clause2.size()&&isspace((unsigned char)set_clause2[ap]))++ap;
+            if(ap<set_clause2.size()&&set_clause2[ap]=='=')++ap;
+            while(ap<set_clause2.size()&&isspace((unsigned char)set_clause2[ap]))++ap;
+            std::string vstr; size_t vs=ap; int vd=0; bool vsq=false;
+            while(ap<set_clause2.size()){
+                char vc=set_clause2[ap];
+                if(vc=='\''){vsq=!vsq;++ap;continue;} if(vsq){++ap;continue;}
+                if(vc=='(')++vd; else if(vc==')'){if(vd>0)--vd;} else if(vc==','&&vd==0)break;
+                ++ap;
+            }
+            vstr=str_trim(set_clause2.substr(vs,ap-vs));
+            assignments.push_back({cn,vstr});
+            while(ap<set_clause2.size()&&(isspace((unsigned char)set_clause2[ap])||set_clause2[ap]==','))++ap;
+        }
+        /* Build combined column order: target cols first, then from_table cols (prefixed) */
+        auto &tcols = db->col_order[tname];
+        auto &fcols = db->col_order[from_table];
+        Row combined_cols_order; /* Use string list */
+        std::vector<std::string> combined_order;
+        for (auto &cn : tcols) combined_order.push_back(cn);
+        for (auto &cn : fcols) {
+            combined_order.push_back(from_table + "." + cn);
+            combined_order.push_back(cn); /* also unqualified */
+        }
+        svdb_set_query_db(db);
+        int64_t updated = 0;
+        for (auto &trow : db->data[tname]) {
+            for (auto &frow : db->data[from_table]) {
+                /* Build combined row */
+                Row combined = trow;
+                /* Add target table's columns with qualified names */
+                for (auto &cn : tcols) combined[tname + "." + cn] = trow.count(cn) ? trow.at(cn) : SvdbVal{};
+                for (auto &cn : fcols) {
+                    combined[from_table + "." + cn] = frow.count(cn) ? frow.at(cn) : SvdbVal{};
+                    if (!combined.count(cn)) combined[cn] = frow.count(cn) ? frow.at(cn) : SvdbVal{};
+                }
+                std::vector<std::string> col_order_vec = combined_order;
+                if (where_clause.empty() || eval_where(combined, col_order_vec, where_clause)) {
+                    for (auto &asgn : assignments) {
+                        std::string simple_col = asgn.first;
+                        /* Strip table qualifier if present */
+                        auto dot = simple_col.find('.');
+                        if (dot != std::string::npos) simple_col = simple_col.substr(dot+1);
+                        if (trow.count(simple_col))
+                            trow[simple_col] = svdb_eval_expr_in_row(asgn.second, combined, col_order_vec);
+                    }
+                    ++updated;
+                    break; /* update target row only once (first match) */
+                }
+            }
+        }
+        svdb_set_query_db(nullptr);
+        db->rows_affected = updated;
+        if (res) { res->code = SVDB_OK; res->rows_affected = updated; }
+        svdb_ast_node_free(ast); svdb_parser_destroy(p);
+        return SVDB_OK;
     }
     /* Find end of SET clause (WHERE or end) */
     size_t where_pos = su.find("WHERE", set_pos);
@@ -1230,9 +2185,19 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
                 if (ap < set_clause.size()) ++ap;
                 vstr = set_clause.substr(s, ap - s);
             } else {
+                /* Read value until top-level comma, handling parens and strings */
                 size_t s = ap;
-                while (ap < set_clause.size() && set_clause[ap] != ',' && !isspace((unsigned char)set_clause[ap])) ++ap;
-                vstr = set_clause.substr(s, ap - s);
+                int vd = 0; bool vs = false;
+                while (ap < set_clause.size()) {
+                    char vc = set_clause[ap];
+                    if (vc == '\'') { vs = !vs; ++ap; continue; }
+                    if (vs) { ++ap; continue; }
+                    if (vc == '(') ++vd;
+                    else if (vc == ')') { if (vd > 0) --vd; }
+                    else if (vc == ',' && vd == 0) break;
+                    ++ap;
+                }
+                vstr = str_trim(set_clause.substr(s, ap - s));
             }
             assignments.push_back({cn, vstr});
             while (ap < set_clause.size() && (isspace((unsigned char)set_clause[ap]) || set_clause[ap] == ',')) ++ap;
@@ -1241,23 +2206,152 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
 
     const auto &col_order = db->col_order[tname];
     int64_t updated = 0;
+    /* Collect old and new row values (needed for FK ON UPDATE actions) */
+    std::vector<std::pair<Row,Row>> updated_pairs; /* {old_row, new_row} */
+    svdb_set_query_db(db);  /* set thread-local DB context for subquery eval in SET expressions */
     for (auto &row : db->data[tname]) {
         if (!eval_where(row, col_order, where_txt)) continue;
+        Row old_row = row;
         for (const auto &asgn : assignments)
-            row[asgn.first] = parse_literal(asgn.second);
+            row[asgn.first] = svdb_eval_expr_in_row(asgn.second, row, col_order);
+        updated_pairs.push_back({old_row, row});
         ++updated;
+    }
+    svdb_set_query_db(nullptr);
+
+    /* FK ON UPDATE actions */
+    if (db->foreign_keys_enabled && !updated_pairs.empty()) {
+        for (auto &kv : db->fk_constraints) {
+            const std::string &child_tname = kv.first;
+            if (!db->data.count(child_tname)) continue;
+            for (const auto &fk : kv.second) {
+                if (str_upper(fk.parent_table) != str_upper(tname)) continue;
+                std::string action = str_upper(fk.on_update);
+                if (action.empty() || action == "NO ACTION" || action == "RESTRICT") continue;
+                if (action == "CASCADE") {
+                    for (const auto &pr : updated_pairs) {
+                        const Row &old_row = pr.first;
+                        const Row &new_row = pr.second;
+                        auto old_it = old_row.find(fk.parent_col);
+                        auto new_it = new_row.find(fk.parent_col);
+                        if (old_it == old_row.end() || new_it == new_row.end()) continue;
+                        if (fk_vals_equal(old_it->second, new_it->second)) continue; /* no change */
+                        for (auto &crow : db->data[child_tname]) {
+                            auto cit = crow.find(fk.child_col);
+                            if (cit == crow.end()) continue;
+                            if (fk_vals_equal(cit->second, old_it->second))
+                                cit->second = new_it->second;
+                        }
+                    }
+                } else if (action == "SET NULL") {
+                    for (const auto &pr : updated_pairs) {
+                        const Row &old_row = pr.first;
+                        const Row &new_row = pr.second;
+                        auto old_it = old_row.find(fk.parent_col);
+                        auto new_it = new_row.find(fk.parent_col);
+                        if (old_it == old_row.end() || new_it == new_row.end()) continue;
+                        if (fk_vals_equal(old_it->second, new_it->second)) continue;
+                        for (auto &crow : db->data[child_tname]) {
+                            auto cit = crow.find(fk.child_col);
+                            if (cit == crow.end()) continue;
+                            if (fk_vals_equal(cit->second, old_it->second))
+                                cit->second = SvdbVal{};
+                        }
+                    }
+                }
+            }
+        }
     }
 
     db->rows_affected = updated;
     if (res) { res->code = SVDB_OK; res->rows_affected = updated; }
+
+    /* Fire AFTER UPDATE triggers */
+    if (!db->triggers.empty()) {
+        for (const auto &pr : updated_pairs)
+            fire_triggers(db, TRIGGER_AFTER, TRIGGER_UPDATE, tname, &pr.second, &pr.first);
+    }
 
     svdb_ast_node_free(ast);
     svdb_parser_destroy(p);
     return SVDB_OK;
 }
 
+/* Recursive FK ON DELETE handler.
+ * Checks/applies FK actions when rows are deleted from 'tname'.
+ * Returns SVDB_ERR (with db->last_error set) if RESTRICT/NO ACTION is violated.
+ * depth prevents infinite recursion in self-referencing tables. */
+static svdb_code_t fk_on_delete(svdb_db_t *db,
+                                  const std::string &tname,
+                                  const std::vector<Row> &deleted_rows,
+                                  int depth = 0) {
+    if (depth > 64 || deleted_rows.empty()) return SVDB_OK;
+
+    for (auto &kv : db->fk_constraints) {
+        const std::string &child_tname = kv.first;
+        if (!db->data.count(child_tname)) continue;
+        for (const auto &fk : kv.second) {
+            if (str_upper(fk.parent_table) != str_upper(tname)) continue;
+
+            std::string action = str_upper(fk.on_delete);
+            /* Empty on_delete defaults to NO ACTION (= RESTRICT at statement level) */
+            if (action.empty() || action == "NO ACTION") action = "RESTRICT";
+
+            if (action == "RESTRICT") {
+                for (const auto &drow : deleted_rows) {
+                    auto pit = drow.find(fk.parent_col);
+                    if (pit == drow.end() || pit->second.type == SVDB_TYPE_NULL) continue;
+                    for (const auto &crow : db->data.at(child_tname)) {
+                        auto cit = crow.find(fk.child_col);
+                        if (cit == crow.end()) continue;
+                        if (fk_vals_equal(cit->second, pit->second)) {
+                            db->last_error = "FOREIGN KEY constraint failed";
+                            return SVDB_ERR;
+                        }
+                    }
+                }
+            } else if (action == "CASCADE") {
+                std::vector<Row> cascade_deleted;
+                auto &crows = db->data[child_tname];
+                for (const auto &drow : deleted_rows) {
+                    auto pit = drow.find(fk.parent_col);
+                    if (pit == drow.end() || pit->second.type == SVDB_TYPE_NULL) continue;
+                    auto new_end = std::remove_if(crows.begin(), crows.end(),
+                        [&](const Row &crow) {
+                            auto cit = crow.find(fk.child_col);
+                            if (cit == crow.end()) return false;
+                            if (fk_vals_equal(cit->second, pit->second)) {
+                                cascade_deleted.push_back(crow);
+                                return true;
+                            }
+                            return false;
+                        });
+                    crows.erase(new_end, crows.end());
+                }
+                if (!cascade_deleted.empty()) {
+                    svdb_code_t rc = fk_on_delete(db, child_tname, cascade_deleted, depth + 1);
+                    if (rc != SVDB_OK) return rc;
+                }
+            } else if (action == "SET NULL") {
+                for (const auto &drow : deleted_rows) {
+                    auto pit = drow.find(fk.parent_col);
+                    if (pit == drow.end() || pit->second.type == SVDB_TYPE_NULL) continue;
+                    for (auto &crow : db->data[child_tname]) {
+                        auto cit = crow.find(fk.child_col);
+                        if (cit == crow.end()) continue;
+                        if (fk_vals_equal(cit->second, pit->second))
+                            cit->second = SvdbVal{};
+                    }
+                }
+            }
+        }
+    }
+    return SVDB_OK;
+}
+
 static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
                               svdb_result_t *res) {
+    svdb_assert(!sql.empty());
     svdb_parser_t *p = svdb_parser_create(sql.c_str(), sql.size());
     if (!p) return SVDB_NOMEM;
     svdb_ast_node_t *ast = svdb_parser_parse(p);
@@ -1277,12 +2371,81 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
         return SVDB_ERR;
     }
 
+    /* Check for DELETE FROM t USING other_table WHERE ... (PostgreSQL style) */
+    {
+        std::string su2 = str_upper(sql);
+        size_t using_pos = std::string::npos;
+        { int depth=0; bool in_s=false;
+          for (size_t i=0; i<sql.size(); ++i) {
+            char c=sql[i]; if(c=='\''){in_s=!in_s;continue;} if(in_s)continue;
+            if(c=='(')++depth; else if(c==')')--depth;
+            if(depth==0&&i+5<=sql.size()&&str_upper(sql.substr(i,5))=="USING"&&
+               (i==0||!isalnum((unsigned char)sql[i-1]))&&
+               (i+5>=sql.size()||!isalnum((unsigned char)sql[i+5]))) { using_pos=i; break; }
+          }
+        }
+        if (using_pos != std::string::npos) {
+            size_t tp = using_pos + 5;
+            while (tp < sql.size() && isspace((unsigned char)sql[tp])) ++tp;
+            size_t ts = tp;
+            while (tp < sql.size() && (isalnum((unsigned char)sql[tp])||sql[tp]=='_')) ++tp;
+            std::string using_table = sql.substr(ts, tp - ts);
+            if (!using_table.empty() && db->schema.count(using_table)) {
+                /* Find WHERE */
+                size_t where_pos2 = std::string::npos;
+                { int depth=0; bool in_s=false;
+                  for (size_t i=tp; i<sql.size(); ++i) {
+                    char c=sql[i]; if(c=='\''){in_s=!in_s;continue;} if(in_s)continue;
+                    if(c=='(')++depth; else if(c==')')--depth;
+                    if(depth==0&&i+5<=sql.size()&&str_upper(sql.substr(i,5))=="WHERE") { where_pos2=i; break; }
+                  }
+                }
+                std::string where_clause = (where_pos2!=std::string::npos)?str_trim(sql.substr(where_pos2+5)):"";
+                auto &tcols = db->col_order[tname];
+                auto &ucols = db->col_order[using_table];
+                auto &trows = db->data[tname];
+                int64_t deleted = 0;
+                /* Build set of target row indexes to delete */
+                std::vector<bool> to_delete(trows.size(), false);
+                for (size_t ti = 0; ti < trows.size(); ++ti) {
+                    for (auto &urow : db->data[using_table]) {
+                        Row combined = trows[ti];
+                        /* Add target table's columns with qualified names */
+                        for (auto &cn : tcols) combined[tname + "." + cn] = trows[ti].count(cn) ? trows[ti].at(cn) : SvdbVal{};
+                        for (auto &cn : ucols) {
+                            combined[using_table + "." + cn] = urow.count(cn) ? urow.at(cn) : SvdbVal{};
+                            if (!combined.count(cn)) combined[cn] = urow.count(cn) ? urow.at(cn) : SvdbVal{};
+                        }
+                        std::vector<std::string> co_vec; for (auto &cn:tcols) co_vec.push_back(cn);
+                        for (auto &cn:ucols) { co_vec.push_back(using_table+"."+cn); if(!combined.count(cn)) co_vec.push_back(cn); }
+                        if (where_clause.empty() || eval_where(combined, co_vec, where_clause)) {
+                            to_delete[ti] = true; break;
+                        }
+                    }
+                }
+                std::vector<Row> new_rows;
+                for (size_t i = 0; i < trows.size(); ++i) {
+                    if (to_delete[i]) ++deleted;
+                    else new_rows.push_back(trows[i]);
+                }
+                db->data[tname] = std::move(new_rows);
+                db->rows_affected = deleted;
+                if (res) { res->code = SVDB_OK; res->rows_affected = deleted; }
+                return SVDB_OK;
+            }
+        }
+    }
+
     const auto &col_order = db->col_order[tname];
     auto &rows = db->data[tname];
     int64_t deleted = 0;
+
+    /* Collect deleted rows before erasing (needed for FK cascade) */
+    std::vector<Row> deleted_rows;
     auto it = rows.begin();
     while (it != rows.end()) {
         if (eval_where(*it, col_order, where_txt)) {
+            deleted_rows.push_back(*it);
             it = rows.erase(it);
             ++deleted;
         } else {
@@ -1290,16 +2453,78 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
         }
     }
 
+    /* FK ON DELETE actions: CASCADE, SET NULL, RESTRICT/NO ACTION (recursive) */
+    if (db->foreign_keys_enabled && !deleted_rows.empty()) {
+        /* RESTRICT check: must happen before modifications; scan first */
+        for (auto &kv : db->fk_constraints) {
+            const std::string &child_tname = kv.first;
+            if (!db->data.count(child_tname)) continue;
+            for (const auto &fk : kv.second) {
+                if (str_upper(fk.parent_table) != str_upper(tname)) continue;
+                std::string action = str_upper(fk.on_delete);
+                if (!action.empty() && action != "RESTRICT" && action != "NO ACTION") continue;
+                for (const auto &drow : deleted_rows) {
+                    auto pit = drow.find(fk.parent_col);
+                    if (pit == drow.end() || pit->second.type == SVDB_TYPE_NULL) continue;
+                    for (const auto &crow : db->data.at(child_tname)) {
+                        auto cit = crow.find(fk.child_col);
+                        if (cit == crow.end()) continue;
+                        if (fk_vals_equal(cit->second, pit->second)) {
+                            /* Undo deletes and return error */
+                            for (auto &dr : deleted_rows) db->data[tname].push_back(dr);
+                            db->last_error = "FOREIGN KEY constraint failed";
+                            return SVDB_ERR;
+                        }
+                    }
+                }
+            }
+        }
+        /* Apply CASCADE / SET NULL recursively (skip RESTRICT - already checked) */
+        svdb_code_t fk_rc = fk_on_delete(db, tname, deleted_rows);
+        if (fk_rc != SVDB_OK) {
+            /* Undo deletes */
+            for (auto &dr : deleted_rows) db->data[tname].push_back(dr);
+            return fk_rc;
+        }
+    }
+
     db->rows_affected = deleted;
     if (res) { res->code = SVDB_OK; res->rows_affected = deleted; }
+
+    /* Fire AFTER DELETE triggers */
+    if (!db->triggers.empty()) {
+        for (const auto &drow : deleted_rows)
+            fire_triggers(db, TRIGGER_AFTER, TRIGGER_DELETE, tname, nullptr, &drow);
+    }
+
     return SVDB_OK;
 }
 
 /* ── Public API ─────────────────────────────────────────────────── */
 
+/* Internal exec (no lock - must be called with lock held) */
+static svdb_code_t svdb_exec_internal(svdb_db_t *db, const std::string &sql_in, svdb_result_t *res) {
+    std::string s = strip_sql_comments(sql_in);
+    s = str_trim(s);
+    std::string kw = first_keyword(s);
+    if (kw == "INSERT")       return do_insert(db, s, res);
+    if (kw == "UPDATE")       return do_update(db, s, res);
+    if (kw == "DELETE")       return do_delete(db, s, res);
+    if (kw == "SELECT") {
+        svdb_rows_t *rows = nullptr;
+        svdb_code_t rc = svdb_query_internal(db, s, &rows);
+        if (rows) svdb_rows_close(rows);
+        return rc;
+    }
+    /* Silently accept anything else in trigger bodies */
+    return SVDB_OK;
+}
+
 extern "C" {
 
 svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
+    svdb_assert_msg(db != nullptr, "svdb_exec: db must not be NULL");
+    svdb_assert_msg(sql != nullptr, "svdb_exec: sql must not be NULL");
     if (!db || !sql) return SVDB_ERR;
     if (res) { res->code = SVDB_OK; res->errmsg = ""; res->rows_affected = 0; res->last_insert_rowid = 0; }
 
@@ -1307,7 +2532,8 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
     db->last_error.clear();
     db->rows_affected = 0;
 
-    std::string s(sql);
+    std::string s = strip_sql_comments(std::string(sql));
+    s = str_trim(s);
     std::string kw = first_keyword(s);
 
     svdb_code_t rc = SVDB_OK;
@@ -1323,7 +2549,8 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
             /* CREATE UNIQUE INDEX ... */
             rc = do_create_index(db, s, true);
         }
-        else if (what == "INDEX") rc = do_create_index(db, s, false);
+        else if (what == "INDEX")   rc = do_create_index(db, s, false);
+        else if (what == "TRIGGER") rc = do_create_trigger(db, s);
         else if (what == "VIEW")  {
             /* Store view metadata so table_list can include it */
             std::string su2 = str_upper(s);
@@ -1370,6 +2597,7 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
         std::string what = su.substr(s2, p - s2);
         if (what == "TABLE") rc = do_drop_table(db, s);
         else if (what == "INDEX") rc = do_drop_index(db, s);
+        else if (what == "TRIGGER") rc = do_drop_trigger(db, s);
         else                  rc = SVDB_OK; /* DROP VIEW: ignore */
     } else if (kw == "ALTER") {
         rc = do_alter_table(db, s);
@@ -1381,7 +2609,82 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
         rc = do_delete(db, s, res);
     } else if (kw == "BEGIN") {
         /* SQL-level transaction: create snapshot */
+        if (db->in_transaction) {
+            rc = SVDB_ERR; /* Nested BEGIN is an error */
+        } else {
+            svdb_tx_t *t = new (std::nothrow) svdb_tx_t();
+            if (t) {
+                t->db = db;
+                t->data_snapshot  = db->data;
+                t->rowid_snapshot = db->rowid_counter;
+                db->sql_tx = t;
+                db->in_transaction = true;
+            }
+            rc = SVDB_OK;
+        }
+    } else if (kw == "COMMIT") {
+        if (db->in_transaction && db->sql_tx) {
+            delete db->sql_tx;
+            db->sql_tx = nullptr;
+            db->in_transaction = false;
+            rc = SVDB_OK;
+        } else {
+            rc = SVDB_ERR; /* COMMIT without BEGIN */
+        }
+    } else if (kw == "ROLLBACK") {
+        /* Could be ROLLBACK or ROLLBACK TO SAVEPOINT name */
+        std::string su2 = str_upper(s);
+        size_t to_pos = su2.find(" TO ");
+        if (to_pos != std::string::npos) {
+            if (db->in_transaction && db->sql_tx) {
+                /* ROLLBACK TO [SAVEPOINT] name */
+                std::string rest2 = str_trim(s.substr(to_pos + 4));
+                /* skip optional SAVEPOINT keyword */
+                std::string rest2u = str_upper(rest2);
+                if (rest2u.substr(0, 9) == "SAVEPOINT") rest2 = str_trim(rest2.substr(9));
+                /* remove trailing ; */
+                while (!rest2.empty() && (rest2.back() == ';' || isspace((unsigned char)rest2.back())))
+                    rest2.pop_back();
+                /* Find savepoint */
+                const std::string &n = rest2;
+                auto &sp_names = db->sql_tx->savepoints;
+                auto &sp_data  = db->sql_tx->sp_data;
+                auto &sp_rowid = db->sql_tx->sp_rowid;
+                bool found_sp = false;
+                for (int i = (int)sp_names.size() - 1; i >= 0; --i) {
+                    if (sp_names[i] == n) {
+                        if (i < (int)sp_data.size()) {
+                            db->data          = sp_data[i];
+                            db->rowid_counter = sp_rowid[i];
+                            sp_names.resize(i + 1);
+                            sp_data.resize(i + 1);
+                            sp_rowid.resize(i + 1);
+                        }
+                        found_sp = true;
+                        break;
+                    }
+                }
+                rc = found_sp ? SVDB_OK : SVDB_ERR; /* Unknown savepoint = error */
+            } else {
+                rc = SVDB_ERR; /* ROLLBACK TO without active transaction */
+            }
+        } else if (db->in_transaction && db->sql_tx) {
+            /* Full rollback */
+            db->data          = db->sql_tx->data_snapshot;
+            db->rowid_counter = db->sql_tx->rowid_snapshot;
+            delete db->sql_tx;
+            db->sql_tx = nullptr;
+            db->in_transaction = false;
+            rc = SVDB_OK;
+        } else {
+            rc = SVDB_ERR; /* ROLLBACK without BEGIN */
+        }
+    } else if (kw == "SAVEPOINT") {
+        std::string sp_name = str_trim(s.substr(9));
+        while (!sp_name.empty() && (sp_name.back() == ';' || isspace((unsigned char)sp_name.back())))
+            sp_name.pop_back();
         if (!db->in_transaction) {
+            /* Implicit transaction for SAVEPOINT without BEGIN (SQLite behaviour) */
             svdb_tx_t *t = new (std::nothrow) svdb_tx_t();
             if (t) {
                 t->db = db;
@@ -1391,58 +2694,7 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
                 db->in_transaction = true;
             }
         }
-        rc = SVDB_OK;
-    } else if (kw == "COMMIT") {
         if (db->in_transaction && db->sql_tx) {
-            delete db->sql_tx;
-            db->sql_tx = nullptr;
-            db->in_transaction = false;
-        }
-        rc = SVDB_OK;
-    } else if (kw == "ROLLBACK") {
-        /* Could be ROLLBACK or ROLLBACK TO SAVEPOINT name */
-        std::string su2 = str_upper(s);
-        size_t to_pos = su2.find(" TO ");
-        if (to_pos != std::string::npos && db->in_transaction && db->sql_tx) {
-            /* ROLLBACK TO [SAVEPOINT] name */
-            std::string rest2 = str_trim(s.substr(to_pos + 4));
-            /* skip optional SAVEPOINT keyword */
-            std::string rest2u = str_upper(rest2);
-            if (rest2u.substr(0, 9) == "SAVEPOINT") rest2 = str_trim(rest2.substr(9));
-            /* remove trailing ; */
-            while (!rest2.empty() && (rest2.back() == ';' || isspace((unsigned char)rest2.back())))
-                rest2.pop_back();
-            /* Find savepoint */
-            const std::string &n = rest2;
-            auto &sp_names = db->sql_tx->savepoints;
-            auto &sp_data  = db->sql_tx->sp_data;
-            auto &sp_rowid = db->sql_tx->sp_rowid;
-            for (int i = (int)sp_names.size() - 1; i >= 0; --i) {
-                if (sp_names[i] == n) {
-                    if (i < (int)sp_data.size()) {
-                        db->data          = sp_data[i];
-                        db->rowid_counter = sp_rowid[i];
-                        sp_names.resize(i + 1);
-                        sp_data.resize(i + 1);
-                        sp_rowid.resize(i + 1);
-                    }
-                    break;
-                }
-            }
-        } else if (db->in_transaction && db->sql_tx) {
-            /* Full rollback */
-            db->data          = db->sql_tx->data_snapshot;
-            db->rowid_counter = db->sql_tx->rowid_snapshot;
-            delete db->sql_tx;
-            db->sql_tx = nullptr;
-            db->in_transaction = false;
-        }
-        rc = SVDB_OK;
-    } else if (kw == "SAVEPOINT") {
-        if (db->in_transaction && db->sql_tx) {
-            std::string sp_name = str_trim(s.substr(9));
-            while (!sp_name.empty() && (sp_name.back() == ';' || isspace((unsigned char)sp_name.back())))
-                sp_name.pop_back();
             db->sql_tx->savepoints.push_back(sp_name);
             db->sql_tx->sp_data.push_back(db->data);
             db->sql_tx->sp_rowid.push_back(db->rowid_counter);
@@ -1471,11 +2723,79 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
         }
         rc = SVDB_OK;
     } else if (kw == "PRAGMA") {
-        /* Route PRAGMA queries through svdb_query_internal for results */
+        /* Route PRAGMA through svdb_query_pragma so SET values are stored */
         svdb_rows_t *rows = nullptr;
-        rc = svdb_query_internal(db, s, &rows);
+        rc = svdb_query_pragma(db, s, &rows);
         if (rows) svdb_rows_close(rows);
     } else if (kw == "SELECT") {
+        /* Check for SELECT ... INTO newtable FROM ... (CREATE TABLE AS SELECT) */
+        {
+            std::string su_s = str_upper(s);
+            /* Find "INTO" that appears before "FROM" and is not inside parens */
+            size_t into_pos = std::string::npos;
+            size_t from_pos = std::string::npos;
+            int depth = 0; bool in_sq = false;
+            for (size_t i = 0; i < s.size(); ++i) {
+                char c = s[i];
+                if (c == '\'' && !in_sq) { in_sq = true; continue; }
+                if (c == '\'' && in_sq) { if (i+1<s.size()&&s[i+1]=='\''){++i;} else in_sq=false; continue; }
+                if (in_sq) continue;
+                if (c == '(') ++depth; else if (c == ')') --depth;
+                if (depth == 0) {
+                    if (i+4 <= s.size() && str_upper(s.substr(i,4)) == "INTO" &&
+                        (i == 0 || !isalnum((unsigned char)s[i-1])) &&
+                        (i+4 >= s.size() || !isalnum((unsigned char)s[i+4]))) {
+                        into_pos = i;
+                    }
+                    if (i+4 <= s.size() && str_upper(s.substr(i,4)) == "FROM" &&
+                        (i == 0 || !isalnum((unsigned char)s[i-1])) &&
+                        (i+4 >= s.size() || !isalnum((unsigned char)s[i+4])) &&
+                        into_pos != std::string::npos) {
+                        from_pos = i;
+                        break;
+                    }
+                }
+            }
+            if (into_pos != std::string::npos && from_pos != std::string::npos) {
+                /* Extract newtable name */
+                size_t np = into_pos + 4;
+                while (np < s.size() && isspace((unsigned char)s[np])) ++np;
+                size_t ns = np;
+                while (np < s.size() && (isalnum((unsigned char)s[np]) || s[np] == '_')) ++np;
+                std::string new_table = s.substr(ns, np - ns);
+                /* Rewrite: SELECT <cols> FROM ... (without INTO part) */
+                std::string rewritten = s.substr(0, into_pos) + s.substr(from_pos);
+                /* Run the select */
+                svdb_rows_t *rows = nullptr;
+                rc = svdb_query_internal(db, rewritten, &rows);
+                if (rc == SVDB_OK && rows && !new_table.empty()) {
+                    /* Build CREATE TABLE statement from result columns */
+                    std::string create_sql2 = "CREATE TABLE " + new_table + " (";
+                    for (size_t ci = 0; ci < rows->col_names.size(); ++ci) {
+                        if (ci) create_sql2 += ", ";
+                        create_sql2 += rows->col_names[ci] + " TEXT";
+                    }
+                    create_sql2 += ")";
+                    do_create_table(db, create_sql2);
+                    /* Insert all rows */
+                    for (auto &row : rows->rows) {
+                        std::string ins = "INSERT INTO " + new_table + " VALUES (";
+                        for (size_t ci = 0; ci < row.size(); ++ci) {
+                            if (ci) ins += ", ";
+                            if (row[ci].type == SVDB_TYPE_NULL) ins += "NULL";
+                            else if (row[ci].type == SVDB_TYPE_INT) ins += std::to_string(row[ci].ival);
+                            else if (row[ci].type == SVDB_TYPE_REAL) { char buf[64]; snprintf(buf,sizeof(buf),"%.17g",row[ci].rval); ins+=buf; }
+                            else { ins += "'"; for (char ch:row[ci].sval){if(ch=='\'')ins+="''";else ins+=ch;} ins += "'"; }
+                        }
+                        ins += ")";
+                        do_insert(db, ins, nullptr);
+                    }
+                }
+                if (rows) svdb_rows_close(rows);
+                if (rc != SVDB_OK && res) { res->code = rc; res->errmsg = db->last_error.c_str(); }
+                return rc;
+            }
+        }
         /* svdb_exec on SELECT: run and discard result */
         svdb_rows_t *rows = nullptr;
         rc = svdb_query_internal(db, s, &rows);
@@ -1483,6 +2803,18 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
     } else {
         /* Unknown: accept silently */
         rc = SVDB_OK;
+        /* Handle ANALYZE: populate sqlite_stat1 */
+        if (kw == "ANALYZE") {
+            db->stat1.clear();
+            for (auto &kv : db->data) {
+                size_t nrows = kv.second.size();
+                size_t ncols = db->col_order.count(kv.first) ? db->col_order.at(kv.first).size() : 0;
+                std::string stat = std::to_string(nrows);
+                if (ncols > 0) for (size_t c = 0; c < ncols; ++c) stat += " " + std::to_string(nrows);
+                db->stat1.emplace_back(kv.first, "", stat);
+            }
+            rc = SVDB_OK;
+        }
     }
 
     if (rc != SVDB_OK && res) {
@@ -1495,6 +2827,10 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
 /* Prepared statement stubs */
 
 svdb_code_t svdb_prepare(svdb_db_t *db, const char *sql, svdb_stmt_t **stmt) {
+    BUG_ON(db == nullptr);
+    BUG_ON(sql == nullptr);
+    BUG_ON(stmt == nullptr);
+    /* BUG_ON fires in debug builds only; the if-guard is the release-build safety net */
     if (!db || !sql || !stmt) return SVDB_ERR;
     /* Empty SQL is an error */
     const char *p = sql;
@@ -1512,6 +2848,7 @@ svdb_code_t svdb_prepare(svdb_db_t *db, const char *sql, svdb_stmt_t **stmt) {
 }
 
 svdb_code_t svdb_stmt_bind_int(svdb_stmt_t *stmt, int idx, int64_t val) {
+    BUG_ON(stmt == nullptr);
     if (!stmt) return SVDB_ERR;
     SvdbVal sv; sv.type = SVDB_TYPE_INT; sv.ival = val;
     stmt->bindings[idx] = sv;
@@ -1519,6 +2856,7 @@ svdb_code_t svdb_stmt_bind_int(svdb_stmt_t *stmt, int idx, int64_t val) {
 }
 
 svdb_code_t svdb_stmt_bind_real(svdb_stmt_t *stmt, int idx, double val) {
+    BUG_ON(stmt == nullptr);
     if (!stmt) return SVDB_ERR;
     SvdbVal sv; sv.type = SVDB_TYPE_REAL; sv.rval = val;
     stmt->bindings[idx] = sv;
@@ -1527,6 +2865,7 @@ svdb_code_t svdb_stmt_bind_real(svdb_stmt_t *stmt, int idx, double val) {
 
 svdb_code_t svdb_stmt_bind_text(svdb_stmt_t *stmt, int idx,
                                   const char *val, size_t len) {
+    BUG_ON(stmt == nullptr);
     if (!stmt) return SVDB_ERR;
     SvdbVal sv; sv.type = SVDB_TYPE_TEXT;
     sv.sval = val ? std::string(val, len) : std::string();
@@ -1535,12 +2874,14 @@ svdb_code_t svdb_stmt_bind_text(svdb_stmt_t *stmt, int idx,
 }
 
 svdb_code_t svdb_stmt_bind_null(svdb_stmt_t *stmt, int idx) {
+    BUG_ON(stmt == nullptr);
     if (!stmt) return SVDB_ERR;
     stmt->bindings[idx] = SvdbVal{};
     return SVDB_OK;
 }
 
 svdb_code_t svdb_stmt_exec(svdb_stmt_t *stmt, svdb_result_t *res) {
+    BUG_ON(stmt == nullptr);
     if (!stmt) return SVDB_ERR;
     return svdb_exec(stmt->db, stmt->sql.c_str(), res);
 }
@@ -1564,6 +2905,8 @@ svdb_code_t svdb_stmt_close(svdb_stmt_t *stmt) {
 /* Transaction stubs */
 
 svdb_code_t svdb_begin(svdb_db_t *db, svdb_tx_t **tx) {
+    BUG_ON(db == nullptr);
+    BUG_ON(tx == nullptr);
     if (!db || !tx) return SVDB_ERR;
     if (db->in_transaction) {
         db->last_error = "cannot start a transaction within a transaction";
@@ -1581,6 +2924,7 @@ svdb_code_t svdb_begin(svdb_db_t *db, svdb_tx_t **tx) {
 }
 
 svdb_code_t svdb_commit(svdb_tx_t *tx) {
+    BUG_ON(tx == nullptr);
     if (!tx) return SVDB_ERR;
     if (tx->db) tx->db->in_transaction = false;
     delete tx;
@@ -1588,6 +2932,7 @@ svdb_code_t svdb_commit(svdb_tx_t *tx) {
 }
 
 svdb_code_t svdb_rollback(svdb_tx_t *tx) {
+    BUG_ON(tx == nullptr);
     if (!tx) return SVDB_ERR;
     if (tx->db) {
         /* Restore snapshot */
@@ -1600,6 +2945,8 @@ svdb_code_t svdb_rollback(svdb_tx_t *tx) {
 }
 
 svdb_code_t svdb_savepoint(svdb_tx_t *tx, const char *name) {
+    BUG_ON(tx == nullptr);
+    BUG_ON(name == nullptr);
     if (!tx || !name) return SVDB_ERR;
     tx->savepoints.push_back(name);
     /* Save current data as savepoint snapshot */
@@ -1609,6 +2956,8 @@ svdb_code_t svdb_savepoint(svdb_tx_t *tx, const char *name) {
 }
 
 svdb_code_t svdb_release(svdb_tx_t *tx, const char *name) {
+    BUG_ON(tx == nullptr);
+    BUG_ON(name == nullptr);
     if (!tx || !name) return SVDB_ERR;
     std::string n(name);
     for (int i = (int)tx->savepoints.size() - 1; i >= 0; --i) {
@@ -1625,6 +2974,8 @@ svdb_code_t svdb_release(svdb_tx_t *tx, const char *name) {
 }
 
 svdb_code_t svdb_rollback_to(svdb_tx_t *tx, const char *name) {
+    BUG_ON(tx == nullptr);
+    BUG_ON(name == nullptr);
     if (!tx || !name || !tx->db) return SVDB_ERR;
     std::string n(name);
     for (int i = (int)tx->savepoints.size() - 1; i >= 0; --i) {
@@ -1648,6 +2999,8 @@ svdb_code_t svdb_rollback_to(svdb_tx_t *tx, const char *name) {
 /* Schema introspection */
 
 svdb_code_t svdb_tables(svdb_db_t *db, svdb_rows_t **rows) {
+    BUG_ON(db == nullptr);
+    BUG_ON(rows == nullptr);
     if (!db || !rows) return SVDB_ERR;
     svdb_rows_t *r = new (std::nothrow) svdb_rows_t();
     if (!r) return SVDB_NOMEM;
@@ -1664,6 +3017,9 @@ svdb_code_t svdb_tables(svdb_db_t *db, svdb_rows_t **rows) {
 }
 
 svdb_code_t svdb_columns(svdb_db_t *db, const char *table, svdb_rows_t **rows) {
+    BUG_ON(db == nullptr);
+    BUG_ON(table == nullptr);
+    BUG_ON(rows == nullptr);
     if (!db || !table || !rows) return SVDB_ERR;
     std::string tname(table);
     svdb_rows_t *r = new (std::nothrow) svdb_rows_t();
@@ -1683,6 +3039,9 @@ svdb_code_t svdb_columns(svdb_db_t *db, const char *table, svdb_rows_t **rows) {
 }
 
 svdb_code_t svdb_indexes(svdb_db_t *db, const char *table, svdb_rows_t **rows) {
+    BUG_ON(db == nullptr);
+    BUG_ON(table == nullptr);
+    BUG_ON(rows == nullptr);
     if (!db || !table || !rows) return SVDB_ERR;
     *rows = new (std::nothrow) svdb_rows_t();
     if (!*rows) return SVDB_NOMEM;
@@ -1705,6 +3064,8 @@ svdb_code_t svdb_indexes(svdb_db_t *db, const char *table, svdb_rows_t **rows) {
 }
 
 svdb_code_t svdb_backup(svdb_db_t *src, const char *dest_path) {
+    BUG_ON(src == nullptr);
+    BUG_ON(dest_path == nullptr);
     if (!src || !dest_path) return SVDB_ERR;
     /* Create or truncate the destination file as a minimal backup marker */
     FILE *f = fopen(dest_path, "wb");

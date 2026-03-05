@@ -2,15 +2,16 @@ package F661
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F661_PragmaEncoding_L1 tests PRAGMA encoding.
 func TestSQL1999_F661_PragmaEncoding_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -27,16 +28,13 @@ func TestSQL1999_F661_PragmaEncoding_L1(t *testing.T) {
 
 // TestSQL1999_F661_PragmaCollationList_L1 tests PRAGMA collation_list.
 func TestSQL1999_F661_PragmaCollationList_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open: %v", err)
 	}
 	defer db.Close()
 
-	rows, err := db.Query("PRAGMA collation_list")
-	if err != nil {
-		t.Fatalf("PRAGMA collation_list error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "PRAGMA collation_list")
 	if len(rows.Data) == 0 {
 		t.Error("Expected at least 1 collation")
 	}
@@ -54,7 +52,7 @@ func TestSQL1999_F661_PragmaCollationList_L1(t *testing.T) {
 
 // TestSQL1999_F661_PragmaForeignKeyToggle_L1 tests toggling PRAGMA foreign_keys.
 func TestSQL1999_F661_PragmaForeignKeyToggle_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}

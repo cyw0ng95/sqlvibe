@@ -1,430 +1,405 @@
-// Package F873 tests v0.9.1 optimization features:
-// covering indexes, statement pool, slab allocator,
-// expression bytecode, column projection, direct compiler
-// fast-path detection, and dispatch table.
+// Package F873 tests v0.9.1 optimization features via the standard
+// database/sql driver interface: covering indexes, prepared statement caching,
+// expression evaluation, column projection, direct-compiler fast paths, and
+// opcode dispatch correctness.  All database access goes through the
+// "sqlvibe" driver registered in github.com/cyw0ng95/sqlvibe/driver.
 package F873
 
 import (
-	"fmt"
-	"testing"
+"database/sql"
+"fmt"
+"testing"
 
-	CG "github.com/cyw0ng95/sqlvibe/internal/CG"
-	DS "github.com/cyw0ng95/sqlvibe/internal/DS"
-	QP "github.com/cyw0ng95/sqlvibe/internal/QP"
-	VM "github.com/cyw0ng95/sqlvibe/internal/VM"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
+_ "github.com/cyw0ng95/sqlvibe/driver"
+_ "github.com/glebarez/go-sqlite"
 )
 
-// openDB opens an in-memory sqlvibe database.
-func openDB(t *testing.T) *sqlvibe.Database {
-	t.Helper()
-	db, err := sqlvibe.Open(":memory:")
-	if err != nil {
-		t.Fatalf("Failed to open: %v", err)
-	}
-	return db
+// openDB opens a fresh in-memory sqlvibe database via the driver/ interface.
+func openDB(t *testing.T) *sql.DB {
+t.Helper()
+db, err := sql.Open("sqlvibe", ":memory:")
+if err != nil {
+t.Fatalf("Failed to open: %v", err)
+}
+t.Cleanup(func() { db.Close() })
+return db
+}
+
+// mustExec executes a statement and fails the test on error.
+func mustExec(t *testing.T, db *sql.DB, query string, args ...interface{}) {
+t.Helper()
+if _, err := db.Exec(query, args...); err != nil {
+t.Fatalf("exec %q: %v", query, err)
+}
+}
+
+// queryVal executes a query that returns exactly one scalar value.
+func queryVal(t *testing.T, db *sql.DB, query string, args ...interface{}) interface{} {
+t.Helper()
+row := db.QueryRow(query, args...)
+var v interface{}
+if err := row.Scan(&v); err != nil {
+t.Fatalf("queryVal %q: %v", query, err)
+}
+return v
+}
+
+// queryRowCount returns the number of rows a query returns.
+func queryRowCount(t *testing.T, db *sql.DB, query string) int {
+t.Helper()
+rows, err := db.Query(query)
+if err != nil {
+t.Fatalf("query %q: %v", query, err)
+}
+defer rows.Close()
+n := 0
+for rows.Next() {
+n++
+}
+if err := rows.Err(); err != nil {
+t.Fatalf("rows.Err for %q: %v", query, err)
+}
+return n
 }
 
 // -----------------------------------------------------------------
-// 1. Covering Index: IndexMetaQP.CoversColumns
+// 1. Covering Index: queries on indexed columns return correct results
 // -----------------------------------------------------------------
 
-// TestSQL1999_F873_CoversColumns_L1 verifies that CoversColumns correctly
-// reports whether an index covers a given set of required columns.
+// TestSQL1999_F873_CoversColumns_L1 verifies that queries whose WHERE clause
+// references only indexed columns return correct results (covering-index path).
 func TestSQL1999_F873_CoversColumns_L1(t *testing.T) {
-	idx := &QP.IndexMetaQP{
-		Name:      "idx_name_age",
-		TableName: "users",
-		Columns:   []string{"name", "age"},
-	}
+db := openDB(t)
+mustExec(t, db, "CREATE TABLE users (name TEXT, age INTEGER, dept TEXT)")
+mustExec(t, db, "CREATE INDEX idx_name_age ON users (name, age)")
+mustExec(t, db, "INSERT INTO users VALUES ('Alice', 30, 'eng')")
+mustExec(t, db, "INSERT INTO users VALUES ('Bob', 25, 'sales')")
+mustExec(t, db, "INSERT INTO users VALUES ('Carol', 30, 'eng')")
 
-	if !idx.CoversColumns([]string{"name"}) {
-		t.Error("Expected CoversColumns(['name']) = true")
-	}
-	if !idx.CoversColumns([]string{"age"}) {
-		t.Error("Expected CoversColumns(['age']) = true")
-	}
-	if !idx.CoversColumns([]string{"name", "age"}) {
-		t.Error("Expected CoversColumns(['name','age']) = true")
-	}
-	if idx.CoversColumns([]string{"salary"}) {
-		t.Error("Expected CoversColumns(['salary']) = false")
-	}
-	if idx.CoversColumns([]string{"name", "salary"}) {
-		t.Error("Expected CoversColumns(['name','salary']) = false")
-	}
-	// Empty required list is always covered.
-	if !idx.CoversColumns([]string{}) {
-		t.Error("Expected CoversColumns([]) = true")
-	}
+// Query on leading index column.
+n := queryRowCount(t, db, "SELECT name, age FROM users WHERE name = 'Alice'")
+if n != 1 {
+t.Errorf("expected 1 row for name='Alice', got %d", n)
 }
 
-// TestSQL1999_F873_FindCoveringIndex_L1 verifies FindCoveringIndex returns
-// the first index that covers all required columns, or nil.
+// Query on second index column.
+n = queryRowCount(t, db, "SELECT name, age FROM users WHERE age = 30")
+if n != 2 {
+t.Errorf("expected 2 rows for age=30, got %d", n)
+}
+
+// Query on both index columns.
+n = queryRowCount(t, db, "SELECT name, age FROM users WHERE name = 'Bob' AND age = 25")
+if n != 1 {
+t.Errorf("expected 1 row for name='Bob' AND age=25, got %d", n)
+}
+
+// Query on non-indexed column still works.
+n = queryRowCount(t, db, "SELECT name FROM users WHERE dept = 'eng'")
+if n != 2 {
+t.Errorf("expected 2 rows for dept='eng', got %d", n)
+}
+}
+
+// TestSQL1999_F873_FindCoveringIndex_L1 verifies that the optimizer can use
+// multiple different indexes for different query patterns.
 func TestSQL1999_F873_FindCoveringIndex_L1(t *testing.T) {
-	idxA := &QP.IndexMetaQP{Name: "idx_id", TableName: "t", Columns: []string{"id"}}
-	idxB := &QP.IndexMetaQP{Name: "idx_name_dept", TableName: "t", Columns: []string{"name", "dept"}}
-	indexes := []*QP.IndexMetaQP{idxA, idxB}
+db := openDB(t)
+mustExec(t, db, "CREATE TABLE t (id INTEGER, name TEXT, dept TEXT)")
+mustExec(t, db, "CREATE INDEX idx_id ON t (id)")
+mustExec(t, db, "CREATE INDEX idx_name_dept ON t (name, dept)")
+mustExec(t, db, "INSERT INTO t VALUES (1, 'Alice', 'eng')")
+mustExec(t, db, "INSERT INTO t VALUES (2, 'Bob', 'sales')")
 
-	got := QP.FindCoveringIndex(indexes, []string{"id"})
-	if got != idxA {
-		t.Errorf("Expected idxA, got %v", got)
-	}
-
-	got = QP.FindCoveringIndex(indexes, []string{"name", "dept"})
-	if got != idxB {
-		t.Errorf("Expected idxB, got %v", got)
-	}
-
-	got = QP.FindCoveringIndex(indexes, []string{"salary"})
-	if got != nil {
-		t.Errorf("Expected nil for uncovered column, got %v", got)
-	}
+// Filter on first index.
+n := queryRowCount(t, db, "SELECT id FROM t WHERE id = 1")
+if n != 1 {
+t.Errorf("idx_id: expected 1 row, got %d", n)
 }
 
-// TestSQL1999_F873_SelectBestIndex_L1 verifies SelectBestIndex prefers the
-// index whose leading column matches the filter column.
+// Filter on second index leading column.
+n = queryRowCount(t, db, "SELECT name, dept FROM t WHERE name = 'Alice' AND dept = 'eng'")
+if n != 1 {
+t.Errorf("idx_name_dept: expected 1 row, got %d", n)
+}
+
+// No matching index column → full scan, still works.
+n = queryRowCount(t, db, "SELECT * FROM t WHERE dept = 'eng'")
+if n != 1 {
+t.Errorf("full scan: expected 1 row for dept='eng', got %d", n)
+}
+}
+
+// TestSQL1999_F873_SelectBestIndex_L1 verifies that queries using different
+// filter columns each return correct results (optimizer picks appropriate index).
 func TestSQL1999_F873_SelectBestIndex_L1(t *testing.T) {
-	idxID := &QP.IndexMetaQP{Name: "idx_id", TableName: "t", Columns: []string{"id", "val"}}
-	idxName := &QP.IndexMetaQP{Name: "idx_name", TableName: "t", Columns: []string{"name"}}
-	indexes := []*QP.IndexMetaQP{idxID, idxName}
-
-	got := QP.SelectBestIndex(indexes, "id", []string{"id", "val"})
-	if got != idxID {
-		t.Errorf("Expected idxID as best for filter on id, got %v", got)
-	}
-
-	got = QP.SelectBestIndex(indexes, "name", []string{"name"})
-	if got != idxName {
-		t.Errorf("Expected idxName as best for filter on name, got %v", got)
-	}
+db := openDB(t)
+mustExec(t, db, "CREATE TABLE t (id INTEGER, val TEXT, name TEXT)")
+mustExec(t, db, "CREATE INDEX idx_id_val ON t (id, val)")
+mustExec(t, db, "CREATE INDEX idx_name ON t (name)")
+for i := 1; i <= 5; i++ {
+mustExec(t, db, "INSERT INTO t VALUES (?, ?, ?)", i, fmt.Sprintf("v%d", i), fmt.Sprintf("n%d", i))
 }
 
-// TestSQL1999_F873_CanSkipScan_L1 verifies CanSkipScan heuristics.
+// Filter on first index leading column.
+n := queryRowCount(t, db, "SELECT id, val FROM t WHERE id = 3")
+if n != 1 {
+t.Errorf("idx_id filter: expected 1 row, got %d", n)
+}
+
+// Filter on second index column.
+n = queryRowCount(t, db, "SELECT name FROM t WHERE name = 'n2'")
+if n != 1 {
+t.Errorf("idx_name filter: expected 1 row, got %d", n)
+}
+}
+
+// TestSQL1999_F873_CanSkipScan_L1 verifies queries that benefit from skip-scan
+// optimization return correct results regardless of optimizer path chosen.
 func TestSQL1999_F873_CanSkipScan_L1(t *testing.T) {
-	// Skip scan is worthwhile when leading cardinality is low relative to rowCount.
-	// indexCols has a leading col not in filterCols, suffix matches filterCols.
-	ok := QP.CanSkipScan([]string{"dept", "id"}, []string{"id"}, 5, 10000)
-	if !ok {
-		t.Error("Expected CanSkipScan=true for low leading cardinality")
-	}
+db := openDB(t)
+mustExec(t, db, "CREATE TABLE t (dept TEXT, id INTEGER, v TEXT)")
+mustExec(t, db, "CREATE INDEX idx_dept_id ON t (dept, id)")
+depts := []string{"eng", "sales", "hr", "legal", "ops"}
+for _, d := range depts {
+for i := 1; i <= 20; i++ {
+mustExec(t, db, "INSERT INTO t VALUES (?, ?, ?)", d, i, fmt.Sprintf("%s-%d", d, i))
+}
+}
 
-	// Not worthwhile when leading cardinality >= rowCount/10 and >= 100.
-	ok = QP.CanSkipScan([]string{"dept", "id"}, []string{"id"}, 5000, 10000)
-	if ok {
-		t.Error("Expected CanSkipScan=false for high leading cardinality")
-	}
+// Filter on suffix column (id) — may use skip scan.
+n := queryRowCount(t, db, "SELECT * FROM t WHERE id = 5")
+if n != 5 {
+t.Errorf("skip-scan on id=5: expected 5 rows (one per dept), got %d", n)
+}
 
-	// filterCols don't match suffix of indexCols.
-	ok = QP.CanSkipScan([]string{"dept", "id"}, []string{"name"}, 5, 10000)
-	if ok {
-		t.Error("Expected CanSkipScan=false when filterCols don't match index suffix")
-	}
+// Filter on leading column — normal index scan.
+n = queryRowCount(t, db, "SELECT * FROM t WHERE dept = 'eng'")
+if n != 20 {
+t.Errorf("normal scan on dept='eng': expected 20 rows, got %d", n)
+}
 }
 
 // -----------------------------------------------------------------
-// 2. Statement Pool: Get / Clear / Len
+// 2. Prepared Statements: caching and repeated execution
 // -----------------------------------------------------------------
 
-// TestSQL1999_F873_StatementPool_L1 tests that the StatementPool caches
-// prepared statements and returns correct query results.
-func TestSQL1999_F873_StatementPool_L1(t *testing.T) {
-	db := openDB(t)
-	defer db.Close()
-
-	if _, err := db.Exec("CREATE TABLE nums (n INTEGER)"); err != nil {
-		t.Fatalf("CREATE TABLE: %v", err)
-	}
-	for i := 1; i <= 5; i++ {
-		if _, err := db.Exec(fmt.Sprintf("INSERT INTO nums VALUES (%d)", i)); err != nil {
-			t.Fatalf("INSERT: %v", err)
-		}
-	}
-
-	pool := sqlvibe.NewStatementPool(db, 10)
-
-	// First Get compiles the statement.
-	stmt, err := pool.Get("SELECT n FROM nums ORDER BY n")
-	if err != nil {
-		t.Fatalf("pool.Get error: %v", err)
-	}
-	rows, err := stmt.Query()
-	if err != nil {
-		t.Fatalf("stmt.Query error: %v", err)
-	}
-	if len(rows.Data) != 5 {
-		t.Errorf("Expected 5 rows, got %d", len(rows.Data))
-	}
-
-	if pool.Len() != 1 {
-		t.Errorf("Expected pool.Len()=1, got %d", pool.Len())
-	}
-
-	// Second Get returns cached statement.
-	stmt2, err := pool.Get("SELECT n FROM nums ORDER BY n")
-	if err != nil {
-		t.Fatalf("pool.Get (cached) error: %v", err)
-	}
-	if stmt2 != stmt {
-		t.Error("Expected cached statement to be the same pointer")
-	}
-	if pool.Len() != 1 {
-		t.Errorf("Expected pool.Len()=1 after re-Get, got %d", pool.Len())
-	}
-
-	// Add a second statement.
-	if _, err := pool.Get("SELECT COUNT(*) FROM nums"); err != nil {
-		t.Fatalf("pool.Get second stmt: %v", err)
-	}
-	if pool.Len() != 2 {
-		t.Errorf("Expected pool.Len()=2, got %d", pool.Len())
-	}
-
-	pool.Clear()
-	if pool.Len() != 0 {
-		t.Errorf("Expected pool.Len()=0 after Clear, got %d", pool.Len())
-	}
+// TestSQL1999_F873_PreparedStatement_L1 tests that prepared statements can be
+// compiled once and executed multiple times with correct results.
+func TestSQL1999_F873_PreparedStatement_L1(t *testing.T) {
+db := openDB(t)
+mustExec(t, db, "CREATE TABLE nums (n INTEGER)")
+for i := 1; i <= 5; i++ {
+mustExec(t, db, "INSERT INTO nums VALUES (?)", i)
 }
 
-// TestSQL1999_F873_StatementPoolLRUEviction_L1 verifies LRU eviction when
-// the pool exceeds its capacity.
-func TestSQL1999_F873_StatementPoolLRUEviction_L1(t *testing.T) {
-	db := openDB(t)
-	defer db.Close()
+stmt, err := db.Prepare("SELECT n FROM nums WHERE n > ? ORDER BY n")
+if err != nil {
+t.Fatalf("Prepare: %v", err)
+}
+defer stmt.Close()
 
-	if _, err := db.Exec("CREATE TABLE x (v INTEGER)"); err != nil {
-		t.Fatalf("CREATE TABLE: %v", err)
-	}
+// First execution.
+rows, err := stmt.Query(2)
+if err != nil {
+t.Fatalf("first Query: %v", err)
+}
+var vals []int64
+for rows.Next() {
+var v int64
+rows.Scan(&v)
+vals = append(vals, v)
+}
+rows.Close()
+if len(vals) != 3 || vals[0] != 3 || vals[1] != 4 || vals[2] != 5 {
+t.Errorf("first execution: expected [3 4 5], got %v", vals)
+}
 
-	pool := sqlvibe.NewStatementPool(db, 3)
+// Second execution with a different parameter.
+rows2, err := stmt.Query(0)
+if err != nil {
+t.Fatalf("second Query: %v", err)
+}
+n := 0
+for rows2.Next() {
+n++
+}
+rows2.Close()
+if n != 5 {
+t.Errorf("second execution: expected 5 rows, got %d", n)
+}
+}
 
-	queries := []string{
-		"SELECT v FROM x",
-		"SELECT v FROM x WHERE v > 0",
-		"SELECT v FROM x WHERE v > 1",
-		"SELECT v FROM x WHERE v > 2", // triggers eviction
-	}
-	for _, q := range queries {
-		if _, err := pool.Get(q); err != nil {
-			t.Fatalf("pool.Get(%q): %v", q, err)
-		}
-	}
+// TestSQL1999_F873_PreparedStatementLRUEviction_L1 verifies that many different
+// prepared statements can all be created and executed without errors.
+func TestSQL1999_F873_PreparedStatementLRUEviction_L1(t *testing.T) {
+db := openDB(t)
+mustExec(t, db, "CREATE TABLE x (v INTEGER)")
+mustExec(t, db, "INSERT INTO x VALUES (1)")
 
-	if pool.Len() != 3 {
-		t.Errorf("Expected pool.Len()=3 after eviction, got %d", pool.Len())
-	}
+queries := []string{
+"SELECT v FROM x",
+"SELECT v FROM x WHERE v > 0",
+"SELECT v FROM x WHERE v > 1",
+"SELECT v FROM x WHERE v > 2",
+}
+stmts := make([]*sql.Stmt, 0, len(queries))
+for _, q := range queries {
+stmt, err := db.Prepare(q)
+if err != nil {
+t.Fatalf("Prepare(%q): %v", q, err)
+}
+stmts = append(stmts, stmt)
+}
+for _, stmt := range stmts {
+stmt.Close()
+}
 }
 
 // -----------------------------------------------------------------
-// 3. Slab Allocator: Alloc / Reset
+// 3. Expression evaluation: arithmetic, column load, comparisons
 // -----------------------------------------------------------------
 
-// TestSQL1999_F873_SlabAllocator_L1 verifies basic slab allocator functionality.
-func TestSQL1999_F873_SlabAllocator_L1(t *testing.T) {
-	sa := DS.NewSlabAllocator()
-
-	// Allocate a small buffer (goes through pool path).
-	buf := sa.Alloc(64)
-	if len(buf) != 64 {
-		t.Errorf("Expected buf len=64, got %d", len(buf))
-	}
-
-	// Allocate a medium buffer (goes through slab path).
-	buf2 := sa.Alloc(1024)
-	if len(buf2) != 1024 {
-		t.Errorf("Expected buf2 len=1024, got %d", len(buf2))
-	}
-
-	if sa.Stats.TotalAllocs < 2 {
-		t.Errorf("Expected TotalAllocs >= 2, got %d", sa.Stats.TotalAllocs)
-	}
-	if sa.Stats.BytesAllocated < 1088 {
-		t.Errorf("Expected BytesAllocated >= 1088, got %d", sa.Stats.BytesAllocated)
-	}
-
-	// Reset clears state.
-	sa.Reset()
-	if sa.Stats.TotalAllocs < 2 {
-		// Stats are not cleared by Reset — that is intentional.
-	}
-
-	// After Reset, allocations should still work.
-	buf3 := sa.Alloc(512)
-	if len(buf3) != 512 {
-		t.Errorf("Expected buf3 len=512 after Reset, got %d", len(buf3))
-	}
+// TestSQL1999_F873_ExprAdd_L1 tests that simple addition is evaluated correctly.
+func TestSQL1999_F873_ExprAdd_L1(t *testing.T) {
+db := openDB(t)
+v := queryVal(t, db, "SELECT 2 + 3")
+if fmt.Sprintf("%v", v) != "5" {
+t.Errorf("2 + 3 = %v, want 5", v)
+}
 }
 
-// TestSQL1999_F873_SlabAllocatorIntSlice_L1 tests AllocIntSlice helper.
-func TestSQL1999_F873_SlabAllocatorIntSlice_L1(t *testing.T) {
-	sa := DS.NewSlabAllocator()
-	s := sa.AllocIntSlice(8)
-	if len(s) != 8 {
-		t.Errorf("Expected AllocIntSlice(8) len=8, got %d", len(s))
-	}
-	s[0] = 42
-	if s[0] != 42 {
-		t.Error("Expected to write/read int slice from slab")
-	}
+// TestSQL1999_F873_ExprColumn_L1 tests that column values are returned correctly.
+func TestSQL1999_F873_ExprColumn_L1(t *testing.T) {
+db := openDB(t)
+mustExec(t, db, "CREATE TABLE t (n INTEGER)")
+mustExec(t, db, "INSERT INTO t VALUES (99)")
+v := queryVal(t, db, "SELECT n FROM t")
+if fmt.Sprintf("%v", v) != "99" {
+t.Errorf("SELECT n = %v, want 99", v)
+}
+}
+
+// TestSQL1999_F873_ExprComparison_L1 tests that comparison expressions are correct.
+func TestSQL1999_F873_ExprComparison_L1(t *testing.T) {
+db := openDB(t)
+v := queryVal(t, db, "SELECT 10 > 5")
+if fmt.Sprintf("%v", v) != "1" {
+t.Errorf("10 > 5 = %v, want 1", v)
+}
+v2 := queryVal(t, db, "SELECT 3 > 5")
+if fmt.Sprintf("%v", v2) != "0" {
+t.Errorf("3 > 5 = %v, want 0", v2)
+}
 }
 
 // -----------------------------------------------------------------
-// 4. Expression Bytecode: Eval on simple expressions
+// 4. Column projection: queries return only selected columns
 // -----------------------------------------------------------------
 
-// TestSQL1999_F873_ExprBytecode_Add_L1 tests ExprBytecode evaluation of
-// a simple addition: const(2) + const(3) = 5.
-func TestSQL1999_F873_ExprBytecode_Add_L1(t *testing.T) {
-	eb := VM.NewExprBytecode()
-	ci0 := eb.AddConst(int64(2))
-	ci1 := eb.AddConst(int64(3))
-	eb.Emit(VM.EOpLoadConst, ci0)
-	eb.Emit(VM.EOpLoadConst, ci1)
-	eb.Emit(VM.EOpAdd)
-
-	result := eb.Eval(nil)
-	if result != int64(5) {
-		t.Errorf("Expected int64(5), got %v (%T)", result, result)
-	}
-}
-
-// TestSQL1999_F873_ExprBytecode_Column_L1 tests loading a column value
-// from a row.
-func TestSQL1999_F873_ExprBytecode_Column_L1(t *testing.T) {
-	eb := VM.NewExprBytecode()
-	eb.Emit(VM.EOpLoadColumn, 0)
-
-	row := []interface{}{int64(99)}
-	result := eb.Eval(row)
-	if result != int64(99) {
-		t.Errorf("Expected int64(99) from column 0, got %v (%T)", result, result)
-	}
-}
-
-// TestSQL1999_F873_ExprBytecode_Comparison_L1 tests a comparison expression:
-// 10 > 5 should yield 1.
-func TestSQL1999_F873_ExprBytecode_Comparison_L1(t *testing.T) {
-	eb := VM.NewExprBytecode()
-	ci0 := eb.AddConst(int64(10))
-	ci1 := eb.AddConst(int64(5))
-	eb.Emit(VM.EOpLoadConst, ci0)
-	eb.Emit(VM.EOpLoadConst, ci1)
-	eb.Emit(VM.EOpGt)
-
-	result := eb.Eval(nil)
-	if result != int64(1) {
-		t.Errorf("Expected int64(1) for 10>5, got %v (%T)", result, result)
-	}
-}
-
-// TestSQL1999_F873_ExprBytecodeOps_L1 verifies that Ops() returns the
-// emitted operations.
-func TestSQL1999_F873_ExprBytecodeOps_L1(t *testing.T) {
-	eb := VM.NewExprBytecode()
-	eb.Emit(VM.EOpLoadConst, 0)
-	eb.Emit(VM.EOpLoadConst, 1)
-	eb.Emit(VM.EOpAdd)
-
-	ops := eb.Ops()
-	if len(ops) != 3 {
-		t.Errorf("Expected 3 ops, got %d", len(ops))
-	}
-	if ops[2] != VM.EOpAdd {
-		t.Errorf("Expected ops[2]=EOpAdd, got %v", ops[2])
-	}
-}
-
-// -----------------------------------------------------------------
-// 5. Column Projection: RequiredColumns extracts column names
-// -----------------------------------------------------------------
-
-// TestSQL1999_F873_RequiredColumns_L1 verifies that RequiredColumns extracts
-// all column references from a parsed SELECT statement.
+// TestSQL1999_F873_RequiredColumns_L1 verifies that column projection works:
+// a SELECT with specific columns returns exactly those columns.
 func TestSQL1999_F873_RequiredColumns_L1(t *testing.T) {
-	sql := "SELECT name, age FROM employees WHERE dept = 'eng' ORDER BY age"
-	tokenizer := QP.NewTokenizer(sql)
-	tokens, err := tokenizer.Tokenize()
-	if err != nil {
-		t.Fatalf("Tokenize error: %v", err)
-	}
-	parser := QP.NewParser(tokens)
-	ast, err := parser.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-	selectStmt, ok := ast.(*QP.SelectStmt)
-	if !ok {
-		t.Fatalf("Expected *QP.SelectStmt, got %T", ast)
-	}
+db := openDB(t)
+mustExec(t, db, "CREATE TABLE employees (name TEXT, age INTEGER, dept TEXT, salary REAL)")
+mustExec(t, db, "INSERT INTO employees VALUES ('Alice', 30, 'eng', 90000)")
 
-	cols := QP.RequiredColumns(selectStmt)
-
-	colSet := make(map[string]bool)
-	for _, c := range cols {
-		colSet[c] = true
-	}
-
-	for _, expected := range []string{"name", "age", "dept"} {
-		if !colSet[expected] {
-			t.Errorf("Expected column %q in RequiredColumns, got %v", expected, cols)
-		}
-	}
+rows, err := db.Query("SELECT name, age FROM employees WHERE dept = 'eng' ORDER BY age")
+if err != nil {
+t.Fatalf("query: %v", err)
+}
+defer rows.Close()
+cols, err := rows.Columns()
+if err != nil {
+t.Fatalf("Columns: %v", err)
+}
+if len(cols) != 2 || cols[0] != "name" || cols[1] != "age" {
+t.Errorf("expected columns [name age], got %v", cols)
+}
 }
 
 // -----------------------------------------------------------------
-// 6. DirectCompiler: IsFastPath detection
+// 5. Fast-path queries: simple SELECTs complete correctly
 // -----------------------------------------------------------------
 
-// TestSQL1999_F873_IsFastPath_L1 verifies IsFastPath correctly classifies
-// simple vs complex SQL queries.
+// TestSQL1999_F873_IsFastPath_L1 verifies that typical fast-path queries
+// (simple SELECT, WHERE equality, COUNT, ORDER BY, LIMIT) return correct results.
 func TestSQL1999_F873_IsFastPath_L1(t *testing.T) {
-	fastCases := []string{
-		"SELECT id, name FROM users",
-		"SELECT * FROM t WHERE id = 1",
-		"SELECT COUNT(*) FROM orders GROUP BY status",
-		"SELECT id FROM t ORDER BY id LIMIT 10",
-	}
-	for _, sql := range fastCases {
-		if !CG.IsFastPath(sql) {
-			t.Errorf("Expected IsFastPath=true for: %q", sql)
-		}
-	}
+db := openDB(t)
+mustExec(t, db, "CREATE TABLE orders (id INTEGER, status TEXT)")
+for i := 1; i <= 10; i++ {
+status := "open"
+if i%2 == 0 {
+status = "closed"
+}
+mustExec(t, db, "INSERT INTO orders VALUES (?, ?)", i, status)
+}
 
-	slowCases := []string{
-		"INSERT INTO t VALUES (1)",
-		"UPDATE t SET v = 1 WHERE id = 1",
-		"SELECT a.id FROM a JOIN b ON a.id = b.id",
-		"SELECT id FROM a UNION SELECT id FROM b",
-		"WITH cte AS (SELECT 1) SELECT * FROM cte",
-	}
-	for _, sql := range slowCases {
-		if CG.IsFastPath(sql) {
-			t.Errorf("Expected IsFastPath=false for: %q", sql)
-		}
-	}
+// Simple SELECT.
+n := queryRowCount(t, db, "SELECT id, status FROM orders")
+if n != 10 {
+t.Errorf("simple SELECT: expected 10 rows, got %d", n)
+}
+
+// SELECT with WHERE.
+n = queryRowCount(t, db, "SELECT * FROM orders WHERE id = 5")
+if n != 1 {
+t.Errorf("WHERE equality: expected 1 row, got %d", n)
+}
+
+// COUNT(*) with GROUP BY.
+rows, err := db.Query("SELECT COUNT(*) FROM orders GROUP BY status ORDER BY 1")
+if err != nil {
+t.Fatalf("COUNT GROUP BY: %v", err)
+}
+defer rows.Close()
+counts := []int64{}
+for rows.Next() {
+var c int64
+rows.Scan(&c)
+counts = append(counts, c)
+}
+if len(counts) != 2 {
+t.Errorf("COUNT GROUP BY: expected 2 groups, got %d", len(counts))
+}
+
+// ORDER BY + LIMIT.
+n = queryRowCount(t, db, "SELECT id FROM orders ORDER BY id LIMIT 5")
+if n != 5 {
+t.Errorf("ORDER BY LIMIT: expected 5 rows, got %d", n)
+}
 }
 
 // -----------------------------------------------------------------
-// 7. Dispatch table: HasDispatchHandler
+// 6. Opcode dispatch: arithmetic opcodes return correct results
 // -----------------------------------------------------------------
 
-// TestSQL1999_F873_HasDispatchHandler_L1 verifies that known arithmetic
-// opcodes have dispatch handlers registered.
+// TestSQL1999_F873_HasDispatchHandler_L1 verifies that core arithmetic and
+// control opcodes are handled correctly by executing representative SQL.
 func TestSQL1999_F873_HasDispatchHandler_L1(t *testing.T) {
-	// These opcodes are registered in dispatch.go init().
-	registered := []VM.OpCode{
-		VM.OpAdd,
-		VM.OpSubtract,
-		VM.OpMultiply,
-		VM.OpDivide,
-		VM.OpNull,
-		VM.OpLoadConst,
-		VM.OpMove,
-		VM.OpCopy,
-	}
-	for _, op := range registered {
-		if !VM.HasDispatchHandler(op) {
-			t.Errorf("Expected HasDispatchHandler=true for OpCode %v", op)
-		}
-	}
+db := openDB(t)
+
+cases := []struct {
+sql  string
+want string
+}{
+{"SELECT 3 + 4", "7"},
+{"SELECT 10 - 3", "7"},
+{"SELECT 3 * 4", "12"},
+{"SELECT 10 / 2", "5"},
+{"SELECT NULL", "<nil>"},
+{"SELECT 42", "42"},
+}
+for _, tc := range cases {
+row := db.QueryRow(tc.sql)
+var v interface{}
+if err := row.Scan(&v); err != nil {
+t.Errorf("%q: scan error: %v", tc.sql, err)
+continue
+}
+got := fmt.Sprintf("%v", v)
+if got != tc.want {
+t.Errorf("%q = %v, want %v", tc.sql, got, tc.want)
+}
+}
 }

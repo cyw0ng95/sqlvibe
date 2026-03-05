@@ -2,15 +2,16 @@ package F641
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F641_JulianDay_L1 tests julianday() function.
 func TestSQL1999_F641_JulianDay_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -39,7 +40,7 @@ func TestSQL1999_F641_JulianDay_L1(t *testing.T) {
 
 // TestSQL1999_F641_Strftime_L1 tests strftime() with extended format specifiers.
 func TestSQL1999_F641_Strftime_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestSQL1999_F641_Strftime_L1(t *testing.T) {
 
 // TestSQL1999_F641_UnixEpoch_L1 tests unixepoch() function.
 func TestSQL1999_F641_UnixEpoch_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}

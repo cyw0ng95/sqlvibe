@@ -2,15 +2,16 @@ package F561
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F561_ForeignKeyEnforcement_L1 tests FK enforcement with PRAGMA foreign_keys = ON.
 func TestSQL1999_F561_ForeignKeyEnforcement_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -85,7 +86,7 @@ func TestSQL1999_F561_ForeignKeyEnforcement_L1(t *testing.T) {
 
 // TestSQL1999_F561_FKCascadeDelete_L1 tests ON DELETE CASCADE.
 func TestSQL1999_F561_FKCascadeDelete_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -114,10 +115,7 @@ func TestSQL1999_F561_FKCascadeDelete_L1(t *testing.T) {
 		t.Fatalf("DELETE error: %v", err)
 	}
 
-	rows, err := sqlvibeDB.Query("SELECT COUNT(*) FROM child")
-	if err != nil {
-		t.Fatalf("Query error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, sqlvibeDB, "SELECT COUNT(*) FROM child")
 	if len(rows.Data) == 0 || rows.Data[0][0] != int64(1) {
 		t.Errorf("Expected 1 child row after cascade delete, got %v", rows.Data)
 	}
@@ -125,7 +123,7 @@ func TestSQL1999_F561_FKCascadeDelete_L1(t *testing.T) {
 
 // TestSQL1999_F561_FKSetNull_L1 tests ON DELETE SET NULL.
 func TestSQL1999_F561_FKSetNull_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -151,10 +149,7 @@ func TestSQL1999_F561_FKSetNull_L1(t *testing.T) {
 		t.Fatalf("DELETE error: %v", err)
 	}
 
-	rows, err := sqlvibeDB.Query("SELECT cat_id FROM item ORDER BY id")
-	if err != nil {
-		t.Fatalf("Query error: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, sqlvibeDB, "SELECT cat_id FROM item ORDER BY id")
 	for _, row := range rows.Data {
 		if row[0] != nil {
 			t.Errorf("Expected NULL cat_id after SET NULL, got %v", row[0])
@@ -164,7 +159,7 @@ func TestSQL1999_F561_FKSetNull_L1(t *testing.T) {
 
 // TestSQL1999_F561_FKRestrict_L1 tests ON DELETE RESTRICT.
 func TestSQL1999_F561_FKRestrict_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -193,7 +188,7 @@ func TestSQL1999_F561_FKRestrict_L1(t *testing.T) {
 
 // TestSQL1999_F561_PragmaForeignKeys_L1 tests PRAGMA foreign_keys.
 func TestSQL1999_F561_PragmaForeignKeys_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}

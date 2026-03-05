@@ -1,5 +1,6 @@
 #include "parser_dml.h"
 #include "parser_internal.h"
+#include "../SF/svdb_assert.h"
 #include <string>
 #include <vector>
 #include <cctype>
@@ -10,12 +11,26 @@
 extern "C" svdb_ast_node_t* svdb_parser_parse_insert(svdb_parser_t* parser,
                                                        const char* sql,
                                                        size_t sql_len) {
+    BUG_ON(parser == nullptr);
+    BUG_ON(sql == nullptr);
     if (!parser || !sql || sql_len == 0) return nullptr;
 
     std::string s(sql, sql_len);
     size_t pos = 0;
 
     if (!parser_expect_keyword(s, pos, "INSERT")) return nullptr;
+    /* Skip optional conflict resolution: OR REPLACE, OR IGNORE, OR ROLLBACK,
+     * OR ABORT, OR FAIL (SQLite-compatible INSERT OR … syntax) */
+    {
+        size_t save = pos;
+        std::string kw1 = parser_read_keyword(s, pos);
+        if (kw1 == "OR") {
+            /* consume the OR and the conflict-resolution keyword */
+            parser_read_keyword(s, pos); /* REPLACE | IGNORE | ROLLBACK | ABORT | FAIL */
+        } else {
+            pos = save; /* not OR – restore position */
+        }
+    }
     parser_expect_keyword(s, pos, "INTO"); /* optional in some dialects */
 
     std::string table = parser_read_ident(s, pos);
@@ -71,6 +86,8 @@ extern "C" svdb_ast_node_t* svdb_parser_parse_insert(svdb_parser_t* parser,
 extern "C" svdb_ast_node_t* svdb_parser_parse_update(svdb_parser_t* parser,
                                                        const char* sql,
                                                        size_t sql_len) {
+    BUG_ON(parser == nullptr);
+    BUG_ON(sql == nullptr);
     if (!parser || !sql || sql_len == 0) return nullptr;
 
     std::string s(sql, sql_len);
@@ -130,6 +147,8 @@ extern "C" svdb_ast_node_t* svdb_parser_parse_update(svdb_parser_t* parser,
 extern "C" svdb_ast_node_t* svdb_parser_parse_delete(svdb_parser_t* parser,
                                                        const char* sql,
                                                        size_t sql_len) {
+    BUG_ON(parser == nullptr);
+    BUG_ON(sql == nullptr);
     if (!parser || !sql || sql_len == 0) return nullptr;
 
     std::string s(sql, sql_len);

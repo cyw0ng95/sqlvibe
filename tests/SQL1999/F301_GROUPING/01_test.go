@@ -1,13 +1,15 @@
 package F301_GROUPING
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
-func openDB(t *testing.T) *sqlvibe.Database {
-	db, err := sqlvibe.Open(":memory:")
+func openDB(t *testing.T) *sql.DB {
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
@@ -33,10 +35,7 @@ func TestSQL1999_F301_GroupByMultiCol_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT year, region, SUM(amount) FROM sales GROUP BY year, region ORDER BY year, region")
-	if err != nil {
-		t.Fatalf("GROUP BY multi-col: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT year, region, SUM(amount) FROM sales GROUP BY year, region ORDER BY year, region")
 	if len(rows.Data) != 4 {
 		t.Errorf("expected 4 groups, got %d: %v", len(rows.Data), rows.Data)
 	}
@@ -65,10 +64,7 @@ func TestSQL1999_F301_GroupByHaving_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT category, SUM(amount) AS total FROM orders GROUP BY category HAVING SUM(amount) > 50 ORDER BY category")
-	if err != nil {
-		t.Fatalf("GROUP BY HAVING: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT category, SUM(amount) AS total FROM orders GROUP BY category HAVING SUM(amount) > 50 ORDER BY category")
 	if len(rows.Data) != 1 {
 		t.Errorf("expected 1 group (C), got %d: %v", len(rows.Data), rows.Data)
 	}
@@ -95,14 +91,11 @@ func TestSQL1999_F301_GroupByAggregates_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query(`
+	rows := SQL1999.QueryRows(t, db, `
 		SELECT student, COUNT(*), MIN(score), MAX(score), SUM(score)
 		FROM scores
 		GROUP BY student
 		ORDER BY student`)
-	if err != nil {
-		t.Fatalf("GROUP BY aggregates: %v", err)
-	}
 	if len(rows.Data) != 2 {
 		t.Errorf("expected 2 rows, got %d", len(rows.Data))
 	}
@@ -131,14 +124,11 @@ func TestSQL1999_F301_RollupSimulated_L1(t *testing.T) {
 	}
 
 	// Simulate ROLLUP: per-dept totals UNION ALL grand total
-	rows, err := db.Query(`
+	rows := SQL1999.QueryRows(t, db, `
 		SELECT dept, SUM(amount) AS total FROM revenue GROUP BY dept
 		UNION ALL
 		SELECT 'ALL', SUM(amount) FROM revenue
 		ORDER BY dept`)
-	if err != nil {
-		t.Fatalf("ROLLUP via UNION ALL: %v", err)
-	}
 	if len(rows.Data) != 3 {
 		t.Errorf("expected 3 rows, got %d: %v", len(rows.Data), rows.Data)
 	}
@@ -165,10 +155,7 @@ func TestSQL1999_F301_GroupByCount_L1(t *testing.T) {
 	}
 
 	// Users with more than 2 events
-	rows, err := db.Query("SELECT user_id, COUNT(*) FROM events GROUP BY user_id HAVING COUNT(*) > 2 ORDER BY user_id")
-	if err != nil {
-		t.Fatalf("HAVING COUNT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT user_id, COUNT(*) FROM events GROUP BY user_id HAVING COUNT(*) > 2 ORDER BY user_id")
 	if len(rows.Data) != 2 {
 		t.Errorf("expected 2 users (user 1 with 3 and user 3 with 3), got %d: %v", len(rows.Data), rows.Data)
 	}

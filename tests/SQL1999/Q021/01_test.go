@@ -2,16 +2,17 @@ package Q021
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 	_ "github.com/glebarez/go-sqlite"
 )
 
-func setup(t *testing.T) (*sqlvibe.Database, *sql.DB) {
+func setup(t *testing.T) (*sql.DB, *sql.DB) {
 	t.Helper()
-	sv, err := sqlvibe.Open(":memory:")
+	sv, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlvibe: %v", err)
 	}
@@ -22,7 +23,7 @@ func setup(t *testing.T) (*sqlvibe.Database, *sql.DB) {
 	return sv, sl
 }
 
-func createJoinTables(sv *sqlvibe.Database, sl *sql.DB) {
+func createJoinTables(sv *sql.DB, sl *sql.DB) {
 	sv.Exec("CREATE TABLE dept (id INTEGER, name TEXT)")
 	sl.Exec("CREATE TABLE dept (id INTEGER, name TEXT)")
 	sv.Exec("CREATE TABLE emp (id INTEGER, dept_id INTEGER, name TEXT)")

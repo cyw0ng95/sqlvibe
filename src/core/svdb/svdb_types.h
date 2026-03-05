@@ -15,6 +15,7 @@ struct ColDef {
     std::string default_val;
     bool        not_null   = false;
     bool        primary_key = false;
+    bool        auto_increment = false; /* INTEGER PRIMARY KEY AUTOINCREMENT */
 };
 
 /* Table-level check constraint expression */
@@ -25,6 +26,23 @@ struct FKDef {
     std::string child_col;
     std::string parent_table;
     std::string parent_col;
+    std::string on_delete; /* "CASCADE", "SET NULL", "RESTRICT", "NO ACTION", or "" */
+    std::string on_update; /* "CASCADE", "SET NULL", "RESTRICT", "NO ACTION", or "" */
+};
+
+/* Trigger timing */
+enum TriggerTiming { TRIGGER_BEFORE, TRIGGER_AFTER, TRIGGER_INSTEAD_OF };
+/* Trigger event */
+enum TriggerEvent { TRIGGER_INSERT, TRIGGER_UPDATE, TRIGGER_DELETE };
+
+/* Trigger definition */
+struct TriggerDef {
+    std::string name;
+    TriggerTiming timing = TRIGGER_AFTER;
+    TriggerEvent  event  = TRIGGER_INSERT;
+    std::string   table;         /* target table */
+    std::string   when_expr;     /* optional WHEN condition */
+    std::string   body;          /* raw SQL of BEGIN ... END body */
 };
 
 /* Table schema: column name -> ColDef */
@@ -62,6 +80,8 @@ struct svdb_db_s {
     std::unordered_map<std::string, CheckList>                         check_constraints;
     /* Foreign key constraints per table */
     std::unordered_map<std::string, std::vector<FKDef>>                fk_constraints;
+    /* Trigger definitions: name -> TriggerDef */
+    std::unordered_map<std::string, TriggerDef>                        triggers;
     /* CREATE TABLE original SQL for each table/view */
     std::unordered_map<std::string, std::string>                       create_sql;
 
@@ -89,7 +109,20 @@ struct svdb_db_s {
     bool        foreign_keys_enabled = false;
     int64_t     max_rows         = 0;       /* 0 = unlimited */
     int64_t     cache_memory     = 2097152; /* 2 MB default */
-    std::string synchronous      = "NORMAL";
+    std::string synchronous      = "FULL";  /* default=2 (FULL) */
+    int64_t     query_timeout_ms = 0;       /* 0 = no timeout */
+    int64_t     max_memory       = 0;       /* 0 = unlimited */
+    int64_t     page_size_val    = 4096;    /* default page size */
+    int64_t     mmap_size_val    = 0;       /* mmap_size */
+    int64_t     auto_vacuum_val  = 0;       /* auto_vacuum */
+    int64_t     temp_store_val   = 0;       /* temp_store */
+    bool        query_only_val   = false;   /* query_only */
+    std::string locking_mode_val = "normal";/* locking_mode */
+    bool        read_uncommitted_val = false; /* read_uncommitted */
+    int64_t     cache_spill_val  = 1;       /* cache_spill, default=1 */
+
+    /* sqlite_stat1: table_name -> {idx_name, stat} */
+    std::vector<std::tuple<std::string,std::string,std::string>> stat1;
 
     /* Transaction state */
     bool         in_transaction = false;

@@ -119,26 +119,27 @@ static std::string read_value(const std::string& sql, size_t& pos) {
     pos = skip_ws(sql, pos);
     if (pos >= sql.size()) return "";
     char c = sql[pos];
-    /* Quoted string */
+    /* Quoted string — preserve quotes so parse_literal can recognize TEXT */
     if (c == '\'' || c == '"') {
         char q = c;
+        size_t start = pos;
         ++pos;
-        std::string s;
         while (pos < sql.size()) {
             if (sql[pos] == q) {
                 if (pos + 1 < sql.size() && sql[pos+1] == q) {
-                    s += q; pos += 2; /* escaped '' or "" */
+                    pos += 2; /* escaped '' or "" */
                 } else {
-                    break; /* closing quote */
+                    ++pos; /* skip closing quote */
+                    break;
                 }
             } else if (sql[pos] == '\\' && pos + 1 < sql.size()) {
-                ++pos; s += sql[pos++];
+                pos += 2; /* skip escape sequence */
             } else {
-                s += sql[pos++];
+                ++pos;
             }
         }
-        if (pos < sql.size()) ++pos; /* skip closing quote */
-        return s;
+        /* Return the full quoted literal, e.g. "'hello'" */
+        return sql.substr(start, pos - start);
     }
     /* Number (possibly negative), including scientific notation like 1.23e-10 */
     if (isdigit(c) || (c == '-' && pos + 1 < sql.size() && isdigit((unsigned char)sql[pos+1]))) {
@@ -167,15 +168,33 @@ static std::string read_value(const std::string& sql, size_t& pos) {
             return kw;
         }
     }
-    /* Expression: read until ',' or ')' or end */
+    /* Expression: read until ',' or ')' or end, stopping at top-level SQL keywords */
     size_t start = pos;
     int depth = 0;
     while (pos < sql.size()) {
-        if (sql[pos] == '(') { ++depth; ++pos; }
+        if (sql[pos] == '\'') {
+            /* Skip quoted string */
+            char q = sql[pos++];
+            while (pos < sql.size()) {
+                if (sql[pos] == q) { ++pos; if (pos < sql.size() && sql[pos] == q) ++pos; else break; }
+                else ++pos;
+            }
+        } else if (sql[pos] == '(') { ++depth; ++pos; }
         else if (sql[pos] == ')') {
             if (depth == 0) break;
             --depth; ++pos;
         } else if (sql[pos] == ',' && depth == 0) break;
+        else if (depth == 0 && isalpha((unsigned char)sql[pos])) {
+            /* Peek for SQL clause keywords that end the value expression */
+            size_t tmp = pos;
+            std::string kw = read_keyword(sql, tmp);
+            if (kw == "WHERE" || kw == "ORDER" || kw == "GROUP" || kw == "LIMIT" ||
+                kw == "HAVING" || kw == "RETURNING" || kw == "ON" || kw == "JOIN" ||
+                kw == "UNION" || kw == "INTERSECT" || kw == "EXCEPT") {
+                break; /* end of value expression */
+            }
+            pos = tmp; /* consumed keyword as part of expression (e.g. CASE, WHEN, END, IS, NOT, etc.) */
+        }
         else ++pos;
     }
     std::string v = sql.substr(start, pos - start);

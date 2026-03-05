@@ -2,14 +2,15 @@ package W011
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 func TestSQL1999_W011_RowNumber_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}

@@ -2,16 +2,17 @@ package F874
 
 import (
 	"database/sql"
+
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"strings"
 	"testing"
 
 	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F874_DateTimeFunctions_L1 validates v0.9.2 date/time function fixes.
 func TestSQL1999_F874_DateTimeFunctions_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -47,7 +48,7 @@ func TestSQL1999_F874_DateTimeFunctions_L1(t *testing.T) {
 // TestSQL1999_F874_UnknownFunctionError_L1 validates that undefined functions
 // produce an error instead of silently returning NULL.
 func TestSQL1999_F874_UnknownFunctionError_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}
@@ -79,7 +80,7 @@ func TestSQL1999_F874_UnknownFunctionError_L1(t *testing.T) {
 
 // TestSQL1999_F874_MathFunctions_L1 validates math functions in constant SELECT context.
 func TestSQL1999_F874_MathFunctions_L1(t *testing.T) {
-	sqlvibeDB, err := sqlvibe.Open(":memory:")
+	sqlvibeDB, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open sqlvibe: %v", err)
 	}

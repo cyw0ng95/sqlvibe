@@ -1,13 +1,15 @@
 package F871_MERGE
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
-func openDB(t *testing.T) *sqlvibe.Database {
-	db, err := sqlvibe.Open(":memory:")
+func openDB(t *testing.T) *sql.DB {
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
@@ -38,10 +40,7 @@ func TestSQL1999_F871_UpsertReplace_L1(t *testing.T) {
 		t.Fatalf("INSERT OR REPLACE new: %v", err)
 	}
 
-	rows, err := db.Query("SELECT key, value FROM config ORDER BY key")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT key, value FROM config ORDER BY key")
 	if len(rows.Data) != 3 {
 		t.Errorf("expected 3 rows, got %d: %v", len(rows.Data), rows.Data)
 	}
@@ -81,10 +80,7 @@ func TestSQL1999_F871_UpsertIgnore_L1(t *testing.T) {
 		t.Fatalf("INSERT OR IGNORE new: %v", err)
 	}
 
-	rows, err := db.Query("SELECT id, name FROM users ORDER BY id")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT id, name FROM users ORDER BY id")
 	if len(rows.Data) != 3 {
 		t.Errorf("expected 3 rows, got %d", len(rows.Data))
 	}
@@ -118,10 +114,7 @@ func TestSQL1999_F871_OnConflictUpdate_L1(t *testing.T) {
 		t.Fatalf("ON CONFLICT DO UPDATE new: %v", err)
 	}
 
-	rows, err := db.Query("SELECT product_id, qty FROM inventory ORDER BY product_id")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT product_id, qty FROM inventory ORDER BY product_id")
 	if len(rows.Data) != 3 {
 		t.Errorf("expected 3 rows, got %d: %v", len(rows.Data), rows.Data)
 	}
@@ -153,10 +146,7 @@ func TestSQL1999_F871_OnConflictAccumulate_L1(t *testing.T) {
 		t.Fatalf("new counter upsert: %v", err)
 	}
 
-	rows, err := db.Query("SELECT name, cnt FROM counters ORDER BY name")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT name, cnt FROM counters ORDER BY name")
 	if len(rows.Data) != 2 {
 		t.Errorf("expected 2 rows, got %d", len(rows.Data))
 	}
@@ -198,10 +188,7 @@ func TestSQL1999_F871_MultiRowUpsert_L1(t *testing.T) {
 		}
 	}
 
-	rows, err := db.Query("SELECT k, v FROM settings ORDER BY k")
-	if err != nil {
-		t.Fatalf("SELECT: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT k, v FROM settings ORDER BY k")
 	if len(rows.Data) != 3 {
 		t.Errorf("expected 3 rows, got %d: %v", len(rows.Data), rows.Data)
 	}

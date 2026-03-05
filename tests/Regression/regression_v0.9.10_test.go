@@ -1,14 +1,15 @@
 package Regression
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
 	"testing"
 	"time"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 func TestRegression_MalformedJoin_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

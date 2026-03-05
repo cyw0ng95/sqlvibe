@@ -1,14 +1,16 @@
 package F879
 
 import (
+	"database/sql"
+	_ "github.com/cyw0ng95/sqlvibe/driver"
+	"github.com/cyw0ng95/sqlvibe/tests/SQL1999"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
 // TestSQL1999_F879_PragmaIndexInfo tests PRAGMA index_info
 func TestSQL1999_F879_PragmaIndexInfo_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -24,10 +26,7 @@ func TestSQL1999_F879_PragmaIndexInfo_L1(t *testing.T) {
 		t.Fatalf("CREATE UNIQUE INDEX: %v", err)
 	}
 
-	rows, err := db.Query("PRAGMA index_info('idx_a')")
-	if err != nil {
-		t.Fatalf("PRAGMA index_info: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "PRAGMA index_info('idx_a')")
 	expected := []string{"seqno", "cid", "name"}
 	for i, col := range rows.Columns {
 		if col != expected[i] {
@@ -51,7 +50,7 @@ func TestSQL1999_F879_PragmaIndexInfo_L1(t *testing.T) {
 
 // TestSQL1999_F879_PragmaForeignKeyList tests PRAGMA foreign_key_list
 func TestSQL1999_F879_PragmaForeignKeyList_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -60,10 +59,7 @@ func TestSQL1999_F879_PragmaForeignKeyList_L1(t *testing.T) {
 	db.Exec("CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT)")
 	db.Exec("CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER, FOREIGN KEY (parent_id) REFERENCES parent(id) ON DELETE CASCADE)")
 
-	rows, err := db.Query("PRAGMA foreign_key_list('child')")
-	if err != nil {
-		t.Fatalf("PRAGMA foreign_key_list: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "PRAGMA foreign_key_list('child')")
 
 	if len(rows.Data) == 0 {
 		t.Fatal("expected at least 1 row from foreign_key_list")
@@ -87,7 +83,7 @@ func TestSQL1999_F879_PragmaForeignKeyList_L1(t *testing.T) {
 
 // TestSQL1999_F879_PragmaForeignKeyListEmpty tests PRAGMA foreign_key_list on table with no FKs
 func TestSQL1999_F879_PragmaForeignKeyListEmpty_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -95,10 +91,7 @@ func TestSQL1999_F879_PragmaForeignKeyListEmpty_L1(t *testing.T) {
 
 	db.Exec("CREATE TABLE standalone (id INTEGER PRIMARY KEY)")
 
-	rows, err := db.Query("PRAGMA foreign_key_list('standalone')")
-	if err != nil {
-		t.Fatalf("PRAGMA foreign_key_list: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "PRAGMA foreign_key_list('standalone')")
 	if len(rows.Data) != 0 {
 		t.Errorf("expected empty result, got %d rows", len(rows.Data))
 	}
@@ -106,16 +99,13 @@ func TestSQL1999_F879_PragmaForeignKeyListEmpty_L1(t *testing.T) {
 
 // TestSQL1999_F879_PragmaFunctionList tests PRAGMA function_list
 func TestSQL1999_F879_PragmaFunctionList_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	rows, err := db.Query("PRAGMA function_list")
-	if err != nil {
-		t.Fatalf("PRAGMA function_list: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "PRAGMA function_list")
 	if len(rows.Columns) == 0 {
 		t.Fatal("expected columns in function_list")
 	}
@@ -142,7 +132,7 @@ func TestSQL1999_F879_PragmaFunctionList_L1(t *testing.T) {
 
 // TestSQL1999_F879_InformationSchemaViews tests information_schema.views
 func TestSQL1999_F879_InformationSchemaViews_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -151,10 +141,7 @@ func TestSQL1999_F879_InformationSchemaViews_L1(t *testing.T) {
 	db.Exec("CREATE TABLE emp (id INTEGER PRIMARY KEY, name TEXT, salary REAL)")
 	db.Exec("CREATE VIEW emp_view AS SELECT id, name FROM emp WHERE salary > 50000")
 
-	rows, err := db.Query("SELECT table_name, view_definition FROM information_schema.views")
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT table_name, view_definition FROM information_schema.views")
 	if len(rows.Data) == 0 {
 		t.Fatal("expected at least 1 view in information_schema.views")
 	}
@@ -175,7 +162,7 @@ func TestSQL1999_F879_InformationSchemaViews_L1(t *testing.T) {
 
 // TestSQL1999_F879_InformationSchemaTableConstraints tests information_schema.table_constraints
 func TestSQL1999_F879_InformationSchemaTableConstraints_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -184,10 +171,7 @@ func TestSQL1999_F879_InformationSchemaTableConstraints_L1(t *testing.T) {
 	db.Exec("CREATE TABLE dept (id INTEGER PRIMARY KEY, name TEXT UNIQUE)")
 	db.Exec("CREATE TABLE emp (id INTEGER PRIMARY KEY, dept_id INTEGER, FOREIGN KEY (dept_id) REFERENCES dept(id))")
 
-	rows, err := db.Query("SELECT constraint_type, table_name FROM information_schema.table_constraints ORDER BY constraint_type, table_name")
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT constraint_type, table_name FROM information_schema.table_constraints ORDER BY constraint_type, table_name")
 
 	types := make(map[string]bool)
 	for _, row := range rows.Data {
@@ -206,7 +190,7 @@ func TestSQL1999_F879_InformationSchemaTableConstraints_L1(t *testing.T) {
 
 // TestSQL1999_F879_InformationSchemaReferentialConstraints tests referential_constraints
 func TestSQL1999_F879_InformationSchemaReferentialConstraints_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -215,10 +199,7 @@ func TestSQL1999_F879_InformationSchemaReferentialConstraints_L1(t *testing.T) {
 	db.Exec("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
 	db.Exec("CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER, FOREIGN KEY (parent_id) REFERENCES parent(id))")
 
-	rows, err := db.Query("SELECT * FROM information_schema.referential_constraints")
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT * FROM information_schema.referential_constraints")
 	if len(rows.Data) == 0 {
 		t.Fatal("expected at least 1 referential constraint")
 	}
@@ -230,7 +211,7 @@ func TestSQL1999_F879_InformationSchemaReferentialConstraints_L1(t *testing.T) {
 
 // TestSQL1999_F879_SqliteMasterSQL tests that sqlite_master returns proper SQL
 func TestSQL1999_F879_SqliteMasterSQL_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -238,10 +219,7 @@ func TestSQL1999_F879_SqliteMasterSQL_L1(t *testing.T) {
 
 	db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER)")
 
-	rows, err := db.Query("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
 	if len(rows.Data) == 0 {
 		t.Fatal("expected row for users table")
 	}
@@ -257,7 +235,7 @@ func TestSQL1999_F879_SqliteMasterSQL_L1(t *testing.T) {
 
 // TestSQL1999_F879_SubstrNegativeLength tests SUBSTR with negative length
 func TestSQL1999_F879_SubstrNegativeLength_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -294,7 +272,7 @@ func TestSQL1999_F879_SubstrNegativeLength_L1(t *testing.T) {
 
 // TestSQL1999_F879_InformationSchemaColumns tests information_schema.columns nullable tracking
 func TestSQL1999_F879_InformationSchemaColumnsNullable_L1(t *testing.T) {
-	db, err := sqlvibe.Open(":memory:")
+	db, err := sql.Open("sqlvibe", ":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -302,10 +280,7 @@ func TestSQL1999_F879_InformationSchemaColumnsNullable_L1(t *testing.T) {
 
 	db.Exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER)")
 
-	rows, err := db.Query("SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name='t' ORDER BY column_name")
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
+	rows := SQL1999.QueryRows(t, db, "SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name='t' ORDER BY column_name")
 
 	colNullable := make(map[string]string)
 	for _, row := range rows.Data {
