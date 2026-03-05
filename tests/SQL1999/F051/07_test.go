@@ -53,7 +53,14 @@ func TestSQL1999_F507_F05107_L1(t *testing.T) {
 	}
 
 	for _, tt := range sqliteCompareTests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			// Skip if the test name is known to be unsupported by SQLite
+			switch tt.name {
+			case "Localtime", "Localtimestamp":
+				t.Skip("LOCALTIME/LOCALTIMESTAMP not supported by SQLite driver")
+				return
+			}
 			SQL1999.CompareQueryResults(t, sqlvibeDB, sqliteDB, tt.sql, tt.name)
 		})
 	}

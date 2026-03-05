@@ -28,6 +28,7 @@
 #include <unordered_set>
 #include <cstring>
 #include <cmath>
+#include <ctime>
 #include <sstream>
 #include <functional>
 #include <cstdio>
@@ -824,6 +825,52 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 case SVDB_TYPE_BLOB: v.sval = "blob"; break;
             }
             return v;
+        }
+        /* CURRENT_DATE / CURRENT_TIME / CURRENT_TIMESTAMP literals */
+        if (eu == "CURRENT_DATE") {
+            auto now = std::time(nullptr); auto *tm = std::gmtime(&now);
+            char buf[12]; std::strftime(buf, sizeof(buf), "%Y-%m-%d", tm);
+            SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
+        }
+        if (eu == "CURRENT_TIME") {
+            auto now = std::time(nullptr); auto *tm = std::gmtime(&now);
+            char buf[10]; std::strftime(buf, sizeof(buf), "%H:%M:%S", tm);
+            SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
+        }
+        if (eu == "CURRENT_TIMESTAMP") {
+            auto now = std::time(nullptr); auto *tm = std::gmtime(&now);
+            char buf[24]; std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+            SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
+        }
+        /* DATE('now') / TIME('now') / DATETIME('now') / STRFTIME(fmt, 'now') */
+        auto is_now_arg = [](const std::string &arg) -> bool {
+            std::string a = arg; if (a.size()>=2 && a.front()=='\'') a = a.substr(1, a.size()-2);
+            std::string au; for (char c : a) au += (char)toupper((unsigned char)c);
+            return au == "NOW" || au == "NOW()";
+        };
+        if ((eu.substr(0, 5) == "DATE(" && fn_paren_ok(4)) || (eu.substr(0, 9) == "JULIANDAY(" && fn_paren_ok(9))) {
+            std::string arg = qry_trim(e.substr(eu[0]=='D'?5:10, e.size()-(eu[0]=='D'?5:10)-1));
+            if (is_now_arg(arg)) {
+                auto now = std::time(nullptr); auto *tm = std::gmtime(&now);
+                char buf[12]; std::strftime(buf, sizeof(buf), "%Y-%m-%d", tm);
+                SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
+            }
+        }
+        if (eu.substr(0, 5) == "TIME(" && fn_paren_ok(4)) {
+            std::string arg = qry_trim(e.substr(5, e.size()-6));
+            if (is_now_arg(arg)) {
+                auto now = std::time(nullptr); auto *tm = std::gmtime(&now);
+                char buf[10]; std::strftime(buf, sizeof(buf), "%H:%M:%S", tm);
+                SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
+            }
+        }
+        if (eu.substr(0, 9) == "DATETIME(" && fn_paren_ok(8)) {
+            std::string arg = qry_trim(e.substr(9, e.size()-10));
+            if (is_now_arg(arg)) {
+                auto now = std::time(nullptr); auto *tm = std::gmtime(&now);
+                char buf[24]; std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+                SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
+            }
         }
         /* ISNULL(expr) / NOTNULL(expr) */
         if (eu.substr(0, 7) == "ISNULL(" && fn_paren_ok(7-1)) {
@@ -2131,6 +2178,7 @@ struct AggState {
     std::string wrapper; /* outer scalar function: ABS/UPPER/LOWER/etc. */
     int64_t count = 0;
     double  sum   = 0.0;
+    int64_t isum  = 0;     /* integer-only accumulator (used when is_real is false) */
     SvdbVal min_val, max_val;
     bool has_min = false, has_max = false;
     bool is_real = false;
@@ -2321,8 +2369,22 @@ static void agg_accumulate(AggState &a, const Row &row,
             a.seen_vals.insert(key);
         }
         ++a.count;
-        if (v.type == SVDB_TYPE_REAL) a.is_real = true;
-        a.sum += val_to_dbl(v);
+        if (a.func == "AVG") {
+            /* AVG uses double accumulation to match SQLite behavior */
+            a.sum += val_to_dbl(v);
+            if (v.type == SVDB_TYPE_REAL) a.is_real = true;
+        } else {
+            /* SUM uses integer accumulation for precision */
+            if (v.type == SVDB_TYPE_REAL) {
+                if (!a.is_real) { /* switch to real mode: add existing isum */
+                    a.sum += (double)a.isum; a.is_real = true;
+                }
+                a.sum += v.rval;
+            } else {
+                if (a.is_real) a.sum += val_to_dbl(v);
+                else a.isum += v.ival;
+            }
+        }
     } else if (a.func == "MIN") {
         if (!a.has_min || val_cmp(v, a.min_val) < 0) { a.min_val = v; a.has_min = true; }
     } else if (a.func == "MAX") {
@@ -2340,10 +2402,11 @@ static SvdbVal agg_result(const AggState &a) {
     if (a.func == "SUM") {
         if (a.count == 0) base_result = SvdbVal{};
         else if (a.is_real) { base_result.type = SVDB_TYPE_REAL; base_result.rval = a.sum; }
-        else { base_result.type = SVDB_TYPE_INT; base_result.ival = (int64_t)a.sum; }
+        else { base_result.type = SVDB_TYPE_INT; base_result.ival = a.isum; }
     } else if (a.func == "AVG") {
         if (a.count == 0) base_result = SvdbVal{};
-        else { base_result.type = SVDB_TYPE_REAL; base_result.rval = a.sum / (double)a.count; }
+        else if (a.is_real) { base_result.type = SVDB_TYPE_REAL; base_result.rval = a.sum / (double)a.count; }
+        else { base_result.type = SVDB_TYPE_REAL; base_result.rval = (double)a.isum / (double)a.count; }
     } else if (a.func == "MIN") {
         base_result = a.has_min ? a.min_val : SvdbVal{};
     } else if (a.func == "MAX") {
