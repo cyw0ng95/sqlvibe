@@ -9,6 +9,7 @@
 #include "svdb.h"
 #include "svdb_types.h"
 #include "svdb_util.h"
+#include "svdb_assert.h"
 #include "QP/parser.h"
 
 #include <cctype>
@@ -1000,6 +1001,8 @@ static svdb_code_t do_alter_table(svdb_db_t *db, const std::string &sql) {
 
 static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
                               svdb_result_t *res) {
+    svdb_assert(db != nullptr);
+    svdb_assert(!sql.empty());
     /* Handle INSERT INTO t DEFAULT VALUES */
     std::string su_pre = str_upper(sql);
     if (su_pre.find("DEFAULT VALUES") != std::string::npos) {
@@ -1350,6 +1353,8 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
 
 static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
                               svdb_result_t *res) {
+    svdb_assert(db != nullptr);
+    svdb_assert(!sql.empty());
     svdb_parser_t *p = svdb_parser_create(sql.c_str(), sql.size());
     if (!p) return SVDB_NOMEM;
     svdb_ast_node_t *ast = svdb_parser_parse(p);
@@ -1450,6 +1455,8 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
 
 static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
                               svdb_result_t *res) {
+    svdb_assert(db != nullptr);
+    svdb_assert(!sql.empty());
     svdb_parser_t *p = svdb_parser_create(sql.c_str(), sql.size());
     if (!p) return SVDB_NOMEM;
     svdb_ast_node_t *ast = svdb_parser_parse(p);
@@ -1492,6 +1499,8 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
 extern "C" {
 
 svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
+    svdb_assert_msg(db != nullptr, "svdb_exec: db must not be NULL");
+    svdb_assert_msg(sql != nullptr, "svdb_exec: sql must not be NULL");
     if (!db || !sql) return SVDB_ERR;
     if (res) { res->code = SVDB_OK; res->errmsg = ""; res->rows_affected = 0; res->last_insert_rowid = 0; }
 

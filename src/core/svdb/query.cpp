@@ -17,6 +17,7 @@
 #include "svdb.h"
 #include "svdb_types.h"
 #include "svdb_util.h"
+#include "svdb_assert.h"
 #include "QP/parser.h"
 
 #include <cctype>
@@ -2741,6 +2742,8 @@ compute_window_functions(const std::vector<Row> &rows,
 
 svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                                    svdb_rows_t **rows_out) {
+    svdb_assert(db != nullptr);
+    svdb_assert(rows_out != nullptr);
     if (!rows_out) return SVDB_ERR;
 
     /* Set thread-local DB context for subquery support */
@@ -4372,6 +4375,9 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
 extern "C" {
 
 svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
+    svdb_assert_msg(db != nullptr, "svdb_query: db must not be NULL");
+    svdb_assert_msg(sql != nullptr, "svdb_query: sql must not be NULL");
+    svdb_assert_msg(rows != nullptr, "svdb_query: rows output pointer must not be NULL");
     if (!db || !sql || !rows) return SVDB_ERR;
     std::unique_lock<std::mutex> lk(db->mu);
     db->last_error.clear();
