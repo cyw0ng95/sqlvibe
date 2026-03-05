@@ -5083,7 +5083,7 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
         else if (db->synchronous == "NORMAL"|| db->synchronous == "1") v.ival = 1;
         else if (db->synchronous == "FULL"  || db->synchronous == "2") v.ival = 2;
         else if (db->synchronous == "EXTRA" || db->synchronous == "3") v.ival = 3;
-        else v.ival = 1;
+        else v.ival = 2; /* default FULL=2 */
         r->rows.push_back({v});
         return SVDB_OK;
     }
@@ -5152,8 +5152,9 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
 
     /* PRAGMA page_size / page_count / freelist_count: return stubs */
     if (pname == "PAGE_SIZE") {
+        if (!parg.empty()) { try { db->page_size_val = std::stoll(parg); } catch (...) {} }
         r->col_names = {"page_size"};
-        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 4096;
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->page_size_val;
         r->rows.push_back({v});
         return SVDB_OK;
     }
@@ -5172,8 +5173,9 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
 
     /* PRAGMA auto_vacuum [= val] */
     if (pname == "AUTO_VACUUM") {
+        if (!parg.empty()) { try { db->auto_vacuum_val = std::stoll(parg); } catch (...) {} }
         r->col_names = {"auto_vacuum"};
-        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0;
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->auto_vacuum_val;
         r->rows.push_back({v});
         return SVDB_OK;
     }
@@ -5192,8 +5194,63 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
 
     /* PRAGMA mmap_size [= val] */
     if (pname == "MMAP_SIZE") {
+        if (!parg.empty()) { try { db->mmap_size_val = std::stoll(parg); } catch (...) {} }
         r->col_names = {"mmap_size"};
-        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0;
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->mmap_size_val;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA temp_store [= val] */
+    if (pname == "TEMP_STORE") {
+        if (!parg.empty()) { try { db->temp_store_val = std::stoll(parg); } catch (...) {} }
+        r->col_names = {"temp_store"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->temp_store_val;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA query_only [= val] */
+    if (pname == "QUERY_ONLY") {
+        if (!parg.empty()) {
+            std::string pu = qry_upper(parg);
+            db->query_only_val = (pu == "1" || pu == "ON" || pu == "TRUE" || pu == "YES");
+        }
+        r->col_names = {"query_only"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->query_only_val ? 1 : 0;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA locking_mode [= val] */
+    if (pname == "LOCKING_MODE") {
+        if (!parg.empty()) { db->locking_mode_val = qry_upper(parg) == "EXCLUSIVE" ? "exclusive" : "normal"; }
+        r->col_names = {"locking_mode"};
+        SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = db->locking_mode_val;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA read_uncommitted [= val] */
+    if (pname == "READ_UNCOMMITTED") {
+        if (!parg.empty()) {
+            std::string pu = qry_upper(parg);
+            db->read_uncommitted_val = (pu == "1" || pu == "ON" || pu == "TRUE" || pu == "YES");
+        }
+        r->col_names = {"read_uncommitted"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->read_uncommitted_val ? 1 : 0;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA cache_spill [= val] */
+    if (pname == "CACHE_SPILL") {
+        if (!parg.empty()) {
+            std::string pu = qry_upper(parg);
+            db->cache_spill_val = (pu == "0" || pu == "OFF" || pu == "FALSE") ? 0 : 1;
+        }
+        r->col_names = {"cache_spill"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->cache_spill_val;
         r->rows.push_back({v});
         return SVDB_OK;
     }

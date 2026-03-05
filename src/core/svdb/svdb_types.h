@@ -91,9 +91,17 @@ struct svdb_db_s {
     bool        foreign_keys_enabled = false;
     int64_t     max_rows         = 0;       /* 0 = unlimited */
     int64_t     cache_memory     = 2097152; /* 2 MB default */
-    std::string synchronous      = "NORMAL";
+    std::string synchronous      = "FULL";  /* default=2 (FULL) */
     int64_t     query_timeout_ms = 0;       /* 0 = no timeout */
     int64_t     max_memory       = 0;       /* 0 = unlimited */
+    int64_t     page_size_val    = 4096;    /* default page size */
+    int64_t     mmap_size_val    = 0;       /* mmap_size */
+    int64_t     auto_vacuum_val  = 0;       /* auto_vacuum */
+    int64_t     temp_store_val   = 0;       /* temp_store */
+    bool        query_only_val   = false;   /* query_only */
+    std::string locking_mode_val = "normal";/* locking_mode */
+    bool        read_uncommitted_val = false; /* read_uncommitted */
+    int64_t     cache_spill_val  = 1;       /* cache_spill, default=1 */
 
     /* Transaction state */
     bool         in_transaction = false;
