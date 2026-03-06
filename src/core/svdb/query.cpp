@@ -1034,10 +1034,12 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 if (sv.type == SVDB_TYPE_NULL) return sv; /* CAST(NULL) = NULL */
                 if (type_str == "INTEGER" || type_str == "INT" || type_str == "BIGINT") {
                     SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = val_to_i64(sv); return v;
-                } else if (type_str == "REAL" || type_str == "FLOAT" || type_str == "DOUBLE") {
+                } else if (type_str == "REAL" || type_str == "FLOAT" || type_str == "DOUBLE" ||
+                           type_str == "NUMERIC" || type_str == "DECIMAL") {
+                    /* NUMERIC/DECIMAL have numeric affinity - prefer REAL for decimal values */
                     SvdbVal v; v.type = SVDB_TYPE_REAL; v.rval = val_to_dbl(sv); return v;
                 } else if (type_str == "DATE" || type_str == "TIME" || type_str == "TIMESTAMP"
-                           || type_str == "DATETIME" || type_str == "NUMERIC" || type_str == "DECIMAL") {
+                           || type_str == "DATETIME") {
                     /* SQLite: DATE/TIME/TIMESTAMP are NUMERIC affinity aliases.
                      * Try INTEGER first (read leading integer from string), then REAL, then TEXT. */
                     if (sv.type == SVDB_TYPE_INT)  return sv;
@@ -3658,6 +3660,11 @@ static SvdbVal agg_result(const AggState &a) {
             /* For CAST wrapper, apply type conversion using stored cast_type */
             if (!a.cast_type.empty()) {
                 std::string type_str = qry_upper(a.cast_type);
+                /* Handle NUMERIC/DECIMAL as REAL */
+                if (type_str.find("NUMERIC") != std::string::npos || 
+                    type_str.find("DECIMAL") != std::string::npos) {
+                    type_str = "REAL";
+                }
                 /* Apply type conversion */
                 if (type_str == "INTEGER" || type_str == "INT") {
                     if (base_result.type == SVDB_TYPE_REAL) {
