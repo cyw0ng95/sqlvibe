@@ -32,16 +32,38 @@ extern void svdb_set_query_db(svdb_db_t *db);
 /* ── Helper: case-insensitive table lookup ───────────────────────────────── */
 
 /* Resolve table name case-insensitively (for unquoted identifiers).
- * Returns the canonical table name from schema, or empty string if not found. */
+ * Returns the canonical table name from schema, or empty string if not found.
+ * Supports schema prefixes: temp., temporary., main. */
 static std::string resolve_table_name(svdb_db_t *db, const std::string &tname) {
-    /* Exact match first */
-    if (db->schema.count(tname)) return tname;
+    /* Strip schema prefix (temp., temporary., main.) */
+    std::string actual_name = tname;
+    if (tname.size() > 5) {
+        std::string prefix = svdb_str_upper(tname.substr(0, 5));
+        if (prefix == "TEMP.") {
+            actual_name = tname.substr(5);
+        }
+    }
+    if (actual_name == tname && tname.size() > 10) {
+        std::string prefix = svdb_str_upper(tname.substr(0, 10));
+        if (prefix == "TEMPORARY.") {
+            actual_name = tname.substr(10);
+        }
+    }
+    if (actual_name == tname && tname.size() > 5) {
+        std::string prefix = svdb_str_upper(tname.substr(0, 5));
+        if (prefix == "MAIN.") {
+            actual_name = tname.substr(5);
+        }
+    }
     
+    /* Exact match first */
+    if (db->schema.count(actual_name)) return actual_name;
+
     /* For unquoted identifiers, do case-insensitive lookup */
-    if (!is_quoted_identifier(tname)) {
-        std::string tname_upper = svdb_str_upper(tname);
+    if (!is_quoted_identifier(actual_name)) {
+        std::string actual_upper = svdb_str_upper(actual_name);
         for (auto &kv : db->schema) {
-            if (svdb_str_upper(kv.first) == tname_upper) {
+            if (svdb_str_upper(kv.first) == actual_upper) {
                 return kv.first;
             }
         }

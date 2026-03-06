@@ -47,6 +47,12 @@ extern "C" svdb_ast_node_t* svdb_parser_parse_create(svdb_parser_t* parser,
             parser_expect_keyword(s, t2, "EXISTS");
             pos = t2;
         }
+        /* Skip optional TEMP/TEMPORARY keyword */
+        t2 = pos;
+        std::string kw3 = parser_read_keyword(s, t2);
+        if (kw3 == "TEMP" || kw3 == "TEMPORARY") {
+            pos = t2;
+        }
         std::string table = parser_read_ident(s, pos);
         svdb_ast_node_set_table(node, table);
 
