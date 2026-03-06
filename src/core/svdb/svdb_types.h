@@ -121,6 +121,7 @@ struct svdb_db_s {
     bool        read_uncommitted_val = false; /* read_uncommitted */
     int64_t     cache_spill_val  = 1;       /* cache_spill, default=1 */
     int64_t     journal_size_limit_val = -1; /* journal_size_limit, -1 = unlimited */
+    int64_t     wal_autocheckpoint_val = 1000; /* wal_autocheckpoint, default=1000 */
 
     /* sqlite_stat1: table_name -> {idx_name, stat} */
     std::vector<std::tuple<std::string,std::string,std::string>> stat1;

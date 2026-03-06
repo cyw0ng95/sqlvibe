@@ -5131,6 +5131,13 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 r->col_names.push_back(col_name);
                 result_row.push_back(eval_expr(expr, empty_row, empty_order));
             }
+            /* Check for evaluation errors (e.g., unknown function) */
+            if (!g_eval_error.empty()) {
+                db->last_error = g_eval_error;
+                g_eval_error.clear();
+                delete r;
+                return SVDB_ERR;
+            }
             r->rows.push_back(result_row);
         }
         *rows_out = r; return SVDB_OK;
@@ -6236,9 +6243,9 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
                 v_seq.type   = SVDB_TYPE_INT; v_seq.ival = 0;
                 v_table.type = SVDB_TYPE_TEXT; v_table.sval = fk.parent_table;
                 v_from.type  = SVDB_TYPE_TEXT; v_from.sval  = fk.child_col;
-                v_to.type    = SVDB_TYPE_TEXT; v_to.sval    = fk.parent_col;
-                v_onupd.type = SVDB_TYPE_TEXT; v_onupd.sval = "NO ACTION";
-                v_ondel.type = SVDB_TYPE_TEXT; v_ondel.sval = "NO ACTION";
+                v_to.type    = SVDB_TYPE_TEXT; v_to.sval    = fk.parent_col.empty() ? fk.child_col : fk.parent_col;
+                v_onupd.type = SVDB_TYPE_TEXT; v_onupd.sval = fk.on_update.empty() ? "NO ACTION" : fk.on_update;
+                v_ondel.type = SVDB_TYPE_TEXT; v_ondel.sval = fk.on_delete.empty() ? "NO ACTION" : fk.on_delete;
                 v_match.type = SVDB_TYPE_TEXT; v_match.sval = "NONE";
                 r->rows.push_back({v_id, v_seq, v_table, v_from, v_to, v_onupd, v_ondel, v_match});
                 ++id;
@@ -6639,6 +6646,77 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
         v2.type = SVDB_TYPE_INT; v2.ival = 0;
         v3.type = SVDB_TYPE_INT; v3.ival = 0;
         r->rows.push_back({v0, v1, v2, v3});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA function_list — return list of built-in SQL functions */
+    if (pname == "FUNCTION_LIST") {
+        r->col_names = {"name", "narg", "type"};
+        /* Scalar functions */
+        const char* scalar_funcs[] = {
+            /* Math */
+            "abs", "round", "ceil", "ceiling", "floor", "pow", "power", "sqrt",
+            "exp", "log", "log10", "ln", "sin", "cos", "tan", "asin", "acos",
+            "atan", "atan2", "sinh", "cosh", "tanh", "deg_to_rad", "rad_to_deg",
+            "mod", "random",
+            /* String */
+            "length", "upper", "lower", "trim", "ltrim", "rtrim", "substr",
+            "substring", "instr", "replace", "quote", "char", "unicode",
+            "group_concat", "string_agg", "repeat", "reverse", "format",
+            /* Type conversion */
+            "typeof", "cast",
+            /* Conditional */
+            "coalesce", "ifnull", "nullif", "iif",
+            /* Date/Time */
+            "date", "time", "datetime", "julianday", "strftime",
+            /* Aggregate */
+            "count", "sum", "avg", "min", "max", "total", "group_concat",
+            /* JSON (extension) */
+            "json", "json_array", "json_object", "json_extract", "json_set",
+            "json_insert", "json_replace", "json_remove", "json_type",
+            "json_valid", "json_patch", "json_quote",
+            /* Full-text search (extension) */
+            "highlight", "snippet", "offsets", "optimize",
+            /* Other */
+            "likelihood", "likely", "unlikely", "last_insert_rowid",
+            "sqlite_version", "changes", "total_changes",
+            nullptr
+        };
+        for (int i = 0; scalar_funcs[i] != nullptr; ++i) {
+            SvdbVal v_name, v_narg, v_type;
+            v_name.type = SVDB_TYPE_TEXT; v_name.sval = scalar_funcs[i];
+            v_narg.type = SVDB_TYPE_INT; v_narg.ival = -1; /* variable args */
+            v_type.type = SVDB_TYPE_TEXT; v_type.sval = "scalar";
+            r->rows.push_back({v_name, v_narg, v_type});
+        }
+        return SVDB_OK;
+    }
+
+    /* PRAGMA wal_autocheckpoint [= N] — get/set WAL auto-checkpoint threshold */
+    if (pname == "WAL_AUTOCKPT" || pname == "WAL_AUTOCHECKPOINT") {
+        if (!parg.empty()) {
+            try { db->wal_autocheckpoint_val = std::stoll(parg); } catch (...) {}
+        }
+        r->col_names = {"wal_autocheckpoint"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->wal_autocheckpoint_val;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA wal_checkpoint [(mode)] — perform WAL checkpoint
+     * Modes: passive, full, truncate (default: passive)
+     * Returns: (busy, log, checkpointed) — stub values for in-memory DB
+     */
+    if (pname == "WAL_CKPT" || pname == "WAL_CHECKPOINT") {
+        std::string mode = qry_upper(parg);
+        if (mode.empty()) mode = "PASSIVE";
+        /* In delete mode (no WAL), checkpoint is a no-op but returns (0,0,0) */
+        r->col_names = {"busy", "log", "checkpointed"};
+        SvdbVal v_busy, v_log, v_ckpt;
+        v_busy.type = SVDB_TYPE_INT; v_busy.ival = 0;
+        v_log.type  = SVDB_TYPE_INT; v_log.ival  = 0;
+        v_ckpt.type = SVDB_TYPE_INT; v_ckpt.ival = 0;
+        r->rows.push_back({v_busy, v_log, v_ckpt});
         return SVDB_OK;
     }
 
