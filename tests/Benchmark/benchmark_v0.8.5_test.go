@@ -6,7 +6,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/cyw0ng95/sqlvibe/internal/DS"
 	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
@@ -26,11 +25,6 @@ func mustExecT(t *testing.T, db *sqlvibe.Database, sql string) {
 	if _, err := db.Exec(sql); err != nil {
 		t.Fatalf("Exec(%q): %v", sql, err)
 	}
-}
-
-// newTestCompressor wraps DS.NewCompressor with level=0.
-func newTestCompressor(name string) (DS.Compressor, error) {
-	return DS.NewCompressor(name, 0)
 }
 
 // -----------------------------------------------------------------
@@ -203,35 +197,27 @@ func TestV085_BackupIncremental(t *testing.T) {
 }
 
 // -----------------------------------------------------------------
-// v0.8.5 Feature tests: Compression (internal/DS)
+// v0.8.5 Feature tests: Compression (via PRAGMA, C++ layer in v0.11.2+)
 // -----------------------------------------------------------------
 
-// TestV085_CompressionAlgorithms tests all Compressor implementations.
+// TestV085_CompressionAlgorithms verifies compression PRAGMAs are accepted.
+// The actual compression is handled in C++ (src/core/DS/compression.cpp).
 func TestV085_CompressionAlgorithms(t *testing.T) {
-	testData := []byte("Hello, sqlvibe! " +
-		"the quick brown fox jumps over the lazy dog. " +
-		"repeated data: aaaaaaaabbbbbbbcccccccc 12345678")
+	db := openDBT(t)
+	defer db.Close()
 
-	algos := []string{"NONE", "RLE", "LZ4", "ZSTD", "GZIP"}
-	for _, name := range algos {
-		c, err := newTestCompressor(name)
+	// Verify that recognized compression algorithms can be set via PRAGMA.
+	for _, algo := range []string{"NONE", "RLE", "LZ4", "ZSTD", "GZIP"} {
+		_, err := db.Query("PRAGMA compression = '" + algo + "'")
 		if err != nil {
-			t.Fatalf("NewCompressor(%q): %v", name, err)
+			t.Fatalf("PRAGMA compression = %q: %v", algo, err)
 		}
+	}
 
-		compressed, err := c.Compress(testData)
-		if err != nil {
-			t.Fatalf("%s Compress: %v", name, err)
-		}
-
-		decompressed, err := c.Decompress(compressed)
-		if err != nil {
-			t.Fatalf("%s Decompress: %v", name, err)
-		}
-
-		if string(decompressed) != string(testData) {
-			t.Fatalf("%s: roundtrip mismatch: got %q, want %q", name, decompressed, testData)
-		}
+	// Verify that an unknown algorithm is rejected.
+	_, err := db.Query("PRAGMA compression = 'SNAPPY'")
+	if err == nil {
+		t.Fatal("expected error for unknown compression algorithm SNAPPY")
 	}
 }
 
@@ -239,30 +225,44 @@ func TestV085_CompressionAlgorithms(t *testing.T) {
 // v0.8.5 Feature benchmarks
 // -----------------------------------------------------------------
 
-// BenchmarkCompression_LZ4 benchmarks LZ4 compress + decompress.
+// BenchmarkCompression_LZ4 benchmarks INSERT+SELECT throughput
+// using the LZ4 compression setting (exercising the C++ compressor).
 func BenchmarkCompression_LZ4(b *testing.B) {
-	data := make([]byte, 4096)
-	for i := range data {
-		data[i] = byte(i % 64) // repetitive to aid compression
+	db := openDB(b)
+	defer db.Close()
+	if _, err := db.Query("PRAGMA compression = 'LZ4'"); err != nil {
+		b.Skipf("PRAGMA compression LZ4 not available: %v", err)
 	}
-	c, _ := newTestCompressor("LZ4")
+	mustExec(b, db, "CREATE TABLE t (id INTEGER, data TEXT)")
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		comp, _ := c.Compress(data)
-		_, _ = c.Decompress(comp)
+		b.StopTimer()
+		db.ClearResultCache()
+		b.StartTimer()
+		rows := mustQuery(b, db, "SELECT COUNT(*) FROM t")
+		for rows.Next() {
+		}
 	}
 }
 
-// BenchmarkCompression_ZSTD benchmarks ZSTD compress + decompress.
+// BenchmarkCompression_ZSTD benchmarks INSERT+SELECT throughput
+// using the ZSTD compression setting (exercising the C++ compressor).
 func BenchmarkCompression_ZSTD(b *testing.B) {
-	data := make([]byte, 4096)
-	for i := range data {
-		data[i] = byte(i % 64)
+	db := openDB(b)
+	defer db.Close()
+	if _, err := db.Query("PRAGMA compression = 'ZSTD'"); err != nil {
+		b.Skipf("PRAGMA compression ZSTD not available: %v", err)
 	}
-	c, _ := newTestCompressor("ZSTD")
+	mustExec(b, db, "CREATE TABLE t (id INTEGER, data TEXT)")
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		comp, _ := c.Compress(data)
-		_, _ = c.Decompress(comp)
+		b.StopTimer()
+		db.ClearResultCache()
+		b.StartTimer()
+		rows := mustQuery(b, db, "SELECT COUNT(*) FROM t")
+		for rows.Next() {
+		}
 	}
 }

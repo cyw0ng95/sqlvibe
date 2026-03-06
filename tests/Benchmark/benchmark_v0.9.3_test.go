@@ -1,15 +1,13 @@
 // Package Benchmark provides v0.9.3 performance benchmarks.
 // These benchmarks cover the v0.9.3 optimizations:
 //   - Extended dispatch table (comparison + string opcodes)
-//   - SIMD-style vectorized batch operations (int64/float64)
+//   - SIMD-style vectorized batch operations (via SQL aggregation in v0.11.2+)
 //   - INSERT OR REPLACE / INSERT OR IGNORE throughput
 package Benchmark
 
 import (
 	"fmt"
 	"testing"
-
-	"github.com/cyw0ng95/sqlvibe/internal/SF/opt"
 )
 
 // -----------------------------------------------------------------
@@ -104,72 +102,96 @@ func BenchmarkDispatchStringOps(b *testing.B) {
 }
 
 // -----------------------------------------------------------------
-// SIMD Vectorization: batch int64 sum
+// Vectorized batch operations (v0.9.3)
+// In v0.11.2+ these are handled by the C++ engine automatically.
+// The benchmarks measure SQL aggregation/expression throughput.
 // -----------------------------------------------------------------
 
-// BenchmarkSIMDVectorSumInt64 measures the vectorized int64 sum.
+// BenchmarkSIMDVectorSumInt64 measures SQL SUM throughput on integer columns.
 func BenchmarkSIMDVectorSumInt64(b *testing.B) {
 	sizes := []int{256, 1024, 4096}
 	for _, n := range sizes {
 		n := n
-		data := make([]int64, n)
-		for i := range data {
-			data[i] = int64(i)
-		}
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			db := openDB(b)
+			defer db.Close()
+			mustExec(b, db, "CREATE TABLE t (val INTEGER)")
+			for i := 0; i < n; i++ {
+				mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d)", i))
+			}
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_ = opt.VectorSumInt64(data)
+				b.StopTimer()
+				db.ClearResultCache()
+				b.StartTimer()
+				rows := mustQuery(b, db, "SELECT SUM(val) FROM t")
+				for rows.Next() {
+				}
 			}
 		})
 	}
 }
 
-// BenchmarkSIMDVectorSumFloat64 measures the vectorized float64 sum.
+// BenchmarkSIMDVectorSumFloat64 measures SQL SUM throughput on float columns.
 func BenchmarkSIMDVectorSumFloat64(b *testing.B) {
 	sizes := []int{256, 1024, 4096}
 	for _, n := range sizes {
 		n := n
-		data := make([]float64, n)
-		for i := range data {
-			data[i] = float64(i) * 1.5
-		}
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			db := openDB(b)
+			defer db.Close()
+			mustExec(b, db, "CREATE TABLE t (val REAL)")
+			for i := 0; i < n; i++ {
+				mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%f)", float64(i)*1.5))
+			}
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_ = opt.VectorSumFloat64(data)
+				b.StopTimer()
+				db.ClearResultCache()
+				b.StartTimer()
+				rows := mustQuery(b, db, "SELECT SUM(val) FROM t")
+				for rows.Next() {
+				}
 			}
 		})
 	}
 }
 
-// BenchmarkSIMDVectorAddInt64 measures vectorized int64 element-wise add.
+// BenchmarkSIMDVectorAddInt64 measures SQL element-wise integer addition throughput.
 func BenchmarkSIMDVectorAddInt64(b *testing.B) {
-	n := 1024
-	a := make([]int64, n)
-	bv := make([]int64, n)
-	dst := make([]int64, n)
-	for i := range a {
-		a[i] = int64(i)
-		bv[i] = int64(i * 2)
+	db := openDB(b)
+	defer db.Close()
+	mustExec(b, db, "CREATE TABLE t (a INTEGER, v INTEGER)")
+	for i := 0; i < 1024; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%d, %d)", i, i*2))
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		opt.VectorAddInt64(dst, a, bv)
+		b.StopTimer()
+		db.ClearResultCache()
+		b.StartTimer()
+		rows := mustQuery(b, db, "SELECT a + v FROM t")
+		for rows.Next() {
+		}
 	}
 }
 
-// BenchmarkSIMDVectorMulFloat64 measures vectorized float64 element-wise multiply.
+// BenchmarkSIMDVectorMulFloat64 measures SQL element-wise float multiplication throughput.
 func BenchmarkSIMDVectorMulFloat64(b *testing.B) {
-	n := 1024
-	a := make([]float64, n)
-	bv := make([]float64, n)
-	dst := make([]float64, n)
-	for i := range a {
-		a[i] = float64(i)
-		bv[i] = float64(i) * 1.5
+	db := openDB(b)
+	defer db.Close()
+	mustExec(b, db, "CREATE TABLE t (a REAL, v REAL)")
+	for i := 0; i < 1024; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO t VALUES (%f, %f)", float64(i), float64(i)*1.5))
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		opt.VectorMulFloat64(dst, a, bv)
+		b.StopTimer()
+		db.ClearResultCache()
+		b.StartTimer()
+		rows := mustQuery(b, db, "SELECT a * v FROM t")
+		for rows.Next() {
+		}
 	}
 }
 

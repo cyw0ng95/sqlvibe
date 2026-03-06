@@ -1123,6 +1123,8 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 if (inner.type == SVDB_TYPE_NULL) return SvdbVal{};
                 SvdbVal digits = eval_expr(args.substr(comma_pos+1), row, col_order);
                 int64_t n = val_to_i64(digits);
+                /* SQLite-compatible: negative digit count is treated as 0 */
+                if (n < 0) n = 0;
                 double factor = std::pow(10.0, (double)n);
                 SvdbVal v; v.type = SVDB_TYPE_REAL;
                 v.rval = std::round(val_to_dbl(inner) * factor) / factor;
@@ -6376,6 +6378,9 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
     } else if (eq != std::string::npos) {
         pname = qry_upper(qry_trim(rest.substr(0, eq)));
         parg  = qry_trim(rest.substr(eq + 1));
+        /* Strip quotes from arg (same handling as paren form) */
+        if (parg.size() >= 2 && (parg.front() == '\'' || parg.front() == '"'))
+            parg = parg.substr(1, parg.size() - 2);
     } else {
         pname = qry_upper(qry_trim(rest));
     }
@@ -6695,7 +6700,15 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
 
     /* PRAGMA compression [= val] */
     if (pname == "COMPRESSION") {
-        if (!parg.empty()) db->compression = qry_upper(parg);
+        if (!parg.empty()) {
+            std::string algo = qry_upper(parg);
+            if (algo != "NONE" && algo != "RLE" && algo != "LZ4" &&
+                algo != "ZSTD" && algo != "GZIP") {
+                db->last_error = "unknown compression algorithm: " + parg;
+                return SVDB_ERR;
+            }
+            db->compression = algo;
+        }
         r->col_names = {"compression"};
         SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = db->compression;
         r->rows.push_back({v});

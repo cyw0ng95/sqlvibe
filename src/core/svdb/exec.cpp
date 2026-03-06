@@ -793,6 +793,10 @@ static SvdbVal eval_expr_exec(const std::string &expr_in, const Row &row,
         if (c == '(') { if (depth2 > 0) --depth2; }
         if (depth2 > 0) continue;
         if ((c == '+' || c == '-') && i > 1) {
+            /* Skip +/- that is part of scientific notation exponent (e.g. 1e+308).
+             * i > 1 guarantees i >= 2, so e[i-2] is always a valid access (i-2 >= 0). */
+            char prev = e[i-2];
+            if (prev == 'e' || prev == 'E') continue;
             SvdbVal lhs = eval_expr_exec(e.substr(0, i-1), row, col_order);
             SvdbVal rhs = eval_expr_exec(e.substr(i), row, col_order);
             if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) return SvdbVal{};
@@ -2001,7 +2005,7 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
                 db->last_error = "near \"DEFAULT\": syntax error";
                 return SVDB_ERR;
             } else {
-                row[ins_cols[ci]] = parse_literal(vstr);
+                row[ins_cols[ci]] = eval_expr_exec(vstr, Row{}, {});
             }
         }
 

@@ -4,9 +4,9 @@
 //   - AND index lookup (uses index on one sub-predicate of a compound AND)
 //   - Pre-sized result slices (reduces allocations in column-name building)
 //   - Prepared statement pool (LRU-evicting cache of compiled query plans)
-//   - Slab allocator (bump-pointer slab with sync.Pool for small objects)
-//   - Expression bytecode (stack-machine evaluator for SQL expressions)
-//   - Direct compiler fast-path detection (simple SELECT classification)
+//   - Slab allocator (bump-pointer slab with sync.Pool for small objects — migrated to C++)
+//   - Expression evaluation (via SQL query path; C++ bytecode VM in v0.11.2+)
+//   - Direct compiler fast-path (via SQL query path; C++ direct compiler in v0.11.2+)
 //
 // NOTE on cache fairness: sqlvibe has an in-process result cache keyed on the
 // SQL string. The benchmarks call db.ClearResultCache() before each iteration
@@ -21,9 +21,6 @@ import (
 	"fmt"
 	"testing"
 
-	CG "github.com/cyw0ng95/sqlvibe/internal/CG"
-	DS "github.com/cyw0ng95/sqlvibe/internal/DS"
-	VM "github.com/cyw0ng95/sqlvibe/internal/VM"
 	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
@@ -269,109 +266,116 @@ func BenchmarkStatementPool(b *testing.B) {
 }
 
 // -----------------------------------------------------------------
-// Slab Allocator (v0.9.1) - DISABLED: SlabAllocator moved to C++
+// Slab Allocator (v0.9.1) — migrated to C++ in v0.11.2
 // -----------------------------------------------------------------
 
-// BenchmarkSlabAllocator measures allocation throughput for the slab allocator
-// vs plain make([]byte, n) to quantify GC pressure reduction.
-// Note: Disabled in v0.11.2 as SlabAllocator is now in C++ (src/core/DS/slab.cpp)
-// A new benchmark will be added in a future migration step.
-func BenchmarkSlabAllocator(b *testing.B) {
-	b.Skip("SlabAllocator migrated to C++ - benchmark pending")
-	
-	b.Run("SlabAlloc_64", func(b *testing.B) {
-		sa := DS.NewSlabAllocator()
+// BenchmarkSlabAllocator_ViaSQL measures the end-to-end INSERT+SELECT
+// throughput that exercises the C++ slab allocator (src/core/DS/slab.cpp)
+// indirectly through the SQL execution path.
+// The former Go-level DS.NewSlabAllocator() benchmark was removed in v0.11.2
+// when the allocator was migrated to C++.
+func BenchmarkSlabAllocator_ViaSQL(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE slab_bench (id INTEGER, data TEXT)")
+	for i := 0; i < 500; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO slab_bench VALUES (%d, 'payload-%d')", i, i))
+	}
+
+	b.Run("Select_500rows", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_ = sa.Alloc(64)
-			if i%1000 == 0 {
-				sa.Reset()
+			b.StopTimer()
+			db.ClearResultCache()
+			b.StartTimer()
+			rows := mustQuery(b, db, "SELECT id, data FROM slab_bench")
+			for rows.Next() {
 			}
-		}
-	})
-
-	b.Run("MakeAlloc_64", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			_ = make([]byte, 64)
-		}
-	})
-
-	b.Run("SlabAlloc_1024", func(b *testing.B) {
-		sa := DS.NewSlabAllocator()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			_ = sa.Alloc(1024)
-			if i%64 == 0 {
-				sa.Reset()
-			}
-		}
-	})
-
-	b.Run("MakeAlloc_1024", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			_ = make([]byte, 1024)
 		}
 	})
 }
 
 // -----------------------------------------------------------------
-// Expression Bytecode (v0.9.1)
+// Expression evaluation (v0.9.1) — C++ bytecode VM in v0.11.2+
 // -----------------------------------------------------------------
 
-// BenchmarkExprBytecode measures ExprBytecode.Eval throughput for a simple
-// arithmetic expression (a + b) vs direct Go addition.
-func BenchmarkExprBytecode(b *testing.B) {
-	eb := VM.NewExprBytecode()
-	ci0 := eb.AddConst(int64(42))
-	ci1 := eb.AddConst(int64(58))
-	eb.Emit(VM.EOpLoadConst, ci0)
-	eb.Emit(VM.EOpLoadConst, ci1)
-	eb.Emit(VM.EOpAdd)
+// BenchmarkExprEval measures arithmetic expression evaluation throughput
+// through the SQL query path.  In v0.11.2+ this exercises the C++ bytecode
+// VM (src/core/VM/bytecode_vm.cpp) rather than the former Go ExprBytecode.
+func BenchmarkExprEval(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
 
-	row := []interface{}{int64(1), int64(2)}
+	mustExec(b, db, "CREATE TABLE expr_bench (a INTEGER, b INTEGER)")
+	for i := 0; i < 1000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO expr_bench VALUES (%d, %d)", i, i+1))
+	}
 
-	b.Run("ExprBytecode_Add", func(b *testing.B) {
+	b.Run("ArithAdd_1K", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_ = eb.Eval(row)
+			b.StopTimer()
+			db.ClearResultCache()
+			b.StartTimer()
+			rows := mustQuery(b, db, "SELECT a + b FROM expr_bench")
+			for rows.Next() {
+			}
 		}
 	})
 
-	b.Run("DirectGoAdd", func(b *testing.B) {
-		a, bv := int64(42), int64(58)
+	b.Run("ArithComplex_1K", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_ = a + bv
+			b.StopTimer()
+			db.ClearResultCache()
+			b.StartTimer()
+			rows := mustQuery(b, db, "SELECT (a + b) * 2 - a / 2 FROM expr_bench")
+			for rows.Next() {
+			}
 		}
 	})
 }
 
 // -----------------------------------------------------------------
-// DirectCompiler IsFastPath (v0.9.1)
+// Direct compiler fast-path (v0.9.1) — C++ direct compiler in v0.11.2+
 // -----------------------------------------------------------------
 
-// BenchmarkDirectCompilerFastPath measures the cost of IsFastPath detection
-// for various SQL patterns.
-func BenchmarkDirectCompilerFastPath(b *testing.B) {
-	queries := []struct {
-		name string
-		sql  string
-	}{
-		{"SimpleSelect", "SELECT id, name FROM users WHERE id = 1"},
-		{"SelectStar", "SELECT * FROM t"},
-		{"WithJoin", "SELECT a.id FROM a JOIN b ON a.id = b.id"},
-		{"WithUnion", "SELECT id FROM a UNION SELECT id FROM b"},
+// BenchmarkDirectCompiler measures end-to-end query execution for query
+// patterns that take the C++ direct-compiler fast path (simple single-table
+// SELECT) vs patterns that require the full bytecode pipeline.
+// In v0.11.2+ this replaces the former Go CG.IsFastPath() micro-benchmark.
+func BenchmarkDirectCompiler(b *testing.B) {
+	db := openDB(b)
+	defer db.Close()
+
+	mustExec(b, db, "CREATE TABLE dc_bench (id INTEGER PRIMARY KEY, name TEXT, val INTEGER)")
+	mustExec(b, db, "CREATE INDEX idx_dc_val ON dc_bench(val)")
+	for i := 0; i < 2000; i++ {
+		mustExec(b, db, fmt.Sprintf("INSERT INTO dc_bench VALUES (%d, 'n%d', %d)", i, i, i%100))
 	}
 
-	for _, q := range queries {
-		q := q
-		b.Run(q.name, func(b *testing.B) {
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_ = CG.IsFastPath(q.sql)
+	b.Run("SimpleSelect_FastPath", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+			db.ClearResultCache()
+			b.StartTimer()
+			rows := mustQuery(b, db, "SELECT id, name FROM dc_bench WHERE id = 42")
+			for rows.Next() {
 			}
-		})
-	}
+		}
+	})
+
+	b.Run("SelectStar_FastPath", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+			db.ClearResultCache()
+			b.StartTimer()
+			rows := mustQuery(b, db, "SELECT * FROM dc_bench WHERE val = 7")
+			for rows.Next() {
+			}
+		}
+	})
 }
