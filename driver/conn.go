@@ -8,14 +8,46 @@ import (
 	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
-// splitSQLStatements splits SQL on top-level semicolons.
+// isSQLWordChar reports whether r is a word character in SQL identifiers.
+func isSQLWordChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_'
+}
+
+// splitSQLStatements splits SQL on top-level semicolons, respecting
+// string literals, parentheses, and BEGIN…END blocks (used in triggers).
 func splitSQLStatements(sql string) []string {
 	var stmts []string
 	var curStmt strings.Builder
+	var wordBuf strings.Builder
 	parenDepth := 0
+	blockDepth := 0 // tracks BEGIN…END nesting (trigger bodies)
 	inString := false
+
+	// Called whenever a word boundary is reached; updates blockDepth.
+	checkWord := func(w string) {
+		upper := strings.ToUpper(w)
+		switch upper {
+		case "BEGIN":
+			blockDepth++
+		case "TRANSACTION", "DEFERRED", "IMMEDIATE", "EXCLUSIVE":
+			// These follow "BEGIN" for transaction syntax (not a block body).
+			if blockDepth > 0 {
+				blockDepth--
+			}
+		case "END":
+			if blockDepth > 0 {
+				blockDepth--
+			}
+		}
+	}
+
 	for _, ch := range sql {
 		if ch == '\'' {
+			// Flush word buffer before toggling string mode.
+			if wordBuf.Len() > 0 {
+				checkWord(wordBuf.String())
+				wordBuf.Reset()
+			}
 			inString = !inString
 			curStmt.WriteRune(ch)
 			continue
@@ -24,13 +56,23 @@ func splitSQLStatements(sql string) []string {
 			curStmt.WriteRune(ch)
 			continue
 		}
+		if isSQLWordChar(ch) {
+			wordBuf.WriteRune(ch)
+			curStmt.WriteRune(ch)
+			continue
+		}
+		// Non-word character: flush the word buffer.
+		if wordBuf.Len() > 0 {
+			checkWord(wordBuf.String())
+			wordBuf.Reset()
+		}
 		if ch == '(' {
 			parenDepth++
 			curStmt.WriteRune(ch)
 		} else if ch == ')' {
 			parenDepth--
 			curStmt.WriteRune(ch)
-		} else if ch == ';' && parenDepth == 0 {
+		} else if ch == ';' && parenDepth == 0 && blockDepth == 0 {
 			stmt := strings.TrimSpace(curStmt.String())
 			if stmt != "" {
 				stmts = append(stmts, stmt)
@@ -39,6 +81,10 @@ func splitSQLStatements(sql string) []string {
 		} else {
 			curStmt.WriteRune(ch)
 		}
+	}
+	// Flush any trailing word.
+	if wordBuf.Len() > 0 {
+		checkWord(wordBuf.String())
 	}
 	lastStmt := strings.TrimSpace(curStmt.String())
 	if lastStmt != "" {

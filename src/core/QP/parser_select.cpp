@@ -38,10 +38,20 @@ extern "C" svdb_ast_node_t* svdb_parser_parse_select(svdb_parser_t* parser,
     /* Read column list until FROM */
     std::vector<std::string> cols;
     pos = parser_skip_ws(s, pos);
+    bool only_star = false;
     if (pos < s.size() && s[pos] == '*') {
         cols.push_back("*");
         ++pos;
-    } else {
+        /* Check whether this is a bare SELECT * (go directly to FROM)
+         * or SELECT *, expr1, expr2, ... (continue reading more columns). */
+        size_t tmp2 = parser_skip_ws(s, pos);
+        if (tmp2 < s.size() && s[tmp2] == ',') {
+            pos = tmp2 + 1;  /* skip the comma and fall through to the loop */
+        } else {
+            only_star = true;
+        }
+    }
+    if (!only_star) {
         /* Collect comma-separated column expressions until FROM */
         while (pos < s.size()) {
             pos = parser_skip_ws(s, pos);

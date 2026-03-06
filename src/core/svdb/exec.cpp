@@ -27,6 +27,8 @@ extern svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
                                       svdb_rows_t **rows_out);
 extern SvdbVal svdb_eval_expr_in_row(const std::string &expr, const Row &row,
                                       const std::vector<std::string> &col_order);
+extern bool svdb_eval_where_in_row(const std::string &where_text, const Row &row,
+                                    const std::vector<std::string> &col_order);
 extern void svdb_set_query_db(svdb_db_t *db);
 
 /* ── Helper: case-insensitive table lookup ───────────────────────────────── */
@@ -1991,15 +1993,13 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         int nv = svdb_ast_get_value_count(ast, ri);
         for (int ci = 0; ci < nv && ci < (int)ins_cols.size(); ++ci) {
             std::string vstr = svdb_ast_get_value(ast, ri, ci);
-            /* Handle DEFAULT keyword — use column's default value */
+            /* Explicit DEFAULT keyword in VALUES list is not supported (SQLite
+               compatible behaviour: the parser stores the raw token "DEFAULT"
+               which is an invalid literal, so reject it with a syntax error). */
             std::string vstr_upper = str_upper(vstr);
             if (vstr_upper == "DEFAULT") {
-                auto dit = db->schema[tname].find(ins_cols[ci]);
-                if (dit != db->schema[tname].end() && !dit->second.default_val.empty()) {
-                    row[ins_cols[ci]] = svdb_eval_expr_in_row(dit->second.default_val, row, {});
-                } else {
-                    row[ins_cols[ci]] = SvdbVal{};
-                }
+                db->last_error = "near \"DEFAULT\": syntax error";
+                return SVDB_ERR;
             } else {
                 row[ins_cols[ci]] = parse_literal(vstr);
             }
@@ -2381,8 +2381,26 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
         svdb_ast_node_free(ast); svdb_parser_destroy(p);
         return SVDB_OK;
     }
-    /* Find end of SET clause (WHERE or end) */
-    size_t where_pos = su.find("WHERE", set_pos);
+    /* Find end of SET clause (WHERE or end) — scan at paren depth 0 only,
+     * so WHERE inside subqueries in SET values is not mistaken for the outer WHERE. */
+    size_t where_pos = std::string::npos;
+    {
+        int depth = 0; bool in_s = false;
+        for (size_t i = set_pos + 3; i < sql.size(); ++i) {
+            char c = sql[i];
+            if (c == '\'') { in_s = !in_s; continue; }
+            if (in_s) continue;
+            if (c == '(') { ++depth; continue; }
+            if (c == ')') { if (depth > 0) --depth; continue; }
+            if (depth == 0 && i + 5 <= sql.size() &&
+                su.substr(i, 5) == "WHERE" &&
+                (i == 0 || !isalnum((unsigned char)sql[i-1]) && sql[i-1] != '_') &&
+                (i + 5 >= sql.size() || (!isalnum((unsigned char)sql[i+5]) && sql[i+5] != '_'))) {
+                where_pos = i;
+                break;
+            }
+        }
+    }
     std::string set_clause = sql.substr(set_pos + 3,
         (where_pos != std::string::npos ? where_pos : sql.size()) - set_pos - 3);
 
@@ -2441,7 +2459,7 @@ static svdb_code_t do_update(svdb_db_t *db, const std::string &sql,
     std::vector<std::pair<Row,Row>> updated_pairs; /* {old_row, new_row} */
     svdb_set_query_db(db);  /* set thread-local DB context for subquery eval in SET expressions */
     for (auto &row : db->data[resolved_tname]) {
-        if (!eval_where(row, col_order, where_txt)) continue;
+        if (!svdb_eval_where_in_row(where_txt, row, col_order)) continue;
         Row old_row = row;
         for (const auto &asgn : assignments)
             row[asgn.first] = svdb_eval_expr_in_row(asgn.second, row, col_order);
@@ -2676,9 +2694,10 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
 
     /* Collect deleted rows before erasing (needed for FK cascade) */
     std::vector<Row> deleted_rows;
+    svdb_set_query_db(db);
     auto it = rows.begin();
     while (it != rows.end()) {
-        if (eval_where(*it, col_order, where_txt)) {
+        if (svdb_eval_where_in_row(where_txt, *it, col_order)) {
             deleted_rows.push_back(*it);
             it = rows.erase(it);
             ++deleted;
@@ -2686,6 +2705,7 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
             ++it;
         }
     }
+    svdb_set_query_db(nullptr);
 
     /* FK ON DELETE actions: CASCADE, SET NULL, RESTRICT/NO ACTION (recursive) */
     if (db->foreign_keys_enabled && !deleted_rows.empty()) {
