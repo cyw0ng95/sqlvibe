@@ -1846,7 +1846,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
     /* CASE WHEN ... THEN ... [WHEN ... THEN ...] [ELSE ...] END */
     {
         std::string eu2 = qry_upper(e);
-        if (eu2.substr(0, 5) == "CASE ") {
+        if (eu2.size() >= 5 && eu2.substr(0, 5) == "CASE ") {
             /* Detect simple vs. searched CASE form:
              * Simple:   CASE expr WHEN val1 THEN res1 ... END
              * Searched: CASE WHEN cond1 THEN res1 ... END  */
@@ -5139,7 +5139,6 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                     }
                     
                     if (inner_rows) {
-
                         /* Extract alias: text between ) and next keyword */
                         std::string rest_sql = sql.substr(close_p + 1);
                         std::string rest_u = qry_upper(qry_trim(rest_sql));
@@ -5164,20 +5163,52 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                         db->schema[tmp_tname] = {};
                         db->col_order[tmp_tname] = {};
                         db->data[tmp_tname] = {};
-                        for (const auto &cn : inner_rows->col_names) {
+                        
+                        /* Parse column aliases from AS t(col1, col2, ...) */
+                        std::vector<std::string> col_aliases;
+                        if (!alias.empty()) {
+                            size_t paren_start = rest_sql.find('(');
+                            if (paren_start != std::string::npos) {
+                                size_t paren_end = rest_sql.find(')', paren_start);
+                                if (paren_end != std::string::npos) {
+                                    std::string alias_str = rest_sql.substr(paren_start + 1, paren_end - paren_start - 1);
+                                    /* Split by comma */
+                                    std::string cur;
+                                    for (char c : alias_str) {
+                                        if (c == ',') { col_aliases.push_back(qry_trim(cur)); cur.clear(); }
+                                        else cur += c;
+                                    }
+                                    if (!qry_trim(cur).empty()) col_aliases.push_back(qry_trim(cur));
+                                }
+                            }
+                        }
+                        
+                        for (size_t i = 0; i < inner_rows->col_names.size(); ++i) {
+                            std::string cn = (i < col_aliases.size()) ? col_aliases[i] : inner_rows->col_names[i];
                             db->schema[tmp_tname][cn] = ColDef{"TEXT", "", false, false};
                             db->col_order[tmp_tname].push_back(cn);
                         }
                         for (const auto &irow : inner_rows->rows) {
                             Row r_new;
-                            for (size_t ci = 0; ci < inner_rows->col_names.size() && ci < irow.size(); ++ci)
-                                r_new[inner_rows->col_names[ci]] = irow[ci];
+                            for (size_t ci = 0; ci < inner_rows->col_names.size() && ci < irow.size(); ++ci) {
+                                std::string cn = (ci < col_aliases.size()) ? col_aliases[ci] : inner_rows->col_names[ci];
+                                r_new[cn] = irow[ci];
+                            }
                             db->data[tmp_tname].push_back(r_new);
                         }
                         delete inner_rows;
 
                         /* Replace (subquery) with tmp_tname in SQL, preserving rest */
-                        std::string new_sql = sql.substr(0, from_pos) + " FROM " + tmp_tname + rest_sql;
+                        /* Remove the column aliases from rest_sql since we already applied them to the temp table */
+                        std::string clean_rest = rest_sql;
+                        size_t alias_paren = clean_rest.find('(');
+                        if (alias_paren != std::string::npos) {
+                            size_t alias_paren_end = clean_rest.find(')', alias_paren);
+                            if (alias_paren_end != std::string::npos) {
+                                clean_rest = clean_rest.substr(0, alias_paren) + clean_rest.substr(alias_paren_end + 1);
+                            }
+                        }
+                        std::string new_sql = sql.substr(0, from_pos) + " FROM " + tmp_tname + clean_rest;
                         svdb_rows_t *result = nullptr;
                         svdb_code_t rc2 = svdb_query_internal(db, new_sql, &result);
 
