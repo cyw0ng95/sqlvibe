@@ -1,4 +1,5 @@
 #include "vfs.h"
+#include "../SF/svdb_assert.h"
 #include <cstring>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -10,6 +11,8 @@ namespace pb {
 
 VFSFile::VFSFile(const std::string& path, OpenFlags flags)
     : path_(path), flags_(flags), cached_size_(0), is_valid_(false) {
+    
+    svdb_assert_msg(!path.empty(), "file path cannot be empty");
 
     std::ios_base::openmode mode = std::ios::binary;
 
@@ -58,22 +61,30 @@ VFSFile::~VFSFile() {
 }
 
 int64_t VFSFile::ReadAt(uint8_t* buf, int64_t len, int64_t offset) {
+    svdb_assert_msg(buf != nullptr, "buffer cannot be null");
+    svdb_assert_msg(len > 0, "read length must be positive: %lld", (long long)len);
+    svdb_assert_msg(offset >= 0, "offset cannot be negative: %lld", (long long)offset);
+    
     std::lock_guard<std::mutex> lock(mutex_);
     if (!stream_.is_open()) {
         return -1;
     }
-    
+
     stream_.seekg(offset);
     if (!stream_.good()) {
         return -1;
     }
-    
+
     stream_.read(reinterpret_cast<char*>(buf), len);
     int64_t bytes_read = stream_.gcount();
     return bytes_read;
 }
 
 int64_t VFSFile::WriteAt(const uint8_t* data, int64_t len, int64_t offset) {
+    svdb_assert_msg(data != nullptr, "data buffer cannot be null");
+    svdb_assert_msg(len > 0, "write length must be positive: %lld", (long long)len);
+    svdb_assert_msg(offset >= 0, "offset cannot be negative: %lld", (long long)offset);
+    
     std::lock_guard<std::mutex> lock(mutex_);
     if (!stream_.is_open()) {
         return -1;
