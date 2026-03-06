@@ -2179,16 +2179,22 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 int cdepth = 0;
                 for (size_t i = 0; i < eu_map.size(); ++i) {
                     if (in_str_map[i]) { in_case_map[i] = (cdepth > 0); continue; }
-                    if (i + 5 <= eu_map.size() && eu_map.substr(i, 5) == "CASE ") {
-                        for (size_t j = i; j < i + 5 && j < eu_map.size(); ++j)
+                    /* Match CASE keyword with word boundaries */
+                    if (i + 4 <= eu_map.size() && eu_map.substr(i, 4) == "CASE" &&
+                        (i == 0 || (!isalnum((unsigned char)eu_map[i-1]) && eu_map[i-1] != '_')) &&
+                        (i + 4 < eu_map.size() && !isalnum((unsigned char)eu_map[i+4]) && eu_map[i+4] != '_')) {
+                        for (size_t j = i; j < i + 4 && j < eu_map.size(); ++j)
                             in_case_map[j] = (cdepth > 0);
-                        ++cdepth; i += 4; continue;
+                        ++cdepth; i += 3; continue;
                     }
-                    if (i + 4 <= eu_map.size() && eu_map.substr(i, 4) == " END") {
+                    /* Match END keyword with word boundaries (preceded by space or non-word char) */
+                    if (i + 3 <= eu_map.size() && eu_map.substr(i, 3) == "END" &&
+                        (i == 0 || (!isalnum((unsigned char)eu_map[i-1]) && eu_map[i-1] != '_')) &&
+                        (i + 3 >= eu_map.size() || (!isalnum((unsigned char)eu_map[i+3]) && eu_map[i+3] != '_'))) {
                         if (cdepth > 0) {
-                            for (size_t j = i; j < i + 4 && j < eu_map.size(); ++j)
+                            for (size_t j = i; j < i + 3 && j < eu_map.size(); ++j)
                                 in_case_map[j] = true;
-                            --cdepth; i += 3; continue;
+                            --cdepth; i += 2; continue;
                         }
                     }
                     in_case_map[i] = (cdepth > 0);
