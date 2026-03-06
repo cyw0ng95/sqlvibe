@@ -91,7 +91,7 @@ echo "      - Data Storage: B-Tree, SIMD, Roaring bitmap"
 echo "      - VM: Hash functions, batch execution, expression eval, dispatch, type conv, strings, datetime, aggregates"
 echo "      - QP: Fast tokenizer"
 echo "      - CG: Bytecode optimizer, plan cache, expression compiler"
-echo "      - Wrapper: Phase 4 invoke chain (hash+filter, batch compare, scan+aggregate)"
+echo "      - SC: System Composer (C API, invoke chain, orchestration)"
 
 # Build C++ extensions
 if [[ -f "CMakeLists.txt" ]]; then
@@ -111,7 +111,7 @@ echo "====> LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 
 # ----- Phase 11: C smoke test (svdb.h public API) ----------------------------
 # Verifies that the unified C public API compiles and works from a pure C caller.
-SVDB_H="$SCRIPT_DIR/src/core/svdb/svdb.h"
+SVDB_H="$SCRIPT_DIR/src/core/SC/svdb.h"
 if [[ -f "$SVDB_H" && -f "$BUILD_DIR/cmake/lib/libsvdb.so" ]]; then
     SMOKE_SRC="$BUILD_DIR/tmp_smoke.c"
     SMOKE_BIN="$BUILD_DIR/tmp_smoke"

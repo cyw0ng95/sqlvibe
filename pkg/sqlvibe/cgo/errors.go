@@ -1,7 +1,7 @@
 package cgo
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../../src/core/svdb
+#cgo CFLAGS: -I${SRCDIR}/../../../src/core/SC
 #include "svdb.h"
 */
 import "C"

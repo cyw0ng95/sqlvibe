@@ -133,34 +133,29 @@ set(SVDB_CORE_SOURCES
     core/IS/vtab_series.cpp
     core/IS/vtab_fts5.cpp
 
-    # Wrapper - Invoke chain
-    core/wrapper/invoke_chain_wrapper.cpp
-
-    # CGO - Hash Join
-    core/cgo/hash_join.cpp
+    # SC - System Composer (orchestration, C API, invoke chain)
+    core/SC/invoke_chain_wrapper.cpp
+    core/SC/database.cpp
+    core/SC/exec.cpp
+    core/SC/query.cpp
+    core/SC/result.cpp
+    core/SC/transaction.cpp
+    core/SC/statement.cpp
+    core/SC/pragma.cpp
+    core/SC/window.cpp
+    core/SC/hash_join.cpp
+    core/SC/setops.cpp
+    core/SC/fk_trigger.cpp
+    core/SC/schema.cpp
+    core/SC/explain.cpp
+    core/SC/backup.cpp
+    core/SC/io.cpp
+    core/SC/vacuum.cpp
+    core/SC/extensions.cpp
+    core/SC/pools.cpp
 
     # VM Engine - Query orchestration
     core/VM/engine/engine.cpp
-
-    # SVDB — Unified C Public API
-    core/svdb/database.cpp
-    core/svdb/exec.cpp
-    core/svdb/query.cpp
-    core/svdb/result.cpp
-    core/svdb/transaction.cpp
-    core/svdb/statement.cpp
-    core/svdb/pragma.cpp
-    core/svdb/window.cpp
-    core/svdb/hash_join.cpp
-    core/svdb/setops.cpp
-    core/svdb/fk_trigger.cpp
-    core/svdb/schema.cpp
-    core/svdb/explain.cpp
-    core/svdb/backup.cpp
-    core/svdb/io.cpp
-    core/svdb/vacuum.cpp
-    core/svdb/extensions.cpp
-    core/svdb/pools.cpp
 )
 
 # Build libsvdb
@@ -176,10 +171,8 @@ target_include_directories(svdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/PB
     ${CMAKE_CURRENT_SOURCE_DIR}/core/SF
     ${CMAKE_CURRENT_SOURCE_DIR}/core/IS
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/wrapper
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/cgo
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/SC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/VM/engine
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/svdb
 )
 
 if(SVDB_COMPILE_OPTS)
