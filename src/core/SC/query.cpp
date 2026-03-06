@@ -6040,7 +6040,9 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     if (has_agg && group_cols.empty()) {
         // ── FAST PATH: COUNT(*) without WHERE ─────────────────────────────
         // Check for simple COUNT(*) FROM table query with no WHERE clause
-        if (where_txt.empty() && !sel_cols.empty()) {
+        // Disable fast path for JOIN queries (must compute actual join result)
+        // Disable fast path for multiple columns (e.g., SELECT COUNT(*), COUNT(DISTINCT col))
+        if (where_txt.empty() && !sel_cols.empty() && all_joins.empty() && sel_cols.size() == 1) {
             bool is_simple_count_star = false;
             std::string first_col_upper = sel_cols.empty() ? "" : qry_upper(qry_trim(sel_cols[0]));
             
@@ -6058,6 +6060,7 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 svdb_is_table_metadata_t metadata;
                 if (svdb_is_get_table_metadata(db->is_registry, tname.c_str(), &metadata) == 0 && 
                     metadata.valid) {
+                    r->col_names.clear();
                     r->col_names.push_back("count");
                     SvdbVal count_val;
                     count_val.type = SVDB_TYPE_INT;
