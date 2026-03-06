@@ -2838,56 +2838,63 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
         else if (what == "INDEX") rc = do_drop_index(db, s);
         else if (what == "TRIGGER") rc = do_drop_trigger(db, s);
         else if (what == "VIEW") {
-            /* DROP [TEMP] VIEW [IF EXISTS] vname */
+            /* DROP [TEMP] VIEW [IF EXISTS] vname [RESTRICT|CASCADE] */
+            /* Note: RESTRICT and CASCADE are SQL standard but SQLite doesn't support them.
+             * We reject them to match SQLite behavior. */
             std::string su2 = str_upper(s);
-            bool if_exists2 = su2.find("IF EXISTS") != std::string::npos;
-            size_t vp2 = su2.find("VIEW");
-            if (vp2 != std::string::npos) {
-                vp2 += 4;
-                while (vp2 < su2.size() && isspace((unsigned char)su2[vp2])) ++vp2;
-                if (su2.substr(vp2, 9) == "IF EXISTS") {
-                    vp2 += 9;
+            if (su2.find(" RESTRICT") != std::string::npos || su2.find(" CASCADE") != std::string::npos) {
+                db->last_error = "near \"RESTRICT\": syntax error";
+                rc = SVDB_ERR;
+            } else {
+                bool if_exists2 = su2.find("IF EXISTS") != std::string::npos;
+                size_t vp2 = su2.find("VIEW");
+                if (vp2 != std::string::npos) {
+                    vp2 += 4;
                     while (vp2 < su2.size() && isspace((unsigned char)su2[vp2])) ++vp2;
-                }
-                std::string vname2;
-                if (vp2 < s.size() && (s[vp2] == '"' || s[vp2] == '`')) {
-                    char q2 = s[vp2++]; size_t vs2 = vp2;
-                    while (vp2 < s.size() && s[vp2] != q2) ++vp2;
-                    vname2 = s.substr(vs2, vp2 - vs2);
-                } else {
-                    size_t vs2 = vp2;
-                    while (vp2 < s.size() && (isalnum((unsigned char)s[vp2]) || s[vp2] == '_')) ++vp2;
-                    vname2 = s.substr(vs2, vp2 - vs2);
-                }
-                if (!vname2.empty()) {
-                    /* Case-insensitive lookup */
-                    std::string resolved_vname;
-                    auto vit = db->schema.find(vname2);
-                    if (vit != db->schema.end()) {
-                        resolved_vname = vname2;
-                    } else {
-                        std::string vu = str_upper(vname2);
-                        for (auto &kv : db->schema) {
-                            if (str_upper(kv.first) == vu) { resolved_vname = kv.first; break; }
-                        }
+                    if (su2.substr(vp2, 9) == "IF EXISTS") {
+                        vp2 += 9;
+                        while (vp2 < su2.size() && isspace((unsigned char)su2[vp2])) ++vp2;
                     }
-                    if (!resolved_vname.empty()) {
-                        db->schema.erase(resolved_vname);
-                        db->col_order.erase(resolved_vname);
-                        db->create_sql.erase(resolved_vname);
-                        db->data.erase(resolved_vname);
-                        rc = SVDB_OK;
-                    } else if (if_exists2) {
-                        rc = SVDB_OK;
+                    std::string vname2;
+                    if (vp2 < s.size() && (s[vp2] == '"' || s[vp2] == '`')) {
+                        char q2 = s[vp2++]; size_t vs2 = vp2;
+                        while (vp2 < s.size() && s[vp2] != q2) ++vp2;
+                        vname2 = s.substr(vs2, vp2 - vs2);
                     } else {
-                        db->last_error = "no such view: " + vname2;
-                        rc = SVDB_ERR;
+                        size_t vs2 = vp2;
+                        while (vp2 < s.size() && (isalnum((unsigned char)s[vp2]) || s[vp2] == '_')) ++vp2;
+                        vname2 = s.substr(vs2, vp2 - vs2);
+                    }
+                    if (!vname2.empty()) {
+                        /* Case-insensitive lookup */
+                        std::string resolved_vname;
+                        auto vit = db->schema.find(vname2);
+                        if (vit != db->schema.end()) {
+                            resolved_vname = vname2;
+                        } else {
+                            std::string vu = str_upper(vname2);
+                            for (auto &kv : db->schema) {
+                                if (str_upper(kv.first) == vu) { resolved_vname = kv.first; break; }
+                            }
+                        }
+                        if (!resolved_vname.empty()) {
+                            db->schema.erase(resolved_vname);
+                            db->col_order.erase(resolved_vname);
+                            db->create_sql.erase(resolved_vname);
+                            db->data.erase(resolved_vname);
+                            rc = SVDB_OK;
+                        } else if (if_exists2) {
+                            rc = SVDB_OK;
+                        } else {
+                            db->last_error = "no such view: " + vname2;
+                            rc = SVDB_ERR;
+                        }
+                    } else {
+                        rc = SVDB_OK;
                     }
                 } else {
                     rc = SVDB_OK;
                 }
-            } else {
-                rc = SVDB_OK;
             }
         }
         else                  rc = SVDB_OK;
