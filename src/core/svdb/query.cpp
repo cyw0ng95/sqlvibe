@@ -5128,69 +5128,113 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         if (from_pos != std::string::npos) {
             size_t after_from = from_pos + 6;
             /* Skip whitespace */
-            while (after_from < sql.size() && sql[after_from] == ' ') ++after_from;
-            if (after_from < sql.size() && sql[after_from] == '(') {
+            while (after_from < su_dt.size() && su_dt[after_from] == ' ') ++after_from;
+
+            /* Scan the FROM clause for the first (SELECT ...) or (VALUES ...) subquery.
+               This handles both "FROM (SELECT ...)" and "FROM tbl, (SELECT ...)" cases. */
+            size_t subq_start = std::string::npos;
+            {
+                int dp = 0; bool ins = false;
+                for (size_t i = after_from; i < su_dt.size(); ++i) {
+                    char c = su_dt[i];
+                    if (c == '\'') { ins = !ins; continue; }
+                    if (ins) continue;
+                    if (c == '(') {
+                        if (dp == 0) {
+                            /* Peek past whitespace to see if it's SELECT or VALUES */
+                            size_t j = i + 1;
+                            while (j < su_dt.size() && su_dt[j] == ' ') ++j;
+                            if (j + 7 <= su_dt.size() &&
+                                (su_dt.substr(j, 7) == "SELECT " || su_dt.substr(j, 7) == "VALUES ")) {
+                                subq_start = i;
+                                break;
+                            }
+                        }
+                        ++dp; continue;
+                    }
+                    if (c == ')') { if (dp > 0) --dp; continue; }
+                    if (dp == 0) {
+                        /* Stop scanning at clause keywords that end the FROM list */
+                        if (i + 6 <= su_dt.size() && su_dt.substr(i, 6) == "WHERE ") break;
+                        if (i + 9 <= su_dt.size() && su_dt.substr(i, 9) == "ORDER BY ") break;
+                        if (i + 9 <= su_dt.size() && su_dt.substr(i, 9) == "GROUP BY ") break;
+                        if (i + 6 <= su_dt.size() && su_dt.substr(i, 6) == "LIMIT ") break;
+                        if (i + 7 <= su_dt.size() && su_dt.substr(i, 7) == "HAVING ") break;
+                    }
+                }
+            }
+
+            if (subq_start != std::string::npos) {
                 /* Find matching closing paren */
                 int dp2 = 0; size_t close_p = std::string::npos;
-                for (size_t i = after_from; i < sql.size(); ++i) {
+                for (size_t i = subq_start; i < sql.size(); ++i) {
                     if (sql[i] == '(') ++dp2;
                     else if (sql[i] == ')') { if (--dp2 == 0) { close_p = i; break; } }
                 }
                 if (close_p != std::string::npos) {
-                    std::string inner_sql = sql.substr(after_from + 1, close_p - after_from - 1);
+                    std::string inner_sql = sql.substr(subq_start + 1, close_p - subq_start - 1);
                     std::string inner_u = qry_upper(qry_trim(inner_sql));
                     svdb_rows_t *inner_rows = nullptr;
-                    
+
                     /* Check if it's a VALUES table constructor */
                     if (inner_u.size() >= 7 && inner_u.substr(0, 7) == "VALUES ") {
-                        /* Execute VALUES as standalone statement */
                         svdb_code_t rc = svdb_query_internal(db, inner_sql, &inner_rows);
                         if (rc != SVDB_OK) { if (inner_rows) delete inner_rows; return rc; }
                         if (!inner_rows) return SVDB_ERR;
                     } else if (inner_u.size() > 6 && inner_u.substr(0, 7) == "SELECT ") {
-                        /* Execute the inner SELECT */
                         svdb_code_t rc = svdb_query_internal(db, inner_sql, &inner_rows);
                         if (rc != SVDB_OK) { if (inner_rows) delete inner_rows; return rc; }
                         if (!inner_rows) return SVDB_ERR;
-                    } else {
-                        /* Not a supported subquery type */
                     }
-                    
+
                     if (inner_rows) {
-                        /* Extract alias: text between ) and next keyword */
+                        /* Extract optional alias: word(s) immediately after the closing ')'.
+                           Handle both "AS alias" and bare "alias". */
                         std::string rest_sql = sql.substr(close_p + 1);
-                        std::string rest_u = qry_upper(qry_trim(rest_sql));
+                        std::string rest_u   = qry_upper(qry_trim(rest_sql));
                         std::string alias;
                         {
-                            /* Read alias: first non-keyword word */
-                            std::string rt = qry_trim(rest_u);
-                            if (!rt.empty() && rt[0] != 'W' && rt[0] != 'O' && rt[0] != 'G' && rt[0] != 'L') {
-                                /* try to read identifier */
+                            std::string rt = rest_u;
+                            /* Skip "AS " keyword if present */
+                            if (rt.size() >= 3 && rt.substr(0, 3) == "AS ") rt = qry_trim(rt.substr(3));
+                            /* Read first identifier (stop at space, comma, keyword) */
+                            if (!rt.empty() && rt[0] != 'W' && rt[0] != 'O' && rt[0] != 'G' &&
+                                rt[0] != 'L' && rt[0] != ',' && rt[0] != ')') {
                                 size_t ae = 0;
-                                while (ae < rt.size() && rt[ae] != ' ' && rt[ae] != '\0') ++ae;
+                                while (ae < rt.size() && rt[ae] != ' ' && rt[ae] != ',' &&
+                                       rt[ae] != ')' && rt[ae] != '\0') ++ae;
                                 std::string word = rt.substr(0, ae);
-                                static const char *stop[] = {"WHERE","ORDER","GROUP","LIMIT","HAVING","INNER","LEFT","JOIN", nullptr};
+                                static const char *stop[] = {
+                                    "WHERE","ORDER","GROUP","LIMIT","HAVING","INNER","LEFT","JOIN",
+                                    "RIGHT","CROSS","FULL","ON","USING", nullptr};
                                 bool is_stop = false;
-                                for (const char **sw = stop; *sw; ++sw) if (word == *sw) { is_stop = true; break; }
+                                for (const char **sw = stop; *sw; ++sw)
+                                    if (word == *sw) { is_stop = true; break; }
                                 if (!is_stop && !word.empty()) alias = word;
                             }
                         }
 
                         /* Build a temporary in-memory "table" from inner_rows */
-                        std::string tmp_tname = "__derived_" + std::to_string((size_t)inner_rows);
+                        static size_t derived_counter = 0;
+                        std::string tmp_tname = "__derived_" + std::to_string(++derived_counter);
                         db->schema[tmp_tname] = {};
                         db->col_order[tmp_tname] = {};
                         db->data[tmp_tname] = {};
-                        
-                        /* Parse column aliases from AS t(col1, col2, ...) */
+
+                        /* Parse column aliases from t(col1, col2, ...) if present */
                         std::vector<std::string> col_aliases;
-                        if (!alias.empty()) {
-                            size_t paren_start = rest_sql.find('(');
-                            if (paren_start != std::string::npos) {
-                                size_t paren_end = rest_sql.find(')', paren_start);
-                                if (paren_end != std::string::npos) {
-                                    std::string alias_str = rest_sql.substr(paren_start + 1, paren_end - paren_start - 1);
-                                    /* Split by comma */
+                        {
+                            /* Look for '(' after the alias (column rename list) */
+                            std::string rt2 = qry_trim(rest_u);
+                            if (rt2.size() >= 3 && rt2.substr(0, 3) == "AS ") rt2 = qry_trim(rt2.substr(3));
+                            /* Skip alias word */
+                            size_t pp = 0;
+                            while (pp < rt2.size() && rt2[pp] != ' ' && rt2[pp] != '(' && rt2[pp] != ',') ++pp;
+                            while (pp < rt2.size() && rt2[pp] == ' ') ++pp;
+                            if (pp < rt2.size() && rt2[pp] == '(') {
+                                size_t pe = rt2.find(')', pp);
+                                if (pe != std::string::npos) {
+                                    std::string alias_str = rt2.substr(pp + 1, pe - pp - 1);
                                     std::string cur;
                                     for (char c : alias_str) {
                                         if (c == ',') { col_aliases.push_back(qry_trim(cur)); cur.clear(); }
@@ -5200,7 +5244,7 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                                 }
                             }
                         }
-                        
+
                         for (size_t i = 0; i < inner_rows->col_names.size(); ++i) {
                             std::string cn = (i < col_aliases.size()) ? col_aliases[i] : inner_rows->col_names[i];
                             db->schema[tmp_tname][cn] = ColDef{"TEXT", "", false, false};
@@ -5216,17 +5260,9 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                         }
                         delete inner_rows;
 
-                        /* Replace (subquery) with tmp_tname in SQL, preserving rest */
-                        /* Remove the column aliases from rest_sql since we already applied them to the temp table */
-                        std::string clean_rest = rest_sql;
-                        size_t alias_paren = clean_rest.find('(');
-                        if (alias_paren != std::string::npos) {
-                            size_t alias_paren_end = clean_rest.find(')', alias_paren);
-                            if (alias_paren_end != std::string::npos) {
-                                clean_rest = clean_rest.substr(0, alias_paren) + clean_rest.substr(alias_paren_end + 1);
-                            }
-                        }
-                        std::string new_sql = sql.substr(0, from_pos) + " FROM " + tmp_tname + clean_rest;
+                        /* Replace (subquery) with tmp_tname in SQL.
+                           sql[0..subq_start-1] + tmp_tname + sql[close_p+1..] */
+                        std::string new_sql = sql.substr(0, subq_start) + tmp_tname + sql.substr(close_p + 1);
                         svdb_rows_t *result = nullptr;
                         svdb_code_t rc2 = svdb_query_internal(db, new_sql, &result);
 
