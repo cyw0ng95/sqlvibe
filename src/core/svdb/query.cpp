@@ -1453,6 +1453,12 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 return eval_expr(is_true ? parts[1] : parts[2], row, col_order);
             }
         }
+        /* last_insert_rowid() — return last inserted rowid */
+        if (eu.substr(0, 18) == "LAST_INSERT_ROWID(" && fn_paren_ok(17)) {
+            SvdbVal v; v.type = SVDB_TYPE_INT;
+            v.ival = g_query_db ? g_query_db->last_insert_rowid : 0;
+            return v;
+        }
         /* TYPEOF(expr) */
         if (eu.substr(0, 7) == "TYPEOF(" && fn_paren_ok(7-1)) {
             SvdbVal inner = eval_expr(e.substr(7, e.size()-8), row, col_order);
