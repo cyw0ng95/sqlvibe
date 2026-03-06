@@ -4774,15 +4774,14 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 if (i + kwlen <= su2.size() && su2.substr(i, kwlen) == kw) {
                     std::string lhs = qry_trim(sql.substr(0, i));
                     std::string rhs = qry_trim(sql.substr(i + kwlen));
-                    /* Validate: ORDER BY/GROUP BY/HAVING not allowed in individual SELECTs of UNION/INTERSECT/EXCEPT.
-                     * They must appear only at the end of the entire set operation. */
+                    /* Validate: ORDER BY not allowed in individual SELECTs of UNION/INTERSECT/EXCEPT.
+                     * GROUP BY and HAVING are allowed in individual SELECTs.
+                     * ORDER BY must appear only at the end of the entire set operation. */
                     std::string lhs_upper = qry_upper(lhs);
                     std::string rhs_upper = qry_upper(rhs);
-                    /* Check LHS for invalid clauses */
-                    if (lhs_upper.find(" ORDER BY ") != std::string::npos ||
-                        lhs_upper.find(" GROUP BY ") != std::string::npos ||
-                        lhs_upper.find(" HAVING ") != std::string::npos) {
-                        db->last_error = "SQL logic error: ORDER BY clause should come after " + 
+                    /* Check LHS for ORDER BY (which is not allowed) */
+                    if (lhs_upper.find(" ORDER BY ") != std::string::npos) {
+                        db->last_error = "SQL logic error: ORDER BY clause should come after " +
                             std::string(kw, 1, kwlen-2) + " not before";
                         return SVDB_ERR;
                     }
