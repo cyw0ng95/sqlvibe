@@ -1,4 +1,5 @@
 #include "exec.h"
+#include "../SF/svdb_assert.h"
 #include <cstring>
 #include <cctype>
 
@@ -6,6 +7,9 @@
 
 static int icase_find_e(const char* sql, size_t sql_len, const char* needle)
 {
+    svdb_assert_msg(sql != nullptr, "sql cannot be null");
+    svdb_assert_msg(needle != nullptr, "needle cannot be null");
+    
     if (!sql || !needle) return 0;
     size_t nl = strlen(needle);
     if (!nl || nl > sql_len) return 0;
@@ -25,6 +29,8 @@ extern "C" {
 
 int svdb_exec_is_result_cache_eligible(const char* sql, size_t sql_len)
 {
+    svdb_assert_msg(sql != nullptr, "sql cannot be null");
+    
     if (!sql || sql_len == 0) return 0;
 
     /* Must be SELECT */
@@ -49,12 +55,18 @@ int svdb_exec_is_result_cache_eligible(const char* sql, size_t sql_len)
 
 size_t svdb_exec_estimate_result_size(int num_cols, int num_rows)
 {
+    svdb_assert_msg(num_cols > 0, "num_cols must be positive: %d", num_cols);
+    svdb_assert_msg(num_rows > 0, "num_rows must be positive: %d", num_rows);
+    
     if (num_cols <= 0 || num_rows <= 0) return 0;
     return (size_t)num_cols * (size_t)num_rows * 8u;
 }
 
 int svdb_exec_should_use_columnar(int num_cols, int num_rows)
 {
+    svdb_assert_msg(num_cols >= 0, "num_cols cannot be negative: %d", num_cols);
+    svdb_assert_msg(num_rows >= 0, "num_rows cannot be negative: %d", num_rows);
+    
     return (num_cols >= 4 && num_rows >= 1000) ? 1 : 0;
 }
 
@@ -65,6 +77,8 @@ int svdb_exec_max_inline_rows(void)
 
 uint64_t svdb_exec_compute_hash(const char* sql, size_t sql_len)
 {
+    svdb_assert_msg(sql != nullptr, "sql cannot be null");
+    
     /* FNV-1a 64-bit */
     uint64_t hash = 14695981039346656037ULL;
     const unsigned char* p = (const unsigned char*)sql;
@@ -78,6 +92,10 @@ uint64_t svdb_exec_compute_hash(const char* sql, size_t sql_len)
 int svdb_exec_normalize_whitespace(const char* sql, size_t sql_len,
                                     char* out_buf, int out_buf_size)
 {
+    svdb_assert_msg(sql != nullptr, "sql cannot be null");
+    svdb_assert_msg(out_buf != nullptr, "out_buf cannot be null");
+    svdb_assert_msg(out_buf_size > 0, "out_buf_size must be positive: %d", out_buf_size);
+    
     if (!sql || !out_buf || out_buf_size <= 0) return -1;
 
     char* w    = out_buf;
