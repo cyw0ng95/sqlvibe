@@ -37,25 +37,20 @@ extern void svdb_set_query_db(svdb_db_t *db);
 static std::string resolve_table_name(svdb_db_t *db, const std::string &tname) {
     /* Strip schema prefix (temp., temporary., main.) */
     std::string actual_name = tname;
-    if (tname.size() > 5) {
-        std::string prefix = svdb_str_upper(tname.substr(0, 5));
-        if (prefix == "TEMP.") {
-            actual_name = tname.substr(5);
-        }
-    }
-    if (actual_name == tname && tname.size() > 10) {
-        std::string prefix = svdb_str_upper(tname.substr(0, 10));
-        if (prefix == "TEMPORARY.") {
-            actual_name = tname.substr(10);
-        }
-    }
-    if (actual_name == tname && tname.size() > 5) {
-        std::string prefix = svdb_str_upper(tname.substr(0, 5));
-        if (prefix == "MAIN.") {
-            actual_name = tname.substr(5);
-        }
-    }
     
+    /* Check for TEMP. prefix (case-insensitive) */
+    if (tname.size() >= 6 && svdb_str_upper(tname.substr(0, 5)) == "TEMP.") {
+        actual_name = tname.substr(5);
+    }
+    /* Check for TEMPORARY. prefix (case-insensitive) */
+    else if (tname.size() >= 11 && svdb_str_upper(tname.substr(0, 10)) == "TEMPORARY.") {
+        actual_name = tname.substr(10);
+    }
+    /* Check for MAIN. prefix (case-insensitive) */
+    else if (tname.size() >= 6 && svdb_str_upper(tname.substr(0, 5)) == "MAIN.") {
+        actual_name = tname.substr(5);
+    }
+
     /* Exact match first */
     if (db->schema.count(actual_name)) return actual_name;
 
@@ -2783,6 +2778,16 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
         size_t s2 = p;
         while (p < su.size() && isalpha((unsigned char)su[p])) ++p;
         std::string what = su.substr(s2, p - s2);
+        
+        /* Handle CREATE [TEMP|TEMPORARY] TABLE */
+        if (what == "TEMP" || what == "TEMPORARY") {
+            /* Skip TEMP/TEMPORARY keyword and find TABLE */
+            while (p < su.size() && isspace((unsigned char)su[p])) ++p;
+            s2 = p;
+            while (p < su.size() && isalpha((unsigned char)su[p])) ++p;
+            what = su.substr(s2, p - s2);
+        }
+        
         if (what == "TABLE")      rc = do_create_table(db, s);
         else if (what == "UNIQUE") {
             /* CREATE UNIQUE INDEX ... */

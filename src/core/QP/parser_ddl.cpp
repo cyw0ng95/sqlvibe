@@ -33,6 +33,13 @@ extern "C" svdb_ast_node_t* svdb_parser_parse_create(svdb_parser_t* parser,
     /* TABLE, INDEX, VIEW, VIRTUAL TABLE, etc. */
     size_t tmp = pos;
     std::string obj_type = parser_read_keyword(s, tmp);
+    
+    /* Handle CREATE [TEMP|TEMPORARY] TABLE - skip TEMP/TEMPORARY keyword */
+    if (obj_type == "TEMP" || obj_type == "TEMPORARY") {
+        pos = tmp;  /* Advance past TEMP/TEMPORARY */
+        tmp = pos;
+        obj_type = parser_read_keyword(s, tmp);  /* Read actual object type */
+    }
     pos = tmp;
 
     svdb_ast_node_t* node = svdb_ast_node_create(SVDB_AST_CREATE);
@@ -45,12 +52,6 @@ extern "C" svdb_ast_node_t* svdb_parser_parse_create(svdb_parser_t* parser,
         if (kw2 == "IF") {
             parser_expect_keyword(s, t2, "NOT");
             parser_expect_keyword(s, t2, "EXISTS");
-            pos = t2;
-        }
-        /* Skip optional TEMP/TEMPORARY keyword */
-        t2 = pos;
-        std::string kw3 = parser_read_keyword(s, t2);
-        if (kw3 == "TEMP" || kw3 == "TEMPORARY") {
             pos = t2;
         }
         std::string table = parser_read_ident(s, pos);
