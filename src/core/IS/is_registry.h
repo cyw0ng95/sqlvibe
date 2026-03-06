@@ -13,12 +13,16 @@ extern "C" {
 /* Opaque registry handle */
 typedef struct svdb_is_registry_s svdb_is_registry_t;
 
-/* Table metadata for fast COUNT(*) */
+/* Table metadata for fast COUNT(*) 
+ * v0.11.5: Enhanced with MVCC-safe versioning and atomic counter
+ */
 typedef struct {
     uint64_t row_count;
+    uint64_t row_count_version;   /* MVCC visibility check */
     uint32_t schema_version;
     uint64_t last_modified_counter;
-    int valid;  /* 1 = valid, 0 = invalid/unknown */
+    uint64_t last_modified_txn;   /* Transaction ID for MVCC */
+    int valid;                    /* 1 = valid, 0 = invalid/unknown */
 } svdb_is_table_metadata_t;
 
 /* Column info for information_schema.columns */

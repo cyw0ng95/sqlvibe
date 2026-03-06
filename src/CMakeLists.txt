@@ -100,7 +100,11 @@ set(SVDB_CORE_SOURCES
     core/VM/bytecode_vm.cpp
     core/VM/vm_opcode.cpp
     core/VM/vm_execute.cpp
-
+    
+    # v0.11.5: Optimized hash join with SIMD + Arena
+    core/VM/fast_hash_table.cpp
+    core/VM/hash_join_optimized.cpp
+    
     # QP - Query Processing
     core/QP/tokenizer.cpp
     core/QP/analyzer.cpp
