@@ -1114,4 +1114,233 @@ void svdb_json_free(char* ptr) {
     }
 }
 
+static char* dup_str(const std::string& s) {
+    char* p = static_cast<char*>(std::malloc(s.size() + 1));
+    if (p) std::strcpy(p, s.c_str());
+    return p;
+}
+
+static std::string json_type_name(const svdb_json::Value& v) {
+    switch (v.type) {
+        case svdb_json::Type::Null:    return "null";
+        case svdb_json::Type::Boolean: return "true";  /* SQLite uses "true"/"false" */
+        case svdb_json::Type::Number:
+            if (v.number == static_cast<int64_t>(v.number)) return "integer";
+            return "real";
+        case svdb_json::Type::String:  return "text";
+        case svdb_json::Type::Array:   return "array";
+        case svdb_json::Type::Object:  return "object";
+    }
+    return "null";
+}
+
+static std::string json_atom_str(const svdb_json::Value& v) {
+    switch (v.type) {
+        case svdb_json::Type::Null:    return "null";
+        case svdb_json::Type::Boolean: return v.boolean ? "true" : "false";
+        case svdb_json::Type::Number: {
+            std::ostringstream oss;
+            if (v.number == static_cast<int64_t>(v.number)) {
+                oss << static_cast<int64_t>(v.number);
+            } else {
+                oss << std::setprecision(15) << v.number;
+            }
+            return oss.str();
+        }
+        case svdb_json::Type::String:  return v.string;
+        default: return "";  /* arrays/objects have no atom */
+    }
+}
+
+/* json_array_insert(json, path, value) - insert value before element at path */
+char* svdb_json_array_insert(const char* json_str, const char* path, const char* value) {
+    if (!json_str || !path || !value) return nullptr;
+    try {
+        svdb_json::Parser parser(json_str);
+        svdb_json::Value root = parser.parse();
+
+        /* Parse path: expect $[N] syntax */
+        std::string p(path);
+        size_t lb = p.find('[');
+        if (lb == std::string::npos) return nullptr;
+        size_t rb = p.find(']', lb);
+        if (rb == std::string::npos) return nullptr;
+        std::string idx_str = p.substr(lb + 1, rb - lb - 1);
+        int idx = std::stoi(idx_str);
+
+        /* Navigate to parent */
+        std::string parent_path = p.substr(0, lb);
+        svdb_json::Value* target = &root;
+        if (parent_path != "$" && parent_path.size() > 1) {
+            std::vector<svdb_json::PathSegment> segs = svdb_json::parsePath(parent_path);
+            target = svdb_json::getAtPath(&root, segs);
+            if (!target) return nullptr;
+        }
+
+        if (!target->isArray()) return nullptr;
+        if (idx < 0) idx = (int)target->array.size() + 1 + idx;
+        if (idx < 0) idx = 0;
+        if (idx > (int)target->array.size()) idx = (int)target->array.size();
+
+        /* Parse the value to insert */
+        svdb_json::Value ins;
+        std::string vs(value);
+        /* Try to parse as JSON, fallback to string */
+        try {
+            svdb_json::Parser vp(vs);
+            ins = vp.parse();
+        } catch (...) {
+            ins = svdb_json::Value::makeString(vs);
+        }
+
+        target->array.insert(target->array.begin() + idx, ins);
+
+        std::string result = svdb_json::Serializer::serialize(root, false);
+        return dup_str(result);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+/* json_each(json) - shallow iterator over array or object top-level elements */
+svdb_json_tvf_rows_t* svdb_json_each(const char* json_str) {
+    if (!json_str) return nullptr;
+    try {
+        svdb_json::Parser parser(json_str);
+        svdb_json::Value root = parser.parse();
+
+        svdb_json_tvf_rows_t* result = static_cast<svdb_json_tvf_rows_t*>(
+            std::malloc(sizeof(svdb_json_tvf_rows_t)));
+        if (!result) return nullptr;
+
+        std::vector<svdb_json_tvf_row_t> rows_vec;
+        int64_t id = 1;
+
+        auto make_row = [&](const std::string& key_str, const svdb_json::Value& v,
+                             const std::string& fullkey_str, const std::string& path_str) {
+            svdb_json_tvf_row_t row;
+            row.key     = dup_str(key_str);
+            std::string val_s = svdb_json::Serializer::serialize(v, false);
+            row.value   = dup_str(val_s);
+            row.type    = dup_str(json_type_name(v));
+            bool scalar = !v.isArray() && !v.isObject();
+            row.atom    = scalar ? dup_str(json_atom_str(v)) : nullptr;
+            row.id      = id++;
+            row.parent  = -1;
+            row.fullkey = dup_str(fullkey_str);
+            row.path    = dup_str(path_str);
+            rows_vec.push_back(row);
+        };
+
+        if (root.isArray()) {
+            for (size_t i = 0; i < root.array.size(); ++i) {
+                std::string key_s = std::to_string(i);
+                std::string fk = "$[" + key_s + "]";
+                make_row(key_s, root.array[i], fk, "$");
+            }
+        } else if (root.isObject()) {
+            for (const auto& kv : root.object) {
+                std::string fk = "$." + kv.first;
+                make_row(kv.first, kv.second, fk, "$");
+            }
+        }
+
+        result->count = (int)rows_vec.size();
+        if (result->count > 0) {
+            result->rows = static_cast<svdb_json_tvf_row_t*>(
+                std::malloc(result->count * sizeof(svdb_json_tvf_row_t)));
+            if (!result->rows) { std::free(result); return nullptr; }
+            for (int i = 0; i < result->count; ++i)
+                result->rows[i] = rows_vec[i];
+        } else {
+            result->rows = nullptr;
+        }
+        return result;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+/* Recursive helper for json_tree */
+static void json_tree_recurse(const svdb_json::Value& v,
+                               const std::string& fullkey,
+                               const std::string& path_str,
+                               const std::string& key_str,
+                               int64_t parent_id,
+                               std::vector<svdb_json_tvf_row_t>& rows_vec,
+                               int64_t& id) {
+    svdb_json_tvf_row_t row;
+    row.key     = dup_str(key_str);
+    std::string val_s = svdb_json::Serializer::serialize(v, false);
+    row.value   = dup_str(val_s);
+    row.type    = dup_str(json_type_name(v));
+    bool scalar = !v.isArray() && !v.isObject();
+    row.atom    = scalar ? dup_str(json_atom_str(v)) : nullptr;
+    row.id      = id;
+    row.parent  = parent_id;
+    row.fullkey = dup_str(fullkey);
+    row.path    = dup_str(path_str);
+    int64_t my_id = id++;
+    rows_vec.push_back(row);
+
+    if (v.isArray()) {
+        for (size_t i = 0; i < v.array.size(); ++i) {
+            std::string child_key = std::to_string(i);
+            std::string child_fk  = fullkey + "[" + child_key + "]";
+            json_tree_recurse(v.array[i], child_fk, fullkey, child_key, my_id, rows_vec, id);
+        }
+    } else if (v.isObject()) {
+        for (const auto& kv : v.object) {
+            std::string child_fk = fullkey + "." + kv.first;
+            json_tree_recurse(kv.second, child_fk, fullkey, kv.first, my_id, rows_vec, id);
+        }
+    }
+}
+
+/* json_tree(json) - recursive iterator over all JSON nodes */
+svdb_json_tvf_rows_t* svdb_json_tree(const char* json_str) {
+    if (!json_str) return nullptr;
+    try {
+        svdb_json::Parser parser(json_str);
+        svdb_json::Value root = parser.parse();
+
+        svdb_json_tvf_rows_t* result = static_cast<svdb_json_tvf_rows_t*>(
+            std::malloc(sizeof(svdb_json_tvf_rows_t)));
+        if (!result) return nullptr;
+
+        std::vector<svdb_json_tvf_row_t> rows_vec;
+        int64_t id = 1;
+        json_tree_recurse(root, "$", "", "$", -1, rows_vec, id);
+
+        result->count = (int)rows_vec.size();
+        if (result->count > 0) {
+            result->rows = static_cast<svdb_json_tvf_row_t*>(
+                std::malloc(result->count * sizeof(svdb_json_tvf_row_t)));
+            if (!result->rows) { std::free(result); return nullptr; }
+            for (int i = 0; i < result->count; ++i)
+                result->rows[i] = rows_vec[i];
+        } else {
+            result->rows = nullptr;
+        }
+        return result;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void svdb_json_tvf_rows_free(svdb_json_tvf_rows_t* rows) {
+    if (!rows) return;
+    for (int i = 0; i < rows->count; ++i) {
+        svdb_json_tvf_row_t& r = rows->rows[i];
+        std::free(r.key);
+        std::free(r.value);
+        std::free(r.type);
+        if (r.atom)    std::free(r.atom);
+        std::free(r.fullkey);
+        std::free(r.path);
+    }
+    if (rows->rows) std::free(rows->rows);
+    std::free(rows);
+}
+
 } // extern "C"

@@ -37,6 +37,7 @@
 #include <cmath>
 #include <ctime>
 #include <sstream>
+#include <iomanip>
 #include <functional>
 #include <cstdio>
 
@@ -923,6 +924,83 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                     std::string result_str(result);
                     svdb_json_free(result);
                     SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = result_str; return v;
+                }
+            }
+            return SvdbVal{};
+        }
+        /* jsonb(json) - return canonical JSON (same as json() for now) */
+        if (eu.substr(0, 6) == "JSONB(" && fn_paren_ok(6-1)) {
+            SvdbVal json_val = eval_expr(e.substr(6, e.size()-7), row, col_order);
+            if (json_val.type == SVDB_TYPE_NULL) return SvdbVal{};
+            std::string json_str = val_to_str(json_val);
+            char *result = svdb_json_minify(json_str.c_str());
+            if (result) {
+                std::string result_str(result);
+                svdb_json_free(result);
+                SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = result_str; return v;
+            }
+            return SvdbVal{};
+        }
+        /* json_array_insert(json, path, value) */
+        if (eu.substr(0, 18) == "JSON_ARRAY_INSERT(" && fn_paren_ok(18-1)) {
+            std::string args = e.substr(18, e.size()-19);
+            std::vector<std::string> parts;
+            int depth = 0; size_t start = 0; bool in_s = false;
+            for (size_t i = 0; i <= args.size(); ++i) {
+                char c = (i < args.size()) ? args[i] : ',';
+                if (c == '\'' && depth == 0) { in_s = !in_s; continue; }
+                if (in_s) continue;
+                if (c == '(') ++depth; else if (c == ')') --depth;
+                else if (c == ',' && depth == 0) {
+                    SvdbVal v = eval_expr(args.substr(start, i-start), row, col_order);
+                    parts.push_back(val_to_str(v));
+                    start = i + 1;
+                }
+            }
+            if (parts.size() >= 3) {
+                char *result = svdb_json_array_insert(parts[0].c_str(), parts[1].c_str(), parts[2].c_str());
+                if (result) {
+                    std::string result_str(result);
+                    svdb_json_free(result);
+                    SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = result_str; return v;
+                }
+            }
+            return SvdbVal{};
+        }
+        /* json_pretty(json) */
+        if (eu.substr(0, 12) == "JSON_PRETTY(" && fn_paren_ok(12-1)) {
+            SvdbVal json_val = eval_expr(e.substr(12, e.size()-13), row, col_order);
+            if (json_val.type == SVDB_TYPE_NULL) return SvdbVal{};
+            std::string json_str = val_to_str(json_val);
+            char *result = svdb_json_pretty(json_str.c_str());
+            if (result) {
+                std::string result_str(result);
+                svdb_json_free(result);
+                SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = result_str; return v;
+            }
+            return SvdbVal{};
+        }
+        /* json_patch(target, patch) */
+        if (eu.substr(0, 11) == "JSON_PATCH(" && fn_paren_ok(11-1)) {
+            std::string args = e.substr(11, e.size()-12);
+            size_t comma = std::string::npos;
+            int depth = 0; bool in_str = false;
+            for (size_t i = 0; i < args.size(); ++i) {
+                char c = args[i];
+                if (c == '\'') { in_str = !in_str; continue; }
+                if (in_str) continue;
+                if (c == '(') ++depth; else if (c == ')') --depth;
+                else if (c == ',' && depth == 0) { comma = i; break; }
+            }
+            if (comma != std::string::npos) {
+                SvdbVal tgt = eval_expr(args.substr(0, comma), row, col_order);
+                SvdbVal pat = eval_expr(args.substr(comma+1), row, col_order);
+                if (tgt.type != SVDB_TYPE_NULL && pat.type != SVDB_TYPE_NULL) {
+                    std::string ts = val_to_str(tgt), ps = val_to_str(pat);
+                    char buf[65536];
+                    if (svdb_json_patch(buf, sizeof(buf), ts.c_str(), ps.c_str()) == 0) {
+                        SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = buf; return v;
+                    }
                 }
             }
             return SvdbVal{};
@@ -2038,6 +2116,9 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                             char prev = e[i-1];
                             if (prev == '!' || prev == '<' || prev == '>') ok = false;
                         }
+                        /* Skip '>' that is part of '->' or '->>' (JSON arrow operator) */
+                        if ((op == ">" || op == ">=") && i > 0 && e[i-1] == '-') ok = false;
+                        if (op == ">" && i > 1 && e[i-1] == '>' && e[i-2] == '-') ok = false;
                         if (ok) { found_c = (size_t)i; break; }
                     }
                 }
@@ -2075,6 +2156,52 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
         }
     }
+
+#ifdef SVDB_EXT_JSON
+    /* JSON arrow operators: ->> (extract as text) and -> (extract as JSON) */
+    {
+        int depth_arrow = 0;
+        bool in_str_arrow = false;
+        /* Scan right-to-left to find ->> or -> at top level */
+        for (int i = (int)e.size()-1; i >= 1; --i) {
+            char c = e[i];
+            if (e[i] == '\'') { in_str_arrow = !in_str_arrow; continue; }
+            if (in_str_arrow) continue;
+            if (c == ')') ++depth_arrow;
+            else if (c == '(') { if (depth_arrow > 0) --depth_arrow; }
+            if (depth_arrow > 0) continue;
+            /* Check for ->> at position i-1, i, i+1 */
+            if (i+1 < (int)e.size() && e[i-1] == '-' && e[i] == '>' && e[i+1] == '>') {
+                SvdbVal lhs = eval_expr(e.substr(0, i-1), row, col_order);
+                SvdbVal rhs = eval_expr(e.substr(i+2), row, col_order);
+                if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) return SvdbVal{};
+                std::string json_str = val_to_str(lhs);
+                std::string path_str = val_to_str(rhs);
+                char *result = svdb_json_extract(json_str.c_str(), path_str.c_str());
+                if (result) {
+                    std::string rs(result); svdb_json_free(result);
+                    SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = rs; return v;
+                }
+                return SvdbVal{};
+            }
+            /* Check for -> at position i-1, i (but not ->>) */
+            if (i < (int)e.size() && e[i-1] == '-' && e[i] == '>' &&
+                (i+1 >= (int)e.size() || e[i+1] != '>')) {
+                SvdbVal lhs = eval_expr(e.substr(0, i-1), row, col_order);
+                SvdbVal rhs = eval_expr(e.substr(i+1), row, col_order);
+                if (lhs.type == SVDB_TYPE_NULL || rhs.type == SVDB_TYPE_NULL) return SvdbVal{};
+                std::string json_str = val_to_str(lhs);
+                std::string path_str = val_to_str(rhs);
+                char *result = svdb_json_extract(json_str.c_str(), path_str.c_str());
+                if (result) {
+                    std::string rs(result); svdb_json_free(result);
+                    SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = rs; return v;
+                }
+                return SvdbVal{};
+            }
+        }
+    }
+#endif /* SVDB_EXT_JSON */
 
     /* Concatenation operator || */
     {
@@ -3128,7 +3255,7 @@ static std::vector<JoinSpec> parse_all_joins(const std::string &sql) {
 static bool is_window_expr(const std::string &expr);
 
 struct AggState {
-    std::string func;    /* COUNT/SUM/AVG/MIN/MAX/GROUP_CONCAT */
+    std::string func;    /* COUNT/SUM/AVG/MIN/MAX/GROUP_CONCAT/JSON_GROUP_ARRAY/JSON_GROUP_OBJECT */
     std::string arg;     /* column or * */
     std::string sep;     /* separator for GROUP_CONCAT */
     std::string wrapper; /* outer scalar function: ABS/UPPER/LOWER/etc. */
@@ -3141,6 +3268,9 @@ struct AggState {
     bool distinct = false; /* COUNT(DISTINCT ...) */
     std::unordered_set<std::string> seen_vals; /* for DISTINCT counting */
     std::vector<std::string> concat_vals; /* for GROUP_CONCAT */
+    std::vector<SvdbVal>    json_vals;    /* for JSON_GROUP_ARRAY values */
+    std::vector<std::pair<std::string,SvdbVal>> json_kv_vals; /* for JSON_GROUP_OBJECT key-value pairs */
+    std::string arg2;    /* second argument (JSON_GROUP_OBJECT value expr) */
 };
 
 static bool is_agg_expr(const std::string &e) {
@@ -3148,7 +3278,7 @@ static bool is_agg_expr(const std::string &e) {
     if (is_window_expr(e)) return false;
     std::string eu = qry_upper(e);
     /* Check for aggregate functions at the TOP LEVEL (not inside a subquery) */
-    static const char *agg_fns[] = {"COUNT(", "SUM(", "AVG(", "MIN(", "MAX(", "GROUP_CONCAT(", "GROUP CONCAT(", nullptr};
+    static const char *agg_fns[] = {"COUNT(", "SUM(", "AVG(", "MIN(", "MAX(", "GROUP_CONCAT(", "GROUP CONCAT(", "JSON_GROUP_ARRAY(", "JSON_GROUP_OBJECT(", nullptr};
     for (const char **fn = agg_fns; *fn; ++fn) {
         std::string pat = *fn;
         size_t p = eu.find(pat);
@@ -3269,6 +3399,27 @@ static AggState make_agg(const std::string &expr) {
             a.sep = ",";
         }
     }
+    /* JSON_GROUP_ARRAY(expr) */
+    if (a.func.empty() && eu.substr(0, 17) == "JSON_GROUP_ARRAY(" && eu.back() == ')') {
+        a.func = "JSON_GROUP_ARRAY";
+        a.arg  = qry_trim(e_orig.substr(17, e_orig.size() - 18));
+    }
+    /* JSON_GROUP_OBJECT(key_expr, val_expr) */
+    if (a.func.empty() && eu.substr(0, 18) == "JSON_GROUP_OBJECT(" && eu.back() == ')') {
+        std::string inner = e_orig.substr(18, e_orig.size() - 19);
+        int d2 = 0; size_t cp = std::string::npos;
+        for (size_t i = 0; i < inner.size(); ++i) {
+            if (inner[i] == '(') ++d2; else if (inner[i] == ')') --d2;
+            else if (inner[i] == ',' && d2 == 0) { cp = i; break; }
+        }
+        a.func = "JSON_GROUP_OBJECT";
+        if (cp != std::string::npos) {
+            a.arg  = qry_trim(inner.substr(0, cp));
+            a.arg2 = qry_trim(inner.substr(cp+1));
+        } else {
+            a.arg = qry_trim(inner);
+        }
+    }
     return a;
 }
 
@@ -3277,7 +3428,7 @@ static AggState make_agg(const std::string &expr) {
 static std::vector<std::string> extract_agg_subexprs(const std::string &expr) {
     std::vector<std::string> result;
     std::string eu = qry_upper(expr);
-    static const char *agg_names[] = {"COUNT", "SUM", "AVG", "MIN", "MAX", "GROUP_CONCAT", nullptr};
+    static const char *agg_names[] = {"COUNT", "SUM", "AVG", "MIN", "MAX", "GROUP_CONCAT", "JSON_GROUP_ARRAY", "JSON_GROUP_OBJECT", nullptr};
     bool in_str = false;
     for (size_t i = 0; i < eu.size(); ++i) {
         char c = eu[i];
@@ -3347,6 +3498,12 @@ static void agg_accumulate(AggState &a, const Row &row,
         if (!a.has_max || val_cmp(v, a.max_val) > 0) { a.max_val = v; a.has_max = true; }
     } else if (a.func == "GROUP_CONCAT") {
         a.concat_vals.push_back(val_to_str(v));
+    } else if (a.func == "JSON_GROUP_ARRAY") {
+        a.json_vals.push_back(v);
+    } else if (a.func == "JSON_GROUP_OBJECT") {
+        /* v is the key; evaluate arg2 for the value */
+        SvdbVal v2 = a.arg2.empty() ? SvdbVal{} : eval_expr(a.arg2, row, col_order);
+        a.json_kv_vals.push_back({val_to_str(v), v2});
     }
 }
 
@@ -3377,6 +3534,72 @@ static SvdbVal agg_result(const AggState &a) {
             }
             base_result.type = SVDB_TYPE_TEXT; base_result.sval = res;
         }
+    } else if (a.func == "JSON_GROUP_ARRAY") {
+        /* Build JSON array from collected values */
+        std::string res = "[";
+        for (size_t i = 0; i < a.json_vals.size(); ++i) {
+            if (i > 0) res += ",";
+            const SvdbVal &sv = a.json_vals[i];
+            if (sv.type == SVDB_TYPE_NULL)       res += "null";
+            else if (sv.type == SVDB_TYPE_INT)   res += std::to_string(sv.ival);
+            else if (sv.type == SVDB_TYPE_REAL) {
+                std::ostringstream oss;
+                if (sv.rval == (int64_t)sv.rval) oss << (int64_t)sv.rval;
+                else oss << std::setprecision(15) << sv.rval;
+                res += oss.str();
+            } else {
+                /* TEXT: JSON-encode the string */
+                res += "\"";
+                for (char c : sv.sval) {
+                    if (c == '"')  res += "\\\"";
+                    else if (c == '\\') res += "\\\\";
+                    else if (c == '\n') res += "\\n";
+                    else if (c == '\r') res += "\\r";
+                    else if (c == '\t') res += "\\t";
+                    else res += c;
+                }
+                res += "\"";
+            }
+        }
+        res += "]";
+        base_result.type = SVDB_TYPE_TEXT; base_result.sval = res;
+    } else if (a.func == "JSON_GROUP_OBJECT") {
+        /* Build JSON object from collected key-value pairs */
+        std::string res = "{";
+        for (size_t i = 0; i < a.json_kv_vals.size(); ++i) {
+            if (i > 0) res += ",";
+            /* Key (always a string) */
+            res += "\"";
+            for (char c : a.json_kv_vals[i].first) {
+                if (c == '"')  res += "\\\"";
+                else if (c == '\\') res += "\\\\";
+                else res += c;
+            }
+            res += "\":";
+            /* Value */
+            const SvdbVal &sv = a.json_kv_vals[i].second;
+            if (sv.type == SVDB_TYPE_NULL)       res += "null";
+            else if (sv.type == SVDB_TYPE_INT)   res += std::to_string(sv.ival);
+            else if (sv.type == SVDB_TYPE_REAL) {
+                std::ostringstream oss;
+                if (sv.rval == (int64_t)sv.rval) oss << (int64_t)sv.rval;
+                else oss << std::setprecision(15) << sv.rval;
+                res += oss.str();
+            } else {
+                res += "\"";
+                for (char c : sv.sval) {
+                    if (c == '"')  res += "\\\"";
+                    else if (c == '\\') res += "\\\\";
+                    else if (c == '\n') res += "\\n";
+                    else if (c == '\r') res += "\\r";
+                    else if (c == '\t') res += "\\t";
+                    else res += c;
+                }
+                res += "\"";
+            }
+        }
+        res += "}";
+        base_result.type = SVDB_TYPE_TEXT; base_result.sval = res;
     } else {
         return SvdbVal{};
     }
@@ -3872,6 +4095,27 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                     r->col_names=wanted; r->rows=nr3;
                 }
             }
+            /* Apply ORDER BY if present */
+            {
+                auto order_cols2 = parse_order_by(sql);
+                if (!order_cols2.empty()) {
+                    std::stable_sort(r->rows.begin(), r->rows.end(),
+                        [&](const std::vector<SvdbVal> &a, const std::vector<SvdbVal> &b) {
+                            for (auto &oc : order_cols2) {
+                                int ci4 = -1;
+                                for (size_t i = 0; i < r->col_names.size(); ++i)
+                                    if (qry_upper(r->col_names[i]) == qry_upper(oc.expr)) { ci4 = (int)i; break; }
+                                if (ci4 < 0 || ci4 >= (int)a.size() || ci4 >= (int)b.size()) continue;
+                                const SvdbVal &av = a[ci4], &bv = b[ci4];
+                                std::string as2 = (av.type==SVDB_TYPE_TEXT)?av.sval:std::to_string(av.ival);
+                                std::string bs2 = (bv.type==SVDB_TYPE_TEXT)?bv.sval:std::to_string(bv.ival);
+                                int cmp = as2.compare(bs2);
+                                if (cmp != 0) return oc.desc ? cmp > 0 : cmp < 0;
+                            }
+                            return false;
+                        });
+                }
+            }
             *rows_out = r;
             return SVDB_OK;
         }
@@ -3992,8 +4236,77 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                                            rd["constraint_name"],rd["table_schema"],rd["table_name"],rd["constraint_type"]});
                     }
                 }
-            }
 
+            } else if (is_view == "KEY_COLUMN_USAGE") {
+                r->col_names = {"constraint_catalog","constraint_schema","constraint_name",
+                                 "table_schema","table_name","column_name","ordinal_position"};
+                /* Primary key columns */
+                for (auto &kv : db->primary_keys) {
+                    if (kv.second.empty()) continue;
+                    int ord = 1;
+                    for (auto &col : kv.second) {
+                        Row rd;
+                        rd["constraint_catalog"]=SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["constraint_schema"] =SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["constraint_name"]   =SvdbVal{SVDB_TYPE_TEXT,0,0,"PRIMARY"};
+                        rd["table_schema"]      =SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["table_name"]        =SvdbVal{SVDB_TYPE_TEXT,0,0,kv.first};
+                        rd["column_name"]       =SvdbVal{SVDB_TYPE_TEXT,0,0,col};
+                        rd["ordinal_position"]  =SvdbVal{SVDB_TYPE_INT,ord++,0,""};
+                        if (!where_txt.empty() && !qry_eval_where(rd, r->col_names, where_txt)) continue;
+                        r->rows.push_back({rd["constraint_catalog"],rd["constraint_schema"],
+                                           rd["constraint_name"],rd["table_schema"],rd["table_name"],
+                                           rd["column_name"],rd["ordinal_position"]});
+                    }
+                }
+                /* Column-level primary keys (single-col PK stored in schema) */
+                for (auto &tbl : db->col_order) {
+                    if (db->primary_keys.count(tbl.first)) continue; /* already handled */
+                    int ord = 1;
+                    for (auto &cn : tbl.second) {
+                        auto &td = db->schema[tbl.first];
+                        auto cit = td.find(cn);
+                        if (cit == td.end() || !cit->second.primary_key) continue;
+                        Row rd;
+                        rd["constraint_catalog"]=SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["constraint_schema"] =SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["constraint_name"]   =SvdbVal{SVDB_TYPE_TEXT,0,0,"PRIMARY"};
+                        rd["table_schema"]      =SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["table_name"]        =SvdbVal{SVDB_TYPE_TEXT,0,0,tbl.first};
+                        rd["column_name"]       =SvdbVal{SVDB_TYPE_TEXT,0,0,cn};
+                        rd["ordinal_position"]  =SvdbVal{SVDB_TYPE_INT,ord++,0,""};
+                        if (!where_txt.empty() && !qry_eval_where(rd, r->col_names, where_txt)) continue;
+                        r->rows.push_back({rd["constraint_catalog"],rd["constraint_schema"],
+                                           rd["constraint_name"],rd["table_schema"],rd["table_name"],
+                                           rd["column_name"],rd["ordinal_position"]});
+                    }
+                }
+            } else if (is_view == "REFERENTIAL_CONSTRAINTS") {
+                r->col_names = {"constraint_catalog","constraint_schema","constraint_name",
+                                 "unique_constraint_catalog","unique_constraint_schema",
+                                 "unique_constraint_name","match_option","update_rule","delete_rule"};
+                for (auto &kv : db->fk_constraints) {
+                    int fidx = 0;
+                    for (auto &fk : kv.second) {
+                        std::string cname = kv.first + "_fk_" + std::to_string(fidx++);
+                        Row rd;
+                        rd["constraint_catalog"]        =SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["constraint_schema"]         =SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["constraint_name"]           =SvdbVal{SVDB_TYPE_TEXT,0,0,cname};
+                        rd["unique_constraint_catalog"] =SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["unique_constraint_schema"]  =SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["unique_constraint_name"]    =SvdbVal{SVDB_TYPE_TEXT,0,0,fk.parent_table+"_pkey"};
+                        rd["match_option"]              =SvdbVal{SVDB_TYPE_TEXT,0,0,"NONE"};
+                        rd["update_rule"]               =SvdbVal{SVDB_TYPE_TEXT,0,0,"NO ACTION"};
+                        rd["delete_rule"]               =SvdbVal{SVDB_TYPE_TEXT,0,0,"NO ACTION"};
+                        if (!where_txt.empty() && !qry_eval_where(rd, r->col_names, where_txt)) continue;
+                        r->rows.push_back({rd["constraint_catalog"],rd["constraint_schema"],
+                                           rd["constraint_name"],rd["unique_constraint_catalog"],
+                                           rd["unique_constraint_schema"],rd["unique_constraint_name"],
+                                           rd["match_option"],rd["update_rule"],rd["delete_rule"]});
+                    }
+                }
+            }
             /* Project SELECT columns */
             {
                 std::string sel_part = qry_trim(sql);
@@ -4498,6 +4811,144 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
             ++i;
         }
     }
+
+#ifdef SVDB_EXT_JSON
+    /* ── JSON Table-Valued Functions (json_each, json_tree, jsonb_each, jsonb_tree) ── */
+    {
+        std::string su_tvf = qry_upper(sql);
+        size_t from_pos_tvf = std::string::npos;
+        /* Find top-level " FROM " */
+        {
+            int dp = 0; bool ins = false;
+            for (size_t i = 0; i + 6 <= su_tvf.size(); ++i) {
+                char c = su_tvf[i];
+                if (c == '\'') { ins = !ins; continue; }
+                if (ins) continue;
+                if (c == '(') { ++dp; continue; }
+                if (c == ')') { if (dp > 0) --dp; continue; }
+                if (dp > 0) continue;
+                if (su_tvf.substr(i, 6) == " FROM ") { from_pos_tvf = i; break; }
+            }
+        }
+        if (from_pos_tvf != std::string::npos) {
+            size_t after_from = from_pos_tvf + 6;
+            while (after_from < su_tvf.size() && su_tvf[after_from] == ' ') ++after_from;
+            /* Check if FROM is followed by a JSON TVF name */
+            static const char *tvf_names[] = {"JSON_EACH(", "JSON_TREE(", "JSONB_EACH(", "JSONB_TREE(", nullptr};
+            bool is_tree[] = {false, true, false, true};
+            int tvf_idx = -1;
+            size_t tvf_name_len = 0;
+            for (int ti = 0; tvf_names[ti]; ++ti) {
+                size_t nl = strlen(tvf_names[ti]);
+                if (after_from + nl <= su_tvf.size() &&
+                    su_tvf.substr(after_from, nl) == tvf_names[ti]) {
+                    tvf_idx = ti;
+                    tvf_name_len = nl;
+                    break;
+                }
+            }
+            if (tvf_idx >= 0) {
+                /* Find closing paren of the TVF call */
+                size_t arg_start = after_from + tvf_name_len - 1; /* points to '(' */
+                int dp2 = 0; size_t close_p = std::string::npos;
+                for (size_t i = arg_start; i < sql.size(); ++i) {
+                    if (sql[i] == '(') ++dp2;
+                    else if (sql[i] == ')') { if (--dp2 == 0) { close_p = i; break; } }
+                }
+                if (close_p != std::string::npos) {
+                    /* Extract the JSON argument */
+                    std::string tvf_arg_expr = sql.substr(arg_start + 1, close_p - arg_start - 1);
+                    /* Evaluate the argument */
+                    Row empty_row; std::vector<std::string> empty_order;
+                    SvdbVal arg_val = eval_expr(tvf_arg_expr, empty_row, empty_order);
+                    std::string json_str = arg_val.type == SVDB_TYPE_NULL ? "" : val_to_str(arg_val);
+
+                    /* Generate TVF rows */
+                    svdb_json_tvf_rows_t *tvf_rows = nullptr;
+                    if (!json_str.empty()) {
+                        if (is_tree[tvf_idx])
+                            tvf_rows = svdb_json_tree(json_str.c_str());
+                        else
+                            tvf_rows = svdb_json_each(json_str.c_str());
+                    }
+
+                    /* Extract optional alias */
+                    std::string rest_sql = sql.substr(close_p + 1);
+                    std::string rest_u = qry_upper(qry_trim(rest_sql));
+                    std::string tvf_alias;
+                    {
+                        std::string rt = qry_trim(rest_u);
+                        if (!rt.empty() && rt[0] != 'W' && rt[0] != 'O' && rt[0] != 'G' &&
+                            rt[0] != 'L' && rt[0] != 'J' && rt[0] != 'I' && rt[0] != ',') {
+                            size_t ae = 0;
+                            while (ae < rt.size() && rt[ae] != ' ' && rt[ae] != ',') ++ae;
+                            std::string word = rt.substr(0, ae);
+                            static const char *stop[] = {"WHERE","ORDER","GROUP","LIMIT","HAVING",
+                                                          "INNER","LEFT","JOIN","ON", nullptr};
+                            bool is_stop = false;
+                            for (const char **sw = stop; *sw; ++sw)
+                                if (word == *sw) { is_stop = true; break; }
+                            if (!is_stop && !word.empty()) tvf_alias = word;
+                        }
+                    }
+
+                    /* Create temp table */
+                    static const char *tvf_cols[] = {"key","value","type","atom","id","parent","fullkey","path"};
+                    std::string tmp_tname = "__tvf_" + std::to_string((size_t)tvf_rows) + "_" + std::to_string(tvf_idx);
+                    db->schema[tmp_tname] = {};
+                    db->col_order[tmp_tname] = {};
+                    db->data[tmp_tname] = {};
+                    for (const char *cn : tvf_cols) {
+                        db->schema[tmp_tname][cn] = ColDef{"TEXT", "", false, false};
+                        db->col_order[tmp_tname].push_back(cn);
+                    }
+
+                    if (tvf_rows) {
+                        for (int ri = 0; ri < tvf_rows->count; ++ri) {
+                            svdb_json_tvf_row_t &tr = tvf_rows->rows[ri];
+                            Row r_new;
+                            r_new["key"]     = tr.key ? SvdbVal{SVDB_TYPE_TEXT, 0, 0, tr.key} : SvdbVal{};
+                            r_new["value"]   = tr.value ? SvdbVal{SVDB_TYPE_TEXT, 0, 0, tr.value} : SvdbVal{};
+                            r_new["type"]    = tr.type ? SvdbVal{SVDB_TYPE_TEXT, 0, 0, tr.type} : SvdbVal{};
+                            r_new["atom"]    = tr.atom ? SvdbVal{SVDB_TYPE_TEXT, 0, 0, tr.atom} : SvdbVal{};
+                            r_new["id"]      = SvdbVal{SVDB_TYPE_INT, tr.id, 0, ""};
+                            r_new["parent"]  = tr.parent >= 0 ? SvdbVal{SVDB_TYPE_INT, tr.parent, 0, ""} : SvdbVal{};
+                            r_new["fullkey"] = tr.fullkey ? SvdbVal{SVDB_TYPE_TEXT, 0, 0, tr.fullkey} : SvdbVal{};
+                            r_new["path"]    = tr.path ? SvdbVal{SVDB_TYPE_TEXT, 0, 0, tr.path} : SvdbVal{};
+                            db->data[tmp_tname].push_back(r_new);
+                        }
+                        svdb_json_tvf_rows_free(tvf_rows);
+                    }
+
+                    /* Rewrite SQL: replace TVF call with tmp table name */
+                    std::string new_sql = sql.substr(0, from_pos_tvf) + " FROM " + tmp_tname;
+                    if (!tvf_alias.empty()) {
+                        /* Skip alias in rest_sql since we're using the table name */
+                        size_t skip_alias = rest_sql.find(tvf_alias);
+                        if (skip_alias != std::string::npos)
+                            new_sql += rest_sql.substr(skip_alias + tvf_alias.size());
+                        else
+                            new_sql += rest_sql;
+                    } else {
+                        new_sql += rest_sql;
+                    }
+
+                    svdb_rows_t *result = nullptr;
+                    svdb_code_t rc2 = svdb_query_internal(db, new_sql, &result);
+
+                    /* Clean up temp table */
+                    db->schema.erase(tmp_tname);
+                    db->col_order.erase(tmp_tname);
+                    db->data.erase(tmp_tname);
+
+                    if (rc2 != SVDB_OK) { if (result) delete result; return rc2; }
+                    *rows_out = result;
+                    return SVDB_OK;
+                }
+            }
+        }
+    }
+#endif /* SVDB_EXT_JSON */
 
     /* ── Derived table (FROM subquery) detection ── */
     /* Detect: SELECT cols FROM (SELECT ...) [alias] [WHERE ...] */
@@ -6149,6 +6600,45 @@ svdb_code_t svdb_query_pragma(svdb_db_t *db, const std::string &sql,
             v_seq.type  = SVDB_TYPE_INT;  v_seq.ival  = kv.second;
             r->rows.push_back({v_name, v_seq});
         }
+        return SVDB_OK;
+    }
+
+    /* PRAGMA shrink_memory — release unused memory, return 0 */
+    if (pname == "SHRINK_MEMORY") {
+        r->col_names = {"shrink_memory"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = 0;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA optimize [= val] — return 'ok' (no-op for in-memory DB) */
+    if (pname == "OPTIMIZE") {
+        r->col_names = {"optimize"};
+        SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = "ok";
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA journal_size_limit [= val] */
+    if (pname == "JOURNAL_SIZE_LIMIT") {
+        if (!parg.empty()) {
+            try { db->journal_size_limit_val = std::stoll(parg); } catch (...) {}
+        }
+        r->col_names = {"journal_size_limit"};
+        SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = db->journal_size_limit_val;
+        r->rows.push_back({v});
+        return SVDB_OK;
+    }
+
+    /* PRAGMA cache_grind — return page-cache statistics stub */
+    if (pname == "CACHE_GRIND") {
+        r->col_names = {"pages_cached", "pages_free", "hits", "misses"};
+        SvdbVal v0, v1, v2, v3;
+        v0.type = SVDB_TYPE_INT; v0.ival = 0;
+        v1.type = SVDB_TYPE_INT; v1.ival = 0;
+        v2.type = SVDB_TYPE_INT; v2.ival = 0;
+        v3.type = SVDB_TYPE_INT; v3.ival = 0;
+        r->rows.push_back({v0, v1, v2, v3});
         return SVDB_OK;
     }
 
