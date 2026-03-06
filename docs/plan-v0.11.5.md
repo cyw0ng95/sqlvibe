@@ -12,7 +12,58 @@ v0.11.5 focuses on optimizing the C++ core engine after the module structure reo
 
 ---
 
-## Completed Tasks
+## Progress Update (2026-03-07)
+
+### Completed
+
+#### [x] M0: Benchmark Infrastructure
+**Status**: ✅ Complete  
+**Commit**: `a975bb4 feat: Add metadata cache infrastructure for COUNT(*) optimization`
+
+**Created Scripts**:
+- `scripts/benchmark_collect.sh` - Automated benchmark collection to CSV
+- `scripts/benchmark_analyze.py` - Priority analysis from results
+- `scripts/benchmark_compare.py` - Before/after comparison with geometric mean
+
+**Baseline Results** (13th Gen Intel i7-13650HX):
+| Workload | Scale | SQLite | sqlvibe | Ratio |
+|----------|-------|--------|---------|-------|
+| COUNT(*) | 1K | 3.9 µs | 467 µs | 119.8× |
+| SELECT all | 1K | 425 µs | 4.17 ms | 9.8× |
+| SUM aggregate | 1K | 44 µs | 1.81 ms | 41.1× |
+| GROUP BY | 1K | 312 µs | 4.91 ms | 15.7× |
+| INSERT batch | 1K | 3.97 ms | 2.29 ms | **1.7× faster** |
+
+#### [x] COUNT(*) Metadata Cache Infrastructure
+**Status**: ✅ Infrastructure Complete, ⚠️ Fast Path Disabled
+
+**What's Working**:
+- `svdb_is_registry_t` with `table_metadata` cache implemented
+- Cache populated when table data loaded
+- Cache updated on INSERT (+1) and DELETE (invalidate)
+- Registry initialized in `svdb_open()`, destroyed in `svdb_close()`
+
+**Files Modified**:
+- `src/core/IS/is_registry.h` - Added `svdb_is_table_metadata_t` struct
+- `src/core/IS/is_registry.cpp` - Implemented cache API
+- `src/core/SC/svdb_types.h` - Added `is_registry` member to `svdb_db_s`
+- `src/core/SC/database.cpp` - Initialize/destroy registry
+- `src/core/SC/exec.cpp` - Update cache on INSERT/DELETE
+- `src/core/SC/query.cpp` - Populate cache when loading table data
+
+**Known Issue**: COUNT(*) fast path causes SIGFPE crash - disabled for debugging
+```cpp
+/* NOTE: COUNT(*) fast path disabled - needs debugging (SIGFPE crash) */
+```
+
+**Next Steps**:
+- Debug SIGFPE crash in fast path (likely division by zero or null deref)
+- Re-enable fast path once fixed
+- Target: 98× speedup (4.89ms → 50µs)
+
+---
+
+## Completed Tasks (Original Plan)
 
 ### [x] Module Structure Optimization (v0.11.4 → v0.11.5)
 

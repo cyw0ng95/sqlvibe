@@ -5699,12 +5699,14 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         auto data_it = db->data.find(tname);
         if (data_it != db->data.end()) {
             all_rows = data_it->second;
-            
+
             /* Update metadata cache with actual row count */
+            /* NOTE: Disabled temporarily - causes SIGFPE crash
             if (db->is_registry) {
-                svdb_is_set_table_metadata(db->is_registry, tname.c_str(), 
+                svdb_is_set_table_metadata(db->is_registry, tname.c_str(),
                                            (uint64_t)all_rows.size());
             }
+            */
         }
         merged_col_order = col_order;
         /* Always add table-name and alias prefixes to rows for correlated subqueries */

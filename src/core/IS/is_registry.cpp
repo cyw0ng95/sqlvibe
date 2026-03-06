@@ -191,11 +191,14 @@ int svdb_is_get_table_metadata(svdb_is_registry_t* reg, const char* table_name, 
 void svdb_is_set_table_metadata(svdb_is_registry_t* reg, const char* table_name, uint64_t row_count) {
     if (!reg || !table_name) return;
     
+    /* Safety check: ensure registry is properly initialized */
+    if (!reg->schema) return;
+    
     std::string key = to_lower(table_name);
     svdb_is_table_metadata_t meta;
     meta.row_count = row_count;
     meta.schema_version = 0;
-    meta.last_modified_counter = ++reg->global_modify_counter;
+    meta.last_modified_counter = reg->global_modify_counter++;
     meta.valid = 1;
     
     reg->table_metadata[key] = meta;
@@ -204,9 +207,12 @@ void svdb_is_set_table_metadata(svdb_is_registry_t* reg, const char* table_name,
 void svdb_is_invalidate_table_metadata(svdb_is_registry_t* reg, const char* table_name) {
     if (!reg || !table_name) return;
     
+    /* Safety check: ensure registry is properly initialized */
+    if (!reg->schema) return;
+    
     std::string key = to_lower(table_name);
     auto it = reg->table_metadata.find(key);
-    
+
     if (it != reg->table_metadata.end()) {
         it->second.valid = 0;
     }
@@ -215,11 +221,14 @@ void svdb_is_invalidate_table_metadata(svdb_is_registry_t* reg, const char* tabl
 void svdb_is_update_table_metadata_delta(svdb_is_registry_t* reg, const char* table_name, int64_t delta) {
     if (!reg || !table_name) return;
     
+    /* Safety check: ensure registry is properly initialized */
+    if (!reg->schema) return;
+    
     std::string key = to_lower(table_name);
     auto it = reg->table_metadata.find(key);
-    
+
     if (it != reg->table_metadata.end() && it->second.valid) {
-        it->second.row_count += delta;
+        it->second.row_count += (uint64_t)delta;
         it->second.last_modified_counter = ++reg->global_modify_counter;
     }
 }

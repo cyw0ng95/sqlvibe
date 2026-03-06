@@ -1836,10 +1836,12 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         row[SVDB_ROWID_COLUMN] = SvdbVal{SVDB_TYPE_INT, db->rowid_counter[resolved_tname2], 0.0, {}};
         db->data[resolved_tname2].push_back(row);
         
-        /* Update metadata cache */
+        /* NOTE: Disabled temporarily - causes SIGFPE crash
+        // Update metadata cache
         if (db->is_registry) {
             svdb_is_update_table_metadata_delta(db->is_registry, resolved_tname2.c_str(), 1);
         }
+        */
         
         db->rows_affected = 1; db->last_insert_rowid = db->rowid_counter[tname2];
         if (res) { res->code = SVDB_OK; res->rows_affected = 1; res->last_insert_rowid = db->last_insert_rowid; }
@@ -2718,10 +2720,12 @@ static svdb_code_t do_delete(svdb_db_t *db, const std::string &sql,
     }
     svdb_set_query_db(nullptr);
     
-    /* Invalidate metadata cache (row count changed) */
+    /* NOTE: Disabled temporarily - causes SIGFPE crash
+    // Invalidate metadata cache (row count changed)
     if (db->is_registry) {
         svdb_is_invalidate_table_metadata(db->is_registry, resolved_tname.c_str());
     }
+    */
 
     /* FK ON DELETE actions: CASCADE, SET NULL, RESTRICT/NO ACTION (recursive) */
     if (db->foreign_keys_enabled && !deleted_rows.empty()) {
