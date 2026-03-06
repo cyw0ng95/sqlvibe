@@ -1803,11 +1803,10 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         size_t ts = into_pos;
         while (into_pos < sql.size() && (isalnum((unsigned char)sql[into_pos]) || sql[into_pos] == '_')) ++into_pos;
         std::string tname2 = sql.substr(ts, into_pos - ts);
-        
-        /* Case-insensitive table lookup */
-        auto schema_it2 = find_table_case_insensitive(db->schema, tname2);
-        if (schema_it2 == db->schema.end()) { db->last_error = "no such table: " + tname2; return SVDB_ERR; }
-        std::string resolved_tname2 = schema_it2->first;
+
+        /* Case-insensitive table lookup with schema prefix support */
+        std::string resolved_tname2 = resolve_table_name(db, tname2);
+        if (resolved_tname2.empty()) { db->last_error = "no such table: " + tname2; return SVDB_ERR; }
         
         const auto &col_order2 = db->col_order[resolved_tname2];
         Row row;
