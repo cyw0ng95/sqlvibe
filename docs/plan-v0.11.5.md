@@ -1,1240 +1,741 @@
 # sqlvibe v0.11.5 Development Plan
 
-**Version**: v0.11.5  
+**Version**: 0.11.5  
 **Date**: 2026-03-06  
-**Focus**: C++ Performance Optimization & Module Structure  
+**Focus**: Complete C++ Performance Optimization  
 
 ---
 
 ## Overview
 
-v0.11.5 focuses on optimizing the C++ core engine after the module structure reorganization (v0.11.4). This plan establishes a comprehensive performance baseline with detailed benchmarks, root cause analysis, and prioritized optimization targets for v0.11.5 → v0.11.6.
+v0.11.5 completes ALL performance optimizations in a single release. Building on v0.11.4 baseline benchmarks, this plan executes 8 parallel workstreams covering JOIN engine, COUNT(*) optimization, VM dispatch, memory system, SIMD, query processing, code generation, and transaction management.
+
+**Target Performance**:
+- INNER JOIN: 60× speedup (6034ms → 100ms)
+- COUNT(*): 98× speedup (4.89ms → 50µs)
+- SELECT all: 5× speedup (47.8ms → 10ms)
+- Overall: ~15× geometric mean improvement
 
 ---
 
-## Progress Update (2026-03-07)
-
-### Completed
-
-#### [x] M0: Benchmark Infrastructure
-**Status**: ✅ Complete  
-**Commit**: `a975bb4 feat: Add metadata cache infrastructure for COUNT(*) optimization`
-
-**Created Scripts**:
-- `scripts/benchmark_collect.sh` - Automated benchmark collection to CSV
-- `scripts/benchmark_analyze.py` - Priority analysis from results
-- `scripts/benchmark_compare.py` - Before/after comparison with geometric mean
-
-**Baseline Results** (13th Gen Intel i7-13650HX):
-| Workload | Scale | SQLite | sqlvibe | Ratio |
-|----------|-------|--------|---------|-------|
-| COUNT(*) | 1K | 3.9 µs | 513 µs | 131.5× |
-| SELECT all | 1K | 425 µs | 4.17 ms | 9.8× |
-| SUM aggregate | 1K | 44 µs | 1.81 ms | 41.1× |
-| GROUP BY | 1K | 312 µs | 4.91 ms | 15.7× |
-| INSERT batch | 1K | 3.97 ms | 2.29 ms | **1.7× faster** |
-
-#### [x] P2: Enable LTO
-**Status**: ✅ Complete  
-**Commit**: `262a931 feat: Enable LTO (Link-Time Optimization)`
-
-**What's Done**:
-- Added `check_ipo_supported()` in `src/CMakeLists.txt`
-- Enabled `CMAKE_INTERPROCEDURAL_OPTIMIZATION` when supported
-- LTO confirmed working with GCC and AVX2
-
-**Expected Impact**: 10-15% overall performance improvement
-
-#### [ ] P0-CRITICAL: Hash Join Optimization
-**Status**: ⏸️ Implementation Attempted (reverted)
-
-**Attempted Implementation**:
-- Created `FastHashTable` with open addressing and SIMD CRC32 hashing
-- Issue: Initial implementation was slower than std::unordered_map (5.8s vs 6s)
-- Root cause: Probe sequence bugs, need more careful implementation
-
-**Next Steps**:
-- Simpler optimization: use `std::string_view` to avoid string copies
-- Pre-size unordered_map with expected cardinality
-- Consider robin_hood::unordered_flat_map for better cache locality
-- Target remains: 60× speedup (6034ms → 100ms)
-
-#### [x] COUNT(*) Metadata Cache Infrastructure
-**Status**: ✅ Infrastructure Complete, ⚠️ Fast Path Disabled (SIGFPE debugging)
-
-**What's Working**:
-- `svdb_is_registry_t` with `table_metadata` cache implemented
-- Registry initialized in `svdb_open()`, destroyed in `svdb_close()`
-- Cache API functions implemented and tested
-- **Stable**: COUNT(*) uses normal aggregate path (no crash)
-
-**Files Modified**:
-- `src/core/IS/is_registry.h` - Added `svdb_is_table_metadata_t` struct
-- `src/core/IS/is_registry.cpp` - Implemented cache API with safety checks
-- `src/core/SC/svdb_types.h` - Added `is_registry` member to `svdb_db_s`
-- `src/core/SC/database.cpp` - Initialize/destroy registry
-- `src/core/SC/exec.cpp` - INSERT/DELETE cache updates (disabled for debugging)
-- `src/core/SC/query.cpp` - Cache population (disabled for debugging)
-
-**Known Issue**: Metadata cache updates cause SIGFPE crash when enabled
-- Root cause: Division by zero in C++ code (instruction `div r15` where r15=0)
-- Workaround: Cache updates disabled, infrastructure remains for future fix
-- Fast path disabled, normal COUNT(*) aggregate path works correctly
-
-**Next Steps**:
-- Debug SIGFPE root cause (likely in unordered_map or counter increment)
-- Re-enable cache updates once fixed
-- Enable fast path for 98× speedup target (4.89ms → 50µs)
-
-**Commits**:
-- `a975bb4` feat: Add metadata cache infrastructure
-- `30d818a` fix: Disable metadata cache updates (SIGFPE debugging)
-
----
-
-## Completed Tasks (Original Plan)
-
-### [x] Module Structure Optimization (v0.11.4 → v0.11.5)
-
-**Status**: ✅ Complete  
-**Commit**: `8ccf4e4 refactor: Optimize C++ module structure into src/core/[SubSystem]`
-
-**Changes**:
-- Created `SC/` (System Composer) subsystem for C API and orchestration
-- Moved `svdb/*` → `SC/` (unified C public API)
-- Moved `wrapper/*` → `SC/` (invoke chain wrappers)
-- Moved `cgo/hash_join.*` → `VM/` (hash join is VM execution)
-- Removed 6 redundant subsystem CMakeLists.txt files (CG, DS, QP, VM, cgo, wrapper)
-- Updated Go CGO include paths to `core/SC`
-- Single `libsvdb.so` build from `src/CMakeLists.txt`
-
-**Result**: All C++ core code organized under `src/core/[SubSystem]`
-```
-src/core/
-├── CG/  (Code Generation)
-├── DS/  (Data Storage)
-├── IS/  (Information Schema)
-├── PB/  (Platform Bridges)
-├── QP/  (Query Processing)
-├── SC/  (System Composer) ← NEW
-├── SF/  (System Framework)
-├── TM/  (Transaction Management)
-└── VM/  (Virtual Machine)
-```
-
----
-
-## Architecture Review Findings
-
-### Current State Analysis
-
-| Subsystem | LOC | Key Components | Status |
-|-----------|-----|----------------|--------|
-| CG | ~1,500 | Bytecode compiler, optimizer, plan cache | ✅ Stable |
-| DS | ~3,500 | B-Tree, page manager, cache, arena, SIMD | ✅ Stable |
-| IS | ~500 | Virtual tables, schema registry | ⚠️ TODOs present |
-| PB | ~300 | VFS abstraction | ✅ Stable |
-| QP | ~2,000 | Tokenizer, parser, analyzer, binder | ✅ Stable |
-| SC | ~8,000 | C API, orchestration, invoke chain | ✅ Stable |
-| SF | ~200 | Assertions, types | ✅ Stable |
-| TM | ~400 | MVCC, transactions | ✅ Stable |
-| VM | ~4,000 | Bytecode executor, engines, opcodes | ✅ Stable |
-
-**Total**: ~20,400 LOC C++ core
-
----
-
-## Performance Baseline (v0.11.5)
-
-**Test Hardware**: 13th Gen Intel(R) Core(TM) i7-13650HX (20 cores), Linux, Go 1.21+  
-**Benchmarks**: In-memory database, `-benchtime=500ms` for 1K/10K tests
-
----
-
-## Benchmark Execution Guide
-
-### Running Benchmarks
-
-```bash
-# Build with all extensions
-./build.sh
-
-# Run full benchmark suite
-./build.sh -b
-
-# Run specific benchmarks
-go test ./tests/Benchmark/... -bench=BenchmarkCompare_ -benchmem -benchtime=1s
-
-# Run with CPU profiling
-go test ./tests/Benchmark/... -bench=BenchmarkCompare_ -cpuprofile=cpu.prof -memprofile=mem.prof
-
-# Run single workload for detailed analysis
-go test ./tests/Benchmark/... -bench=BenchmarkCompare_SelectAll_1K -benchmem -v
-```
-
-### Automated Benchmark Collection Script
-
-Create `scripts/benchmark_collect.sh`:
-
-```bash
-#!/bin/bash
-# benchmark_collect.sh - Collect performance data for analysis
-
-set -euo pipefail
-
-OUTPUT_DIR=".build/benchmarks"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-OUTPUT_FILE="${OUTPUT_DIR}/benchmark_${TIMESTAMP}.csv"
-
-mkdir -p "$OUTPUT_DIR"
-
-echo "Collecting benchmarks on: $(uname -a)"
-echo "Go version: $(go version)"
-echo "Output: ${OUTPUT_FILE}"
-
-# Header
-echo "workload,scale,sqlite_ns,sqlvibe_ns,ratio,status" > "$OUTPUT_FILE"
-
-# Run benchmarks and parse results
-go test ./tests/Benchmark/... \
-    -bench=BenchmarkCompare_ \
-    -benchmem \
-    -benchtime=1s \
-    -count=5 \
-    -run=^$ \
-    2>&1 | tee "${OUTPUT_FILE%.csv}.txt" | \
-    grep -E "BenchmarkCompare" | \
-    awk '{
-        # Parse: BenchmarkCompare_SelectAll_1K_SQLite-20  1388  441523 ns/op
-        name=$1; iters=$2; ns=$3;
-        gsub(/-.*$/, "", name);  # Remove -20 suffix
-        gsub(/_SQLite$/, "", name);
-        print name","ns
-    }' >> "$OUTPUT_FILE"
-
-echo "Benchmark collection complete: $OUTPUT_FILE"
-```
-
-### Benchmark Data Analysis Script
-
-Create `scripts/benchmark_analyze.py`:
-
-```python
-#!/usr/bin/env python3
-# benchmark_analyze.py - Analyze benchmark results
-
-import csv
-import sys
-from collections import defaultdict
-
-def analyze_benchmark(csv_file):
-    data = defaultdict(dict)
-    
-    with open(csv_file) as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            workload = row['workload']
-            scale = row['scale']
-            ratio = float(row['ratio'])
-            data[f"{workload}_{scale}"] = ratio
-    
-    # Sort by slowdown
-    sorted_data = sorted(data.items(), key=lambda x: x[1], reverse=True)
-    
-    print("=" * 60)
-    print("BENCHMARK ANALYSIS - Sorted by Slowdown")
-    print("=" * 60)
-    
-    for (name, ratio) in sorted_data:
-        status = "🔴 CRITICAL" if ratio > 100 else "🟡 HIGH" if ratio > 10 else "🟢 OK"
-        print(f"{name:30s} {ratio:8.1f}×  {status}")
-    
-    # Calculate priority scores
-    print("\n" + "=" * 60)
-    print("OPTIMIZATION PRIORITIES")
-    print("=" * 60)
-    
-    critical = [(n, r) for n, r in sorted_data if r > 100]
-    high = [(n, r) for n, r in sorted_data if 10 < r <= 100]
-    
-    if critical:
-        print("\nP0-CRITICAL (100×+ slowdown):")
-        for name, ratio in critical:
-            print(f"  - {name}: {ratio:.0f}×")
-    
-    if high:
-        print("\nP1-HIGH (10-100× slowdown):")
-        for name, ratio in high:
-            print(f"  - {name}: {ratio:.1f}×")
-
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: benchmark_analyze.py <benchmark.csv>")
-        sys.exit(1)
-    analyze_benchmark(sys.argv[1])
-```
-
-### Usage Workflow
-
-```bash
-# 1. Collect baseline benchmarks
-./scripts/benchmark_collect.sh
-
-# 2. Analyze results
-python3 scripts/benchmark_analyze.py .build/benchmarks/benchmark_20260306_120000.csv
-
-# 3. Implement optimization (e.g., hash join fast path)
-# ... code changes ...
-
-# 4. Re-run benchmarks
-./scripts/benchmark_collect.sh
-
-# 5. Compare before/after
-python3 scripts/benchmark_compare.py \
-    .build/benchmarks/benchmark_before.csv \
-    .build/benchmarks/benchmark_after.csv
-```
-
-### Benchmark Comparison Script
-
-Create `scripts/benchmark_compare.py`:
-
-```python
-#!/usr/bin/env python3
-# benchmark_compare.py - Compare before/after optimization
-
-import csv
-import sys
-
-def compare_benchmarks(before_file, after_file):
-    before = {}
-    after = {}
-    
-    with open(before_file) as f:
-        for row in csv.DictReader(f):
-            key = f"{row['workload']}_{row['scale']}"
-            before[key] = float(row['sqlvibe_ns'])
-    
-    with open(after_file) as f:
-        for row in csv.DictReader(f):
-            key = f"{row['workload']}_{row['scale']}"
-            after[key] = float(row['sqlvibe_ns'])
-    
-    print("=" * 70)
-    print("BENCHMARK COMPARISON - Before vs After Optimization")
-    print("=" * 70)
-    print(f"{'Workload':<25s} {'Before':>12s} {'After':>12s} {'Speedup':>10s} {'Status':<8s}")
-    print("-" * 70)
-    
-    improvements = []
-    regressions = []
-    
-    for key in sorted(before.keys()):
-        if key not in after:
-            continue
-        
-        before_ns = before[key]
-        after_ns = after[key]
-        speedup = before_ns / after_ns if after_ns > 0 else float('inf')
-        
-        if speedup > 1.0:
-            status = "✅"
-            improvements.append((key, speedup))
-        elif speedup < 1.0:
-            status = "⚠️"
-            regressions.append((key, 1.0/speedup))
-        else:
-            status = "➡️"
-        
-        before_ms = before_ns / 1e6
-        after_ms = after_ns / 1e6
-        print(f"{key:<25s} {before_ms:>10.2f}ms {after_ms:>10.2f}ms {speedup:>8.2f}× {status}")
-    
-    print("-" * 70)
-    
-    if improvements:
-        print("\n✅ IMPROVEMENTS:")
-        for name, speedup in sorted(improvements, key=lambda x: x[1], reverse=True)[:5]:
-            print(f"  {name}: {speedup:.2f}× faster")
-    
-    if regressions:
-        print("\n⚠️ REGRESSIONS:")
-        for name, speedup in sorted(regressions, key=lambda x: x[1], reverse=True)[:5]:
-            print(f"  {name}: {speedup:.2f}× slower")
-    
-    # Summary
-    geo_mean = 1.0
-    count = 0
-    for key in before:
-        if key in after:
-            ratio = before[key] / after[key]
-            geo_mean *= ratio
-            count += 1
-    
-    if count > 0:
-        geo_mean = geo_mean ** (1.0 / count)
-        print(f"\n📊 GEOMETRIC MEAN SPEEDUP: {geo_mean:.2f}×")
-
-if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: benchmark_compare.py <before.csv> <after.csv>")
-        sys.exit(1)
-    compare_benchmarks(sys.argv[1], sys.argv[2])
-```
-
-### Profiling Guide
-
-```bash
-# CPU profiling - identify hot spots
-go test ./tests/Benchmark/... \
-    -bench=BenchmarkCompare_InnerJoin_1K \
-    -cpuprofile=cpu.prof \
-    -benchtime=30s
-
-# Analyze CPU profile
-go tool pprof -http=:8080 cpu.prof
-
-# Memory profiling - find allocations
-go test ./tests/Benchmark/... \
-    -bench=BenchmarkCompare_SelectAll_1K \
-    -memprofile=mem.prof \
-    -benchtime=30s
-
-# Analyze memory profile
-go tool pprof -http=:8080 mem.prof
-
-# Trace profiling - execution timeline
-go test ./tests/Benchmark/... \
-    -bench=BenchmarkCompare_SUM_1K \
-    -trace=trace.out \
-    -benchtime=30s
-
-# View trace
-go tool trace trace.out
-```
-
-### Benchmark Data Collection Checklist
-
-- [ ] Run `./build.sh` to ensure clean build
-- [ ] Close background applications (reduce noise)
-- [ ] Run each benchmark 5 times (`-count=5`)
-- [ ] Collect CPU and memory profiles for critical workloads
-- [ ] Save raw output (`.txt`) and parsed data (`.csv`)
-- [ ] Document hardware/OS/Go version in output file
-- [ ] Compare against baseline after each optimization
-- [ ] Update README.md with new results
-
----
-
-## Performance Baseline Results (v0.11.5)
-
-### Full Benchmark Results
+## Baseline Performance (v0.11.5)
 
 | Workload | Scale | SQLite | sqlvibe | Ratio | Status |
 |----------|-------|--------|---------|-------|--------|
-| **SELECT all** | 1K | 442 µs | 4.17 ms | 9.4× | 🔴 slower |
-| **SELECT all** | 10K | 4.22 ms | 47.8 ms | 11.3× | 🔴 slower |
-| **COUNT(*)** | 1K | 3.9 µs | 510 µs | 130.8× | 🔴 slower |
-| **COUNT(*)** | 10K | 5.2 µs | 4.89 ms | 940.4× | 🔴 slower |
-| **SUM aggregate** | 1K | 43 µs | 1.90 ms | 44.2× | 🔴 slower |
-| **SUM aggregate** | 10K | 375 µs | 18.5 ms | 49.3× | 🔴 slower |
-| **GROUP BY** (4 groups) | 1K | 312 µs | 4.75 ms | 15.2× | 🔴 slower |
-| **GROUP BY** (4 groups) | 10K | 3.27 ms | 49.0 ms | 15.0× | 🔴 slower |
-| **INSERT batch** | 1K | 3.98 ms | 2.28 ms | **1.7×** | 🟢 faster |
-| **INNER JOIN** | 1K | 619 µs | 6034 ms | 9746.4× | 🔴 slower |
-
-### Scalability Analysis (Slowdown Factor vs SQLite)
-
-| Workload | 1K Slowdown | 10K Slowdown | Scaling |
-|----------|-------------|--------------|---------|
-| SELECT all | 9.4× | 11.3× | +20% |
-| COUNT(*) | 130.8× | 940.4× | +619% ⚠️ |
-| SUM aggregate | 44.2× | 49.3× | +12% |
-| GROUP BY | 15.2× | 15.0× | -1% ✓ |
-| INSERT batch | 0.6× | N/A | N/A |
-
-### Key Insights
-
-- **INSERT batch**: 1.7× faster — only workload where sqlvibe leads (C++ direct insert fast path)
-- **GROUP BY**: Best scaling behavior (-1% slowdown at 10K, stable ratio)
-- **COUNT(*)**: Worst scaling (940× slower at 10K) — needs index-only scan optimization
-- **INNER JOIN**: Critical bottleneck (9746× slower) — hash join needs urgent optimization
-- **SELECT all**: Moderate overhead (9-11×) — bytecode VM dispatch cost
+| INNER JOIN | 1K | 619 µs | 6034 ms | 9746× | 🔴 CRITICAL |
+| COUNT(*) | 10K | 5.2 µs | 4.89 ms | 940× | 🔴 CRITICAL |
+| SELECT all | 10K | 4.22 ms | 47.8 ms | 11.3× | 🔴 slower |
+| SUM aggregate | 10K | 375 µs | 18.5 ms | 49.3× | 🔴 slower |
+| GROUP BY | 10K | 3.27 ms | 49.0 ms | 15.0× | 🔴 slower |
+| INSERT batch | 1K | 3.98 ms | 2.28 ms | 0.6× | 🟢 faster |
 
 ---
 
-## Optimization Priorities (v0.11.5 → v0.11.6)
+## Workstream Architecture
 
-Based on benchmark analysis, here are the prioritized optimization targets:
-
-| Priority | Area | Current | Target | Impact |
-|----------|------|---------|--------|--------|
-| **P0-CRITICAL** | INNER JOIN | 6034 ms | 100 ms | 60× speedup |
-| **P0-CRITICAL** | COUNT(*) 10K | 4.89 ms | 50 µs | 98× speedup |
-| **P1-HIGH** | SELECT all 10K | 47.8 ms | 5 ms | 10× speedup |
-| **P1-HIGH** | SUM aggregate 10K | 18.5 ms | 500 µs | 37× speedup |
-| **P2** | GROUP BY 10K | 49.0 ms | 3 ms | 16× speedup |
+```
+v0.11.5 Workstreams (Parallel Execution)
+=================================================================
+┌─────────────┬─────────────┬─────────────┬─────────────┐
+│  WS1: JOIN │  WS2: COUNT│  WS3: VM   │  WS4: QP/CG │
+│   P0       │   P0       │   P1       │   P1        │
+├─────────────┼─────────────┼─────────────┼─────────────┤
+│  WS5: DS   │  WS6: MEM  │  WS7: SIMD │  WS8: TM/IS │
+│   P1       │   P1       │   P1       │   P2        │
+└─────────────┴─────────────┴─────────────┴─────────────┘
+```
 
 ---
 
-## Root Cause Analysis
+## Workstream 1: JOIN Engine (P0-CRITICAL)
 
-| Bottleneck | Component | Root Cause | Solution |
-|------------|-----------|------------|----------|
-| VM dispatch | VM/exec.cpp | Per-instruction function call overhead | Batch execution, inline dispatch |
-| Hash join | VM/hash_join.cpp | Naive hash table, no SIMD | Hash table tuning, SIMD probes |
-| COUNT(*) | DS/btree.cpp | Full table scan | Index-only scan, metadata cache |
-| Memory alloc | Multiple | malloc/new per-row | Arena allocator (ArenaV2) |
-| GC pressure | Go runtime | CGO → Go boundary allocations | Reduce crossing, batch results |
+**Target**: INNER JOIN 6034ms → 100ms (60× speedup)
 
----
-
-## Memory Management Strategy: Hybrid Approach
-
-### Smart Pointers vs Arena Allocators
-
-**Analysis**: Smart pointers solve ownership, not performance. For sqlvibe's optimization targets (60× JOIN, 98× COUNT), arena allocators are necessary in hot paths. Use smart pointers to *own* arenas, not for per-row allocations.
-
-| Type | Memory Overhead | CPU Overhead | Best Use Case |
-|------|-----------------|--------------|---------------|
-| `unique_ptr` | 8 bytes (pointer) | Minimal | Single ownership, RAII |
-| `shared_ptr` | 16-32 bytes (control block) | Atomic refcount | Shared ownership |
-| `weak_ptr` | 16 bytes | Atomic refcount | Non-owning references |
-| **Arena** | **0 bytes** (bulk) | **~5ns** (pointer bump) | **Query execution, hot paths** |
-
-### Allocation Comparison
-
-```cpp
-// Current: ~2000 allocations per 1K rows (hash join)
-std::unordered_map<std::string, std::vector<size_t>> hashTable;
-for (size_t i = 0; i < right_count; i++) {
-    std::string key = normalizeKey(keyVal, keyLen);  // malloc #1
-    hashTable[key].push_back(i);  // vector realloc #2-N
-}
-
-// With unique_ptr: Same allocations + 8 bytes/entry overhead
-std::unordered_map<std::string, std::unique_ptr<std::vector<size_t>>>;
-
-// With Arena: 1 allocation for entire hash table
-void* mem = arena->Alloc(sizeof(FastHashTable));
-FastHashTable* table = new(mem) FastHashTable();
-```
-
-### Hybrid Strategy
-
-#### Use Arena Allocators For (Hot Paths)
-
-| Component | Reason | Files | Expected Impact |
-|-----------|--------|-------|-----------------|
-| Hash join build/probe | 1000s of rows, short-lived | `VM/hash_join.cpp` | 60× speedup |
-| Query result rows | Bulk allocation, query lifetime | `VM/engine/engine.cpp` | 40% GC reduction |
-| VM registers | Fixed size, batch execution | `VM/vm_execute.cpp` | 5× dispatch speedup |
-| String copies | Per-column, eliminated by string_view | `VM/vm_opcode.cpp` | 15% latency improvement |
-
-#### Use Smart Pointers For (Long-lived/Complex Ownership)
-
-| Component | Type | Reason | Files |
-|-----------|------|--------|-------|
-| Database handle | `unique_ptr` | Single owner, clear lifecycle | `SC/database.cpp` |
-| Statement cache | `unique_ptr` | Cache owns statements | `SC/statement.cpp` |
-| Virtual table modules | `shared_ptr` | Shared between queries | `IS/vtab_api.cpp` |
-| Transaction state | `unique_ptr` | Clear ownership | `TM/transaction.cpp` |
-| Arena instances | `unique_ptr` | RAII cleanup | All query executors |
-
-### Recommended Pattern: Smart Pointer + Arena
-
-```cpp
-// Query executor: unique_ptr owns arena, arena owns query memory
-class QueryExecutor {
-    std::unique_ptr<ArenaV2> query_arena;  // Smart pointer for arena ownership
-    
-public:
-    svdb_result_t Execute(const Query& query) {
-        // Arena for bulk query allocations (freed when query completes)
-        query_arena = std::make_unique<ArenaV2>(256 * 1024);
-        
-        // Hash join uses arena - no per-row malloc
-        auto* hash_table = FastHashTable::Build(
-            query.left_rows, 
-            query.right_rows, 
-            query_arena.get()  // Arena passed to hot path
-        );
-        
-        // Results copied to arena memory
-        svdb_result_t result = hash_table->ExecuteJoin(query_arena.get());
-        
-        // Arena freed here - all query memory released in O(1)
-        query_arena.reset();
-        return result;
-    }
-};
-
-// Database handle: unique_ptr for clear ownership
-class Database {
-    std::unique_ptr<PageManager> pm_;
-    std::unique_ptr<MetadataCache> cache_;
-    
-public:
-    Database() 
-        : pm_(std::make_unique<PageManager>())
-        , cache_(std::make_unique<MetadataCache>()) 
-    {}
-    // Automatic cleanup via RAII, no manual delete
-};
-```
-
-### Safe Arena Implementation
-
-```cpp
-// ArenaV2 with smart pointer integration and safety limits
-class SafeArena {
-    std::vector<std::unique_ptr<char[]>> chunks_;  // Smart pointer owns chunks
-    size_t total_allocated_ = 0;
-    const size_t max_size_;
-    
-public:
-    SafeArena(size_t max_size = 64 * 1024 * 1024) 
-        : max_size_(max_size) {}
-    
-    // Automatic cleanup via unique_ptr destructor
-    ~SafeArena() = default;  // chunks_ freed automatically
-    
-    void* Alloc(size_t size) {
-        if (total_allocated_ + size > max_size_) {
-            throw std::bad_alloc("Arena size limit exceeded");
-        }
-        // ... allocation logic
-    }
-    
-    // Debug: track allocations
-    void DumpStats() const {
-        printf("Arena: %zu bytes in %zu chunks\n", 
-               total_allocated_, chunks_.size());
-    }
-    
-    // Reset for reuse (O(1) free without deallocating chunks)
-    void Reset() {
-        total_allocated_ = 0;
-        // chunks_ retained for next query
-    }
-};
-```
-
-### Memory Strategy by Priority
-
-| Priority | Component | Strategy | Rationale |
-|----------|-----------|----------|-----------|
-| P0 | Hash join | **Arena** | 60× speedup requires eliminating malloc |
-| P0 | COUNT(*) cache | **unique_ptr** | Long-lived, clear ownership |
-| P1 | VM dispatch | **Arena** | Batch execution needs contiguous memory |
-| P1 | Engine row copies | **Arena** | 40% GC reduction target |
-| P2 | Database handle | **unique_ptr** | RAII, no performance impact |
-| P2 | VTab modules | **shared_ptr** | Shared between concurrent queries |
+### Root Causes
+1. std::unordered_map<std::string, vector<size_t>> — heap allocation per key
+2. normalizeKey() creates temporary std::string for every row
+3. No SIMD acceleration for key comparison
+4. Naive hash table with linear resize during build
 
 ### Tasks
 
-- [ ] Audit all `malloc`/`new` calls in hot paths
-- [ ] Replace per-query allocations with ArenaV2
-- [ ] Wrap arena instances in `std::unique_ptr`
-- [ ] Add `SafeArena` with size limits and debug stats
-- [ ] Document memory ownership in code comments
+| # | Task | Difficulty | Dependency |
+|---|------|------------|------------|
+| 1.1 | Implement open-addressing FastHashTable with ArenaV2 | HIGH | - |
+| 1.2 | Add SIMD CRC32 hash computation | MEDIUM | 1.1 |
+| 1.3 | Pre-size hash table based on cardinality | MEDIUM | 1.1 |
+| 1.4 | Implement vectorized probe phase | HIGH | 1.2 |
+| 1.5 | Add null-handling fast path | MEDIUM | 1.1 |
+| 1.6 | Support LEFT/RIGHT/INNER/FULL joins | MEDIUM | 1.4 |
+| 1.7 | Benchmark and verify 100ms target | - | 1.6 |
 
-**Expected Impact**: Zero memory leaks (RAII), 40% GC reduction (arenas), improved code clarity (smart pointers for ownership)
-
----
-
-## Detailed Optimization Plans
-
-### P0-CRITICAL: Hash Join Optimization
-
-**Current Performance**: 6034 ms for 1K rows (9746× slower than SQLite)  
-**Target**: 100 ms (60× speedup)
-
-**Root Causes**:
-1. `std::unordered_map<std::string, vector<size_t>>` — heap allocation per key
-2. `normalizeKey()` creates temporary `std::string` for every row
-3. No SIMD acceleration for key comparison
-4. Naive hash table with linear resize during build phase
-5. No pre-sizing based on input cardinality
-
-**Files to Modify**:
-- `src/core/VM/hash_join.cpp` (complete rewrite)
-- `src/core/VM/hash_join.h` (new API)
-- `src/core/VM/fast_hash_table.h` (new)
-- `src/core/VM/hash_table_prober.h` (new)
-
-**Implementation Plan**:
+### Implementation
 
 ```cpp
-// Current (hash_join.cpp:50-70)
-std::unordered_map<std::string, std::vector<size_t>> hashTable;
-hashTable.reserve(right_count);
+// src/core/VM/hash_join.cpp - Complete Rewrite
 
-for (size_t i = 0; i < right_count; i++) {
-    std::string key = normalizeKey(keyVal, keyLen);  // HEAP ALLOC
-    hashTable[key].push_back(i);  // HEAP ALLOC for vector growth
-}
-
-// Optimized: Open-addressing hash table with SIMD
 struct FastHashTable {
-    static constexpr size_t BUCKET_COUNT = 65536;  // Power of 2
+    static constexpr size_t BUCKET_COUNT = 65536;
     static constexpr size_t MAX_PROBE = 16;
     
-    uint64_t keys[BUCKET_COUNT];      // Hash values (not strings)
-    uint32_t values[BUCKET_COUNT];    // Row indices
-    uint8_t probes[BUCKET_COUNT];     // Probe lengths
+    uint64_t* keys;        // Hash values (Arena allocated)
+    uint32_t* values;     // Row indices
+    uint8_t* probes;      // Probe lengths
+    size_t count;
+    size_t capacity;
+    ArenaV2* arena;
     
-    void Insert(uint64_t hash, uint32_t row_idx);
+    static FastHashTable* Build(const svdb_row_t* rows, size_t n, ArenaV2* arena);
     uint32_t* Find(uint64_t hash, size_t* count);
 };
 
-// SIMD key comparison (16 bytes at once)
-inline uint64_t compute_hash_simd(const char* data, size_t len) {
-#ifdef __AVX2__
-    __m128i v = _mm_loadu_si128((const __m128i*)data);
-    return _mm_crc32_u64(0, _mm_extract_epi64(v, 0));
-#endif
+extern "C" {
+    svdb_join_result_t svdb_hash_join_batch_optimized(
+        const svdb_row_t* left_rows, size_t left_count,
+        const svdb_row_t* right_rows, size_t right_count,
+        size_t left_key_col, size_t right_key_col,
+        size_t num_left_cols, size_t num_right_cols,
+        ArenaV2* arena
+    );
 }
 ```
 
-**Tasks**:
-- [ ] Design `FastHashTable` with open addressing
-- [ ] Implement SIMD hash computation
-- [ ] Pre-size hash table based on input cardinality
-- [ ] Use ArenaV2 for hash table storage
-- [ ] Add vectorized probe phase
-- [ ] Benchmark: target 100ms for 1K rows
+### Files Modified
+- src/core/VM/hash_join.cpp (rewrite)
+- src/core/VM/hash_join.h (new API)
+- src/core/VM/fast_hash_table.h (new)
 
-**Expected Impact**: 60× speedup for INNER JOIN (6034ms → 100ms)
+### Expected Impact
+- 60× speedup for INNER JOIN (6034ms → 100ms)
 
 ---
 
-### P0-CRITICAL: COUNT(*) Index-Only Scan
+## Workstream 2: COUNT(*) Optimization (P0-CRITICAL)
 
-**Current Performance**: 4.89 ms for 10K rows (940× slower than SQLite)  
-**Target**: 50 µs (98× speedup)
+**Target**: COUNT(*) 10K: 4.89ms → 50µs (98× speedup)
 
-**Root Causes**:
+### Root Causes
 1. Full B-tree leaf scan for every COUNT(*)
-2. No metadata cache for row counts
-3. Row materialization even though only count is needed
-4. No index-only scan path in query engine
+2. No metadata cache for row counts (infrastructure exists but disabled)
+3. SIGFPE bug in cache update path (division by zero)
 
-**Files to Modify**:
-- `src/core/DS/btree.cpp` (add metadata methods)
-- `src/core/DS/manager.cpp` (add row count tracking)
-- `src/core/IS/is_registry.h` (add metadata cache)
-- `src/core/SC/query.cpp` (add COUNT(*) fast path)
+### Tasks
 
-**Implementation Plan**:
+| # | Task | Difficulty | Dependency |
+|---|------|------------|------------|
+| 2.1 | Fix SIGFPE bug in metadata cache (division by zero) | MEDIUM | - |
+| 2.2 | Implement TableMetadata with row count | MEDIUM | 2.1 |
+| 2.3 | Add cache invalidation hooks | MEDIUM | 2.2 |
+| 2.4 | Implement COUNT(*) fast path | MEDIUM | 2.2 |
+| 2.5 | Add MVCC-safe counter with version | HIGH | 2.3 |
+| 2.6 | Benchmark and verify 50µs target | - | 2.5 |
+
+### Implementation
 
 ```cpp
-// Add metadata cache for table row counts
+// src/core/IS/is_registry.cpp + src/core/SC/query.cpp
+
 struct TableMetadata {
     uint64_t row_count;
+    uint64_t row_count_version;  // MVCC visibility
     uint32_t schema_version;
-    uint64_t last_modified_counter;
+    uint64_t last_modified_txn;
     bool valid;
+    
+    std::atomic<uint64_t> counter;  // Thread-safe counter
 };
 
 class MetadataCache {
     std::unordered_map<std::string, TableMetadata> cache_;
     
 public:
-    uint64_t GetRowCount(const std::string& table);
+    uint64_t GetRowCount(const std::string& table, uint64_t read_version);
+    void IncrementRowCount(const std::string& table);
+    void DecrementRowCount(const std::string& table);
     void Invalidate(const std::string& table);
-    void Update(const std::string& table, int64_t delta);
 };
 
-// Add COUNT(*) fast path in query engine
-svdb_result_t execute_count_star(const std::string& table) {
-    if (metadata_cache_.HasValidCount(table)) {
-        return metadata_cache_.GetRowCount(table);  // O(1) lookup
+// Fast path in query execution
+svdb_result_t ExecuteCountStar(const std::string& table, uint64_t txn_id) {
+    if (auto meta = cache_.Get(table)) {
+        if (meta->valid && meta->schema_version == current_schema) {
+            return meta->row_count;  // O(1)
+        }
     }
-    // Fallback to B-tree scan
-    return btree_count_all(table);
+    return BTreeCount(table);  // Fallback
 }
 ```
 
-**Tasks**:
-- [ ] Add `TableMetadata` struct with row count
-- [ ] Implement `MetadataCache` class
-- [ ] Add hooks to update count on INSERT/DELETE
-- [ ] Add COUNT(*) fast path in query engine
-- [ ] Invalidate cache on schema changes
-- [ ] Benchmark: target 50µs for 10K rows
+### Files Modified
+- src/core/IS/is_registry.cpp
+- src/core/IS/is_registry.h
+- src/core/SC/query.cpp
 
-**Expected Impact**: 98× speedup for COUNT(*) (4.89ms → 50µs)
+### Expected Impact
+- 98× speedup for COUNT(*) (4.89ms → 50µs)
 
 ---
 
-### P1-HIGH: VM Dispatch Optimization
+## Workstream 3: VM Dispatch Optimization (P1)
 
-**Current Performance**: 9-11× slower for SELECT all  
-**Target**: 2× slower (5× improvement)
+**Target**: SELECT all 11× → 2× slowdown (5× improvement)
 
-**Root Causes**:
+### Root Causes
 1. Per-instruction switch dispatch overhead
 2. No instruction batching
 3. Excessive bounds checking in hot path
 4. Function call overhead for each opcode handler
 
-**Files to Modify**:
-- `src/core/VM/vm_execute.cpp` (dispatch loop)
-- `src/core/VM/vm_opcode.h` (inline handlers)
-- `src/core/VM/dispatch.h` (new)
+### Tasks
 
-**Implementation Plan**:
+| # | Task | Difficulty | Dependency |
+|---|------|------------|------------|
+| 3.1 | Implement computed goto dispatch | HIGH | - |
+| 3.2 | Inline hot opcode handlers (LOAD_CONST, ADD, MOVE) | MEDIUM | 3.1 |
+| 3.3 | Remove redundant bounds checks in hot path | MEDIUM | 3.1 |
+| 3.4 | Implement 256-instruction batch execution | HIGH | 3.2 |
+| 3.5 | Add branch prediction hints | LOW | 3.3 |
+| 3.6 | Benchmark and verify 2× target | - | 3.5 |
+
+### Implementation
 
 ```cpp
-// Current: Switch dispatch
-for (size_t pc = 0; pc < program->num_instructions; pc++) {
-    const Instruction* instr = &program->instructions[pc];
-    switch (instr->op) {
-        case OP_LOAD_CONST: exec_load_const(instr); break;
-        case OP_ADD: exec_add(instr); break;
-        // ...
-    }
-}
+// src/core/VM/vm_execute.cpp
 
-// Optimized: Computed goto (threaded code)
-#define DISPATCH() goto* opcodes[instr->op]
-#define NEXT() ((instr++), DISPATCH())
-
-void execute(Program* program) {
+// Computed goto dispatch
+void VMExecute(Program* program) {
     static const void* opcodes[] = {
-        &&op_load_const, &&op_add, &&op_sub, ...
+        &&OP_HALT, &&OP_LOAD_CONST, &&OP_MOVE, &&OP_ADD,
+        &&OP_SUB, &&OP_MUL, &&OP_DIV, &&OP_RESULT_ROW,
+        // ... all opcodes
     };
     
-    const Instruction* instr = program->instructions;
-    DISPATCH();
+    const Instr* instr = program->instructions;
+    goto* opcodes[instr->op];
     
-    op_load_const:
-        // inline handler
-        NEXT();
-    op_add:
-        // inline handler
-        NEXT();
-    // ...
-}
-
-// Or: Batch execution (process 256 instructions at once)
-struct BatchVM {
-    static constexpr int BATCH_SIZE = 256;
-    svdb_value_t registers[BATCH_SIZE][64];
+OP_LOAD_CONST:
+    registers[instr->p1] = constants[instr->p2];
+    instr++;
+    goto* opcodes[instr->op];
     
-    void ExecuteBatch(const Instruction* instrs, size_t count);
-};
-```
-
-**Tasks**:
-- [ ] Implement computed goto dispatch
-- [ ] Inline hot opcode handlers (LOAD_CONST, ADD, MOVE)
-- [ ] Remove redundant bounds checks in hot path
-- [ ] Add batch execution mode for 256 instructions
-- [ ] Benchmark: target 2× slowdown (from 11×)
-
-**Expected Impact**: 5× speedup for SELECT all (11× → 2× slowdown)
-
----
-
-### P1-HIGH: Memory Arena Integration (with Smart Pointers)
-
-**Problem**: Mixed allocation strategies (`new[]`, `malloc`, `free`) cause fragmentation and GC pressure
-
-**Strategy**: Hybrid approach — arenas for hot paths (query execution), smart pointers for ownership (database, caches)
-
-**Files to Modify**:
-- `src/core/VM/hash_join.cpp`
-- `src/core/VM/engine/engine.cpp`
-- `src/core/VM/vm_opcode.cpp`
-- `src/core/DS/arena_v2.h` (extend with SafeArena)
-- `src/core/DS/arena_v2.cpp` (extend)
-- `src/core/SC/database.cpp` (add unique_ptr)
-
-**Implementation**:
-
-```cpp
-// Current (hash_join.cpp:113-117)
-svdb_row_t* new_rows = new svdb_row_t[result.capacity];
-std::copy(result.rows, result.rows + result.capacity, new_rows);
-delete[] result.rows;
-
-// Optimized: Use arena allocator
-void* mem = arena->Alloc(new_capacity * sizeof(svdb_row_t));
-svdb_row_t* new_rows = new(mem) svdb_row_t[new_capacity];
-
-// Current (engine/engine.cpp:18-30)
-static svdb_value_t copy_val(const svdb_value_t* v) {
-    char* p = (char*)malloc(v->str_len + 1);  // MALLOC
-    memcpy(p, v->str_data, v->str_len);
-    // ...
+OP_ADD:
+    registers[instr->p3].int_val = 
+        registers[instr->p1].int_val + registers[instr->p2].int_val;
+    instr++;
+    goto* opcodes[instr->op];
+    
+    // ... other handlers
 }
 
-// Optimized: Arena allocation
-char* p = (char*)arena->Alloc(v->str_len + 1);
-memcpy(p, v->str_data, v->str_len);
-```
-
-**Tasks**:
-- [ ] Audit all `malloc`/`new` calls in hot paths (hash_join, engine, vm_opcode)
-- [ ] Extend `ArenaV2` with `SafeArena` features (size limits, debug stats)
-- [ ] Add per-query arena lifecycle (begin/end) with `std::unique_ptr<ArenaV2>`
-- [ ] Replace `new[]`/`delete[]` in hash_join.cpp with arena allocation
-- [ ] Replace `malloc`/`free` in engine/engine.cpp with arena allocation
-- [ ] Replace `malloc`/`free` in vm_opcode.cpp with arena allocation
-- [ ] Wrap Database members in `std::unique_ptr` (PageManager, MetadataCache)
-- [ ] Benchmark GC pressure reduction
-
-**Expected Impact**: Zero memory leaks (RAII), 40% reduction in Go GC pressure, 15% latency improvement
-
----
-
-### P1: SIMD Expansion
-
-**Problem**: SIMD only used for basic vector ops, not query execution
-
-**Files to Modify**:
-- `src/core/VM/compare.cpp`
-- `src/core/VM/aggregate.cpp`
-- `src/core/VM/hash_join.cpp`
-- `src/core/DS/simd.h` (extend)
-- `src/core/DS/simd.cpp` (extend)
-
-**Implementation**:
-
-```cpp
-// Add SIMD batch compare (VM/compare.cpp)
-void svdb_batch_compare_int64(const int64_t* a, const int64_t* b,
-                               uint8_t* results, size_t n) {
-#ifdef __AVX2__
-    for (size_t i = 0; i + 4 <= n; i += 4) {
-        __m256i va = _mm256_loadu_si256((const __m256i*)&a[i]);
-        __m256i vb = _mm256_loadu_si256((const __m256i*)&b[i]);
-        __m256i cmp = _mm256_cmpeq_epi64(va, vb);
-        _mm256_storeu_si256((__m256i*)&results[i], cmp);
-    }
-    for (; i < n; i++) {
-        results[i] = (a[i] == b[i]) ? 1 : 0;
-    }
-#endif
-}
-
-// Add SIMD batch SUM (VM/aggregate.cpp)
-void svdb_batch_sum_int64(const int64_t* values, uint8_t* mask,
-                          int64_t* result, size_t n) {
-#ifdef __AVX2__
-    __m256i acc = _mm256_setzero_si256();
-    for (size_t i = 0; i + 4 <= n; i += 4) {
-        __m256i v = _mm256_loadu_si256((const __m256i*)&values[i]);
-        acc = _mm256_add_epi64(acc, v);
-    }
-    *result = _mm256_extract_epi64(acc, 0)
-            + _mm256_extract_epi64(acc, 1)
-            + _mm256_extract_epi64(acc, 2)
-            + _mm256_extract_epi64(acc, 3);
-#endif
+// Batch execution
+void ExecuteBatch(VM* vm, const Instr* instrs, size_t count) {
+    // Process 256 instructions without per-instruction dispatch
+    svdb_value_t batch_regs[256][64];
+    // Vectorized execution
 }
 ```
 
-**Tasks**:
-- [ ] Add batch compare SIMD functions
-- [ ] Add batch aggregate SIMD functions (SUM, COUNT, AVG)
-- [ ] Add SIMD hash probe functions
-- [ ] Integrate into VM execution paths
-- [ ] Benchmark speedup
+### Files Modified
+- src/core/VM/vm_execute.cpp
+- src/core/VM/vm_execute.h
 
-**Expected Impact**: 4x speedup for batch comparisons, aggregates, hash probes
+### Expected Impact
+- 5× speedup for SELECT all (47.8ms → 10ms)
 
 ---
 
-### P1: Bytecode Optimizer Enhancements
+## Workstream 4: Query Processing + Code Gen (P1)
 
-**Problem**: Optimizer only handles basic arithmetic
+### QP Tasks
 
-**Files to Modify**:
-- `src/core/CG/optimizer.cpp`
-- `src/core/CG/optimizer.h`
+| # | Task | Difficulty | Dependency |
+|---|------|------------|------------|
+| 4.1 | Parser string_view conversion | LOW | - |
+| 4.2 | Placeholder pre-scanning (O(n) → O(1)) | LOW | 4.1 |
+| 4.3 | AST node pool allocator | MEDIUM | 4.1 |
+| 4.4 | Implement predicate pushdown | MEDIUM | - |
+| 4.5 | Loop-invariant code motion | MEDIUM | 4.4 |
+| 4.6 | Constant propagation | LOW | - |
+| 4.7 | Plan cache with LRU | MEDIUM | - |
+| 4.8 | Index-aware opcode selection | HIGH | - |
 
-**Implementation**:
+### Implementation
+
 ```cpp
-// Add predicate pushdown optimization
-// Before: OpLoadConst → OpFilter → OpResultRow
-// After:  OpSeekGE (uses index) → OpResultRow
+// src/core/QP/parser.cpp - string_view
 
-// Add loop-invariant code motion
-// Detect constants in loop bodies, hoist to pre-header
-```
-
-**Tasks**:
-- [ ] Implement predicate pushdown
-- [ ] Implement loop-invariant code motion
-- [ ] Implement index-aware opcode selection
-- [ ] Add optimizer statistics
-- [ ] Benchmark complex queries
-
-**Expected Impact**: 2-3x speedup for complex queries with repeated expressions
-
----
-
-### P2: Index Statistics
-
-**Problem**: No index statistics for cost-based optimization
-
-**Files to Modify**:
-- `src/core/IS/is_registry.cpp`
-- `src/core/IS/is_registry.h`
-- `src/core/IS/index_stats.h` (new)
-
-**Implementation**:
-```cpp
-struct IndexStats {
-    uint32_t cardinality;
-    uint32_t height;
-    double selectivity;
-};
-
-int ChooseIndex(const QueryPlan& plan, const IndexStats* stats, size_t n);
-```
-
-**Tasks**:
-- [ ] Design index statistics collection
-- [ ] Implement statistics update on write
-- [ ] Add index selection algorithm
-- [ ] Integrate with query planner
-- [ ] Benchmark plan quality
-
-**Expected Impact**: Better query plans for multi-index scenarios
-
----
-
-### P2: Parser Zero-Copy with string_view
-
-**Problem**: Parser creates many temporary `std::string` allocations
-
-**Files to Modify**:
-- `src/core/QP/parser.cpp`
-- `src/core/QP/parser.h`
-- `src/core/QP/tokenizer.h` (extend)
-
-**Implementation**:
-```cpp
-// Use string_view for zero-copy parsing
 struct Token {
     TokenType type;
     std::string_view text;  // Points into original SQL buffer
 };
 
-std::string_view read_ident(const std::string& sql, size_t& pos);
+std::string_view read_ident(const std::string& sql, size_t& pos) {
+    // No copy, returns view
+}
+
+// src/core/CG/optimizer.cpp - Predicate Pushdown
+
+void OptimizePredicatePushdown(Program* program) {
+    for (auto& instr : program->instructions) {
+        if (instr.op == OP_FILTER && instr.predicate_is_constant) {
+            // Evaluate predicate once, modify opcode to seek
+            instr.op = OP_SEEK;
+            // Push constant to SARGable form
+        }
+    }
+}
 ```
 
-**Tasks**:
-- [ ] Convert Token to use string_view
-- [ ] Update parser functions to return string_view
-- [ ] Update AST nodes to use string_view
-- [ ] Ensure SQL buffer lifetime management
-- [ ] Benchmark parsing speed
+### Files Modified
+- src/core/QP/parser.cpp
+- src/core/QP/parser.h
+- src/core/QP/binder.cpp
+- src/core/QP/tokenizer.h
+- src/core/CG/optimizer.cpp
+- src/core/CG/optimizer.h
+- src/core/CG/bytecode_compiler.cpp
+- src/core/CG/plan_cache.h (new)
 
-**Expected Impact**: 30% faster parsing, reduced allocation overhead
+### Expected Impact
+- 30% faster parsing
+- 2-3× speedup for complex queries
 
 ---
 
-### P2: Build Optimization (LTO/PGO)
+## Workstream 5: Data Storage (P1)
 
-**Problem**: No profile-guided or link-time optimization
+### Tasks
 
-**Files to Modify**:
-- `CMakeLists.txt`
-- `src/CMakeLists.txt`
+| # | Task | Difficulty | Dependency |
+|---|------|------------|------------|
+| 5.1 | B-Tree key pre-extraction buffer | MEDIUM | - |
+| 5.2 | SIMD binary search | MEDIUM | 5.1 |
+| 5.3 | Page prefetching | LOW | - |
+| 5.4 | Bloom filter integration | MEDIUM | - |
+| 5.5 | Roaring bitmap SIMD ops | MEDIUM | - |
+| 5.6 | WAL batch commit | MEDIUM | WS8 |
 
-**Implementation**:
-```cmake
-# Add LTO
-include(CheckIPOSupported)
-check_ipo_supported(RESULT lto_supported)
-if(lto_supported)
-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
-endif()
+### Implementation
 
-# Add PGO (optional)
-option(ENABLE_PGO "Enable profile-guided optimization" OFF)
-if(ENABLE_PGO)
-    add_compile_options(-fprofile-generate)
-    add_link_options(-fprofile-generate)
-endif()
+```cpp
+// src/core/DS/btree.cpp - SIMD Search
+
+int btree_simd_search(const uint8_t* page_data, size_t page_size,
+                      const uint8_t* key, size_t key_len) {
+#ifdef __AVX2__
+    // Load all cell pointers at once
+    // Compare keys in parallel
+    // Binary search with SIMD masks
+#endif
+}
+
+// src/core/DS/page_manager_v2.cpp - Prefetch
+
+void PrefetchPages(uint32_t* page_nums, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        prefetch(page_data[i], PREFETCH_HINT_T0);
+    }
+}
 ```
 
-**Tasks**:
-- [ ] Enable LTO in CMakeLists.txt
-- [ ] Add PGO build option
-- [ ] Create benchmark suite for PGO training
-- [ ] Document PGO build process
-- [ ] Benchmark overall speedup
+### Files Modified
+- src/core/DS/btree.cpp
+- src/core/DS/btree.h
+- src/core/DS/manager.cpp
+- src/core/DS/page_manager_v2.cpp
+- src/core/DS/roaring.cpp
 
-**Expected Impact**: 10-15% speedup across all workloads
-
----
-
-## Quick Wins (1-2 days each)
-
-These optimizations provide immediate value with minimal effort:
-
-### [ ] 1. Enable LTO
-- **Files**: `CMakeLists.txt`
-- **Effort**: 2 hours
-- **Impact**: 10-15% overall
-
-### [ ] 2. Arena for hash_join
-- **Files**: `VM/hash_join.cpp`, `DS/arena_v2.h`
-- **Effort**: 1 day
-- **Impact**: 40% GC reduction
-
-### [ ] 3. Parser string_view
-- **Files**: `QP/parser.cpp`, `QP/parser.h`
-- **Effort**: 1 day
-- **Impact**: 30% faster parsing
-
-### [ ] 4. SIMD batch compare
-- **Files**: `VM/compare.cpp`, `DS/simd.cpp`
-- **Effort**: 2 days
-- **Impact**: 4x batch comparisons
+### Expected Impact
+- 2× B-Tree search improvement
 
 ---
 
-## Updated Milestones
+## Workstream 6: Memory System (P1)
 
-### M0: Baseline Collection (Day 1-2)
-- [ ] Create `scripts/benchmark_collect.sh`
-- [ ] Create `scripts/benchmark_analyze.py`
-- [ ] Create `scripts/benchmark_compare.py`
-- [ ] Collect v0.11.5 baseline (5 runs each)
-- [ ] Generate CPU/memory profiles for top 3 bottlenecks
-- [ ] Save results to `.build/benchmarks/baseline_v0.11.5.csv`
+**Target**: 40% GC reduction
 
-### M1: Critical Fixes (Week 1-2)
-- [ ] Hash join fast path (60× target)
-- [ ] COUNT(*) metadata cache (98× target)
-- [ ] Enable LTO (10-15% free performance)
-- [ ] **Benchmark**: Run `./scripts/benchmark_collect.sh` after each fix
-- [ ] **Analyze**: Compare against baseline with `benchmark_compare.py`
+### Tasks
 
-### M2: VM Optimization (Week 3-4)
-- [ ] Computed goto dispatch (5× target)
-- [ ] Arena integration (40% GC reduction)
-- [ ] Inline hot opcode handlers
-- [ ] **Benchmark**: Collect memory profiles to verify GC reduction
-- [ ] **Profile**: CPU profiles to verify dispatch overhead reduced
+| # | Task | Difficulty | Dependency |
+|---|------|------------|------------|
+| 6.1 | Hash join Arena integration | HIGH | WS1 |
+| 6.2 | VM register file Arena | MEDIUM | WS3 |
+| 6.3 | Engine result row Arena | MEDIUM | - |
+| 6.4 | SafeArena with limits | LOW | - |
+| 6.5 | String pool pre-allocation | LOW | - |
+| 6.6 | CGO boundary batch transfer | HIGH | - |
 
-### M3: SIMD & Batch (Week 5-6)
-- [ ] SIMD batch compare/aggregate (4× target)
-- [ ] Batch execution engine (5-10× analytical)
-- [ ] Hash table SIMD probes
-- [ ] **Benchmark**: Isolate SIMD impact with micro-benchmarks
-- [ ] **Verify**: Check CPU flags (`grep avx2 /proc/cpuinfo`)
+### Implementation
 
-### M4: Optimizer & Statistics (Week 7-8)
-- [ ] Bytecode optimizer enhancements
-- [ ] Index statistics collection
-- [ ] Cost-based index selection
-- [ ] **Benchmark**: Complex query workloads (multi-join, subqueries)
+```cpp
+// src/core/DS/arena_v2.h
 
-### M5: Validation & Release (Week 9)
-- [ ] Full benchmark suite re-run (5 runs each)
-- [ ] Regression tests (SQL:1999, 89+ suites)
-- [ ] Documentation updates (README.md performance tables)
-- [ ] **Compare**: Final vs baseline geometric mean speedup
-- [ ] **Release**: v0.11.6 with performance changelog
+class SafeArena {
+    std::vector<std::unique_ptr<char[]>> chunks_;
+    size_t total_allocated_ = 0;
+    const size_t max_size_;
+    
+public:
+    SafeArena(size_t max_size = 64 * 1024 * 1024) : max_size_(max_size) {}
+    
+    void* Alloc(size_t size) {
+        if (total_allocated_ + size > max_size_) {
+            throw std::bad_alloc("Arena exhausted");
+        }
+        // Bump pointer allocation
+    }
+    
+    void Reset() { total_allocated_ = 0; }  // O(1) free
+    
+    void DumpStats() const;
+};
 
----
-
-## Benchmark-Driven Development Workflow
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. COLLECT BASELINE                                             │
-│    ./scripts/benchmark_collect.sh                               │
-│    → .build/benchmarks/baseline_v0.11.5.csv                     │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 2. ANALYZE                                                      │
-│    python3 scripts/benchmark_analyze.py baseline_v0.11.5.csv    │
-│    → Identifies P0-CRITICAL bottlenecks                         │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 3. IMPLEMENT OPTIMIZATION                                       │
-│    (e.g., hash join fast path)                                  │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 4. COLLECT POST-OPTIMIZATION DATA                               │
-│    ./scripts/benchmark_collect.sh                               │
-│    → .build/benchmarks/after_hash_join.csv                      │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 5. COMPARE                                                      │
-│    python3 scripts/benchmark_compare.py                         │
-│      baseline_v0.11.5.csv after_hash_join.csv                   │
-│    → Shows speedup, geometric mean                              │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 6. PROFILE (if targets not met)                                 │
-│    go test -bench=X -cpuprofile=cpu.prof                        │
-│    go tool pprof cpu.prof                                       │
-│    → Identifies remaining hot spots                             │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 7. ITERATE or MERGE                                             │
-│    If targets met: merge to dev, update README                  │
-│    If targets missed: return to step 3                          │
-└─────────────────────────────────────────────────────────────────┘
+// Usage in query execution
+class QueryExecutor {
+    std::unique_ptr<SafeArena> query_arena_;
+    
+public:
+    svdb_result_t Execute(const Query& q) {
+        query_arena_ = std::make_unique<SafeArena>(256 * 1024);
+        // All allocations use arena
+        // Automatic cleanup
+    }
+};
 ```
 
-### Success Criteria per Optimization
+### Files Modified
+- src/core/DS/arena_v2.cpp
+- src/core/DS/arena_v2.h
+- src/core/SC/database.cpp (unique_ptr)
+- src/core/VM/engine/engine.cpp
 
-| Optimization | Target | Measurement | Pass Criteria |
-|--------------|--------|-------------|---------------|
-| Hash join | 60× | `INNER_JOIN_1K` | < 100ms |
-| COUNT(*) | 98× | `COUNT_STAR_10K` | < 50µs |
-| VM dispatch | 5× | `SELECT_ALL_10K` | < 10ms |
-| Arena memory | 40% GC | `mem.prof` allocs | -40% allocations |
-| SIMD batch | 4× | `SUM_AGGREGATE_10K` | < 5ms |
-| LTO | 10% | Geometric mean | 1.10× overall |
+### Expected Impact
+- 40% reduction in Go GC pressure
 
 ---
 
-## Risks & Mitigations
+## Workstream 7: SIMD Library (P1)
+
+### Tasks
+
+| # | Task | Difficulty | Dependency |
+|---|------|------------|------------|
+| 7.1 | SIMD batch compare (int64, float64) | MEDIUM | - |
+| 7.2 | SIMD aggregate (SUM, COUNT, AVG) | MEDIUM | - |
+| 7.3 | SIMD hash probe | HIGH | WS1 |
+| 7.4 | SIMD string comparison | MEDIUM | - |
+| 7.5 | SIMD bitmap operations | MEDIUM | WS5 |
+| 7.6 | CRC32/xxHash SIMD | MEDIUM | WS1 |
+
+### Implementation
+
+```cpp
+// src/core/DS/simd.cpp - Already partially implemented, extend
+
+void svdb_batch_compare_int64_simd(const int64_t* a, const int64_t* b,
+                                    int8_t* results, size_t n) {
+#ifdef __AVX2__
+    for (size_t i = 0; i + 4 <= n; i += 4) {
+        __m256i va = _mm256_loadu_si256((const __m256i*)&a[i]);
+        __m256i vb = _mm256_loadu_si256((const __m256i*)&b[i]);
+        __m256i cmp = _mm256_cmpgt_epi64(va, vb);
+        _mm256_storeu_si256((__m256i*)&results[i], cmp);
+    }
+#endif
+}
+
+void svdb_batch_sum_int64_simd(const int64_t* values, int64_t* result, size_t n) sum with reduction
+}
+```
+
+### Files Modified
+- src {
+    // Horizontal/core/DS/simd.cpp
+- src/core/DS/simd.h
+- src/core/VM/expr_eval.cpp
+- src/core/VM/aggregate_engine.cpp
+- src/core/VM/sort.cpp
+
+### Expected Impact
+- 4× speedup for batch operations
+
+---
+
+## Workstream 8: Transaction + Schema (P2)
+
+### Tasks
+
+| # | Task | Difficulty | Dependency |
+|---|------|------------|------------|
+| 8.1 | WAL batch commit | MEDIUM | - |
+| 8.2 | Version chain optimization | MEDIUM | - |
+| 8.3 | Index statistics collection | MEDIUM | - |
+| 8.4 | FTS5 optimization | MEDIUM | - |
+| 8.5 | Checkpoint optimization | MEDIUM | - |
+
+### Files Modified
+- src/core/TM/mvcc.cpp
+- src/core/TM/transaction.cpp
+- src/core/TM/wal.cpp
+- src/core/IS/is_registry.cpp
+- src/core/IS/schema.cpp
+- src/core/IS/vtab_fts5.cpp
+
+### Expected Impact
+- 30% improvement in write throughput
+
+---
+
+## Workstream 9: Build + Infrastructure (P2)
+
+### Tasks
+
+| # | Task | Difficulty | Dependency |
+|---|------|------------|------------|
+| 9.1 | Enable LTO (already done in v0.11.5) | LOW | - |
+| 9.2 | PGO build support | MEDIUM | - |
+| 9.3 | Benchmark infrastructure | LOW | - |
+| 9.4 | Performance regression CI | MEDIUM | 9.3 |
+
+### Files Modified
+- CMakeLists.txt
+- src/CMakeLists.txt
+- scripts/benchmark_*.sh (already created in v0.11.5)
+
+---
+
+## Complete File List
+
+```
+src/core/
+├── VM/
+│   ├── hash_join.cpp       [WS1] - COMPLETE REWRITE
+│   ├── hash_join.h         [WS1] - New API
+│   ├── fast_hash_table.h   [WS1] - NEW
+│   ├── vm_execute.cpp      [WS3] - Dispatch optimization
+│   ├── aggregate_engine.cpp [WS3] - SIMD aggregation
+│   ├── sort.cpp            [WS3] - Hybrid sort
+│   └── expr_eval.cpp       [WS7] - SIMD batch ops
+├── DS/
+│   ├── btree.cpp           [WS5] - SIMD search, metadata
+│   ├── manager.cpp          [WS5] - Row count tracking
+│   ├── page_manager_v2.cpp  [WS5] - Prefetch
+│   ├── simd.cpp             [WS7] - Extend SIMD
+│   ├── simd.h              [WS7] - New functions
+│   ├── arena_v2.cpp        [WS6] - SafeArena
+│   ├── arena_v2.h          [WS6] - SafeArena
+│   ├── roaring.cpp         [WS5] - SIMD bitmaps
+│   └── cache_v2.cpp        [WS5] - Bloom filter
+├── QP/
+│   ├── parser.cpp          [WS4] - string_view
+│   ├── parser.h            [WS4] - string_view
+│   ├── binder.cpp          [WS4] - O(n) placeholder
+│   └── tokenizer.h         [WS4] - Token caching
+├── CG/
+│   ├── optimizer.cpp       [WS4] - Predicate pushdown
+│   ├── optimizer.h         [WS4] - New passes
+│   ├── bytecode_compiler.cpp [WS4] - Optimization
+│   └── plan_cache.h       [WS4] - NEW
+├── IS/
+│   ├── is_registry.cpp     [WS2] - Metadata cache fix
+│   ├── is_registry.h       [WS2] - Metadata struct
+│   ├── schema.cpp         [WS8] - Statistics
+│   └── vtab_fts5.cpp      [WS8] - FTS5 opt
+├── SC/
+│   ├── query.cpp          [WS2] - COUNT fast path
+│   ├── database.cpp       [WS6] - unique_ptr
+│   └── statement.cpp      [WS5] - Cache
+├── TM/
+│   ├── mvcc.cpp           [WS8] - Version chain
+│   ├── transaction.cpp    [WS8] - WAL batch
+│   └── wal.cpp            [WS8] - Batch commit
+└── PB/
+    └── vfs.cpp            [WS5] - mmap support
+```
+
+---
+
+## Milestone Schedule
+
+| Week | Focus | Deliverables |
+|------|-------|--------------|
+| **Week 1** | WS1 + WS2 | Hash join rewrite, COUNT(*) fix |
+| **Week 2** | WS3 + WS6 | VM dispatch, Arena integration |
+| **Week 3** | WS4 + WS7 | Parser, Optimizer, SIMD |
+| **Week 4** | WS5 + WS8 | DS optimization, TM/IS |
+| **Week 5** | Integration | Full benchmark suite |
+| **Week 6** | Testing | SQL:1999 regression, bug fixes |
+| **Week 7** | Polish | Documentation, release |
+
+---
+
+## Parallel Development Strategy
+
+```bash
+# Team Structure (4 parallel tracks)
+Track A (P0):     JOIN + COUNT     → 2 engineers
+Track B (P1):     VM + MEM + SIMD  → 2 engineers  
+Track C (P1):     QP + CG + DS    → 2 engineers
+Track D (P2):     TM + IS + Infra  → 1 engineer
+
+# Daily Integration
+- Morning: Standup, sync on blockers
+- Evening: Merge to integration branch
+- Daily: Full benchmark run
+
+# Weekly Milestone
+- Monday: Feature freeze for milestone
+- Friday: Benchmark comparison, bug bash
+```
+
+---
+
+## Success Criteria
+
+| Metric | Baseline | Target | Improvement |
+|--------|----------|--------|-------------|
+| INNER JOIN 1K | 6034 ms | 100 ms | **60×** |
+| COUNT(*) 10K | 4.89 ms | 50 µs | **98×** |
+| SELECT all 10K | 47.8 ms | 10 ms | **5×** |
+| SUM aggregate 10K | 18.5 ms | 2 ms | **9×** |
+| GROUP BY 10K | 49.0 ms | 5 ms | **10×** |
+| INSERT batch 1K | 2.28 ms | 1.5 ms | **1.5×** (maintain) |
+| Go GC Pressure | Baseline | -40% | **40% reduction** |
+| **Geometric Mean** | - | - | **~15× faster** |
+
+---
+
+## Benchmark Verification
+
+### Required Tests Per Workstream
+
+| Workstream | Test | Pass Criteria |
+|------------|------|---------------|
+| WS1: JOIN | BenchmarkCompare_InnerJoin_1K | < 100ms |
+| WS2: COUNT | BenchmarkCompare_CountStar_10K | < 50µs |
+| WS3: VM | BenchmarkCompare_SelectAll_10K | < 10ms |
+| WS4: QP/CG | Parser microbenchmark | 30% faster |
+| WS5: DS | B-Tree search microbenchmark | 2× faster |
+| WS6: MEM | Memory profile | -40% allocations |
+| WS7: SIMD | Batch ops microbenchmark | 4× faster |
+| WS8: TM/IS | Write benchmark | 30% faster |
+
+### Full Benchmark Suite
+
+```bash
+# Run complete benchmark
+./scripts/benchmark_collect.sh
+
+# Compare against baseline
+python3 scripts/benchmark_compare.py \
+    .build/benchmarks/baseline_v0.11.5.csv \
+    .build/benchmarks/after_v0.11.5.csv
+```
+
+---
+
+## Regression Prevention
+
+### Test Suite Requirements
+
+- [ ] SQL:1999 test suite (89+ suites)
+- [ ] Regression tests (all previously fixed bugs)
+- [ ] Edge cases: NULL handling, empty tables, large values
+- [ ] Concurrency: multi-threaded access
+- [ ] Recovery: crash during transaction
+
+### CI/CD Integration
+
+```yaml
+# .github/workflows/perf.yml
+name: Performance Regression
+on: [push, pull_request]
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: ./build.sh
+      - name: Run benchmarks
+        run: ./scripts/benchmark_collect.sh
+      - name: Compare
+        run: python3 scripts/benchmark_compare.py baseline.csv current.csv
+      - name: Alert on regression
+        if: failure()
+        run: echo "Performance regression detected"
+```
+
+---
+
+## Risk Mitigation
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| Hash join rewrite complexity | High | Incremental rollout, keep fallback path |
-| Arena allocator memory leaks | Medium | Per-query lifecycle, audit all allocations |
-| VM dispatch breaking changes | High | Maintain switch fallback, gradual migration |
-| SIMD portability | Low | Runtime CPU feature detection, scalar fallback |
-| PGO build complexity | Low | Optional build flag, documented process |
+| Hash join rewrite complexity | HIGH | Incremental rollout, keep fallback path |
+| Arena allocator memory leaks | MEDIUM | Per-query lifecycle, audit all allocations |
+| VM dispatch breaking changes | HIGH | Maintain switch fallback, gradual migration |
+| COUNT(*) SIGFPE regression | HIGH | Extensive edge case testing |
+| Schedule slip | MEDIUM | Buffer 1 week, cut P2 if needed |
+| SIMD portability | LOW | Runtime CPU feature detection, scalar fallback |
 
 ---
 
-## Success Metrics
+## Commit Strategy
 
-1. **Performance**: 
-   - INNER JOIN: 60× speedup (6034ms → 100ms)
-   - COUNT(*): 98× speedup (4.89ms → 50µs)
-   - SELECT all: 5× speedup (11× → 2× slowdown)
-2. **Memory**: 40% reduction in Go GC pressure
-3. **Code Quality**: No regressions in SQL:1999 tests (89+ suites)
-4. **Build Time**: <5% increase in C++ build time
+### Per-Workstream Commits
+
+```bash
+# Workstream 1: Hash Join
+git add src/core/VM/hash_join.cpp src/core/VM/fast_hash_table.h
+git commit -m "perf: Rewrite hash join with Arena + SIMD
+
+- Open-addressing hash table implementation
+- ArenaV2 for zero-copy allocations
+- SIMD CRC32 hash computation
+- Target: 60x speedup (6034ms -> 100ms)
+Test: BenchmarkCompare_InnerJoin_1K"
+
+# Workstream 2: COUNT(*)
+git add src/core/IS/is_registry.cpp src/core/SC/query.cpp
+git commit -m "perf: Fix COUNT(*) metadata cache
+
+- Fix SIGFPE division by zero bug
+- Implement thread-safe row counter
+- Add MVCC-safe cache validation
+- Target: 98x speedup (4.89ms -> 50us)
+Test: BenchmarkCompare_CountStar_10K"
+```
+
+### Weekly Integration Commits
+
+```bash
+# Friday integration
+git add -A
+git commit -m "perf: v0.11.5 Week 1 integration
+
+- WS1: Hash join rewrite (60% complete)
+- WS2: COUNT(*) fix (80% complete)
+- Benchmark: INNER JOIN 6034ms -> 800ms (7.5x)
+"
+```
 
 ---
 
 ## References
 
-- Architecture: `docs/ARCHITECTURE.md`
-- Performance Baseline: `README.md` (v0.11.5 benchmarks)
-- C++ Module Structure: Commit `8ccf4e4`
-- Hash Join Implementation: `src/core/VM/hash_join.cpp`
-- Arena Allocator: `src/core/DS/arena_v2.h`
+- v0.11.5 Plan: docs/plan-v0.11.5.md
+- Architecture: docs/ARCHITECTURE.md
+- Benchmark Infrastructure: scripts/benchmark_*.sh
+- C++ Module Structure: src/core/
+- Hash Join Implementation: src/core/VM/hash_join.cpp
+- Arena Allocator: src/core/DS/arena_v2.h
+
+---
+
+## Document History
+
+| Version | Date | Author | Changes |
+|---------|------|--------|---------|
+| 0.11.5 | 2026-03-06 | sqlvibe team | Initial plan |
+
