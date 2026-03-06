@@ -33,7 +33,22 @@ extern "C" svdb_ast_node_t* svdb_parser_parse_insert(svdb_parser_t* parser,
     }
     parser_expect_keyword(s, pos, "INTO"); /* optional in some dialects */
 
+    /* Read table name (may be qualified: schema.table) */
     std::string table = parser_read_ident(s, pos);
+    if (table.empty()) return nullptr;
+    
+    /* Check for schema.table format */
+    size_t save_pos = pos;
+    pos = parser_skip_ws(s, pos);
+    if (pos < s.size() && s[pos] == '.') {
+        ++pos; /* consume '.' */
+        std::string table_part = parser_read_ident(s, pos);
+        if (!table_part.empty()) {
+            table = table + "." + table_part;
+        } else {
+            pos = save_pos; /* not a qualified name, restore position */
+        }
+    }
     if (table.empty()) return nullptr;
 
     svdb_ast_node_t* node = svdb_ast_node_create(SVDB_AST_INSERT);
@@ -95,7 +110,22 @@ extern "C" svdb_ast_node_t* svdb_parser_parse_update(svdb_parser_t* parser,
 
     if (!parser_expect_keyword(s, pos, "UPDATE")) return nullptr;
 
+    /* Read table name (may be qualified: schema.table) */
     std::string table = parser_read_ident(s, pos);
+    if (table.empty()) return nullptr;
+    
+    /* Check for schema.table format */
+    size_t save_pos = pos;
+    pos = parser_skip_ws(s, pos);
+    if (pos < s.size() && s[pos] == '.') {
+        ++pos; /* consume '.' */
+        std::string table_part = parser_read_ident(s, pos);
+        if (!table_part.empty()) {
+            table = table + "." + table_part;
+        } else {
+            pos = save_pos; /* not a qualified name, restore position */
+        }
+    }
     if (table.empty()) return nullptr;
 
     svdb_ast_node_t* node = svdb_ast_node_create(SVDB_AST_UPDATE);
@@ -157,7 +187,22 @@ extern "C" svdb_ast_node_t* svdb_parser_parse_delete(svdb_parser_t* parser,
     if (!parser_expect_keyword(s, pos, "DELETE")) return nullptr;
     parser_expect_keyword(s, pos, "FROM");
 
+    /* Read table name (may be qualified: schema.table) */
     std::string table = parser_read_ident(s, pos);
+    if (table.empty()) return nullptr;
+    
+    /* Check for schema.table format */
+    size_t save_pos = pos;
+    pos = parser_skip_ws(s, pos);
+    if (pos < s.size() && s[pos] == '.') {
+        ++pos; /* consume '.' */
+        std::string table_part = parser_read_ident(s, pos);
+        if (!table_part.empty()) {
+            table = table + "." + table_part;
+        } else {
+            pos = save_pos; /* not a qualified name, restore position */
+        }
+    }
     if (table.empty()) return nullptr;
 
     svdb_ast_node_t* node = svdb_ast_node_create(SVDB_AST_DELETE);

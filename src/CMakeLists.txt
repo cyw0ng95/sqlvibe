@@ -193,6 +193,12 @@ if(SVDB_BUILD_DEBUG)
     message(STATUS "SVDB_BUILD_DEBUG enabled — debug assertions active")
 endif()
 
+# Extension compile definitions
+target_compile_definitions(svdb PUBLIC SVDB_EXT_JSON SVDB_EXT_MATH SVDB_EXT_FTS5)
+
+# Link extension libraries
+target_link_libraries(svdb PRIVATE svdb_ext_json svdb_ext_math svdb_ext_fts5)
+
 # Sanitizer support
 if(SVDB_SANITIZER)
     set(SVDB_SAN_FLAGS "-fsanitize=${SVDB_SANITIZER}" -fno-omit-frame-pointer -g)

@@ -159,11 +159,11 @@ static std::string read_value(const std::string& sql, size_t& pos) {
         }
         return sql.substr(start, pos - start);
     }
-    /* NULL/TRUE/FALSE */
+    /* NULL/TRUE/FALSE/DEFAULT */
     if (isalpha(c)) {
         size_t tmp = pos;
         std::string kw = read_keyword(sql, tmp);
-        if (kw == "NULL" || kw == "TRUE" || kw == "FALSE") {
+        if (kw == "NULL" || kw == "TRUE" || kw == "FALSE" || kw == "DEFAULT") {
             pos = tmp;
             return kw;
         }
