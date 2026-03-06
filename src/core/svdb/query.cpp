@@ -4377,6 +4377,23 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                                            rd["constraint_name"],rd["table_schema"],rd["table_name"],rd["constraint_type"]});
                     }
                 }
+                /* Foreign key constraints */
+                int fkidx = 0;
+                for (auto &kv : db->fk_constraints) {
+                    for (auto &fk : kv.second) {
+                        if (fk.child_col.empty()) continue;
+                        Row rd;
+                        rd["constraint_catalog"]=SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["constraint_schema"] =SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["constraint_name"]   =SvdbVal{SVDB_TYPE_TEXT,0,0,kv.first+"_fk_"+std::to_string(fkidx++)};
+                        rd["table_schema"]      =SvdbVal{SVDB_TYPE_TEXT,0,0,"main"};
+                        rd["table_name"]        =SvdbVal{SVDB_TYPE_TEXT,0,0,kv.first};
+                        rd["constraint_type"]   =SvdbVal{SVDB_TYPE_TEXT,0,0,"FOREIGN KEY"};
+                        if (!where_txt.empty() && !qry_eval_where(rd, r->col_names, where_txt)) continue;
+                        r->rows.push_back({rd["constraint_catalog"],rd["constraint_schema"],
+                                           rd["constraint_name"],rd["table_schema"],rd["table_name"],rd["constraint_type"]});
+                    }
+                }
 
             } else if (is_view == "KEY_COLUMN_USAGE") {
                 r->col_names = {"constraint_catalog","constraint_schema","constraint_name",
