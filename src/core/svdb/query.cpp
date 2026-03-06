@@ -2972,11 +2972,17 @@ static std::vector<JoinSpec> parse_comma_joins(const std::string &sql) {
         if (ep != std::string::npos && ep < from_end) from_end = ep;
     }
     std::string from_clause = sql.substr(from_pos, from_end - from_pos);
-    /* Split by comma */
+    /* Split by top-level comma only (don't split inside parentheses) */
     std::vector<std::string> tables;
     size_t p = 0;
     while (p < from_clause.size()) {
-        size_t comma = from_clause.find(',', p);
+        int td = 0;
+        size_t comma = std::string::npos;
+        for (size_t i = p; i < from_clause.size(); ++i) {
+            if (from_clause[i] == '(') ++td;
+            else if (from_clause[i] == ')') { if (td > 0) --td; }
+            else if (from_clause[i] == ',' && td == 0) { comma = i; break; }
+        }
         if (comma == std::string::npos) { tables.push_back(qry_trim(from_clause.substr(p))); break; }
         tables.push_back(qry_trim(from_clause.substr(p, comma - p)));
         p = comma + 1;
@@ -7254,6 +7260,14 @@ svdb_code_t svdb_query(svdb_db_t *db, const char *sql, svdb_rows_t **rows) {
 SvdbVal svdb_eval_expr_in_row(const std::string &expr, const Row &row,
                                const std::vector<std::string> &col_order) {
     return eval_expr(expr, row, col_order);
+}
+
+/* Evaluate a WHERE condition using the full qry_eval_where engine.
+ * g_query_db must already be set (via svdb_set_query_db) before calling. */
+bool svdb_eval_where_in_row(const std::string &where_text, const Row &row,
+                              const std::vector<std::string> &col_order) {
+    if (where_text.empty()) return true;
+    return qry_eval_where(row, col_order, where_text);
 }
 
 /* Set thread-local DB context for use by eval_expr subqueries */
