@@ -2,6 +2,7 @@
 #include "manager.h"
 #include "varint.h"
 #include "cell.h"
+#include "../SF/svdb_assert.h"
 #include <cstring>
 #include <cstdlib>
 
@@ -26,6 +27,9 @@ static int btree_read_page(svdb_btree_t* bt, uint32_t page_num,
                            uint8_t** page_data, size_t* page_size) {
     if (!bt || page_num == 0) return 0;
     
+    svdb_assert_msg(page_data != nullptr, "page_data output pointer must not be null");
+    svdb_assert_msg(page_size != nullptr, "page_size output pointer must not be null");
+
     if (bt->use_callbacks && bt->callback_pm.read_page) {
         return bt->callback_pm.read_page(bt->callback_pm.user_data, page_num, page_data, page_size);
     } else if (bt->embedded_pm) {
@@ -45,8 +49,11 @@ static int btree_write_page(svdb_btree_t* bt, uint32_t page_num,
                             const uint8_t* page_data, size_t page_size) {
     if (!bt || page_num == 0) return 0;
     
+    svdb_assert_msg(page_data != nullptr, "page_data must not be null");
+    svdb_assert_msg(page_size >= 8, "page_size too small: %zu", page_size);
+
     if (bt->use_callbacks && bt->callback_pm.write_page) {
-        return bt->callback_pm.write_page(bt->callback_pm.user_data, page_num, 
+        return bt->callback_pm.write_page(bt->callback_pm.user_data, page_num,
                                           const_cast<uint8_t*>(page_data), page_size);
     } else if (bt->embedded_pm) {
         return svdb_page_manager_write(bt->embedded_pm, page_num, page_data, page_size);
@@ -58,6 +65,8 @@ static int btree_write_page(svdb_btree_t* bt, uint32_t page_num,
 static int btree_allocate_page(svdb_btree_t* bt, uint32_t* page_num) {
     if (!bt) return 0;
     
+    svdb_assert_msg(page_num != nullptr, "page_num output pointer must not be null");
+
     if (bt->use_callbacks && bt->callback_pm.allocate_page) {
         return bt->callback_pm.allocate_page(bt->callback_pm.user_data, page_num);
     } else if (bt->embedded_pm) {
@@ -69,7 +78,7 @@ static int btree_allocate_page(svdb_btree_t* bt, uint32_t* page_num) {
 // Helper: Free page using embedded or callback PageManager
 static int btree_free_page(svdb_btree_t* bt, uint32_t page_num) {
     if (!bt || page_num == 0) return 0;
-    
+
     if (bt->use_callbacks && bt->callback_pm.free_page) {
         return bt->callback_pm.free_page(bt->callback_pm.user_data, page_num);
     } else if (bt->embedded_pm) {
@@ -87,31 +96,50 @@ static const uint8_t PAGE_TYPE_INDEX_INTERIOR = 0x02;
 // Binary search for cell index in a page
 extern "C" int svdb_btree_binary_search(const uint8_t* page_data, size_t page_size,
                                          const uint8_t* key, size_t key_len, int is_table) {
+    svdb_assert_msg(page_data != nullptr, "page_data cannot be null");
+    svdb_assert_msg(page_size >= 8, "page_size too small: %zu", page_size);
+    svdb_assert_msg(key != nullptr, "search key cannot be null");
+    svdb_assert_msg(key_len > 0, "key length must be positive: %zu", key_len);
+    
     if (!page_data || page_size < 8 || !key || key_len == 0) {
         return -1;
     }
-    
+
     uint8_t page_type = page_data[0];
-    int num_cells = (page_data[3] << 8) | page_data[4];
+    svdb_assert_msg(page_type == PAGE_TYPE_TABLE_LEAF || 
+                    page_type == PAGE_TYPE_TABLE_INTERIOR ||
+                    page_type == PAGE_TYPE_INDEX_LEAF || 
+                    page_type == PAGE_TYPE_INDEX_INTERIOR,
+                    "invalid page type: 0x%02x", page_type);
     
+    int num_cells = (page_data[3] << 8) | page_data[4];
+    svdb_assert_msg(num_cells >= 0, "invalid cell count: %d", num_cells);
+
     if (num_cells == 0) {
         return -1;
     }
-    
+
     // Binary search
     int lo = 0, hi = num_cells - 1;
     int result = -1;
     
+    svdb_assert_msg(hi < 100000, "excessive cell count: %d", hi);
+
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
-        
+        svdb_assert_msg(mid >= 0 && mid < num_cells, "cell index out of bounds: %d", mid);
+
         // Get cell pointer offset
         int cell_ptr_offset = 8 + mid * 2;
+        svdb_assert_msg(cell_ptr_offset >= 8, "invalid cell pointer offset: %d", cell_ptr_offset);
+        
         if (cell_ptr_offset + 2 > static_cast<int>(page_size)) {
             break;
         }
-        
+
         uint16_t cell_offset = (page_data[cell_ptr_offset] << 8) | page_data[cell_ptr_offset + 1];
+        svdb_assert_msg(cell_offset >= 8, "invalid cell offset: %u", cell_offset);
+        
         if (cell_offset >= page_size) {
             break;
         }
@@ -187,13 +215,23 @@ extern "C" int svdb_btree_binary_search(const uint8_t* page_data, size_t page_si
 static int search_leaf_page(const uint8_t* page_data, size_t page_size,
                             const uint8_t* key, size_t key_len, int is_table,
                             uint8_t** value, size_t* value_len) {
+    svdb_assert_msg(page_data != nullptr, "page_data cannot be null");
+    svdb_assert_msg(page_size >= 8, "page_size too small: %zu", page_size);
+    svdb_assert_msg(key != nullptr, "search key cannot be null");
+    svdb_assert_msg(key_len > 0, "key length must be positive: %zu", key_len);
+    svdb_assert_msg(value != nullptr, "value output pointer cannot be null");
+    svdb_assert_msg(value_len != nullptr, "value_len output pointer cannot be null");
+    
     int cell_idx = svdb_btree_binary_search(page_data, page_size, key, key_len, is_table);
     if (cell_idx < 0) {
         return 0;
     }
-    
+
     // Get cell pointer
     int cell_ptr_offset = 8 + cell_idx * 2;
+    svdb_assert_msg(cell_ptr_offset + 2 <= static_cast<int>(page_size), 
+                    "cell pointer offset out of bounds: %d", cell_ptr_offset);
+    
     uint16_t cell_offset = (page_data[cell_ptr_offset] << 8) | page_data[cell_ptr_offset + 1];
     
     if (is_table) {
@@ -247,11 +285,22 @@ static int search_leaf_page(const uint8_t* page_data, size_t page_size,
 static int search_interior_page(const uint8_t* page_data, size_t page_size,
                                 const uint8_t* key, size_t key_len, int is_table,
                                 svdb_btree_t* bt, uint32_t* child_page) {
+    svdb_assert_msg(page_data != nullptr, "page_data cannot be null");
+    svdb_assert_msg(page_size >= 8, "page_size too small: %zu", page_size);
+    svdb_assert_msg(key != nullptr, "search key cannot be null");
+    svdb_assert_msg(key_len > 0, "key length must be positive: %zu", key_len);
+    svdb_assert_msg(bt != nullptr, "btree handle cannot be null");
+    svdb_assert_msg(child_page != nullptr, "child_page output pointer cannot be null");
+    
     int num_cells = (page_data[3] << 8) | page_data[4];
+    svdb_assert_msg(num_cells >= 0 && num_cells < 100000, "invalid cell count: %d", num_cells);
 
     // Find the right child
     for (int i = 0; i < num_cells; i++) {
         int cell_ptr_offset = 8 + i * 2;
+        svdb_assert_msg(cell_ptr_offset + 2 <= static_cast<int>(page_size),
+                        "cell pointer offset out of bounds: %d", cell_ptr_offset);
+        
         uint16_t cell_offset = (page_data[cell_ptr_offset] << 8) | page_data[cell_ptr_offset + 1];
 
         uint32_t left_child;
@@ -490,7 +539,16 @@ static int insert_into_leaf(uint8_t* page_data, size_t page_size,
                              const uint8_t* key, size_t key_len,
                              const uint8_t* value, size_t value_len,
                              int is_table) {
+    svdb_assert_msg(page_data != nullptr, "page_data cannot be null");
+    svdb_assert_msg(page_size >= 8, "page_size too small: %zu", page_size);
+    svdb_assert_msg(key != nullptr, "key cannot be null");
+    svdb_assert_msg(key_len > 0, "key length must be positive: %zu", key_len);
+    svdb_assert_msg(value != nullptr, "value cannot be null");
+    svdb_assert_msg(value_len > 0, "value length must be positive: %zu", value_len);
+    
     int num_cells = (page_data[3] << 8) | page_data[4];
+    svdb_assert_msg(num_cells >= 0 && num_cells < 10000, "invalid cell count: %d", num_cells);
+    
     int content_start = (page_data[5] << 8) | page_data[6];
     if (content_start == 0) content_start = (int)page_size;
 
@@ -567,7 +625,14 @@ static int insert_into_leaf(uint8_t* page_data, size_t page_size,
 // Delete from a leaf page. Returns 1 if deleted, 0 if not found.
 static int delete_from_leaf(uint8_t* page_data, size_t page_size,
                               const uint8_t* key, size_t key_len, int is_table) {
+    svdb_assert_msg(page_data != nullptr, "page_data cannot be null");
+    svdb_assert_msg(page_size >= 8, "page_size too small: %zu", page_size);
+    svdb_assert_msg(key != nullptr, "key cannot be null");
+    svdb_assert_msg(key_len > 0, "key length must be positive: %zu", key_len);
+    
     int num_cells = (page_data[3] << 8) | page_data[4];
+    svdb_assert_msg(num_cells >= 0 && num_cells < 10000, "invalid cell count: %d", num_cells);
+    
     int found_idx = -1;
     int64_t search_rowid = 0;
 
@@ -617,9 +682,16 @@ static int delete_from_leaf(uint8_t* page_data, size_t page_size,
 
 int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
                       const uint8_t* value, size_t value_len) {
+    svdb_assert_msg(bt != nullptr, "btree handle cannot be null");
+    svdb_assert_msg(key != nullptr, "key cannot be null");
+    svdb_assert_msg(key_len > 0, "key length must be positive: %zu", key_len);
+    svdb_assert_msg(value != nullptr, "value cannot be null");
+    svdb_assert_msg(value_len > 0, "value length must be positive: %zu", value_len);
+    svdb_assert_msg(bt->config.root_page > 0, "root_page must be positive: %u", bt->config.root_page);
+    
     if (!bt || !key || key_len == 0 || !value) return 0;
     if (bt->config.root_page == 0) return 0;
-    
+
     // Read root page
     uint8_t* page_data = nullptr;
     size_t page_size = 0;
@@ -628,6 +700,12 @@ int svdb_btree_insert(svdb_btree_t* bt, const uint8_t* key, size_t key_len,
     if (!page_data || page_size < 8) return 0;
 
     uint8_t page_type = page_data[0];
+    svdb_assert_msg(page_type == PAGE_TYPE_TABLE_LEAF || 
+                    page_type == PAGE_TYPE_TABLE_INTERIOR ||
+                    page_type == PAGE_TYPE_INDEX_LEAF || 
+                    page_type == PAGE_TYPE_INDEX_INTERIOR,
+                    "invalid page type: 0x%02x", page_type);
+    
     int is_table = (page_type == PAGE_TYPE_TABLE_LEAF || page_type == PAGE_TYPE_TABLE_INTERIOR);
     int is_leaf = (page_type == PAGE_TYPE_TABLE_LEAF || page_type == PAGE_TYPE_INDEX_LEAF);
 

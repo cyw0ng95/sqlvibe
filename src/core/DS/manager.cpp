@@ -1,6 +1,7 @@
 #include "manager.h"
 #include "cache.h"
 #include "../PB/vfs.h"
+#include "../SF/svdb_assert.h"
 #include <string.h>
 #include <cstdlib>
 #include <cstring>
@@ -14,20 +15,24 @@ static const char SVDB_MAGIC[17] = "SQLite format 3\0";
  * ----------------------------------------------------------------------- */
 
 static inline uint16_t rd16(const uint8_t* p) {
+    svdb_assert_msg(p != nullptr, "rd16: pointer cannot be null");
     return (uint16_t)((p[0] << 8) | p[1]);
 }
 
 static inline void wr16(uint8_t* p, uint16_t v) {
+    svdb_assert_msg(p != nullptr, "wr16: pointer cannot be null");
     p[0] = (uint8_t)(v >> 8);
     p[1] = (uint8_t)(v);
 }
 
 static inline uint32_t rd32(const uint8_t* p) {
+    svdb_assert_msg(p != nullptr, "rd32: pointer cannot be null");
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
            ((uint32_t)p[2] <<  8) |  (uint32_t)p[3];
 }
 
 static inline void wr32(uint8_t* p, uint32_t v) {
+    svdb_assert_msg(p != nullptr, "wr32: pointer cannot be null");
     p[0] = (uint8_t)(v >> 24);
     p[1] = (uint8_t)(v >> 16);
     p[2] = (uint8_t)(v >>  8);
@@ -54,6 +59,10 @@ static const int DEFAULT_CACHE_PAGES = 2000;
 extern "C" {
 
 svdb_page_manager* svdb_page_manager_create(const char* db_path, uint32_t page_size, int cache_pages) {
+    svdb_assert_msg(db_path != nullptr, "db_path cannot be null");
+    svdb_assert_msg(page_size >= 512 && page_size <= 65536, 
+                    "page_size must be [512, 65536]: %u", page_size);
+    
     if (!db_path || !svdb_manager_is_valid_page_size(page_size)) {
         return nullptr;
     }
@@ -134,6 +143,11 @@ void svdb_page_manager_destroy(svdb_page_manager* pm) {
 
 int svdb_page_manager_read(svdb_page_manager* pm, uint32_t page_num,
                            const uint8_t** page_data, size_t* page_size) {
+    svdb_assert_msg(pm != nullptr, "pm cannot be null");
+    svdb_assert_msg(page_num > 0, "page_num must be positive: %u", page_num);
+    svdb_assert_msg(page_data != nullptr, "page_data output pointer cannot be null");
+    svdb_assert_msg(page_size != nullptr, "page_size output pointer cannot be null");
+    
     if (!pm || !pm->is_valid || page_num == 0) return 0;
 
     std::lock_guard<std::mutex> lock(pm->mu);
@@ -157,6 +171,11 @@ int svdb_page_manager_read(svdb_page_manager* pm, uint32_t page_num,
 
 int svdb_page_manager_write(svdb_page_manager* pm, uint32_t page_num,
                             const uint8_t* page_data, size_t page_size) {
+    svdb_assert_msg(pm != nullptr, "pm cannot be null");
+    svdb_assert_msg(page_num > 0, "page_num must be positive: %u", page_num);
+    svdb_assert_msg(page_data != nullptr, "page_data cannot be null");
+    svdb_assert_msg(page_size >= 512, "page_size too small: %zu", page_size);
+    
     if (!pm || !pm->is_valid || page_num == 0 || !page_data) return 0;
     if (page_size != pm->page_size) return 0;
 
@@ -180,6 +199,9 @@ int svdb_page_manager_write(svdb_page_manager* pm, uint32_t page_num,
 }
 
 int svdb_page_manager_allocate(svdb_page_manager* pm, uint32_t* page_num) {
+    svdb_assert_msg(pm != nullptr, "pm cannot be null");
+    svdb_assert_msg(page_num != nullptr, "page_num output pointer cannot be null");
+    
     if (!pm || !pm->is_valid || !page_num) return 0;
 
     std::lock_guard<std::mutex> lock(pm->mu);
@@ -189,7 +211,7 @@ int svdb_page_manager_allocate(svdb_page_manager* pm, uint32_t* page_num) {
 
     int64_t new_size = (int64_t)pm->num_pages * pm->page_size;
     int64_t current_size = SVDB_PB_VFS_GetSize(pm->file);
-    
+
     if (current_size < new_size) {
         std::vector<uint8_t> zero_page(pm->page_size, 0);
         int64_t offset = svdb_manager_page_offset(*page_num, pm->page_size);
@@ -200,6 +222,9 @@ int svdb_page_manager_allocate(svdb_page_manager* pm, uint32_t* page_num) {
 }
 
 int svdb_page_manager_free(svdb_page_manager* pm, uint32_t page_num) {
+    svdb_assert_msg(pm != nullptr, "pm cannot be null");
+    svdb_assert_msg(page_num > 0, "page_num must be positive: %u", page_num);
+    
     if (!pm || !pm->is_valid || page_num == 0) return 0;
 
     std::lock_guard<std::mutex> lock(pm->mu);
@@ -210,11 +235,13 @@ int svdb_page_manager_free(svdb_page_manager* pm, uint32_t page_num) {
 }
 
 uint32_t svdb_page_manager_get_page_size(const svdb_page_manager* pm) {
+    svdb_assert_msg(pm != nullptr, "pm cannot be null");
     if (!pm) return 0;
     return pm->page_size;
 }
 
 uint32_t svdb_page_manager_get_num_pages(const svdb_page_manager* pm) {
+    svdb_assert_msg(pm != nullptr, "pm cannot be null");
     if (!pm) return 0;
     return pm->num_pages;
 }
