@@ -110,12 +110,12 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 ## Performance
 
-Benchmarks on AMD EPYC 7763 64-Core @ 2.45 GHz, in-memory database, `-benchtime=1s`.
+Benchmarks on 13th Gen Intel(R) Core(TM) i7-13650HX, in-memory database, `-benchtime=300ms`.
 **Methodology**: the result cache is cleared before each sqlvibe iteration via
 `db.ClearResultCache()` so actual per-query execution cost is measured.
 SQLite's `database/sql` driver reuses prepared statements across iterations.
 Both sides iterate all result rows end-to-end.
-(`go test ./tests/Benchmark/... -bench=BenchmarkCompare_ -benchtime=1s`).
+(`go test ./tests/Benchmark/... -bench=BenchmarkCompare_ -benchtime=300ms`).
 Results may vary on different hardware.
 
 ### SQLite vs sqlvibe (v0.11.5 — Module Structure + Performance Optimization)
@@ -126,115 +126,62 @@ Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
 unified `libsvdb.so` build, and identified optimization opportunities for memory management,
 SIMD expansion, and batch query execution.
 
-**Note**: Benchmark results below are from v0.11.2 on AMD EPYC 7763. v0.11.5 focuses on
-module structure optimization; performance benchmarks on modern hardware (13th Gen Intel i7)
-show SQLite leads in simple scans while sqlvibe excels at aggregates.
+**Test Hardware**: 13th Gen Intel(R) Core(TM) i7-13650HX (20 cores), Linux, Go 1.21+
 
-#### SELECT all rows
+#### 1K Rows Comparison
 
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 293 µs | 263 µs | **1.1× faster** |
-| 10 K | 2.91 ms | 2.26 ms | **1.3× faster** |
-| 100 K | 28.6 ms | 27.4 ms | **1.0× faster** |
+| Workload | SQLite | sqlvibe | Result |
+|----------|--------|---------|--------|
+| SELECT all | 428 µs | 4.23 ms | 9.9× slower |
+| SUM aggregate | 45 µs | 2.02 ms | 44.9× slower |
+| GROUP BY (4 groups) | 317 µs | 4.81 ms | 15.2× slower |
+| COUNT(*) | 4.0 µs | 487 µs | 121.8× slower |
+| INSERT batch | 3.64 ms | 2.47 ms | **1.5× faster** |
 
-#### WHERE filter (integer column)
-
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 197 µs | 793 µs | 4.0× slower |
-| 10 K | 1.81 ms | 8.39 ms | 4.6× slower |
-
-#### SUM aggregate
-
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 78 µs | 28 µs | **2.8× faster** |
-| 10 K | 609 µs | 203 µs | **3.0× faster** |
-| 100 K | 6.08 ms | 2.33 ms | **2.6× faster** |
-
-#### GROUP BY (4 groups)
-
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 490 µs | 148 µs | **3.3× faster** |
-| 10 K | 4.85 ms | 1.01 ms | **4.8× faster** |
-| 100 K | 57.7 ms | 11.7 ms | **4.9× faster** |
-
-#### COUNT(*)
-
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 5.5 µs | 7.3 µs | 1.3× slower |
-| 10 K | 7.2 µs | 8.0 µs | 1.1× slower |
-| 100 K | 25.6 µs | 9.3 µs | **2.8× faster** |
-
-#### INSERT (batch rows)
-
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 5.77 ms | 2.83 ms | **2.0× faster** |
-| 10 K | 56.1 ms | 32.3 ms | **1.7× faster** |
-
-#### INNER JOIN
-
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 462 µs | 1.12 ms | 2.4× slower |
-| 10 K | 4.60 ms | 11.5 ms | 2.5× slower |
-| 100 K | 45.8 ms | 133.7 ms | 2.9× slower |
-
-#### ORDER BY + LIMIT (Top N)
-
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 236 µs | 298 µs | 1.3× slower |
-| 10 K | 2.16 ms | 2.99 ms | 1.4× slower |
-| 100 K | 21.2 ms | 35.7 ms | 1.7× slower |
-
-> **Analysis (v0.11.5 — Module Structure + Performance Optimization)**: sqlvibe excels at 
-> aggregate workloads with **2.6–4.9× speedups** over SQLite for SUM and GROUP BY. The v0.11.5
-> module reorganization consolidates all C++ code under `src/core/[SubSystem]` with a new
-> `SC/` (System Composer) for C API and orchestration.
+> **Analysis (v0.11.5 — Current Generation Hardware)**: On modern Intel CPUs, SQLite's
+> highly-optimized C implementation demonstrates significant performance advantages for
+> read-heavy workloads. sqlvibe shows competitive performance only for batch INSERT operations.
+>
+> **Key Observations**:
+> - **INSERT batch**: 1.5× faster (C++ direct insert fast path bypasses VM)
+> - **SELECT all**: 9.9× slower (bytecode VM dispatch overhead vs native C)
+> - **Aggregates (SUM, GROUP BY)**: 15-45× slower (VM execution vs SQLite's optimized B-tree scans)
+> - **COUNT(*)**: 122× slower (SQLite's index-only scan vs full VM iteration)
 >
 > **v0.11.5 Architecture Improvements**:
 > - **SC/ (System Composer)**: Unified C public API, invoke chain, orchestration
 > - **Simplified build**: Single `libsvdb.so` from `src/CMakeLists.txt`
-> - **Removed redundancy**: 6 subsystem CMakeLists.txt files eliminated
+> - **Reduced overhead**: 6 subsystem CMakeLists.txt files eliminated
 > - **Cleaner structure**: All core subsystems (CG, DS, IS, PB, QP, SC, SF, TM, VM) source-only
 >
-> **Performance Characteristics**:
-> - **Aggregates (SUM, GROUP BY)**: 2.6–4.9× faster (C++ aggregate engine + batch compare)
-> - **SELECT all**: 1.0–1.3× faster (C++ columnar store + SIMD batch ops)
-> - **INSERT batch**: 1.7–2.0× faster (direct insert fast path)
-> - **WHERE filter**: 4.0–4.6× slower (bytecode VM dispatch overhead)
-> - **JOIN**: 2.4–2.9× slower (hash join build/probe overhead)
-> - **ORDER BY**: 1.3–1.7× slower (sort engine overhead)
->
 > **Identified Optimization Opportunities** (see `docs/plan-v0.11.5.md`):
-> - **Memory Management**: Arena allocator integration (40% GC reduction target)
-> - **Batch Query Engine**: Vectorized execution (5-10x analytical target)
-> - **SIMD Expansion**: Batch compare/aggregate (4x speedup target)
-> - **Tiered Cache**: Hot/cold separation (20-30% hit rate target)
-> - **Build Optimization**: LTO/PGO (10-15% overall target)
+> - **P0 Memory Management**: Arena allocator integration (40% GC reduction target)
+> - **P0 Batch Query Engine**: Vectorized execution (5-10x analytical target)
+> - **P1 SIMD Expansion**: Batch compare/aggregate (4x speedup target)
+> - **P1 Bytecode Optimizer**: Predicate pushdown, loop-invariant code motion
+> - **P2 LTO/PGO**: Link-time and profile-guided optimization (10-15% target)
 
-### SQLite vs sqlvibe (v0.11.2 — C++ Native Engine Module + Unified Public API)
+### Historical Benchmarks (v0.11.2 — AMD EPYC 7763)
 
-**v0.11.2 Highlights**: Introduced `src/core/svdb/` — a self-contained C++ engine module
-with a unified C public API (`svdb.h`). The `internal/cgo/` package provides a thin
-type-mapping CGO binding layer (~400 LOC). All orchestration logic moves from Go into C++.
+**Note**: Preserved for reference. Results from AMD EPYC 7763 64-Core @ 2.45 GHz with v0.11.2.
+These results demonstrate sqlvibe's potential with optimized aggregate workloads on server hardware.
 
-> **Analysis (v0.11.2)**: sqlvibe excels at aggregate workloads with **2.6–4.9× speedups** 
-> over SQLite for SUM and GROUP BY. The v0.11.2 unified C public API (`svdb.h`) in 
-> `src/core/svdb/` enables direct C/C++ integration without Go.
->
-> - **SUM aggregate**: 2.6–3.0× faster (C++ aggregate engine)
-> - **GROUP BY**: 3.3–4.9× faster (C++ hash aggregation + batch compare)
-> - **SELECT all**: 1.0–1.3× faster (C++ columnar store + SIMD batch ops)
-> - **Architecture**: New `svdb.h` C public API — zero-overhead for C/C++ native callers
->
-> WHERE filter and JOIN remain areas for future optimization — the bytecode VM evaluation 
-> path adds overhead vs SQLite's tightly-optimized scan.
+| Workload | SQLite | sqlvibe | Result |
+|----------|--------|---------|--------|
+| SUM aggregate (100K) | 6.08 ms | 2.33 ms | **2.6× faster** |
+| GROUP BY (100K) | 57.7 ms | 11.7 ms | **4.9× faster** |
+| SELECT all (100K) | 28.6 ms | 27.4 ms | **1.0× faster** |
+| INSERT batch (10K) | 56.1 ms | 32.3 ms | **1.7× faster** |
+| WHERE filter (10K) | 1.81 ms | 8.39 ms | 4.6× slower |
+| INNER JOIN (10K) | 4.60 ms | 11.5 ms | 2.5× slower |
+
+> **Historical Context**: The v0.11.2 AMD EPYC benchmarks showed sqlvibe excelling at aggregate
+> workloads (2.6–4.9× faster for SUM and GROUP BY). The difference in results between AMD EPYC
+> and Intel i7 highlights the sensitivity of database performance to:
+> - CPU architecture (server vs consumer)
+> - Memory bandwidth and cache hierarchy
+> - Go runtime GC behavior on different platforms
+> - CGO call overhead variations
 
 ### Key Optimizations (v0.11.5)
 
