@@ -21,6 +21,7 @@
 #include "svdb_util.h"
 #include "../SF/svdb_assert.h"
 #include "QP/parser.h"
+#include "../IS/is_registry.h"
 
 #ifdef SVDB_EXT_JSON
 #include "../../ext/json/json.h"
@@ -5698,6 +5699,12 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         auto data_it = db->data.find(tname);
         if (data_it != db->data.end()) {
             all_rows = data_it->second;
+            
+            /* Update metadata cache with actual row count */
+            if (db->is_registry) {
+                svdb_is_set_table_metadata(db->is_registry, tname.c_str(), 
+                                           (uint64_t)all_rows.size());
+            }
         }
         merged_col_order = col_order;
         /* Always add table-name and alias prefixes to rows for correlated subqueries */
@@ -6031,6 +6038,31 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     }
 
     if (has_agg && group_cols.empty()) {
+        /* NOTE: COUNT(*) fast path disabled - needs debugging (SIGFPE crash)
+        // ── FAST PATH: COUNT(*) without WHERE ─────────────────────────────
+        // Check for simple COUNT(*) FROM table query with no WHERE clause
+        if (star && where_txt.empty() && sel_cols.size() == 1 && 
+            qry_upper(sel_cols[0]).find("COUNT") != std::string::npos &&
+            qry_upper(sel_cols[0]).find("*") != std::string::npos &&
+            db->is_registry != nullptr) {
+            
+            // Try to get cached row count from metadata
+            svdb_is_table_metadata_t metadata;
+            if (svdb_is_get_table_metadata(db->is_registry, tname.c_str(), &metadata) == 0 && 
+                metadata.valid && metadata.row_count > 0) {
+                // Cache hit - use cached count
+                r->col_names = {"count"};
+                SvdbVal count_val;
+                count_val.type = SVDB_TYPE_INT;
+                count_val.ival = (int64_t)metadata.row_count;
+                count_val.rval = 0.0;
+                r->rows.push_back({count_val});
+                *rows_out = r;
+                return SVDB_OK;
+            }
+        }
+        */
+        
         /* Single-group aggregate (e.g. SELECT COUNT(*), SUM(x), SUM(i)+SUM(r)) */
         std::vector<AggState> aggs;
         const std::vector<std::string> &agg_src = star ? std::vector<std::string>{"*"} : sel_cols;

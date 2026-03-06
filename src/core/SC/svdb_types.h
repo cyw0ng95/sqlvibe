@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <mutex>
 #include "svdb.h"
+#include "../IS/is_registry.h"
 
 /* Column type string e.g. "INTEGER", "TEXT", "REAL", "BLOB" */
 using ColType = std::string;
@@ -84,6 +85,9 @@ struct svdb_db_s {
     std::unordered_map<std::string, TriggerDef>                        triggers;
     /* CREATE TABLE original SQL for each table/view */
     std::unordered_map<std::string, std::string>                       create_sql;
+
+    /* Information schema registry (for metadata cache) */
+    svdb_is_registry_t                                                *is_registry;
 
     /* In-memory row storage: table_name -> rows */
     std::unordered_map<std::string, std::vector<Row>>                  data;

@@ -26,12 +26,23 @@ svdb_code_t svdb_open(const char *path, svdb_db_t **db) {
     svdb_db_t *d = new (std::nothrow) svdb_db_t();
     if (!d) return SVDB_NOMEM;
     d->path = path;
+    
+    /* Initialize information schema registry for metadata cache */
+    d->is_registry = svdb_is_registry_create(nullptr);
+    
     *db = d;
     return SVDB_OK;
 }
 
 svdb_code_t svdb_close(svdb_db_t *db) {
     if (!db) return SVDB_ERR;
+    
+    /* Destroy information schema registry */
+    if (db->is_registry) {
+        svdb_is_registry_destroy(db->is_registry);
+        db->is_registry = nullptr;
+    }
+    
     delete db;
     return SVDB_OK;
 }

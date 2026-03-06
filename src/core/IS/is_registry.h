@@ -13,6 +13,14 @@ extern "C" {
 /* Opaque registry handle */
 typedef struct svdb_is_registry_s svdb_is_registry_t;
 
+/* Table metadata for fast COUNT(*) */
+typedef struct {
+    uint64_t row_count;
+    uint32_t schema_version;
+    uint64_t last_modified_counter;
+    int valid;  /* 1 = valid, 0 = invalid/unknown */
+} svdb_is_table_metadata_t;
+
 /* Column info for information_schema.columns */
 typedef struct {
     const char* column_name;
@@ -86,6 +94,12 @@ int svdb_is_query_referential(svdb_is_registry_t* reg, const char* schema, const
 
 /* Check if table is information_schema table */
 int svdb_is_information_schema_table(const char* table_name);
+
+/* Table metadata cache for fast COUNT(*) */
+int svdb_is_get_table_metadata(svdb_is_registry_t* reg, const char* table_name, svdb_is_table_metadata_t* metadata);
+void svdb_is_set_table_metadata(svdb_is_registry_t* reg, const char* table_name, uint64_t row_count);
+void svdb_is_invalidate_table_metadata(svdb_is_registry_t* reg, const char* table_name);
+void svdb_is_update_table_metadata_delta(svdb_is_registry_t* reg, const char* table_name, int64_t delta);
 
 /* Free result */
 void svdb_is_result_free(svdb_is_result_t* result);
