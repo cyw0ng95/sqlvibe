@@ -1988,7 +1988,18 @@ static svdb_code_t do_insert(svdb_db_t *db, const std::string &sql,
         int nv = svdb_ast_get_value_count(ast, ri);
         for (int ci = 0; ci < nv && ci < (int)ins_cols.size(); ++ci) {
             std::string vstr = svdb_ast_get_value(ast, ri, ci);
-            row[ins_cols[ci]] = parse_literal(vstr);
+            /* Handle DEFAULT keyword — use column's default value */
+            std::string vstr_upper = str_upper(vstr);
+            if (vstr_upper == "DEFAULT") {
+                auto dit = db->schema[tname].find(ins_cols[ci]);
+                if (dit != db->schema[tname].end() && !dit->second.default_val.empty()) {
+                    row[ins_cols[ci]] = svdb_eval_expr_in_row(dit->second.default_val, row, {});
+                } else {
+                    row[ins_cols[ci]] = SvdbVal{};
+                }
+            } else {
+                row[ins_cols[ci]] = parse_literal(vstr);
+            }
         }
 
         /* Apply column type affinity coercion (SQLite compatible) */
