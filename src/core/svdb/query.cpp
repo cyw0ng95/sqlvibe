@@ -5065,12 +5065,24 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 if (close_p != std::string::npos) {
                     std::string inner_sql = sql.substr(after_from + 1, close_p - after_from - 1);
                     std::string inner_u = qry_upper(qry_trim(inner_sql));
-                    if (inner_u.size() > 6 && inner_u.substr(0, 7) == "SELECT ") {
-                        /* Execute the inner SELECT */
-                        svdb_rows_t *inner_rows = nullptr;
+                    svdb_rows_t *inner_rows = nullptr;
+                    
+                    /* Check if it's a VALUES table constructor */
+                    if (inner_u.size() >= 7 && inner_u.substr(0, 7) == "VALUES ") {
+                        /* Execute VALUES as standalone statement */
                         svdb_code_t rc = svdb_query_internal(db, inner_sql, &inner_rows);
                         if (rc != SVDB_OK) { if (inner_rows) delete inner_rows; return rc; }
                         if (!inner_rows) return SVDB_ERR;
+                    } else if (inner_u.size() > 6 && inner_u.substr(0, 7) == "SELECT ") {
+                        /* Execute the inner SELECT */
+                        svdb_code_t rc = svdb_query_internal(db, inner_sql, &inner_rows);
+                        if (rc != SVDB_OK) { if (inner_rows) delete inner_rows; return rc; }
+                        if (!inner_rows) return SVDB_ERR;
+                    } else {
+                        /* Not a supported subquery type */
+                    }
+                    
+                    if (inner_rows) {
 
                         /* Extract alias: text between ) and next keyword */
                         std::string rest_sql = sql.substr(close_p + 1);
