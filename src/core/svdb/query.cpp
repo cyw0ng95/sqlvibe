@@ -4176,7 +4176,8 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 rd["type"]     = SvdbVal{SVDB_TYPE_TEXT,0,0,ttype};
                 rd["name"]     = SvdbVal{SVDB_TYPE_TEXT,0,0,kv.first};
                 rd["tbl_name"] = SvdbVal{SVDB_TYPE_TEXT,0,0,kv.first};
-                rd["rootpage"] = SvdbVal{SVDB_TYPE_INT,1,0,""};
+                /* Views have rootpage=0 since they don't have physical storage */
+                rd["rootpage"] = SvdbVal{SVDB_TYPE_INT, (ttype == "view") ? 0 : 1, 0, ""};
                 rd["sql"]      = SvdbVal{SVDB_TYPE_TEXT,0,0,sql_str};
                 if (!where_txt.empty() && !qry_eval_where(rd, r->col_names, where_txt)) continue;
                 r->rows.push_back({rd["type"],rd["name"],rd["tbl_name"],rd["rootpage"],rd["sql"]});
