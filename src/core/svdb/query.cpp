@@ -596,6 +596,21 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 return a;
             }
         }
+        /* ROW(a, b, ...) — returns first argument (scalar context) */
+        if (eu.substr(0, 4) == "ROW(" && fn_paren_ok(4-1)) {
+            std::string args = e.substr(4, e.size()-5);
+            /* Find first top-level comma */
+            int depth = 0;
+            for (size_t i = 0; i < args.size(); ++i) {
+                if (args[i] == '(') ++depth;
+                else if (args[i] == ')') --depth;
+                else if (args[i] == ',' && depth == 0) {
+                    return eval_expr(qry_trim(args.substr(0, i)), row, col_order);
+                }
+            }
+            /* Single argument */
+            return eval_expr(qry_trim(args), row, col_order);
+        }
         /* LENGTH(expr) — returns byte count for BLOB, Unicode code-point count for TEXT */
         if (eu.substr(0, 7) == "LENGTH(" && fn_paren_ok(7-1)) {
             SvdbVal inner = eval_expr(e.substr(7, e.size()-8), row, col_order);
@@ -3259,6 +3274,7 @@ struct AggState {
     std::string arg;     /* column or * */
     std::string sep;     /* separator for GROUP_CONCAT */
     std::string wrapper; /* outer scalar function: ABS/UPPER/LOWER/etc. */
+    std::string cast_type; /* type for CAST wrapper */
     int64_t count = 0;
     double  sum   = 0.0;
     int64_t isum  = 0;     /* integer-only accumulator (used when is_real is false) */
@@ -3297,6 +3313,14 @@ static bool is_agg_expr(const std::string &e) {
             p = eu.find(pat, p + 1);
         }
     }
+    /* Also check for CAST wrapper around aggregate: CAST(AVG(x) AS INT) */
+    if (eu.substr(0, 5) == "CAST(") {
+        /* Find the inner expression */
+        size_t inner_start = 5;
+        size_t inner_end = e.size() - 1;
+        std::string inner = qry_trim(e.substr(inner_start, inner_end - inner_start));
+        return is_agg_expr(inner);
+    }
     return false;
 }
 
@@ -3321,8 +3345,8 @@ static AggState make_agg(const std::string &expr) {
         }
     }
     std::string eu = qry_upper(e_orig);
-    /* Check for outer scalar wrapper: e.g. ABS(MIN(a)), UPPER(MAX(s)) */
-    static const char *scalar_funcs[] = {"ABS", "UPPER", "LOWER", "ROUND", "CEIL", "FLOOR", "LENGTH", nullptr};
+    /* Check for outer scalar wrapper: e.g. ABS(MIN(a)), UPPER(MAX(s)), CAST(AVG(x) AS INT) */
+    static const char *scalar_funcs[] = {"ABS", "UPPER", "LOWER", "ROUND", "CEIL", "FLOOR", "LENGTH", "CAST", nullptr};
     for (const char **sf = scalar_funcs; *sf && a.func.empty(); ++sf) {
         std::string prefix = std::string(*sf) + "(";
         if (eu.substr(0, prefix.size()) == prefix && eu.back() == ')') {
@@ -3336,6 +3360,17 @@ static AggState make_agg(const std::string &expr) {
                                    inner_eu.find("MAX(") != std::string::npos);
             if (has_inner_agg) {
                 a.wrapper = *sf;
+                /* For CAST wrapper, extract the type */
+                if (std::string(*sf) == "CAST") {
+                    size_t as_pos = inner_eu.find(" AS ");
+                    if (as_pos != std::string::npos) {
+                        a.cast_type = qry_trim(inner_expr.substr(as_pos + 4));
+                        /* Remove trailing ')' if present */
+                        if (!a.cast_type.empty() && a.cast_type.back() == ')') {
+                            a.cast_type.pop_back();
+                        }
+                    }
+                }
                 e_orig = qry_trim(inner_expr);
                 eu = inner_eu;
                 break;
@@ -3619,6 +3654,47 @@ static SvdbVal agg_result(const AggState &a) {
             if (base_result.type == SVDB_TYPE_REAL) base_result.rval = std::ceil(base_result.rval);
         } else if (a.wrapper == "FLOOR") {
             if (base_result.type == SVDB_TYPE_REAL) base_result.rval = std::floor(base_result.rval);
+        } else if (a.wrapper == "CAST") {
+            /* For CAST wrapper, apply type conversion using stored cast_type */
+            if (!a.cast_type.empty()) {
+                std::string type_str = qry_upper(a.cast_type);
+                /* Apply type conversion */
+                if (type_str == "INTEGER" || type_str == "INT") {
+                    if (base_result.type == SVDB_TYPE_REAL) {
+                        base_result.ival = (int64_t)base_result.rval;
+                        base_result.type = SVDB_TYPE_INT;
+                    } else if (base_result.type == SVDB_TYPE_TEXT) {
+                        char *endp = nullptr;
+                        int64_t iv = strtoll(base_result.sval.c_str(), &endp, 10);
+                        if (endp != base_result.sval.c_str() && *endp == '\0') {
+                            base_result.ival = iv;
+                            base_result.type = SVDB_TYPE_INT;
+                        }
+                    }
+                } else if (type_str == "REAL" || type_str == "FLOAT" || type_str == "DOUBLE") {
+                    if (base_result.type == SVDB_TYPE_INT) {
+                        base_result.rval = (double)base_result.ival;
+                        base_result.type = SVDB_TYPE_REAL;
+                    } else if (base_result.type == SVDB_TYPE_TEXT) {
+                        char *endp = nullptr;
+                        double dv = strtod(base_result.sval.c_str(), &endp);
+                        if (endp != base_result.sval.c_str() && *endp == '\0') {
+                            base_result.rval = dv;
+                            base_result.type = SVDB_TYPE_REAL;
+                        }
+                    }
+                } else if (type_str == "TEXT") {
+                    if (base_result.type == SVDB_TYPE_INT) {
+                        base_result.sval = std::to_string(base_result.ival);
+                        base_result.type = SVDB_TYPE_TEXT;
+                    } else if (base_result.type == SVDB_TYPE_REAL) {
+                        char buf[64];
+                        snprintf(buf, sizeof(buf), "%.17g", base_result.rval);
+                        base_result.sval = buf;
+                        base_result.type = SVDB_TYPE_TEXT;
+                    }
+                }
+            }
         }
     }
     return base_result;
