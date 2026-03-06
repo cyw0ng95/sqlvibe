@@ -35,31 +35,35 @@ v0.11.5 focuses on optimizing the C++ core engine after the module structure reo
 | INSERT batch | 1K | 3.97 ms | 2.29 ms | **1.7× faster** |
 
 #### [x] COUNT(*) Metadata Cache Infrastructure
-**Status**: ✅ Infrastructure Complete, ⚠️ Fast Path Disabled
+**Status**: ✅ Infrastructure Complete, ⚠️ Fast Path Disabled (SIGFPE debugging)
 
 **What's Working**:
 - `svdb_is_registry_t` with `table_metadata` cache implemented
-- Cache populated when table data loaded
-- Cache updated on INSERT (+1) and DELETE (invalidate)
 - Registry initialized in `svdb_open()`, destroyed in `svdb_close()`
+- Cache API functions implemented and tested
+- **Stable**: COUNT(*) uses normal aggregate path (no crash)
 
 **Files Modified**:
 - `src/core/IS/is_registry.h` - Added `svdb_is_table_metadata_t` struct
-- `src/core/IS/is_registry.cpp` - Implemented cache API
+- `src/core/IS/is_registry.cpp` - Implemented cache API with safety checks
 - `src/core/SC/svdb_types.h` - Added `is_registry` member to `svdb_db_s`
 - `src/core/SC/database.cpp` - Initialize/destroy registry
-- `src/core/SC/exec.cpp` - Update cache on INSERT/DELETE
-- `src/core/SC/query.cpp` - Populate cache when loading table data
+- `src/core/SC/exec.cpp` - INSERT/DELETE cache updates (disabled for debugging)
+- `src/core/SC/query.cpp` - Cache population (disabled for debugging)
 
-**Known Issue**: COUNT(*) fast path causes SIGFPE crash - disabled for debugging
-```cpp
-/* NOTE: COUNT(*) fast path disabled - needs debugging (SIGFPE crash) */
-```
+**Known Issue**: Metadata cache updates cause SIGFPE crash when enabled
+- Root cause: Division by zero in C++ code (instruction `div r15` where r15=0)
+- Workaround: Cache updates disabled, infrastructure remains for future fix
+- Fast path disabled, normal COUNT(*) aggregate path works correctly
 
 **Next Steps**:
-- Debug SIGFPE crash in fast path (likely division by zero or null deref)
-- Re-enable fast path once fixed
-- Target: 98× speedup (4.89ms → 50µs)
+- Debug SIGFPE root cause (likely in unordered_map or counter increment)
+- Re-enable cache updates once fixed
+- Enable fast path for 98× speedup target (4.89ms → 50µs)
+
+**Commits**:
+- `a975bb4` feat: Add metadata cache infrastructure
+- `30d818a` fix: Disable metadata cache updates (SIGFPE debugging)
 
 ---
 

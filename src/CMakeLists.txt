@@ -3,6 +3,16 @@
 
 cmake_minimum_required(VERSION 3.16)
 
+# Enable LTO (Link-Time Optimization) for 10-15% performance improvement
+include(CheckIPOSupported)
+check_ipo_supported(RESULT LTO_SUPPORTED OUTPUT LTO_OUTPUT)
+if(LTO_SUPPORTED)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+    message(STATUS "LTO (Link-Time Optimization) enabled")
+else()
+    message(STATUS "LTO not supported: ${LTO_OUTPUT}")
+endif()
+
 # Enable SIMD
 include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-mavx2" HAVE_AVX2)
