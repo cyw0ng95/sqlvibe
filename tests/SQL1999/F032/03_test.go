@@ -10,7 +10,6 @@ import (
 )
 
 func TestSQL1999_F301_F03203_L1(t *testing.T) {
-	t.Skip("Known limitation: CASCADE drop with dependent views not fully supported")
 
 	sqlvibePath := ":memory:"
 	sqlitePath := ":memory:"
