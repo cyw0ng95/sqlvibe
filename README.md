@@ -6,7 +6,6 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
-| **v0.11.5** | 2026-03-06 | Comprehensive performance baseline: 1K/10K benchmarks, optimization priorities, root cause analysis |
 | **v0.11.4** | 2026-03-05 | C++ module consolidation: All core code under src/core/[SubSystem] |
 | **v0.10.16** | 2026-03-01 | CGO Phases 12-18: expression eval, bytecode dispatch, type conversion, string/datetime/aggregate batch ops, fast QP tokenizer |
 | **v0.9.17** | 2026-02-26 | JSON Extension Enhancement: Table-valued functions (json_each, json_tree), Aggregates (json_group_array, json_group_object), JSONB format |
@@ -92,18 +91,6 @@ unified `libsvdb.so` build. This baseline establishes detailed metrics for optim
 > - **COUNT(*)**: Worst scaling (940× slower at 10K) — needs index-only scan optimization
 > - **INNER JOIN**: Critical bottleneck (9746× slower) — hash join needs urgent optimization
 > - **SELECT all**: Moderate overhead (9-11×) — bytecode VM dispatch cost
-
-### Optimization Priorities (v0.11.5 → v0.11.6)
-
-Based on benchmark analysis, here are the prioritized optimization targets:
-
-| Priority | Area | Current | Target | Impact |
-|----------|------|---------|--------|--------|
-| **P0** | INNER JOIN | 6034 ms | 100 ms | 60× speedup |
-| **P0** | COUNT(*) 10K | 4.89 ms | 50 µs | 98× speedup |
-| **P1** | SELECT all 10K | 47.8 ms | 5 ms | 10× speedup |
-| **P1** | SUM aggregate 10K | 18.5 ms | 500 µs | 37× speedup |
-| **P2** | GROUP BY 10K | 49.0 ms | 3 ms | 16× speedup |
 
 ### Root Cause Analysis
 
