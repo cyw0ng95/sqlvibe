@@ -1842,7 +1842,10 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             SvdbVal v = eval_expr(e.substr(0, isnotnull), row, col_order);
             SvdbVal r; r.type = SVDB_TYPE_INT; r.ival = (v.type != SVDB_TYPE_NULL) ? 1 : 0; return r;
         }
-        /* CASE WHEN ... THEN ... [WHEN ... THEN ...] [ELSE ...] END */
+    }
+    /* CASE WHEN ... THEN ... [WHEN ... THEN ...] [ELSE ...] END */
+    {
+        std::string eu2 = qry_upper(e);
         if (eu2.substr(0, 5) == "CASE ") {
             /* Detect simple vs. searched CASE form:
              * Simple:   CASE expr WHEN val1 THEN res1 ... END
@@ -1873,7 +1876,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
 
             size_t pos2 = is_simple ? first_when + 1 : 5; /* skip to WHEN */
-            SvdbVal result;
+            SvdbVal result; result.type = SVDB_TYPE_NULL; /* default if no match */
             bool matched = false;
             while (pos2 < eu2.size()) {
                 while (pos2 < eu2.size() && eu2[pos2] == ' ') ++pos2;
