@@ -484,10 +484,15 @@ static int parse_column_defs(const std::string &sql, size_t pos,
             }
         }
 
+        /* Check for duplicate column name */
+        if (out_td.find(col_name) != out_td.end()) {
+            return -1;  /* Signal duplicate column error */
+        }
+
         out_td[col_name] = cd;
         out_order.push_back(col_name);
     }
-    
+
     return column_pk_count;
 }
 
@@ -984,6 +989,10 @@ static svdb_code_t do_create_table(svdb_db_t *db, const std::string &sql) {
     if (!is_ctas) {
         /* Standard CREATE TABLE with column definitions */
         column_pk_count = parse_column_defs(sql, 0, td, order, &pks, &uniqs, &checks, &fks);
+        if (column_pk_count == -1) {
+            db->last_error = "duplicate column name: " + order.back();
+            return SVDB_ERR;
+        }
     }
     /* For CREATE TABLE AS SELECT, td and order remain empty - will be populated by executing the SELECT */
 
