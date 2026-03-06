@@ -1756,6 +1756,28 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             if (c == ')') { ++depth; continue; }
             if (c == '(') { if (depth > 0) --depth; continue; }
             if (depth > 0) continue;
+            /* Skip CASE...END blocks: when we see END, find matching CASE and skip to it */
+            if (i >= 3) {
+                char c0 = s[i], c1 = (i>=1) ? s[i-1] : ' ', c2 = (i>=2) ? s[i-2] : ' ', c3 = (i>=3) ? s[i-3] : ' ';
+                if ((c0 == 'D' || c0 == 'd') && (c1 == 'N' || c1 == 'n') && (c2 == 'E' || c2 == 'e') &&
+                    (c3 == ' ' || c3 == '(' || c3 == ',' || c3 == '=' || c3 == '+' || c3 == '-' || c3 == '*' || c3 == '/' || c3 == '>' || c3 == '<' || c3 == '\t' || c3 == '\n' || c3 == '\r')) {
+                    /* Found END, now find matching CASE by counting nested END/CASE pairs */
+                    int end_count = 1;
+                    int j = i - 3;
+                    while (j >= 3 && end_count > 0) {
+                        char jc0 = s[j], jc1 = s[j-1], jc2 = s[j-2], jc3 = s[j-3];
+                        if ((jc0 == 'D' || jc0 == 'd') && (jc1 == 'N' || jc1 == 'n') && (jc2 == 'E' || jc2 == 'e') &&
+                            (jc3 == ' ' || jc3 == '(' || jc3 == ',' || jc3 == '=' || jc3 == '+' || jc3 == '-' || jc3 == '*' || jc3 == '/' || jc3 == '>' || jc3 == '<')) {
+                            ++end_count; j -= 3;
+                        } else if ((jc0 == 'E' || jc0 == 'e') && (jc1 == 'S' || jc1 == 's') && (jc2 == 'A' || jc2 == 'a') && (jc3 == 'C' || jc3 == 'c') &&
+                            (j-4 < 0 || s[j-4] == ' ' || s[j-4] == '(' || s[j-4] == ',' || s[j-4] == '=' || s[j-4] == '+' || s[j-4] == '-' || s[j-4] == '*' || s[j-4] == '/' || s[j-4] == '>' || s[j-4] == '<')) {
+                            --end_count; j -= 3;
+                        }
+                        --j;
+                    }
+                    i = j + 1; continue; /* Skip to just after CASE */
+                }
+            }
             if (ops_str.find(c) != std::string::npos) {
                 /* Make sure it's a real operator, not unary minus/plus */
                 if ((c == '-' || c == '+') && i == 0) continue;
