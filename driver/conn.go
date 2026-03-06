@@ -3,12 +3,52 @@ package driver
 import (
 	"context"
 	"database/sql/driver"
+	"strings"
 
 	"github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
 )
 
-// Conn implements driver.Conn, driver.ConnBeginTx, driver.ExecerContext,
-// and driver.QueryerContext.
+// splitSQLStatements splits SQL on top-level semicolons.
+func splitSQLStatements(sql string) []string {
+	var stmts []string
+	var curStmt strings.Builder
+	parenDepth := 0
+	inString := false
+	for _, ch := range sql {
+		if ch == '\'' {
+			inString = !inString
+			curStmt.WriteRune(ch)
+			continue
+		}
+		if inString {
+			curStmt.WriteRune(ch)
+			continue
+		}
+		if ch == '(' {
+			parenDepth++
+			curStmt.WriteRune(ch)
+		} else if ch == ')' {
+			parenDepth--
+			curStmt.WriteRune(ch)
+		} else if ch == ';' && parenDepth == 0 {
+			stmt := strings.TrimSpace(curStmt.String())
+			if stmt != "" {
+				stmts = append(stmts, stmt)
+			}
+			curStmt.Reset()
+		} else {
+			curStmt.WriteRune(ch)
+		}
+	}
+	lastStmt := strings.TrimSpace(curStmt.String())
+	if lastStmt != "" {
+		stmts = append(stmts, lastStmt)
+	}
+	return stmts
+}
+
+// Conn implements driver.Conn, driver.ConnBeginTx, driver.ConnPrepareContext,
+// driver.ExecerContext, and driver.QueryerContext.
 type Conn struct {
 	db *sqlvibe.Database
 }
@@ -59,17 +99,28 @@ func (c *Conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, e
 // ExecContext executes a non-query statement with context support.
 func (c *Conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	pos, named := fromNamedValues(args)
-	var res sqlvibe.Result
-	var err error
-	if named != nil {
-		res, err = c.db.ExecContextNamed(ctx, query, named)
-	} else {
-		res, err = c.db.ExecContextWithParams(ctx, query, pos)
+
+	/* Split on semicolons and execute each statement */
+	stmts := splitSQLStatements(query)
+	if len(stmts) == 0 {
+		return Result{}, nil
 	}
-	if err != nil {
-		return nil, err
+
+	var lastRes sqlvibe.Result
+	var lastErr error
+
+	for _, stmt := range stmts {
+		if named != nil {
+			lastRes, lastErr = c.db.ExecContextNamed(ctx, stmt, named)
+		} else {
+			lastRes, lastErr = c.db.ExecContextWithParams(ctx, stmt, pos)
+		}
+		if lastErr != nil {
+			return nil, lastErr
+		}
 	}
-	return Result{lastInsertID: res.LastInsertRowID, rowsAffected: res.RowsAffected}, nil
+
+	return Result{lastInsertID: lastRes.LastInsertRowID, rowsAffected: lastRes.RowsAffected}, nil
 }
 
 // QueryContext executes a query statement with context support.
