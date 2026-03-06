@@ -2161,15 +2161,37 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
 
         /* Comparison operators (=, <>, !=, <, >, <=, >=) */
         /* Scan right-to-left to find the rightmost operator, */
-        /* but first do a forward pre-pass to find in-string positions */
+        /* but first do a forward pre-pass to find in-string/in-CASE positions */
         {
-            /* Pre-compute string regions by scanning left-to-right */
+            /* Pre-compute string regions and CASE...END regions */
             std::vector<bool> in_str_map(e.size(), false);
+            std::vector<bool> in_case_map(e.size(), false);
             {
                 bool in_s = false;
                 for (size_t i = 0; i < e.size(); ++i) {
                     if (e[i] == '\'') in_s = !in_s;
                     in_str_map[i] = in_s;
+                }
+            }
+            {
+                /* Build CASE...END depth map (uppercased for matching) */
+                std::string eu_map = qry_upper(e);
+                int cdepth = 0;
+                for (size_t i = 0; i < eu_map.size(); ++i) {
+                    if (in_str_map[i]) { in_case_map[i] = (cdepth > 0); continue; }
+                    if (i + 5 <= eu_map.size() && eu_map.substr(i, 5) == "CASE ") {
+                        for (size_t j = i; j < i + 5 && j < eu_map.size(); ++j)
+                            in_case_map[j] = (cdepth > 0);
+                        ++cdepth; i += 4; continue;
+                    }
+                    if (i + 4 <= eu_map.size() && eu_map.substr(i, 4) == " END") {
+                        if (cdepth > 0) {
+                            for (size_t j = i; j < i + 4 && j < eu_map.size(); ++j)
+                                in_case_map[j] = true;
+                            --cdepth; i += 3; continue;
+                        }
+                    }
+                    in_case_map[i] = (cdepth > 0);
                 }
             }
             static const char* cmp_ops[] = {"!=", "<>", "<=", ">=", "<", ">", "=", nullptr};
@@ -2180,6 +2202,7 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 size_t found_c = std::string::npos;
                 for (int i = (int)e.size() - (int)osz; i >= 0; --i) {
                     if ((size_t)i < e.size() && in_str_map[(size_t)i]) continue;
+                    if ((size_t)i < e.size() && in_case_map[(size_t)i]) continue;
                     char c = e[(size_t)i];
                     if (c == ')') ++depth_c;
                     else if (c == '(') { if (depth_c > 0) --depth_c; }
@@ -2990,6 +3013,22 @@ static size_t find_fetch_clause(const std::string &su_upper, size_t from = 0) {
     return (fp < fn) ? fp : fn;
 }
 
+/* Find the first occurrence of keyword kw (already upper-cased) at paren depth 0
+ * in the upper-cased string su_upper, starting from position from. */
+static size_t find_kw_depth0(const std::string &su_upper, const std::string &kw, size_t from = 0) {
+    size_t klen = kw.size();
+    int depth = 0; bool in_s = false;
+    for (size_t i = from; i + klen <= su_upper.size(); ++i) {
+        char c = su_upper[i];
+        if (c == '\'') { in_s = !in_s; continue; }
+        if (in_s) continue;
+        if (c == '(') { ++depth; continue; }
+        if (c == ')') { if (depth > 0) --depth; continue; }
+        if (depth == 0 && su_upper.substr(i, klen) == kw) return i;
+    }
+    return std::string::npos;
+}
+
 /* Extract ORDER BY clause */
 static std::vector<OrderCol> parse_order_by(const std::string &sql) {
     std::vector<OrderCol> result;
@@ -3051,7 +3090,7 @@ static std::vector<OrderCol> parse_order_by(const std::string &sql) {
 static void parse_limit_offset(const std::string &sql, int64_t &limit, int64_t &offset) {
     limit = -1; offset = 0;
     std::string su = qry_upper(sql);
-    size_t lpos = su.find("LIMIT ");
+    size_t lpos = find_kw_depth0(su, "LIMIT ");
     if (lpos == std::string::npos) {
         /* Also handle FETCH FIRST/NEXT n ROWS ONLY */
         size_t fpos = find_fetch_clause(su);
@@ -3090,11 +3129,11 @@ static void parse_limit_offset(const std::string &sql, int64_t &limit, int64_t &
 static std::vector<std::string> parse_group_by(const std::string &sql) {
     std::vector<std::string> result;
     std::string su = qry_upper(sql);
-    size_t pos = su.find("GROUP BY ");
+    size_t pos = find_kw_depth0(su, "GROUP BY ");
     if (pos == std::string::npos) return result;
-    size_t end = su.find("HAVING ", pos);
-    if (end == std::string::npos) end = su.find("ORDER BY ", pos);
-    if (end == std::string::npos) end = su.find("LIMIT ", pos);
+    size_t end = find_kw_depth0(su, "HAVING ", pos);
+    if (end == std::string::npos) end = find_kw_depth0(su, "ORDER BY ", pos);
+    if (end == std::string::npos) end = find_kw_depth0(su, "LIMIT ", pos);
     if (end == std::string::npos) end = find_fetch_clause(su, pos);
     std::string gb_text = (end != std::string::npos)
         ? sql.substr(pos + 9, end - pos - 9)
@@ -3108,10 +3147,10 @@ static std::vector<std::string> parse_group_by(const std::string &sql) {
 /* Extract HAVING clause */
 static std::string parse_having(const std::string &sql) {
     std::string su = qry_upper(sql);
-    size_t pos = su.find("HAVING ");
+    size_t pos = find_kw_depth0(su, "HAVING ");
     if (pos == std::string::npos) return "";
-    size_t end = su.find("ORDER BY ", pos);
-    if (end == std::string::npos) end = su.find("LIMIT ", pos);
+    size_t end = find_kw_depth0(su, "ORDER BY ", pos);
+    if (end == std::string::npos) end = find_kw_depth0(su, "LIMIT ", pos);
     if (end == std::string::npos) end = find_fetch_clause(su, pos);
     return (end != std::string::npos) ? sql.substr(pos+7, end-pos-7) : sql.substr(pos+7);
 }
@@ -3130,11 +3169,11 @@ static std::string parse_where_from_sql(const std::string &sql) {
         if (depth > 0) continue;
         if (su.substr(i, 7) == " WHERE ") {
             std::string rest = sql.substr(i + 7);
-            /* End at ORDER BY / GROUP BY / LIMIT / HAVING */
+            /* End at ORDER BY / GROUP BY / LIMIT / HAVING (at depth 0 in rest) */
             std::string ru = qry_upper(rest);
             size_t end = std::string::npos;
             for (const char *kw : {" ORDER BY ", " GROUP BY ", " LIMIT ", " HAVING ", " UNION ", " INTERSECT ", " EXCEPT "}) {
-                size_t ep = ru.find(kw);
+                size_t ep = find_kw_depth0(ru, kw);
                 if (ep != std::string::npos && (end == std::string::npos || ep < end)) end = ep;
             }
             return (end != std::string::npos) ? qry_trim(rest.substr(0, end)) : qry_trim(rest);
@@ -5842,6 +5881,13 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     std::vector<std::string> out_cols;
     if (star) {
         out_cols = merged_col_order; /* use merged for JOIN, col_order for simple */
+        /* Append any extra expressions after * (e.g., SELECT *, expr AS alias) */
+        for (const auto &c : sel_cols) {
+            std::string cu = qry_upper(c);
+            size_t as_pos = find_top_as(cu);
+            std::string col_expr = (as_pos != std::string::npos) ? c.substr(0, as_pos) : c;
+            out_cols.push_back(qry_trim(col_expr));
+        }
     } else {
         for (const auto &c : sel_cols) {
             /* Strip alias (AS name) — must be at top level, not inside parens */
@@ -5876,6 +5922,15 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     r->col_names.clear();
     if (star) {
         r->col_names = merged_col_order; /* JOINs show all merged columns */
+        /* Append column names for any extra expressions after * */
+        for (size_t i = 0; i < sel_cols.size(); ++i) {
+            std::string cu = qry_upper(sel_cols[i]);
+            size_t as_pos = find_top_as(cu);
+            std::string col_name = (as_pos != std::string::npos)
+                ? qry_trim(sel_cols[i].substr(as_pos + 4))
+                : sel_cols[i];
+            r->col_names.push_back(col_name);
+        }
     } else {
         for (size_t i = 0; i < sel_cols.size(); ++i) {
             std::string cu = qry_upper(sel_cols[i]);
@@ -6079,6 +6134,14 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                     auto it = rep_row.find(cn);
                     res_row.push_back(it != rep_row.end() ? it->second : SvdbVal{});
                 }
+                /* Evaluate any extra expressions after * */
+                for (size_t ci = 0; ci < sel_cols.size(); ++ci) {
+                    size_t oc_idx = col_order.size() + ci;
+                    if (oc_idx < out_cols.size())
+                        res_row.push_back(eval_expr(out_cols[oc_idx], rep_row, merged_col_order));
+                    else
+                        res_row.push_back(SvdbVal{});
+                }
             } else {
                 for (size_t i = 0; i < sel_cols.size(); ++i) {
                     if (!agg_list[i].func.empty()) res_row.push_back(agg_result(agg_list[i]));
@@ -6155,6 +6218,14 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                     auto it = row.find(cn);
                     result_row.push_back(it != row.end() ? it->second : SvdbVal{});
                 }
+            }
+            /* Evaluate any extra expressions appended after * (e.g., SELECT *, expr AS alias) */
+            for (size_t ci = 0; ci < sel_cols.size(); ++ci) {
+                size_t oc_idx = merged_col_order.size() + ci;
+                if (oc_idx < out_cols.size())
+                    result_row.push_back(eval_expr(out_cols[oc_idx], row, merged_col_order));
+                else
+                    result_row.push_back(SvdbVal{});
             }
         } else {
             for (size_t ci = 0; ci < out_cols.size(); ++ci) {
