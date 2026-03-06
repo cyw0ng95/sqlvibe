@@ -126,6 +126,10 @@ Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
 unified `libsvdb.so` build, and identified optimization opportunities for memory management,
 SIMD expansion, and batch query execution.
 
+**Note**: Benchmark results below are from v0.11.2 on AMD EPYC 7763. v0.11.5 focuses on
+module structure optimization; performance benchmarks on modern hardware (13th Gen Intel i7)
+show SQLite leads in simple scans while sqlvibe excels at aggregates.
+
 #### SELECT all rows
 
 | Rows | SQLite | sqlvibe | Result |
@@ -198,6 +202,14 @@ SIMD expansion, and batch query execution.
 > - **Simplified build**: Single `libsvdb.so` from `src/CMakeLists.txt`
 > - **Removed redundancy**: 6 subsystem CMakeLists.txt files eliminated
 > - **Cleaner structure**: All core subsystems (CG, DS, IS, PB, QP, SC, SF, TM, VM) source-only
+>
+> **Performance Characteristics**:
+> - **Aggregates (SUM, GROUP BY)**: 2.6–4.9× faster (C++ aggregate engine + batch compare)
+> - **SELECT all**: 1.0–1.3× faster (C++ columnar store + SIMD batch ops)
+> - **INSERT batch**: 1.7–2.0× faster (direct insert fast path)
+> - **WHERE filter**: 4.0–4.6× slower (bytecode VM dispatch overhead)
+> - **JOIN**: 2.4–2.9× slower (hash join build/probe overhead)
+> - **ORDER BY**: 1.3–1.7× slower (sort engine overhead)
 >
 > **Identified Optimization Opportunities** (see `docs/plan-v0.11.5.md`):
 > - **Memory Management**: Arena allocator integration (40% GC reduction target)
