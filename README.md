@@ -6,6 +6,10 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
+| **v0.11.5** | 2026-03-06 | C++ module structure optimization: SC/ (System Composer), unified libsvdb build, removed redundant CMakeLists.txt |
+| **v0.11.4** | 2026-03-05 | C++ module consolidation: All core code under src/core/[SubSystem] |
+| **v0.11.3** | 2026-03-04 | Foundation classes v2: ArenaV2, CacheV2, PageManagerV2, C++ owned memory |
+| **v0.11.2** | 2026-03-03 | C++ Native Engine: Unified C public API (svdb.h), thin CGO binding (~400 LOC) |
 | **v0.10.16** | 2026-03-01 | CGO Phases 12-18: expression eval, bytecode dispatch, type conversion, string/datetime/aggregate batch ops, fast QP tokenizer |
 | **v0.10.15** | 2026-03-01 | CLI: .dump enhancements, .export fix; context/ window/ subpackages; ANY_VALUE, MODE aggregates |
 | **v0.9.17** | 2026-02-26 | JSON Extension Enhancement: Table-valued functions (json_each, json_tree), Aggregates (json_group_array, json_group_object), JSONB format |
@@ -114,13 +118,13 @@ Both sides iterate all result rows end-to-end.
 (`go test ./tests/Benchmark/... -bench=BenchmarkCompare_ -benchtime=1s`).
 Results may vary on different hardware.
 
-### SQLite vs sqlvibe (v0.11.2 — C++ Native Engine Module + Unified Public API)
+### SQLite vs sqlvibe (v0.11.5 — Module Structure + Performance Optimization)
 
 Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
 
-**v0.11.2 Highlights**: Introduces `src/core/svdb/` — a self-contained C++ engine module
-with a unified C public API (`svdb.h`). The `internal/cgo/` package provides a thin
-type-mapping CGO binding layer (~400 LOC). All orchestration logic moves from Go into C++.
+**v0.11.5 Highlights**: Optimized C++ module structure with `SC/` (System Composer) subsystem,
+unified `libsvdb.so` build, and identified optimization opportunities for memory management,
+SIMD expansion, and batch query execution.
 
 #### SELECT all rows
 
@@ -184,21 +188,52 @@ type-mapping CGO binding layer (~400 LOC). All orchestration logic moves from Go
 | 10 K | 2.16 ms | 2.99 ms | 1.4× slower |
 | 100 K | 21.2 ms | 35.7 ms | 1.7× slower |
 
-> **Analysis (v0.11.2 — C++ Native Engine Module + Unified Public API)**: sqlvibe excels at aggregate workloads with **2.6–4.9× speedups** over SQLite for SUM and GROUP BY. The v0.11.2 unified C public API (`svdb.h`) in `src/core/svdb/` enables direct C/C++ integration without Go. Key improvements:
+> **Analysis (v0.11.5 — Module Structure + Performance Optimization)**: sqlvibe excels at 
+> aggregate workloads with **2.6–4.9× speedups** over SQLite for SUM and GROUP BY. The v0.11.5
+> module reorganization consolidates all C++ code under `src/core/[SubSystem]` with a new
+> `SC/` (System Composer) for C API and orchestration.
+>
+> **v0.11.5 Architecture Improvements**:
+> - **SC/ (System Composer)**: Unified C public API, invoke chain, orchestration
+> - **Simplified build**: Single `libsvdb.so` from `src/CMakeLists.txt`
+> - **Removed redundancy**: 6 subsystem CMakeLists.txt files eliminated
+> - **Cleaner structure**: All core subsystems (CG, DS, IS, PB, QP, SC, SF, TM, VM) source-only
+>
+> **Identified Optimization Opportunities** (see `docs/plan-v0.11.5.md`):
+> - **Memory Management**: Arena allocator integration (40% GC reduction target)
+> - **Batch Query Engine**: Vectorized execution (5-10x analytical target)
+> - **SIMD Expansion**: Batch compare/aggregate (4x speedup target)
+> - **Tiered Cache**: Hot/cold separation (20-30% hit rate target)
+> - **Build Optimization**: LTO/PGO (10-15% overall target)
+
+### SQLite vs sqlvibe (v0.11.2 — C++ Native Engine Module + Unified Public API)
+
+**v0.11.2 Highlights**: Introduced `src/core/svdb/` — a self-contained C++ engine module
+with a unified C public API (`svdb.h`). The `internal/cgo/` package provides a thin
+type-mapping CGO binding layer (~400 LOC). All orchestration logic moves from Go into C++.
+
+> **Analysis (v0.11.2)**: sqlvibe excels at aggregate workloads with **2.6–4.9× speedups** 
+> over SQLite for SUM and GROUP BY. The v0.11.2 unified C public API (`svdb.h`) in 
+> `src/core/svdb/` enables direct C/C++ integration without Go.
+>
 > - **SUM aggregate**: 2.6–3.0× faster (C++ aggregate engine)
 > - **GROUP BY**: 3.3–4.9× faster (C++ hash aggregation + batch compare)
 > - **SELECT all**: 1.0–1.3× faster (C++ columnar store + SIMD batch ops)
 > - **Architecture**: New `svdb.h` C public API — zero-overhead for C/C++ native callers
 >
-> WHERE filter and JOIN remain areas for future optimization — the bytecode VM evaluation path adds overhead vs SQLite's tightly-optimized scan.
+> WHERE filter and JOIN remain areas for future optimization — the bytecode VM evaluation 
+> path adds overhead vs SQLite's tightly-optimized scan.
 
-### Key Optimizations (v0.11.2)
+### Key Optimizations (v0.11.5)
 
-- **C++ Native Engine**: New `src/core/svdb/` module with unified C public API (`svdb.h`) — open/exec/query/transactions/schema from pure C/C++
-- **Phase 11 C smoke test**: `build.sh` verifies the C API via `svdb_open`/`svdb_exec`/`svdb_query` without any Go runtime
-- **Thin CGO binding**: `internal/cgo/` package (~400 LOC) — pure type-mapping, no business logic
-- **C++ Bytecode Optimizer**: Dead-code elimination + peephole passes via `svdb_cg_optimize_bc_instrs` applied to every query (zero-copy raw-buffer path)
-- **C++ Query Engine Module**: 14 engine operations (FilterRows, InnerJoin, LeftOuterJoin, GroupRows, SortRows, ExistsRows, etc.) in C++ with Go-callback predicates
+- **Module Structure**: `SC/` (System Composer) subsystem for C API and orchestration
+- **Unified Build**: Single `libsvdb.so` from `src/CMakeLists.txt` — no redundant subsystem libraries
+- **Clean Architecture**: All core code under `src/core/[SubSystem]` (CG, DS, IS, PB, QP, SC, SF, TM, VM)
+- **C++ Native Engine**: `src/core/svdb/` → `SC/` with unified C public API (`svdb.h`)
+- **Phase 11 C smoke test**: `build.sh` verifies the C API via `svdb_open`/`svdb_exec`/`svdb_query`
+- **Thin CGO binding**: `pkg/sqlvibe/cgo/` package (~600 LOC) — pure type-mapping, no business logic
+- **C++ Bytecode Optimizer**: Dead-code elimination + peephole passes via `svdb_cg_optimize_bc_instrs`
+- **C++ Query Engine Module**: 14 engine operations (FilterRows, InnerJoin, LeftOuterJoin, GroupRows, SortRows, ExistsRows, etc.)
 - **C++ DS Layer**: B-Tree, columnar store, row store, overflow — all in C++ with embedded PageManager
 - **C++ VM Layer**: All 46 bytecode opcodes implemented in C++ with batch SIMD execution
 - **C++ QP/CG**: Full SQL parser and bytecode compiler in C++
@@ -216,6 +251,19 @@ type-mapping CGO binding layer (~400 LOC). All orchestration logic moves from Go
 - **Covering Index**: Index-only scans with zero table lookup
 - **Column Projection**: Materialize only required columns
 - **SIMD Vectorization**: 4-way unrolled batch ops for int64/float64 (AVX2)
+
+### Identified Optimization Opportunities (v0.11.5 → v0.11.6)
+
+See `docs/plan-v0.11.5.md` for detailed optimization plans:
+
+- **P0 Memory Management**: Arena allocator integration — 40% GC reduction target
+- **P0 Batch Query Engine**: Vectorized execution — 5-10x analytical speedup target
+- **P1 Tiered Cache**: Hot/cold separation — 20-30% hit rate improvement target
+- **P1 SIMD Expansion**: Batch compare/aggregate — 4x speedup target
+- **P1 Bytecode Optimizer**: Predicate pushdown, loop-invariant code motion — 2-3x complex queries
+- **P2 Index Statistics**: Cost-based optimization — better query plans
+- **P2 Parser string_view**: Zero-copy parsing — 30% faster parse
+- **P2 LTO/PGO**: Link-time and profile-guided optimization — 10-15% overall
 
 ## SQL:1999 Compatibility
 
