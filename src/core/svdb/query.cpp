@@ -943,6 +943,32 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
             }
             return SvdbVal{};
         }
+        /* json_replace(json, path, value) */
+        if (eu.substr(0, 13) == "JSON_REPLACE(" && fn_paren_ok(12)) {
+            std::string args = e.substr(13, e.size()-14);
+            /* Parse: json, path, value */
+            std::vector<std::string> parts;
+            int depth = 0; size_t start = 0;
+            for (size_t i = 0; i <= args.size(); ++i) {
+                char c = (i < args.size()) ? args[i] : ',';
+                if (c == '(') ++depth; else if (c == ')') --depth;
+                else if (c == ',' && depth == 0) {
+                    SvdbVal v = eval_expr(args.substr(start, i-start), row, col_order);
+                    parts.push_back(val_to_str(v));
+                    start = i + 1;
+                }
+            }
+            if (parts.size() >= 3) {
+                const char *path_value_pairs[] = {parts[1].c_str(), parts[2].c_str()};
+                char *result = svdb_json_replace(parts[0].c_str(), path_value_pairs, 1);
+                if (result) {
+                    std::string result_str(result);
+                    svdb_json_free(result);
+                    SvdbVal v; v.type = SVDB_TYPE_TEXT; v.sval = result_str; return v;
+                }
+            }
+            return SvdbVal{};
+        }
         /* jsonb(json) - return canonical JSON (same as json() for now) */
         if (eu.substr(0, 6) == "JSONB(" && fn_paren_ok(6-1)) {
             SvdbVal json_val = eval_expr(e.substr(6, e.size()-7), row, col_order);
