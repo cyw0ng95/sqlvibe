@@ -793,7 +793,8 @@ static SvdbVal eval_expr_exec(const std::string &expr_in, const Row &row,
         if (c == '(') { if (depth2 > 0) --depth2; }
         if (depth2 > 0) continue;
         if ((c == '+' || c == '-') && i > 1) {
-            /* Skip +/- that is part of scientific notation exponent (e.g. 1e+308) */
+            /* Skip +/- that is part of scientific notation exponent (e.g. 1e+308).
+             * i > 1 guarantees i >= 2, so e[i-2] is always a valid access (i-2 >= 0). */
             char prev = e[i-2];
             if (prev == 'e' || prev == 'E') continue;
             SvdbVal lhs = eval_expr_exec(e.substr(0, i-1), row, col_order);

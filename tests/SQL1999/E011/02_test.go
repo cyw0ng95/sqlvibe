@@ -83,7 +83,7 @@ func TestSQL1999_F301_E01102_L1(t *testing.T) {
 
 	// Rows 4 (DBL_MAX), 10 (1e-100) and 11 (1e100) are excluded from the
 	// SQLite comparison because go-sqlite returns +Inf for DBL_MAX and has
-	// slightly different float64 ULP representations for sub-normal range
+	// slightly different float64 ULP representations for subnormal range
 	// values.  We still verify sqlvibe stores and returns these rows.
 	t.Run("VerifyFloats_ExtremeValues", func(t *testing.T) {
 		result := SQL1999.QuerySqlvibeOnly(t, sqlvibeDB,

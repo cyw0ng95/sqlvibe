@@ -157,16 +157,19 @@ static std::string read_value(const std::string& sql, size_t& pos) {
                 pos = e_pos; /* not valid scientific notation, back up to before 'e' */
             }
         }
-        /* If followed by an arithmetic operator, read the full expression generically */
+        /* If followed by an arithmetic operator, read the full expression generically.
+         * Reset pos to num_start and fall through to the generic expression reader below. */
         size_t tmp = skip_ws(sql, pos);
         if (tmp < sql.size() && (sql[tmp] == '+' || sql[tmp] == '-' ||
                                   sql[tmp] == '*' || sql[tmp] == '/')) {
-            pos = num_start; /* restart and fall through to generic expression reader */
+            pos = num_start; /* restart: fall through to generic expression reader */
+            /* intentional fall-through: no return here */
         } else {
             return sql.substr(num_start, pos - num_start);
         }
     }
-    /* NULL/TRUE/FALSE/DEFAULT */
+    /* NULL/TRUE/FALSE/DEFAULT — only reached if NOT a number (or if number was followed
+     * by an arithmetic operator and pos was reset to num_start above) */
     if (isalpha(c)) {
         size_t tmp = pos;
         std::string kw = read_keyword(sql, tmp);

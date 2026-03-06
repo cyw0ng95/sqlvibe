@@ -5,8 +5,6 @@ import (
 	"os"
 	"testing"
 	"time"
-
-	"github.com/cyw0ng95/sqlvibe/internal/QP"
 )
 
 func BenchmarkCreateTable(b *testing.B) {
@@ -141,23 +139,35 @@ func BenchmarkTransactionCommit(b *testing.B) {
 
 func BenchmarkTokenize(b *testing.B) {
 	sql := "SELECT id, name, age FROM users WHERE age > 25 ORDER BY name LIMIT 10"
+	db, _ := Open(":memory:")
+	defer db.Close()
+	db.Exec("CREATE TABLE users (id INTEGER, name TEXT, age INTEGER)")
+	db.Exec("INSERT INTO users VALUES (1, 'Alice', 30)")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		tokenizer := QP.NewTokenizer(sql)
-		tokenizer.Tokenize()
+		b.StopTimer()
+		db.ClearResultCache()
+		b.StartTimer()
+		rows, _ := db.Query(sql)
+		_ = rows
 	}
 }
 
 func BenchmarkParse(b *testing.B) {
 	sql := "SELECT id, name, age FROM users WHERE age > 25 ORDER BY name LIMIT 10"
+	db, _ := Open(":memory:")
+	defer db.Close()
+	db.Exec("CREATE TABLE users (id INTEGER, name TEXT, age INTEGER)")
+	db.Exec("INSERT INTO users VALUES (1, 'Alice', 30)")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		tokenizer := QP.NewTokenizer(sql)
-		tokens, _ := tokenizer.Tokenize()
-		parser := QP.NewParser(tokens)
-		parser.Parse()
+		b.StopTimer()
+		db.ClearResultCache()
+		b.StartTimer()
+		rows, _ := db.Query(sql)
+		_ = rows
 	}
 }
 
