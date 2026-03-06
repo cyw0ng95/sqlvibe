@@ -28,11 +28,36 @@ v0.11.5 focuses on optimizing the C++ core engine after the module structure reo
 **Baseline Results** (13th Gen Intel i7-13650HX):
 | Workload | Scale | SQLite | sqlvibe | Ratio |
 |----------|-------|--------|---------|-------|
-| COUNT(*) | 1K | 3.9 µs | 467 µs | 119.8× |
+| COUNT(*) | 1K | 3.9 µs | 513 µs | 131.5× |
 | SELECT all | 1K | 425 µs | 4.17 ms | 9.8× |
 | SUM aggregate | 1K | 44 µs | 1.81 ms | 41.1× |
 | GROUP BY | 1K | 312 µs | 4.91 ms | 15.7× |
 | INSERT batch | 1K | 3.97 ms | 2.29 ms | **1.7× faster** |
+
+#### [x] P2: Enable LTO
+**Status**: ✅ Complete  
+**Commit**: `262a931 feat: Enable LTO (Link-Time Optimization)`
+
+**What's Done**:
+- Added `check_ipo_supported()` in `src/CMakeLists.txt`
+- Enabled `CMAKE_INTERPROCEDURAL_OPTIMIZATION` when supported
+- LTO confirmed working with GCC and AVX2
+
+**Expected Impact**: 10-15% overall performance improvement
+
+#### [ ] P0-CRITICAL: Hash Join Optimization
+**Status**: ⏸️ Implementation Attempted (reverted)
+
+**Attempted Implementation**:
+- Created `FastHashTable` with open addressing and SIMD CRC32 hashing
+- Issue: Initial implementation was slower than std::unordered_map (5.8s vs 6s)
+- Root cause: Probe sequence bugs, need more careful implementation
+
+**Next Steps**:
+- Simpler optimization: use `std::string_view` to avoid string copies
+- Pre-size unordered_map with expected cardinality
+- Consider robin_hood::unordered_flat_map for better cache locality
+- Target remains: 60× speedup (6034ms → 100ms)
 
 #### [x] COUNT(*) Metadata Cache Infrastructure
 **Status**: ✅ Infrastructure Complete, ⚠️ Fast Path Disabled (SIGFPE debugging)
