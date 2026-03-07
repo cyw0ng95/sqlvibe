@@ -1,6 +1,6 @@
 # sqlvibe
 
-**sqlvibe** is a high-performance in-memory database engine written in Go with SQL compatibility.
+**sqlvibe** is a high-performance SQL:1999-compatible database engine with a C++ core.
 
 ## Stable Releases
 
@@ -36,61 +36,58 @@
 
 ## Architecture
 
+- **C++ Core**: All core subsystems (DS, VM, QP, CG, TM, PB, IS, SC) written in C++
+- **Go API**: Thin CGO wrapper (~600 LOC) for Go public API
 - **Storage**: Hybrid row/columnar store with RoaringBitmap indexes
 - **Query Processing**: Tokenizer → Parser → Optimizer → Compiler
 - **Execution**: Register-based VM with vectorized execution
-- **Memory**: Arena allocator + sync.Pool for zero-GC query execution
+- **Memory**: Arena allocator + object pools for high-performance query execution
 - **Extensions**: Build-tag controlled, statically linked, auto-registered at startup
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 ## Performance
 
-**Test Hardware**: 13th Gen Intel(R) Core(TM) i7-13650HX (20 cores), Linux, Go 1.21+  
-**Benchmarks**: In-memory database, `-benchtime=500ms` for 1K/10K tests.  
-**Methodology**: Result cache cleared before each sqlvibe iteration via `db.ClearResultCache()`.  
-SQLite's `database/sql` driver reuses prepared statements. Both sides iterate all result rows.  
-(`go test ./tests/Benchmark/... -bench=BenchmarkCompare_ -benchmem`).  
+**Test Hardware**: 13th Gen Intel(R) Core(TM) i7-13650HX (8 cores), Linux
+**Benchmarks**: C++ Google Benchmark, 1000 rows per test, Release build
+**Methodology**: Each benchmark creates fresh database, executes SQL, iterates all result rows.
 Results may vary on different hardware.
 
-### SQLite vs sqlvibe (v0.11.5 — Comprehensive Baseline)
+### SQLite vs sqlvibe (v0.11.5 — C++ Benchmark)
 
-Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
+Build with `./build.sh -b` to run C++ benchmarks with Release build.
 
-**v0.11.5 Highlights**: Optimized C++ module structure with `SC/` (System Composer) subsystem,
-unified `libsvdb.so` build. This baseline establishes detailed metrics for optimization tracking.
+**v0.11.5**: Pure C++ benchmark using Google Benchmark framework with svdb.h C API
+direct comparison against SQLite3 C API.
 
-#### Full Benchmark Results (1K, 10K rows)
+#### Benchmark Results (1K rows, 1000 iterations)
 
-| Workload | Scale | SQLite | sqlvibe | Ratio | Status |
-|----------|-------|--------|---------|-------|--------|
-| **SELECT all** | 1K | 442 µs | 4.17 ms | 9.4× | 🔴 slower |
-| **SELECT all** | 10K | 4.22 ms | 47.8 ms | 11.3× | 🔴 slower |
-| **COUNT(*)** | 1K | 3.9 µs | 510 µs | 130.8× | 🔴 slower |
-| **COUNT(*)** | 10K | 5.2 µs | 4.89 ms | 940.4× | 🔴 slower |
-| **SUM aggregate** | 1K | 43 µs | 1.90 ms | 44.2× | 🔴 slower |
-| **SUM aggregate** | 10K | 375 µs | 18.5 ms | 49.3× | 🔴 slower |
-| **GROUP BY** (4 groups) | 1K | 312 µs | 4.75 ms | 15.2× | 🔴 slower |
-| **GROUP BY** (4 groups) | 10K | 3.27 ms | 49.0 ms | 15.0× | 🔴 slower |
-| **INSERT batch** | 1K | 3.98 ms | 2.28 ms | **1.7×** | 🟢 faster |
-| **INNER JOIN** | 1K | 619 µs | 6034 ms | 9746.4× | 🔴 slower |
+| Workload | SQLite (ns/op) | sqlvibe (ns/op) | Ratio | Status |
+|----------|----------------|-----------------|-------|--------|
+| **INSERT single** | 18,497 | 511,351 | 27.6× | 🔴 slower |
+| **INSERT batch** | 447,024 | 530,251 | 1.2× | 🔴 slower |
+| **SELECT all** | 726 | 672,782 | 926× | 🔴 slower |
+| **SELECT WHERE** | 603 | 800,304 | 1,327× | 🔴 slower |
+| **SELECT ORDER BY** | 1,001 | 723,374 | 722× | 🔴 slower |
+| **SELECT aggregate** | 645 | 828,865 | 1,285× | 🔴 slower |
+| **SELECT JOIN** | 12,392 | 31,782,000 | 2,565× | 🔴 slower |
+| **SELECT subquery** | 1,589 | 5,353,550,000 | 3,369,636× | 🔴 slower |
+| **UPDATE** | 580 | 1,136,800 | 1,959× | 🔴 slower |
+| **DELETE** | 525 | 808,853 | 1,541× | 🔴 slower |
 
-#### Scalability Analysis (Slowdown Factor vs SQLite)
+#### Scalability Analysis
 
-| Workload | 1K Slowdown | 10K Slowdown | Scaling |
-|----------|-------------|--------------|---------|
-| SELECT all | 9.4× | 11.3× | +20% |
-| COUNT(*) | 130.8× | 940.4× | +619% ⚠️ |
-| SUM aggregate | 44.2× | 49.3× | +12% |
-| GROUP BY | 15.2× | 15.0× | -1% ✓ |
-| INSERT batch | 0.6× | N/A | N/A |
+| Workload | sqlite (ms/1K) | sqlvibe (ms/1K) | Gap |
+|----------|----------------|-----------------|-----|
+| SELECT all | 0.73 | 673 | 922× |
+| Insert batch | 447 | 530 | 1.2× |
+| Join | 12 | 31,782 | 2,565× |
 
 > **Key Insights**:
-> - **INSERT batch**: 1.7× faster — only workload where sqlvibe leads (C++ direct insert fast path)
-> - **GROUP BY**: Best scaling behavior (+12% slowdown at 10K, stable ratio)
-> - **COUNT(*)**: Worst scaling (940× slower at 10K) — needs index-only scan optimization
-> - **INNER JOIN**: Critical bottleneck (9746× slower) — hash join needs urgent optimization
-> - **SELECT all**: Moderate overhead (9-11×) — bytecode VM dispatch cost
+> - **INSERT batch**: Closest performance (1.2× slower) — C++ direct insert path
+> - **SELECT**: Full table scan overhead significant — needs optimization
+> - **JOIN**: Major bottleneck (2,565×) — hash join implementation needs work
+> - **Subquery**: Critical issue (3.3M×) — correlated subquery handling needs fix
 
 ### Root Cause Analysis
 
@@ -100,7 +97,6 @@ unified `libsvdb.so` build. This baseline establishes detailed metrics for optim
 | Hash join | VM/hash_join.cpp | Naive hash table, no SIMD | Hash table tuning, SIMD probes |
 | COUNT(*) | DS/btree.cpp | Full table scan | Index-only scan, metadata cache |
 | Memory alloc | Multiple | malloc/new per-row | Arena allocator (ArenaV2) |
-| GC pressure | Go runtime | CGO → Go boundary allocations | Reduce crossing, batch results |
 
 ### Architecture Improvements (v0.11.5)
 
@@ -120,26 +116,6 @@ See `docs/plan-v0.11.5.md` for complete implementation details:
 - **P1 Bytecode Optimizer**: Predicate pushdown, loop-invariant code motion
 - **P2 Index Statistics**: Cost-based optimization, index-only scans
 - **P2 LTO/PGO**: Link-time and profile-guided optimization (10-15% target)
-
----
-
-### Historical Reference (v0.11.2 — AMD EPYC 7763)
-
-Preserved for comparison. Results from AMD EPYC 7763 64-Core @ 2.45 GHz with v0.11.2.
-
-| Workload | SQLite | sqlvibe | Result |
-|----------|--------|---------|--------|
-| SUM aggregate (100K) | 6.08 ms | 2.33 ms | **2.6× faster** |
-| GROUP BY (100K) | 57.7 ms | 11.7 ms | **4.9× faster** |
-| SELECT all (100K) | 28.6 ms | 27.4 ms | **1.0× faster** |
-| INSERT batch (10K) | 56.1 ms | 32.3 ms | **1.7× faster** |
-
-> **Note**: The performance delta between AMD EPYC (v0.11.2) and Intel i7 (v0.11.5) highlights
-> architecture sensitivity. Server CPUs (EPYC) show better sqlvibe performance due to:
-> - Higher memory bandwidth (8-channel vs dual-channel)
-> - Larger L3 cache (256MB vs 24MB)
-> - Different CGO scheduling behavior
-> - Go runtime GC tuning differences
 
 ## License
 

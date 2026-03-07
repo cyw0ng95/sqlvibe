@@ -72,3 +72,39 @@ target_include_directories(tests_cpp_unit PRIVATE
 )
 
 add_test(NAME CppUnitTests COMMAND tests_cpp_unit)
+
+# v0.11.5: C++ Benchmarks (Google Benchmark)
+# Fetch Google Benchmark
+include(FetchContent)
+FetchContent_Declare(
+    google_benchmark
+    URL https://github.com/google/benchmark/archive/refs/tags/v1.8.3.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+# Manually set benchmark options before making available
+set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(google_benchmark)
+
+# Find SQLite3
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SQLITE3 REQUIRED sqlite3)
+
+# Create BenchmarkCpp directory
+file(MAKE_DIRECTORY ${CMAKE_SOURCE_DIR}/tests/BenchmarkCpp)
+
+# BenchmarkCpp executable
+add_executable(BenchmarkCpp
+    tests/BenchmarkCpp/main.cpp
+)
+target_link_libraries(BenchmarkCpp
+    PRIVATE
+    svdb
+    benchmark::benchmark
+    ${SQLITE3_LIBRARIES}
+)
+target_include_directories(BenchmarkCpp PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/core/SC
+    ${SQLITE3_INCLUDE_DIRS}
+)
