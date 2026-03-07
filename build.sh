@@ -278,8 +278,8 @@ if [[ $RUN_BENCH -eq 1 ]]; then
     cmake --build . --target BenchmarkCpp -j$(nproc)
 
     # Run with CSV output
-    if [[ -f "./tests/BenchmarkCpp/BenchmarkCpp" ]]; then
-        ./tests/BenchmarkCpp/BenchmarkCpp --benchmark_format=csv --benchmark_out="$BUILD_DIR/bench.csv" --benchmark_out_format=csv 2>&1 | tee "$BUILD_DIR/bench.log"
+    if [[ -f "./bin/BenchmarkCpp" ]]; then
+        ./bin/BenchmarkCpp --benchmark_format=csv --benchmark_out="$BUILD_DIR/bench.csv" --benchmark_out_format=csv 2>&1 | tee "$BUILD_DIR/bench.log"
         echo "====> Benchmarks complete. CSV: $BUILD_DIR/bench.csv"
     else
         echo "====> WARNING: BenchmarkCpp not found"

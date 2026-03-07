@@ -86,9 +86,29 @@ set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
 set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(google_benchmark)
 
-# Find SQLite3
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SQLITE3 REQUIRED sqlite3)
+# Build SQLite3 via ExternalProject for performance comparison
+include(ExternalProject)
+ExternalProject_Add(sqlite3
+    URL https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip
+    SOURCE_DIR ${CMAKE_BINARY_DIR}/sqlite3-src
+    BINARY_DIR ${CMAKE_BINARY_DIR}/sqlite3-build
+    CONFIGURE_COMMAND ${CMAKE_COMMAND} -E make_directory <BINARY_DIR>
+    BUILD_COMMAND
+        ${CMAKE_C_COMPILER} -c -o <BINARY_DIR>/sqlite3.o
+            -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION
+            <SOURCE_DIR>/sqlite3.c
+        && ${CMAKE_AR} rcs <BINARY_DIR>/libsqlite3.a <BINARY_DIR>/sqlite3.o
+    INSTALL_COMMAND ${CMAKE_COMMAND} -E create_symlink <SOURCE_DIR>/sqlite3.h <BINARY_DIR>/sqlite3.h
+    BUILD_BYPRODUCTS <BINARY_DIR>/libsqlite3.a
+)
+
+# Create imported target for sqlite3
+add_library(sqlite3_static STATIC IMPORTED)
+set_target_properties(sqlite3_static PROPERTIES
+    IMPORTED_LOCATION ${CMAKE_BINARY_DIR}/sqlite3-build/libsqlite3.a
+    INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_BINARY_DIR}/sqlite3-build
+)
+add_dependencies(sqlite3_static sqlite3)
 
 # Create BenchmarkCpp directory
 file(MAKE_DIRECTORY ${CMAKE_SOURCE_DIR}/tests/BenchmarkCpp)
@@ -101,10 +121,11 @@ target_link_libraries(BenchmarkCpp
     PRIVATE
     svdb
     benchmark::benchmark
-    ${SQLITE3_LIBRARIES}
+    sqlite3_static
 )
 target_include_directories(BenchmarkCpp PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/core/SC
-    ${SQLITE3_INCLUDE_DIRS}
+    ${CMAKE_BINARY_DIR}/sqlite3-src
 )
+add_dependencies(BenchmarkCpp sqlite3_static)
