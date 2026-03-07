@@ -55,7 +55,8 @@ typedef struct {
 
 /* Batch column data - columnar layout for efficient transfer */
 typedef struct {
-    svdb_type_t  type;              /* column type */
+    svdb_type_t  type;              /* column type (dominant; kept for compat) */
+    svdb_type_t *type_arr;          /* per-row type [row_count] */
     int64_t     *ival_arr;          /* int64 values (NULL marked in null_mask) */
     double      *rval_arr;          /* double values (NULL marked in null_mask) */
     char       **sval_arr;          /* text/blob pointers */
@@ -97,6 +98,7 @@ void          svdb_row_batch_free(svdb_row_batch_t *batch);
 int           svdb_batch_row_count(const svdb_row_batch_t *batch);
 int           svdb_batch_col_count(const svdb_row_batch_t *batch);
 svdb_type_t   svdb_batch_col_type(const svdb_row_batch_t *batch, int col);
+svdb_type_t   svdb_batch_get_row_type(const svdb_row_batch_t *batch, int col, int row);
 int           svdb_batch_is_null(const svdb_row_batch_t *batch, int col, int row);
 int64_t       svdb_batch_get_int(const svdb_row_batch_t *batch, int col, int row);
 double        svdb_batch_get_real(const svdb_row_batch_t *batch, int col, int row);

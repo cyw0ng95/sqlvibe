@@ -98,8 +98,8 @@ func (r *Rows) Get(col int) interface{} {
 		return nil
 	}
 
-	// Get column type
-	colType := C.svdb_batch_col_type(&r.batch, colIdx)
+	// Get per-row type
+	colType := C.svdb_batch_get_row_type(&r.batch, colIdx, rowIdx)
 
 	switch colType {
 	case C.SVDB_TYPE_INT:
