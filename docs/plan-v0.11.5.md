@@ -740,10 +740,11 @@ git commit -m "perf: v0.11.5 Week 1 integration
 | 0.11.5 | 2026-03-06 | sqlvibe team | Initial plan |
 | 0.11.5 | 2026-03-07 | sqlvibe team | Implemented WS1 JOIN opt + WS2 COUNT fixes |
 | 0.11.5 | 2026-03-07 | sqlvibe team | WS3 VM dispatch, WS4 CG optimizer, WS7 SIMD extensions |
+| 0.11.5 | 2026-03-07 | sqlvibe team | WS5 B-Tree key cache + prefetch, WS6 SafeArena, WS8 WAL batch + MVCC GC, WS9 PGO |
 
 ---
 
-## Current Status (v0.11.5 - In Progress)
+## Current Status (v0.11.5 - COMPLETE)
 
 ### Completed
 
@@ -753,19 +754,15 @@ git commit -m "perf: v0.11.5 Week 1 integration
 | WS2: COUNT(*) Fix | COMPLETE | Metadata cache with delta invalidation on INSERT/DELETE |
 | WS3: VM Dispatch | COMPLETE | Added svdb_vm_execute_optimized + computed-goto stub |
 | WS4: CG Optimizer | COMPLETE | Added constant propagation pass; level≥2 runs it + dead-code re-pass |
+| WS5: DS B-Tree | COMPLETE | Rowid cache eliminates per-step varint decode; prefetch hints on interior traversal |
+| WS6: Memory | COMPLETE | SafeArena class with configurable hard limit + C API (svdb_safe_arena_*) |
 | WS7: SIMD Library | COMPLETE | Added min/max double, batch filter int64, CRC32 hardware hash |
-
-### Pending
-
-| Workstream | Status |
-|------------|--------|
-| WS5: DS (B-Tree SIMD, prefetch) | PENDING |
-| WS6: Memory (SafeArena integration) | PENDING |
-| WS8: TM/IS (WAL batch commit) | PENDING |
-| WS9: Build/Infrastructure | PENDING |
+| WS8: TM/IS | COMPLETE | WAL batch commit buffer (64 tx / 4MB flush), MVCC GC PruneOldVersions |
+| WS9: Build | COMPLETE | PGO support: SVDB_PGO_GENERATE + SVDB_PGO_USE CMake options |
 
 ### Test Results
 - SQL:1999: PASS (89+ suites)
 - SQL Logic: PASS (joins with GROUP BY + aggregate)
 - Regression: PASS
+- All workstreams verified in single build + test run
 
