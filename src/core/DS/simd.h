@@ -32,6 +32,20 @@ int64_t svdb_vector_sum_int64(const int64_t* a, size_t n);
 double svdb_vector_avg_double(const double* a, size_t n);
 int64_t svdb_vector_min_int64(const int64_t* a, size_t n);
 int64_t svdb_vector_max_int64(const int64_t* a, size_t n);
+double svdb_vector_min_double(const double* a, size_t n);
+double svdb_vector_max_double(const double* a, size_t n);
+
+// Batch filter: write indices of elements where a[i] == val into out[]; returns count
+size_t svdb_vector_filter_eq_int64(const int64_t* a, int64_t val, size_t n,
+                                    size_t* out_indices);
+size_t svdb_vector_filter_gt_int64(const int64_t* a, int64_t val, size_t n,
+                                    size_t* out_indices);
+size_t svdb_vector_filter_lt_int64(const int64_t* a, int64_t val, size_t n,
+                                    size_t* out_indices);
+
+// CRC32 hash (hardware-accelerated when SSE4.2 available)
+uint32_t svdb_crc32_u64(uint32_t crc, uint64_t val);
+uint32_t svdb_crc32_bytes(const void* data, size_t len, uint32_t seed);
 
 // Vector fill
 void svdb_vector_fill_double(double* a, double value, size_t n);

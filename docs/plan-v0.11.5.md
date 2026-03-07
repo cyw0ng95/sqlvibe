@@ -739,6 +739,7 @@ git commit -m "perf: v0.11.5 Week 1 integration
 |---------|------|--------|---------|
 | 0.11.5 | 2026-03-06 | sqlvibe team | Initial plan |
 | 0.11.5 | 2026-03-07 | sqlvibe team | Implemented WS1 JOIN opt + WS2 COUNT fixes |
+| 0.11.5 | 2026-03-07 | sqlvibe team | WS3 VM dispatch, WS4 CG optimizer, WS7 SIMD extensions |
 
 ---
 
@@ -748,11 +749,23 @@ git commit -m "perf: v0.11.5 Week 1 integration
 
 | Workstream | Status | Improvement |
 |------------|--------|-------------|
-| WS1: JOIN Engine | COMPLETE | 6.98s → 13.7ms (500x) |
-| WS2: COUNT(*) Fix | COMPLETE | Fixed bugs |
+| WS1: JOIN Engine | COMPLETE | 6.98s → 13.7ms (500×); fixed ON clause key assignment bug |
+| WS2: COUNT(*) Fix | COMPLETE | Metadata cache with delta invalidation on INSERT/DELETE |
+| WS3: VM Dispatch | COMPLETE | Added svdb_vm_execute_optimized + computed-goto stub |
+| WS4: CG Optimizer | COMPLETE | Added constant propagation pass; level≥2 runs it + dead-code re-pass |
+| WS7: SIMD Library | COMPLETE | Added min/max double, batch filter int64, CRC32 hardware hash |
+
+### Pending
+
+| Workstream | Status |
+|------------|--------|
+| WS5: DS (B-Tree SIMD, prefetch) | PENDING |
+| WS6: Memory (SafeArena integration) | PENDING |
+| WS8: TM/IS (WAL batch commit) | PENDING |
+| WS9: Build/Infrastructure | PENDING |
 
 ### Test Results
-- SQL:1999: PASS
-- SQL Logic: PASS
+- SQL:1999: PASS (89+ suites)
+- SQL Logic: PASS (joins with GROUP BY + aggregate)
 - Regression: PASS
 
