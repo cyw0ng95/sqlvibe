@@ -738,4 +738,21 @@ git commit -m "perf: v0.11.5 Week 1 integration
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 0.11.5 | 2026-03-06 | sqlvibe team | Initial plan |
+| 0.11.5 | 2026-03-07 | sqlvibe team | Implemented WS1 JOIN opt + WS2 COUNT fixes |
+
+---
+
+## Current Status (v0.11.5 - In Progress)
+
+### Completed
+
+| Workstream | Status | Improvement |
+|------------|--------|-------------|
+| WS1: JOIN Engine | COMPLETE | 6.98s → 13.7ms (500x) |
+| WS2: COUNT(*) Fix | COMPLETE | Fixed bugs |
+
+### Test Results
+- SQL:1999: PASS
+- SQL Logic: PASS
+- Regression: PASS
 
