@@ -5682,27 +5682,61 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
             left_key_col = qry_trim(left_key_col);
             right_key_col = left_key_col;
         } else if (!join.on_expr.empty()) {
-            /* Try to parse simple ON condition: left.col = right.col */
+            /* Try to parse simple ON condition: tbl.col = tbl.col */
             std::string on_upper = qry_upper(join.on_expr);
             /* Look for pattern: IDENT = IDENT (no AND, no OR, no function calls) */
             size_t eq_pos = on_upper.find('=');
             if (eq_pos != std::string::npos && on_upper.find("AND") == std::string::npos && 
                 on_upper.find("OR") == std::string::npos) {
-                std::string left_expr = qry_trim(join.on_expr.substr(0, eq_pos));
-                std::string right_expr = qry_trim(join.on_expr.substr(eq_pos + 1));
-                /* Strip table prefix if present: t.col → col */
-                size_t dot1 = left_expr.rfind('.');
-                if (dot1 != std::string::npos) left_key_col = left_expr.substr(dot1 + 1);
-                else left_key_col = left_expr;
-                size_t dot2 = right_expr.rfind('.');
-                if (dot2 != std::string::npos) right_key_col = right_expr.substr(dot2 + 1);
-                else right_key_col = right_expr;
+                std::string expr_a = qry_trim(join.on_expr.substr(0, eq_pos));
+                std::string expr_b = qry_trim(join.on_expr.substr(eq_pos + 1));
+                /* Extract optional table prefix and column name from each side */
+                std::string prefix_a, col_a, prefix_b, col_b;
+                size_t dot1 = expr_a.rfind('.');
+                if (dot1 != std::string::npos) {
+                    prefix_a = qry_upper(expr_a.substr(0, dot1));
+                    col_a = expr_a.substr(dot1 + 1);
+                } else {
+                    col_a = expr_a;
+                }
+                size_t dot2 = expr_b.rfind('.');
+                if (dot2 != std::string::npos) {
+                    prefix_b = qry_upper(expr_b.substr(0, dot2));
+                    col_b = expr_b.substr(dot2 + 1);
+                } else {
+                    col_b = expr_b;
+                }
                 /* Verify both are simple identifiers */
-                if (!left_key_col.empty() && !right_key_col.empty()) {
-                    bool simple_left = true, simple_right = true;
-                    for (char c : left_key_col) if (!isalnum((unsigned char)c) && c != '_') { simple_left = false; break; }
-                    for (char c : right_key_col) if (!isalnum((unsigned char)c) && c != '_') { simple_right = false; break; }
-                    if (simple_left && simple_right) use_hash_join = true;
+                bool simple_a = !col_a.empty(), simple_b = !col_b.empty();
+                for (char c : col_a) if (!isalnum((unsigned char)c) && c != '_') { simple_a = false; break; }
+                for (char c : col_b) if (!isalnum((unsigned char)c) && c != '_') { simple_b = false; break; }
+                if (simple_a && simple_b) {
+                    /* Determine which side belongs to left table and which to right table.
+                     * We compare the table prefix against the left/right aliases and table names.
+                     * This correctly handles ON e.dept_id = d.id where e is the right table. */
+                    std::string left_tname_up  = qry_upper(tname);
+                    std::string left_alias_up  = qry_upper(left_alias);
+                    std::string right_tname_up = qry_upper(right_tname);
+                    std::string right_alias_up = qry_upper(right_alias);
+                    bool a_is_left  = prefix_a.empty() || prefix_a == left_tname_up  || prefix_a == left_alias_up;
+                    bool a_is_right = prefix_a.empty() || prefix_a == right_tname_up || prefix_a == right_alias_up;
+                    bool b_is_left  = prefix_b.empty() || prefix_b == left_tname_up  || prefix_b == left_alias_up;
+                    bool b_is_right = prefix_b.empty() || prefix_b == right_tname_up || prefix_b == right_alias_up;
+                    /* Only assign if we can unambiguously map each side to a table */
+                    if (a_is_left && !a_is_right && b_is_right && !b_is_left) {
+                        left_key_col  = col_a;
+                        right_key_col = col_b;
+                        use_hash_join = true;
+                    } else if (a_is_right && !a_is_left && b_is_left && !b_is_right) {
+                        left_key_col  = col_b;
+                        right_key_col = col_a;
+                        use_hash_join = true;
+                    } else if (prefix_a.empty() && prefix_b.empty()) {
+                        /* No prefix at all: assume textual order matches table order */
+                        left_key_col  = col_a;
+                        right_key_col = col_b;
+                        use_hash_join = true;
+                    }
                 }
             }
         }
