@@ -1,8 +1,13 @@
 #include "simd.h"
 #include <cstring>
+#include <cfloat>
 
 #ifdef __AVX2__
 #include <immintrin.h>
+#endif
+
+#ifdef __SSE4_2__
+#include <nmmintrin.h>
 #endif
 
 #ifdef __SSE4_1__
@@ -389,6 +394,154 @@ int svdb_bitmap_find_first(const uint64_t* a, size_t n) {
         }
     }
     return -1;
+}
+
+// Vector min - double
+double svdb_vector_min_double(const double* a, size_t n) {
+    if (n == 0) return 0.0;
+    double min_val = a[0];
+#ifdef __AVX2__
+    __m256d vmin = _mm256_set1_pd(DBL_MAX);
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256d va = _mm256_loadu_pd(&a[i]);
+        vmin = _mm256_min_pd(vmin, va);
+    }
+    alignas(32) double tmp[4];
+    _mm256_store_pd(tmp, vmin);
+    min_val = tmp[0];
+    for (int j = 1; j < 4; j++) if (tmp[j] < min_val) min_val = tmp[j];
+    for (; i < n; i++) if (a[i] < min_val) min_val = a[i];
+#else
+    for (size_t i = 1; i < n; i++) if (a[i] < min_val) min_val = a[i];
+#endif
+    return min_val;
+}
+
+// Vector max - double
+double svdb_vector_max_double(const double* a, size_t n) {
+    if (n == 0) return 0.0;
+    double max_val = a[0];
+#ifdef __AVX2__
+    __m256d vmax = _mm256_set1_pd(-DBL_MAX);
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256d va = _mm256_loadu_pd(&a[i]);
+        vmax = _mm256_max_pd(vmax, va);
+    }
+    alignas(32) double tmp[4];
+    _mm256_store_pd(tmp, vmax);
+    max_val = tmp[0];
+    for (int j = 1; j < 4; j++) if (tmp[j] > max_val) max_val = tmp[j];
+    for (; i < n; i++) if (a[i] > max_val) max_val = a[i];
+#else
+    for (size_t i = 1; i < n; i++) if (a[i] > max_val) max_val = a[i];
+#endif
+    return max_val;
+}
+
+// Batch filter: collect indices where a[i] == val
+size_t svdb_vector_filter_eq_int64(const int64_t* a, int64_t val, size_t n,
+                                    size_t* out_indices) {
+    size_t count = 0;
+#ifdef __AVX2__
+    __m256i vval = _mm256_set1_epi64x(val);
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256i va = _mm256_loadu_si256((const __m256i*)&a[i]);
+        __m256i vcmp = _mm256_cmpeq_epi64(va, vval);
+        int mask = _mm256_movemask_pd(_mm256_castsi256_pd(vcmp));
+        if (mask & 1) out_indices[count++] = i;
+        if (mask & 2) out_indices[count++] = i + 1;
+        if (mask & 4) out_indices[count++] = i + 2;
+        if (mask & 8) out_indices[count++] = i + 3;
+    }
+    for (; i < n; i++) if (a[i] == val) out_indices[count++] = i;
+#else
+    for (size_t i = 0; i < n; i++) if (a[i] == val) out_indices[count++] = i;
+#endif
+    return count;
+}
+
+// Batch filter: collect indices where a[i] > val
+size_t svdb_vector_filter_gt_int64(const int64_t* a, int64_t val, size_t n,
+                                    size_t* out_indices) {
+    size_t count = 0;
+#ifdef __AVX2__
+    __m256i vval = _mm256_set1_epi64x(val);
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256i va = _mm256_loadu_si256((const __m256i*)&a[i]);
+        __m256i vcmp = _mm256_cmpgt_epi64(va, vval);
+        int mask = _mm256_movemask_pd(_mm256_castsi256_pd(vcmp));
+        if (mask & 1) out_indices[count++] = i;
+        if (mask & 2) out_indices[count++] = i + 1;
+        if (mask & 4) out_indices[count++] = i + 2;
+        if (mask & 8) out_indices[count++] = i + 3;
+    }
+    for (; i < n; i++) if (a[i] > val) out_indices[count++] = i;
+#else
+    for (size_t i = 0; i < n; i++) if (a[i] > val) out_indices[count++] = i;
+#endif
+    return count;
+}
+
+// Batch filter: collect indices where a[i] < val
+size_t svdb_vector_filter_lt_int64(const int64_t* a, int64_t val, size_t n,
+                                    size_t* out_indices) {
+    size_t count = 0;
+#ifdef __AVX2__
+    __m256i vval = _mm256_set1_epi64x(val);
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256i va = _mm256_loadu_si256((const __m256i*)&a[i]);
+        /* a[i] < val ↔ val > a[i] */
+        __m256i vcmp = _mm256_cmpgt_epi64(vval, va);
+        int mask = _mm256_movemask_pd(_mm256_castsi256_pd(vcmp));
+        if (mask & 1) out_indices[count++] = i;
+        if (mask & 2) out_indices[count++] = i + 1;
+        if (mask & 4) out_indices[count++] = i + 2;
+        if (mask & 8) out_indices[count++] = i + 3;
+    }
+    for (; i < n; i++) if (a[i] < val) out_indices[count++] = i;
+#else
+    for (size_t i = 0; i < n; i++) if (a[i] < val) out_indices[count++] = i;
+#endif
+    return count;
+}
+
+// CRC32 hardware-accelerated hash
+uint32_t svdb_crc32_u64(uint32_t crc, uint64_t val) {
+#ifdef __SSE4_2__
+    return (uint32_t)_mm_crc32_u64((uint64_t)crc, val);
+#else
+    /* Software CRC32 fallback */
+    crc ^= (uint32_t)(val & 0xFFFFFFFF);
+    for (int i = 0; i < 32; i++) crc = (crc >> 1) ^ (0xEDB88320u & -(crc & 1));
+    crc ^= (uint32_t)(val >> 32);
+    for (int i = 0; i < 32; i++) crc = (crc >> 1) ^ (0xEDB88320u & -(crc & 1));
+    return crc;
+#endif
+}
+
+uint32_t svdb_crc32_bytes(const void* data, size_t len, uint32_t seed) {
+    const uint8_t* p = (const uint8_t*)data;
+    uint32_t crc = seed;
+#ifdef __SSE4_2__
+    size_t i = 0;
+    for (; i + 8 <= len; i += 8) {
+        uint64_t v;
+        memcpy(&v, p + i, 8);
+        crc = (uint32_t)_mm_crc32_u64((uint64_t)crc, v);
+    }
+    for (; i < len; i++) crc = (uint32_t)_mm_crc32_u8(crc, p[i]);
+#else
+    for (size_t i = 0; i < len; i++) {
+        crc ^= p[i];
+        for (int j = 0; j < 8; j++) crc = (crc >> 1) ^ (0xEDB88320u & -(crc & 1));
+    }
+#endif
+    return crc;
 }
 
 } // extern "C"

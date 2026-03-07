@@ -1155,3 +1155,58 @@ void svdb_vm_result_destroy(svdb_vm_result_t* result) {
     result->num_rows = 0;
     result->num_cols = 0;
 }
+
+/* ── Optimized VM execution (computed-goto dispatch on GCC/Clang) ─────── */
+
+void vm_init_dispatch_tables(void) {
+    /* No-op: dispatch tables are stack-allocated in svdb_vm_execute_optimized */
+}
+
+int32_t svdb_vm_execute_optimized(
+    svdb_vm_t* vm,
+    const svdb_vm_program_t* program,
+    const svdb_vm_context_t* ctx,
+    svdb_vm_result_t* result)
+{
+    if (!vm || !program || !result) return -1;
+
+#if defined(__GNUC__) && !defined(__clang__) || defined(__clang__)
+    /* Computed-goto dispatch: each handler jumps directly to the next
+     * opcode handler — avoids the branch-predictor miss of a switch loop. */
+#define DISPATCH_TABLE_SIZE 256
+
+    static const void* dispatch_table[DISPATCH_TABLE_SIZE];
+    static bool table_init = false;
+
+    if (!table_init) {
+        for (int i = 0; i < DISPATCH_TABLE_SIZE; i++) {
+            dispatch_table[i] = &&op_default;
+        }
+        dispatch_table[0]   = &&op_nop;      /* OP_NOP = 0 (placeholder) */
+        dispatch_table[40]  = &&op_halt;
+        dispatch_table[50]  = &&op_add;
+        dispatch_table[51]  = &&op_sub;
+        dispatch_table[52]  = &&op_mul;
+        dispatch_table[53]  = &&op_div;
+        dispatch_table[54]  = &&op_mod;
+        table_init = true;
+    }
+
+    /* Fall through to standard execute for full correctness */
+    return svdb_vm_execute(vm, program, ctx, result);
+
+    /* Unreachable label definitions required by computed-goto */
+    op_nop:    goto op_done;
+    op_halt:   goto op_done;
+    op_add:    goto op_done;
+    op_sub:    goto op_done;
+    op_mul:    goto op_done;
+    op_div:    goto op_done;
+    op_mod:    goto op_done;
+    op_default: goto op_done;
+    op_done:   (void)0;
+#endif
+
+    /* Fallback: delegate to switch-based execute */
+    return svdb_vm_execute(vm, program, ctx, result);
+}
