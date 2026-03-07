@@ -5668,23 +5668,122 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         auto data_it = db->data.find(tname);
         const std::vector<Row> &left_rows = (data_it != db->data.end()) ? data_it->second : std::vector<Row>{};
         
-        for (const auto &lrow : left_rows) {
-            bool matched = false;
-            Row lrow_prefixed;
-            for (auto &kv : lrow) {
-                lrow_prefixed[kv.first] = kv.second;
-                lrow_prefixed[tname + "." + kv.first] = kv.second;
-                if (!left_alias.empty()) lrow_prefixed[left_alias + "." + kv.first] = kv.second;
-            }
-            for (size_t ri = 0; ri < right_rows_list.size(); ++ri) {
-                if (eval_on_match(lrow_prefixed, right_rows_list[ri])) {
-                    all_rows.push_back(make_merged_row(lrow, &right_rows_list[ri]));
-                    matched = true;
-                    right_matched[ri] = true;
+        /* ── OPTIMIZED HASH JOIN for simple equi-joins ── */
+        /* Try to use hash join if: USING clause or simple ON a.col = b.col */
+        bool use_hash_join = false;
+        std::string left_key_col, right_key_col;
+        
+        /* Check if we can use hash join: USING clause or simple ON equality */
+        if (!join.using_col.empty()) {
+            /* USING(col) → use col as key on both sides */
+            use_hash_join = true;
+            std::istringstream uss(join.using_col);
+            std::getline(uss, left_key_col, ',');
+            left_key_col = qry_trim(left_key_col);
+            right_key_col = left_key_col;
+        } else if (!join.on_expr.empty()) {
+            /* Try to parse simple ON condition: left.col = right.col */
+            std::string on_upper = qry_upper(join.on_expr);
+            /* Look for pattern: IDENT = IDENT (no AND, no OR, no function calls) */
+            size_t eq_pos = on_upper.find('=');
+            if (eq_pos != std::string::npos && on_upper.find("AND") == std::string::npos && 
+                on_upper.find("OR") == std::string::npos) {
+                std::string left_expr = qry_trim(join.on_expr.substr(0, eq_pos));
+                std::string right_expr = qry_trim(join.on_expr.substr(eq_pos + 1));
+                /* Strip table prefix if present: t.col → col */
+                size_t dot1 = left_expr.rfind('.');
+                if (dot1 != std::string::npos) left_key_col = left_expr.substr(dot1 + 1);
+                else left_key_col = left_expr;
+                size_t dot2 = right_expr.rfind('.');
+                if (dot2 != std::string::npos) right_key_col = right_expr.substr(dot2 + 1);
+                else right_key_col = right_expr;
+                /* Verify both are simple identifiers */
+                if (!left_key_col.empty() && !right_key_col.empty()) {
+                    bool simple_left = true, simple_right = true;
+                    for (char c : left_key_col) if (!isalnum((unsigned char)c) && c != '_') { simple_left = false; break; }
+                    for (char c : right_key_col) if (!isalnum((unsigned char)c) && c != '_') { simple_right = false; break; }
+                    if (simple_left && simple_right) use_hash_join = true;
                 }
             }
-            if (!matched && (is_left_jn)) {
-                all_rows.push_back(make_merged_row(lrow, nullptr));
+        }
+        
+        /* Build hash table for right table if using hash join */
+        std::unordered_map<std::string, std::vector<size_t>> right_hash; /* key → row indices */
+        if (use_hash_join && !right_key_col.empty()) {
+            right_hash.reserve(right_rows_list.size() * 2);
+            for (size_t ri = 0; ri < right_rows_list.size(); ++ri) {
+                const Row &rrow = right_rows_list[ri];
+                /* Build key from right_key_col */
+                std::string key;
+                auto it = rrow.find(right_key_col);
+                if (it != rrow.end()) {
+                    if (it->second.type == SVDB_TYPE_INT) key = std::to_string(it->second.ival);
+                    else if (it->second.type == SVDB_TYPE_REAL) key = std::to_string(it->second.rval);
+                    else if (it->second.type == SVDB_TYPE_TEXT) key = it->second.sval;
+                    else key = "";
+                } else {
+                    key = "";
+                }
+                right_hash[key].push_back(ri);
+            }
+        }
+        
+        if (use_hash_join && !right_key_col.empty() && !right_hash.empty()) {
+            /* HASH JOIN: O(n+m) instead of O(n*m) */
+            for (const auto &lrow : left_rows) {
+                Row lrow_prefixed;
+                for (auto &kv : lrow) {
+                    lrow_prefixed[kv.first] = kv.second;
+                    lrow_prefixed[tname + "." + kv.first] = kv.second;
+                    if (!left_alias.empty()) lrow_prefixed[left_alias + "." + kv.first] = kv.second;
+                }
+                
+                /* Build key from left_key_col */
+                std::string key;
+                auto it = lrow.find(left_key_col);
+                if (it != lrow.end()) {
+                    if (it->second.type == SVDB_TYPE_INT) key = std::to_string(it->second.ival);
+                    else if (it->second.type == SVDB_TYPE_REAL) key = std::to_string(it->second.rval);
+                    else if (it->second.type == SVDB_TYPE_TEXT) key = it->second.sval;
+                    else key = "";
+                } else {
+                    key = "";
+                }
+                
+                auto hit = right_hash.find(key);
+                if (hit != right_hash.end()) {
+                    for (size_t ri : hit->second) {
+                        all_rows.push_back(make_merged_row(lrow, &right_rows_list[ri]));
+                        right_matched[ri] = true;
+                    }
+                    if (is_left_jn && hit->second.empty()) {
+                        all_rows.push_back(make_merged_row(lrow, nullptr));
+                    }
+                } else if (is_left_jn) {
+                    /* No match - add NULL row for LEFT JOIN */
+                    all_rows.push_back(make_merged_row(lrow, nullptr));
+                }
+            }
+        } else {
+            /* Fallback to nested loop join */
+            for (const auto &lrow : left_rows) {
+                bool matched = false;
+                Row lrow_prefixed;
+                for (auto &kv : lrow) {
+                    lrow_prefixed[kv.first] = kv.second;
+                    lrow_prefixed[tname + "." + kv.first] = kv.second;
+                    if (!left_alias.empty()) lrow_prefixed[left_alias + "." + kv.first] = kv.second;
+                }
+                for (size_t ri = 0; ri < right_rows_list.size(); ++ri) {
+                    if (eval_on_match(lrow_prefixed, right_rows_list[ri])) {
+                        all_rows.push_back(make_merged_row(lrow, &right_rows_list[ri]));
+                        matched = true;
+                        right_matched[ri] = true;
+                    }
+                }
+                if (!matched && (is_left_jn)) {
+                    all_rows.push_back(make_merged_row(lrow, nullptr));
+                }
             }
         }
 
