@@ -41,6 +41,9 @@
 #include <iomanip>
 #include <functional>
 #include <cstdio>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
@@ -138,6 +141,79 @@ static size_t utf8_byte_offset(const std::string &s, size_t char_pos) {
         else               i += 4;
     }
     return i;
+}
+
+/* Forward declaration */
+static bool qry_eval_where(const Row &row,
+                            const std::vector<std::string> &col_order,
+                            const std::string &where_text);
+
+/* Forward declaration */
+static bool qry_eval_where(const Row &row,
+                            const std::vector<std::string> &col_order,
+                            const std::string &where_text);
+
+/* ── Parallel Scan Helper ───────────────────────────────────────────── */
+
+/* Threshold for parallel scan (rows) */
+static const int64_t PARALLEL_SCAN_THRESHOLD = 5000;
+
+/* Get number of CPU cores for parallel processing */
+static int get_cpu_cores() {
+    int cores = std::thread::hardware_concurrency();
+    return cores > 0 ? cores : 4;
+}
+
+/* Parallel filter helper: filters rows in parallel using multiple threads.
+ * Returns filtered row indices. */
+static std::vector<size_t> parallel_filter_rows(
+    const std::vector<Row>& rows,
+    const std::string& where_text,
+    const std::vector<std::string>& col_order)
+{
+    if (rows.size() < (size_t)PARALLEL_SCAN_THRESHOLD || where_text.empty()) {
+        /* Small table or no filter: single-threaded */
+        std::vector<size_t> result;
+        for (size_t i = 0; i < rows.size(); ++i) {
+            if (where_text.empty() || qry_eval_where(rows[i], col_order, where_text)) {
+                result.push_back(i);
+            }
+        }
+        return result;
+    }
+
+    /* Parallel scan */
+    int num_threads = get_cpu_cores();
+    int64_t chunk_size = (rows.size() + num_threads - 1) / num_threads;
+
+    std::vector<std::vector<size_t>> thread_results(num_threads);
+    std::vector<std::thread> threads;
+
+    for (int t = 0; t < num_threads; ++t) {
+        threads.emplace_back([&, t]() {
+            size_t start = t * chunk_size;
+            size_t end = std::min(start + (size_t)chunk_size, rows.size());
+
+            for (size_t i = start; i < end; ++i) {
+                if (qry_eval_where(rows[i], col_order, where_text)) {
+                    thread_results[t].push_back(i);
+                }
+            }
+        });
+    }
+
+    /* Wait for all threads */
+    for (auto& th : threads) {
+        th.join();
+    }
+
+    /* Merge results */
+    std::vector<size_t> result;
+    for (const auto& tr : thread_results) {
+        result.insert(result.end(), tr.begin(), tr.end());
+    }
+
+    return result;
 }
 
 /* Return UTF-8 substring: start and len are character counts (0-based start). */
@@ -340,6 +416,13 @@ static thread_local const Row *g_outer_row = nullptr;
 static thread_local const std::vector<std::string> *g_outer_col_order = nullptr;
 /* Thread-local eval error: set by eval_expr for fatal errors like unknown function */
 static thread_local std::string g_eval_error;
+
+/* Thread-local cache for non-correlated subquery results (IN subquery optimization).
+ * Maps subquery SQL string -> set of result values (as strings for hashability).
+ * This cache is cleared at the start of each new query to avoid stale results. */
+static thread_local std::map<std::string, std::unordered_set<std::string>> g_in_subquery_cache;
+/* Flag to indicate if we're in a query context where caching is valid */
+static thread_local bool g_subquery_cache_active = false;
 
 /* Forward declaration of svdb_query_internal (defined later) */
 svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql, svdb_rows_t **rows_out);
@@ -2072,18 +2155,48 @@ static SvdbVal eval_expr(const std::string &expr, const Row &row,
                 if (paren_start != std::string::npos && paren_end != std::string::npos) {
                     std::string inside = e.substr(paren_start + 1, paren_end - paren_start - 1);
                     std::string inside_u = qry_upper(qry_trim(inside));
-                    /* Subquery */
+                    /* Subquery - use cache for O(1) lookup on subsequent rows */
                     if (inside_u.size() > 6 && inside_u.substr(0, 7) == "SELECT " && g_query_db) {
-                        svdb_rows_t *sub_rows = nullptr;
-                        svdb_code_t rc = svdb_query_internal(g_query_db, qry_trim(inside), &sub_rows);
+                        std::string sub_sql = qry_trim(inside);
+
+                        /* Check if we have cached results for this subquery */
                         bool found = false;
-                        if (rc == SVDB_OK && sub_rows) {
-                            for (auto &srow : sub_rows->rows) {
-                                if (!srow.empty() && srow[0].type != SVDB_TYPE_NULL &&
-                                    val_cmp(lhs, srow[0]) == 0) { found = true; break; }
+                        bool cache_hit = false;
+
+                        if (g_subquery_cache_active) {
+                            auto cache_it = g_in_subquery_cache.find(sub_sql);
+                            if (cache_it != g_in_subquery_cache.end()) {
+                                /* Cache hit: use O(1) hash set lookup */
+                                cache_hit = true;
+                                std::string lhs_str = val_to_str(lhs);
+                                found = cache_it->second.count(lhs_str) > 0;
                             }
-                            delete sub_rows;
                         }
+
+                        if (!cache_hit) {
+                            /* Cache miss: execute subquery and cache results */
+                            svdb_rows_t *sub_rows = nullptr;
+                            svdb_code_t rc = svdb_query_internal(g_query_db, sub_sql, &sub_rows);
+                            if (rc == SVDB_OK && sub_rows) {
+                                std::unordered_set<std::string> cached_results;
+                                for (auto &srow : sub_rows->rows) {
+                                    if (!srow.empty() && srow[0].type != SVDB_TYPE_NULL) {
+                                        cached_results.insert(val_to_str(srow[0]));
+                                    }
+                                }
+                                delete sub_rows;
+
+                                /* Check if lhs is in the result set before moving */
+                                std::string lhs_str = val_to_str(lhs);
+                                found = cached_results.count(lhs_str) > 0;
+
+                                /* Store in cache for future rows */
+                                if (g_subquery_cache_active) {
+                                    g_in_subquery_cache[sub_sql] = std::move(cached_results);
+                                }
+                            }
+                        }
+
                         SvdbVal v; v.type = SVDB_TYPE_INT; v.ival = negated ? !found : found; return v;
                     }
                     /* Value list — handle empty list */
@@ -2769,18 +2882,45 @@ static bool qry_eval_where(const Row &row,
                             else { p += kv.first.size(); }
                         }
                     }
-                    svdb_rows_t *sub_rows = nullptr;
-                    svdb_code_t rc = svdb_query_internal(g_query_db, sub_sql, &sub_rows);
+
+                    /* Use cache for non-correlated subqueries (O(1) lookup) */
                     bool found = false;
                     bool has_null = false;
-                    if (rc == SVDB_OK && sub_rows) {
-                        for (auto &srow : sub_rows->rows) {
-                            if (srow.empty()) continue;
-                            if (srow[0].type == SVDB_TYPE_NULL) { has_null = true; continue; }
-                            if (val_cmp(lhs, srow[0]) == 0) { found = true; break; }
+                    bool cache_hit = false;
+
+                    if (g_subquery_cache_active) {
+                        auto cache_it = g_in_subquery_cache.find(sub_sql);
+                        if (cache_it != g_in_subquery_cache.end()) {
+                            /* Cache hit: use O(1) hash set lookup */
+                            cache_hit = true;
+                            std::string lhs_str = val_to_str(lhs);
+                            found = cache_it->second.count(lhs_str) > 0;
                         }
-                        delete sub_rows;
                     }
+
+                    if (!cache_hit) {
+                        /* Cache miss: execute subquery and cache results */
+                        svdb_rows_t *sub_rows = nullptr;
+                        svdb_code_t rc = svdb_query_internal(g_query_db, sub_sql, &sub_rows);
+                        if (rc == SVDB_OK && sub_rows) {
+                            std::unordered_set<std::string> cached_results;
+                            for (auto &srow : sub_rows->rows) {
+                                if (srow.empty()) continue;
+                                if (srow[0].type == SVDB_TYPE_NULL) { has_null = true; continue; }
+                                cached_results.insert(val_to_str(srow[0]));
+                            }
+                            delete sub_rows;
+
+                            /* Store in cache for future rows */
+                            if (g_subquery_cache_active) {
+                                g_in_subquery_cache[sub_sql] = std::move(cached_results);
+                            }
+
+                            /* Check if lhs is in the result set */
+                            found = g_in_subquery_cache[sub_sql].count(val_to_str(lhs)) > 0;
+                        }
+                    }
+
                     if (negated) { if (found) return false; if (has_null) return false; return true; }
                     return found;
                 }
@@ -4112,6 +4252,23 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
 
     /* Clear any leftover eval error from a previous call */
     g_eval_error.clear();
+
+    /* Only manage the subquery cache at the outermost query level.
+     * Nested subqueries should inherit the outer query's cache context. */
+    bool is_outer_query = !g_subquery_cache_active;
+    if (is_outer_query) {
+        g_in_subquery_cache.clear();
+        g_subquery_cache_active = true;
+    }
+    struct CacheGuard {
+        bool should_cleanup;
+        ~CacheGuard() {
+            if (should_cleanup) {
+                g_in_subquery_cache.clear();
+                g_subquery_cache_active = false;
+            }
+        }
+    } cache_guard{is_outer_query};
 
     /* Set thread-local DB context for subquery support */
     svdb_db_t *prev_db = g_query_db;
@@ -5852,6 +6009,8 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
             }
         } else {
             /* Fallback to nested loop join */
+            fprintf(stderr, "[DEBUG] Using NESTED LOOP JOIN: use_hash_join=%d, right_key_col=%s, hash_table_built=%d\n",
+                    use_hash_join, right_key_col.c_str(), hash_table_built);
             for (const auto &lrow : left_rows) {
                 bool matched = false;
                 Row lrow_prefixed;
@@ -6276,10 +6435,21 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                 }
             }
         }
-        for (const auto &row : all_rows) {
-            if (!qry_eval_where(row, merged_col_order, where_txt)) continue;
-            for (auto &a : aggs) agg_accumulate(a, row, merged_col_order);
-            for (auto &a : extra_aggs) agg_accumulate(a, row, merged_col_order);
+        /* Use parallel scan for large tables in aggregation */
+        std::vector<size_t> agg_matching_indices;
+        if (all_rows.size() >= (size_t)PARALLEL_SCAN_THRESHOLD && !where_txt.empty()) {
+            agg_matching_indices = parallel_filter_rows(all_rows, where_txt, merged_col_order);
+            for (size_t idx : agg_matching_indices) {
+                const auto &row = all_rows[idx];
+                for (auto &a : aggs) agg_accumulate(a, row, merged_col_order);
+                for (auto &a : extra_aggs) agg_accumulate(a, row, merged_col_order);
+            }
+        } else {
+            for (const auto &row : all_rows) {
+                if (!qry_eval_where(row, merged_col_order, where_txt)) continue;
+                for (auto &a : aggs) agg_accumulate(a, row, merged_col_order);
+                for (auto &a : extra_aggs) agg_accumulate(a, row, merged_col_order);
+            }
         }
         /* Build virtual row for sub-agg results used by compound expressions */
         Row agg_virtual_row;
@@ -6424,9 +6594,21 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
     /* ── Simple SELECT (no GROUP BY) ── */
     /* First, collect matching rows for window function support */
     std::vector<Row> matching_rows;
-    for (const auto &row : all_rows) {
-        if (!qry_eval_where(row, merged_col_order, where_txt)) continue;
-        matching_rows.push_back(row);
+
+    /* Use parallel scan for large tables */
+    if (all_rows.size() >= (size_t)PARALLEL_SCAN_THRESHOLD && !where_txt.empty()) {
+        /* Parallel filtering */
+        std::vector<size_t> matching_indices = parallel_filter_rows(all_rows, where_txt, merged_col_order);
+        matching_rows.reserve(matching_indices.size());
+        for (size_t idx : matching_indices) {
+            matching_rows.push_back(all_rows[idx]);
+        }
+    } else {
+        /* Single-threaded filtering for small tables */
+        for (const auto &row : all_rows) {
+            if (!qry_eval_where(row, merged_col_order, where_txt)) continue;
+            matching_rows.push_back(row);
+        }
     }
 
     /* Detect and pre-compute window functions */

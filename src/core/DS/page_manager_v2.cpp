@@ -3,6 +3,9 @@
 #include <cstring>
 #include <stdexcept>
 #include <sys/stat.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace svdb::ds {
 
@@ -108,13 +111,18 @@ size_t svdb_pm_v2_get_cache_size(svdb_page_manager_v2_t* pm) {
 // PageManagerV2 Implementation
 // ============================================================================
 
-PageManagerV2::PageManagerV2(const std::string& db_path, 
+PageManagerV2::PageManagerV2(const std::string& db_path,
                              uint32_t page_size,
                              bool create_if_missing)
     : db_path_(db_path)
     , page_size_(page_size)
     , page_count_(0)
     , is_open_(false)
+    , mmap_enabled_(false)
+    , mmap_huge_pages_(false)
+    , mmap_data_(nullptr)
+    , mmap_size_(0)
+    , mmap_fd_(-1)
 {
     // Initialize cache with 256 pages (1MB default for 4KB pages)
     cache_ = std::make_unique<LRUCacheV2>(256);
@@ -237,7 +245,7 @@ uint8_t* PageManagerV2::ReadPage(uint32_t page_num, size_t* out_size) {
         if (out_size) *out_size = 0;
         return nullptr;
     }
-    
+
     // Check cache first
     size_t size = 0;
     uint8_t* cached = cache_->Get(page_num, &size);
@@ -245,15 +253,26 @@ uint8_t* PageManagerV2::ReadPage(uint32_t page_num, size_t* out_size) {
         if (out_size) *out_size = size;
         return cached;
     }
-    
-    // Read from file
+
+    // Try mmap first if enabled (read-only, zero-copy)
+    if (mmap_enabled_ && mmap_data_ != nullptr) {
+        uint64_t offset = static_cast<uint64_t>(page_num - 1) * page_size_;
+        if (offset + page_size_ <= mmap_size_) {
+            // Return pointer directly into mmap'd region
+            // Note: Caller should NOT free this pointer!
+            if (out_size) *out_size = page_size_;
+            return static_cast<uint8_t*>(mmap_data_) + offset;
+        }
+    }
+
+    // Read from file (fallback)
     uint8_t* buffer = new uint8_t[page_size_];
     uint64_t offset = static_cast<uint64_t>(page_num - 1) * page_size_;
     ReadFromFile(offset, buffer, page_size_);
-    
+
     // Add to cache
     cache_->Put(page_num, buffer, page_size_);
-    
+
     if (out_size) *out_size = page_size_;
     return buffer;
 }
@@ -339,11 +358,24 @@ void PageManagerV2::Close() {
     if (!is_open_.exchange(false)) {
         return;
     }
-    
+
     Sync();
     SaveHeader();
+
+    // Clean up mmap if enabled
+    if (mmap_data_ != nullptr && mmap_data_ != MAP_FAILED) {
+        munmap(mmap_data_, mmap_size_);
+        mmap_data_ = nullptr;
+    }
+    if (mmap_fd_ >= 0) {
+        close(mmap_fd_);
+        mmap_fd_ = -1;
+    }
+    mmap_size_ = 0;
+    mmap_enabled_ = false;
+
     CloseFile();
-    
+
     cache_->Clear();
     freelist_->Clear();
 }
@@ -356,6 +388,177 @@ void PageManagerV2::UpdateHeader(const DBHeader& header) {
     std::lock_guard<std::mutex> lock(mutex_);
     header_ = header;
     SaveHeader();
+}
+
+// ============================================================================
+// WS3: Memory-Mapped I/O Implementation
+// ============================================================================
+
+void PageManagerV2::EnableMMap(bool enable, bool use_huge_pages) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (enable == mmap_enabled_) {
+        return;  // No change
+    }
+
+    if (enable) {
+        // Enable mmap
+        if (!file_.is_open()) {
+            return;
+        }
+
+        // Close fstream and open with separate fd for mmap
+        file_.flush();
+        file_.close();
+
+        // Open with O_RDONLY for mmap
+        int flags = O_RDONLY;
+#ifdef MAP_HUGETLB
+        if (use_huge_pages) {
+            flags = O_RDONLY | O_LARGEFILE;
+        }
+#endif
+
+        mmap_fd_ = open(db_path_.c_str(), flags);
+        if (mmap_fd_ < 0) {
+            // Reopen fstream on failure
+            file_.open(db_path_, std::ios::in | std::ios::out | std::ios::binary);
+            return;
+        }
+
+        // Get file size
+        struct stat st;
+        if (fstat(mmap_fd_, &st) != 0) {
+            close(mmap_fd_);
+            mmap_fd_ = -1;
+            file_.open(db_path_, std::ios::in | std::ios::out | std::ios::binary);
+            return;
+        }
+
+        mmap_size_ = static_cast<size_t>(st.st_size);
+
+        if (mmap_size_ > 0) {
+            int prot = PROT_READ;
+            int map_flags = MAP_SHARED;
+
+#ifdef MAP_HUGETLB
+            if (use_huge_pages && mmap_size_ >= (2 * 1024 * 1024)) {
+                map_flags |= MAP_HUGETLB;
+            }
+#endif
+
+            mmap_data_ = mmap(nullptr, mmap_size_, prot, map_flags, mmap_fd_, 0);
+
+            if (mmap_data_ == MAP_FAILED) {
+                mmap_data_ = nullptr;
+                close(mmap_fd_);
+                mmap_fd_ = -1;
+                mmap_size_ = 0;
+                file_.open(db_path_, std::ios::in | std::ios::out | std::ios::binary);
+                return;
+            }
+
+            mmap_enabled_ = true;
+            mmap_huge_pages_ = use_huge_pages;
+        }
+    } else {
+        // Disable mmap
+        if (mmap_data_ != nullptr && mmap_data_ != MAP_FAILED) {
+            munmap(mmap_data_, mmap_size_);
+        }
+        if (mmap_fd_ >= 0) {
+            close(mmap_fd_);
+        }
+
+        mmap_data_ = nullptr;
+        mmap_size_ = 0;
+        mmap_fd_ = -1;
+        mmap_enabled_ = false;
+        mmap_huge_pages_ = false;
+
+        // Reopen fstream
+        file_.open(db_path_, std::ios::in | std::ios::out | std::ios::binary);
+    }
+}
+
+const uint8_t* PageManagerV2::GetMMapPage(uint32_t page_num) {
+    if (!mmap_enabled_ || mmap_data_ == nullptr) {
+        return nullptr;
+    }
+
+    if (page_num == 0 || page_num > page_count_.load()) {
+        return nullptr;
+    }
+
+    uint64_t offset = static_cast<uint64_t>(page_num - 1) * page_size_;
+    if (offset + page_size_ > mmap_size_) {
+        return nullptr;
+    }
+
+    return static_cast<const uint8_t*>(mmap_data_) + offset;
+}
+
+void PageManagerV2::PrefetchPages(uint32_t start_page, uint32_t count) {
+    if (!mmap_enabled_ || mmap_data_ == nullptr) {
+        return;
+    }
+
+    uint64_t offset = static_cast<uint64_t>(start_page - 1) * page_size_;
+    uint64_t len = static_cast<uint64_t>(count) * page_size_;
+
+    if (offset + len > mmap_size_) {
+        len = mmap_size_ - offset;
+    }
+
+    if (len > 0) {
+#ifdef __linux__
+        madvise(static_cast<char*>(mmap_data_) + offset, len, MADV_WILLNEED);
+        // Also trigger read-ahead by touching first byte of each page
+        volatile char* p = static_cast<volatile char*>(mmap_data_) + offset;
+        for (uint32_t i = 0; i < count && offset + i * page_size_ < mmap_size_; i++) {
+            (void)p[i * page_size_];
+        }
+#endif
+    }
+}
+
+void PageManagerV2::AdviseSequential() {
+    if (mmap_enabled_ && mmap_data_ != nullptr) {
+#ifdef __linux__
+        madvise(mmap_data_, mmap_size_, MADV_SEQUENTIAL);
+#endif
+    }
+}
+
+void PageManagerV2::AdviseRandom() {
+    if (mmap_enabled_ && mmap_data_ != nullptr) {
+#ifdef __linux__
+        madvise(mmap_data_, mmap_size_, MADV_RANDOM);
+#endif
+    }
+}
+
+void PageManagerV2::AdviseWillNeed(uint32_t start_page, uint32_t count) {
+    PrefetchPages(start_page, count);
+}
+
+void PageManagerV2::AdviseDontNeed(uint32_t start_page, uint32_t count) {
+    if (!mmap_enabled_ || mmap_data_ == nullptr) {
+        return;
+    }
+
+    uint64_t offset = static_cast<uint64_t>(start_page - 1) * page_size_;
+    uint64_t len = static_cast<uint64_t>(count) * page_size_;
+
+    if (offset + len > mmap_size_) {
+        len = mmap_size_ - offset;
+    }
+
+    if (len > 0) {
+#ifdef __linux__
+        madvise(static_cast<char*>(mmap_data_) + offset, len, MADV_DONTNEED);
+#endif
+    }
 }
 
 }  // namespace svdb::ds

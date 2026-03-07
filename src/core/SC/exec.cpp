@@ -3189,7 +3189,96 @@ svdb_code_t svdb_exec(svdb_db_t *db, const char *sql, svdb_result_t *res) {
     return rc;
 }
 
-/* Prepared statement stubs */
+/* ── Prepared Statement Parameter Substitution ───────────────────── */
+
+/* Escape single quotes in string literals for SQL */
+static std::string escape_sql_string(const std::string &s) {
+    std::string out;
+    out.reserve(s.size() * 2);
+    for (char c : s) {
+        out += c;
+        if (c == '\'') out += '\'';  /* Double single quotes */
+    }
+    return out;
+}
+
+/* Substitute ? placeholders with bound parameter values.
+ * Parameters are 1-indexed (first ? is parameter 1).
+ * Returns the SQL string with all ? replaced by their bound values.
+ * Unbound parameters are treated as NULL. */
+static std::string substitute_params(const std::string &sql,
+                                      const std::map<int, SvdbVal> &bindings) {
+    std::string result;
+    result.reserve(sql.size() * 2);
+    size_t i = 0;
+    int param_idx = 1;  /* 1-indexed */
+
+    while (i < sql.size()) {
+        /* Skip string literals - don't substitute ? inside them */
+        if (sql[i] == '\'') {
+            result += sql[i];
+            ++i;
+            while (i < sql.size()) {
+                result += sql[i];
+                if (sql[i] == '\'') {
+                    /* Check for escaped quote '' */
+                    if (i + 1 < sql.size() && sql[i + 1] == '\'') {
+                        result += sql[++i];
+                    } else {
+                        ++i;
+                        break;
+                    }
+                }
+                ++i;
+            }
+            continue;
+        }
+
+        /* Substitute ? placeholder */
+        if (sql[i] == '?') {
+            auto it = bindings.find(param_idx);
+            if (it != bindings.end()) {
+                const SvdbVal &val = it->second;
+                switch (val.type) {
+                    case SVDB_TYPE_NULL:
+                        result += "NULL";
+                        break;
+                    case SVDB_TYPE_INT:
+                        result += std::to_string(val.ival);
+                        break;
+                    case SVDB_TYPE_REAL: {
+                        char buf[64];
+                        snprintf(buf, sizeof(buf), "%.15g", val.rval);
+                        result += buf;
+                        break;
+                    }
+                    case SVDB_TYPE_TEXT:
+                        result += '\'';
+                        result += escape_sql_string(val.sval);
+                        result += '\'';
+                        break;
+                    default:
+                        result += "NULL";
+                        break;
+                }
+            } else {
+                /* Unbound parameter = NULL */
+                result += "NULL";
+            }
+            ++param_idx;
+            ++i;
+            continue;
+        }
+
+        /* Regular character */
+        result += sql[i];
+        ++i;
+    }
+
+    return result;
+}
+
+/* Prepared statement implementation */
 
 svdb_code_t svdb_prepare(svdb_db_t *db, const char *sql, svdb_stmt_t **stmt) {
     BUG_ON(db == nullptr);
@@ -3248,12 +3337,14 @@ svdb_code_t svdb_stmt_bind_null(svdb_stmt_t *stmt, int idx) {
 svdb_code_t svdb_stmt_exec(svdb_stmt_t *stmt, svdb_result_t *res) {
     BUG_ON(stmt == nullptr);
     if (!stmt) return SVDB_ERR;
-    return svdb_exec(stmt->db, stmt->sql.c_str(), res);
+    std::string sql = substitute_params(stmt->sql, stmt->bindings);
+    return svdb_exec(stmt->db, sql.c_str(), res);
 }
 
 svdb_code_t svdb_stmt_query(svdb_stmt_t *stmt, svdb_rows_t **rows) {
     if (!stmt) return SVDB_ERR;
-    return svdb_query(stmt->db, stmt->sql.c_str(), rows);
+    std::string sql = substitute_params(stmt->sql, stmt->bindings);
+    return svdb_query(stmt->db, sql.c_str(), rows);
 }
 
 svdb_code_t svdb_stmt_reset(svdb_stmt_t *stmt) {

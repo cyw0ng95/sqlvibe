@@ -76,6 +76,13 @@ set(SVDB_CORE_SOURCES
     core/DS/freelist_v2.cpp
     core/DS/page_manager_v2.cpp
 
+    # v0.11.6 Performance optimization
+    core/DS/lockfree_queue.cpp
+    core/DS/parallel_scan.cpp
+    core/PB/io_uring.cpp
+    core/PB/mmap_vfs.cpp
+    core/SF/numa.cpp
+
     # VM - Virtual Machine
     core/VM/hash.cpp
     core/VM/compare.cpp

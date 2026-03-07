@@ -91,6 +91,100 @@ int svdb_column_store_row_count(svdb_column_store_t* store);
 /* Return non-deleted row count. */
 int svdb_column_store_live_count(svdb_column_store_t* store);
 
+/* ==========================================================================
+ * SIMD-Optimized Column Scan Operations
+ * ========================================================================== */
+
+/* Comparison operators for SIMD scan */
+#define SVDB_COL_CMP_EQ   0  /* == */
+#define SVDB_COL_CMP_NE   1  /* != */
+#define SVDB_COL_CMP_GT   2  /* >  */
+#define SVDB_COL_CMP_GE   3  /* >= */
+#define SVDB_COL_CMP_LT   4  /* <  */
+#define SVDB_COL_CMP_LE   5  /* <= */
+
+/*
+ * SIMD-optimized column scan for INT64 columns.
+ * Produces a bitmap of matching rows.
+ *
+ * col_idx: column index to scan
+ * op: comparison operator (SVDB_COL_CMP_*)
+ * val: comparison value
+ * result_bitmap: output bitmap (must be pre-allocated with (row_count+63)/64 uint64_t)
+ *                Bit i is set if row i matches the condition and is not deleted.
+ *
+ * Returns number of matching rows.
+ */
+size_t svdb_column_store_scan_int64(svdb_column_store_t* store,
+                                     int col_idx,
+                                     int op,
+                                     int64_t val,
+                                     uint64_t* result_bitmap);
+
+/*
+ * SIMD-optimized column scan for DOUBLE columns.
+ */
+size_t svdb_column_store_scan_double(svdb_column_store_t* store,
+                                      int col_idx,
+                                      int op,
+                                      double val,
+                                      uint64_t* result_bitmap);
+
+/*
+ * Combine two bitmaps with AND operation (for multi-condition WHERE).
+ * result[i] = a[i] & b[i]
+ * Returns number of set bits in result.
+ */
+size_t svdb_column_store_bitmap_and(uint64_t* result,
+                                     const uint64_t* a,
+                                     const uint64_t* b,
+                                     size_t bitmap_size);
+
+/*
+ * Combine two bitmaps with OR operation.
+ */
+size_t svdb_column_store_bitmap_or(uint64_t* result,
+                                    const uint64_t* a,
+                                    const uint64_t* b,
+                                    size_t bitmap_size);
+
+/*
+ * Extract row indices from a bitmap.
+ * out_indices: pre-allocated array of at least bitmap_size * 64 elements
+ * Returns the number of indices extracted.
+ */
+size_t svdb_column_store_bitmap_to_indices(const uint64_t* bitmap,
+                                            size_t bitmap_size,
+                                            int* out_indices);
+
+/*
+ * SIMD aggregation with bitmap filter.
+ * Only rows where bitmap bit is set are included.
+ */
+
+/* Sum of INT64 column */
+int64_t svdb_column_store_sum_int64(svdb_column_store_t* store,
+                                     int col_idx,
+                                     const uint64_t* bitmap);
+
+/* Sum of DOUBLE column */
+double svdb_column_store_sum_double(svdb_column_store_t* store,
+                                     int col_idx,
+                                     const uint64_t* bitmap);
+
+/* Min of INT64 column */
+int64_t svdb_column_store_min_int64(svdb_column_store_t* store,
+                                     int col_idx,
+                                     const uint64_t* bitmap);
+
+/* Max of INT64 column */
+int64_t svdb_column_store_max_int64(svdb_column_store_t* store,
+                                     int col_idx,
+                                     const uint64_t* bitmap);
+
+/* Count of rows in bitmap */
+size_t svdb_column_store_count(const uint64_t* bitmap, size_t bitmap_size);
+
 #ifdef __cplusplus
 }
 #endif

@@ -67,6 +67,20 @@ struct IndexDef {
     bool unique = false;
 };
 
+/* In-memory index data: maps column value to row indices */
+/* Key: int64 for INTEGER, string for TEXT, double for REAL */
+struct IndexEntry {
+    std::vector<size_t> row_indices;  /* indices into table's row vector */
+};
+
+/* Per-column index data structure */
+struct ColumnIndex {
+    std::unordered_map<int64_t, IndexEntry> int_index;
+    std::unordered_map<double, IndexEntry> real_index;
+    std::unordered_map<std::string, IndexEntry> text_index;
+    bool valid = false;  /* true if index is built and up-to-date */
+};
+
 /* Database state */
 struct svdb_db_s {
     std::string path;
@@ -94,6 +108,9 @@ struct svdb_db_s {
 
     /* Index metadata: index_name -> IndexDef */
     std::map<std::string, IndexDef>                                    indexes;
+
+    /* In-memory index data: (table_name, column_name) -> ColumnIndex */
+    std::map<std::pair<std::string, std::string>, ColumnIndex>         index_data;
 
     /* Auto-increment counters: table_name -> last rowid */
     std::unordered_map<std::string, int64_t>                           rowid_counter;
