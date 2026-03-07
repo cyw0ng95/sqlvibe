@@ -93,18 +93,21 @@ static void InsertDataSVDB(svdb_db_t* db, const char* table_name, int num_rows) 
     svdb_tx_t* tx = nullptr;
     svdb_begin(db, &tx);
 
+    std::string sql = "INSERT INTO " + std::string(table_name) + " VALUES (?, ?, ?, ?);";
+    svdb_stmt_t* stmt = nullptr;
+    svdb_prepare(db, sql.c_str(), &stmt);
+
     for (int i = 1; i <= num_rows; ++i) {
-        char sql[256];
+        svdb_stmt_bind_int(stmt, 1, i);
+        svdb_stmt_bind_int(stmt, 2, GenerateRandomInt(1, 10000));
+        svdb_stmt_bind_real(stmt, 3, GenerateRandomReal());
         std::string s = GenerateRandomString(10);
-        snprintf(sql, sizeof(sql),
-                 "INSERT INTO %s VALUES (%d, %lld, %.6f, '%s');",
-                 table_name, i,
-                 (long long)GenerateRandomInt(1, 10000),
-                 GenerateRandomReal(),
-                 s.c_str());
-        svdb_exec(db, sql, nullptr);
+        svdb_stmt_bind_text(stmt, 4, s.c_str(), s.length());
+        svdb_stmt_exec(stmt, nullptr);
+        svdb_stmt_reset(stmt);
     }
 
+    svdb_stmt_close(stmt);
     svdb_commit(tx);
 }
 
@@ -119,13 +122,21 @@ static void BM_InsertSingle_SVDB(benchmark::State& state) {
 
         CreateSVDBTable(db, "t");
 
+        svdb_stmt_t* stmt = nullptr;
+        svdb_prepare(db, "INSERT INTO t VALUES (?, ?, ?, ?);", &stmt);
+
         for (int i = 1; i <= kNumRows; ++i) {
-            char sql[256];
-            snprintf(sql, sizeof(sql), "INSERT INTO t VALUES (%d, %lld, %.6f, 'text%d');",
-                     i, (long long)i, (double)i, i);
-            svdb_exec(db, sql, nullptr);
+            svdb_stmt_bind_int(stmt, 1, i);
+            svdb_stmt_bind_int(stmt, 2, i);
+            svdb_stmt_bind_real(stmt, 3, (double)i);
+            char text[32];
+            snprintf(text, sizeof(text), "text%d", i);
+            svdb_stmt_bind_text(stmt, 4, text, strlen(text));
+            svdb_stmt_exec(stmt, nullptr);
+            svdb_stmt_reset(stmt);
         }
 
+        svdb_stmt_close(stmt);
         svdb_close(db);
     }
 }
@@ -405,14 +416,25 @@ static void CreateJoinTablesSVDB(svdb_db_t* db) {
     svdb_tx_t* tx = nullptr;
     svdb_begin(db, &tx);
 
+    svdb_stmt_t* stmt1 = nullptr;
+    svdb_stmt_t* stmt2 = nullptr;
+    svdb_prepare(db, "INSERT INTO t1 VALUES (?, ?);", &stmt1);
+    svdb_prepare(db, "INSERT INTO t2 VALUES (?, ?);", &stmt2);
+
     for (int i = 1; i <= kNumRows; ++i) {
-        char sql[128];
-        snprintf(sql, sizeof(sql), "INSERT INTO t1 VALUES (%d, %d);", i, i % 100);
-        svdb_exec(db, sql, nullptr);
-        snprintf(sql, sizeof(sql), "INSERT INTO t2 VALUES (%d, %d);", i, i % 100);
-        svdb_exec(db, sql, nullptr);
+        svdb_stmt_bind_int(stmt1, 1, i);
+        svdb_stmt_bind_int(stmt1, 2, i % 100);
+        svdb_stmt_exec(stmt1, nullptr);
+        svdb_stmt_reset(stmt1);
+
+        svdb_stmt_bind_int(stmt2, 1, i);
+        svdb_stmt_bind_int(stmt2, 2, i % 100);
+        svdb_stmt_exec(stmt2, nullptr);
+        svdb_stmt_reset(stmt2);
     }
 
+    svdb_stmt_close(stmt1);
+    svdb_stmt_close(stmt2);
     svdb_commit(tx);
 }
 

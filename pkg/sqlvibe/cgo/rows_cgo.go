@@ -6,11 +6,22 @@ package cgo
 #include <stdlib.h>
 */
 import "C"
-import "unsafe"
+import (
+	"unsafe"
+)
+
+// Default batch size for row fetching (reduces CGO calls 256x)
+const defaultBatchSize = 256
 
 // Rows wraps a svdb_rows_t handle for iterating a result set.
 type Rows struct {
-	h *C.svdb_rows_t
+	h         *C.svdb_rows_t
+	batch     C.svdb_row_batch_t // current batch buffer (embedded struct)
+	batchRows int                // rows in current batch
+	batchIdx  int                // current row index within batch (0 to batchRows-1)
+	colCount  int                // cached column count
+	exhausted bool               // true when no more rows to fetch
+	hasBatch  bool               // true if batch contains valid data
 }
 
 // ColumnCount returns the number of columns in the result set.
@@ -34,31 +45,81 @@ func (r *Rows) Next() bool {
 	if r.h == nil {
 		return false
 	}
-	return C.svdb_rows_next(r.h) != 0
+
+	// Check if we have more rows in the current batch
+	if r.hasBatch && r.batchIdx < r.batchRows-1 {
+		r.batchIdx++
+		return true
+	}
+
+	// Need to fetch a new batch
+	if r.exhausted {
+		return false
+	}
+
+	// Free previous batch if any
+	if r.hasBatch {
+		C.svdb_row_batch_free(&r.batch)
+		r.hasBatch = false
+	}
+
+	// Fetch next batch
+	fetchCount := C.svdb_rows_fetch_batch(r.h, &r.batch, defaultBatchSize)
+	if fetchCount == 0 {
+		r.batchRows = 0
+		r.batchIdx = 0
+		r.exhausted = true
+		return false
+	}
+
+	r.batchRows = int(fetchCount)
+	r.batchIdx = 0
+	r.hasBatch = true
+	if r.colCount == 0 {
+		r.colCount = int(C.svdb_batch_col_count(&r.batch))
+	}
+	return true
 }
 
 // Get returns the value at column col in the current row.
 func (r *Rows) Get(col int) interface{} {
-	if r.h == nil {
+	if r.h == nil || !r.hasBatch {
 		return nil
 	}
-	v := C.svdb_rows_get(r.h, C.int(col))
-	// v._type: CGO renames C struct field "type" to "_type" because "type" is a Go keyword.
-	switch v._type {
+	if col < 0 || col >= r.colCount || r.batchIdx >= r.batchRows {
+		return nil
+	}
+
+	rowIdx := C.int(r.batchIdx)
+	colIdx := C.int(col)
+
+	// Check for NULL
+	if C.svdb_batch_is_null(&r.batch, colIdx, rowIdx) != 0 {
+		return nil
+	}
+
+	// Get column type
+	colType := C.svdb_batch_col_type(&r.batch, colIdx)
+
+	switch colType {
 	case C.SVDB_TYPE_INT:
-		return int64(v.ival)
+		return int64(C.svdb_batch_get_int(&r.batch, colIdx, rowIdx))
 	case C.SVDB_TYPE_REAL:
-		return float64(v.rval)
+		return float64(C.svdb_batch_get_real(&r.batch, colIdx, rowIdx))
 	case C.SVDB_TYPE_TEXT:
-		if v.sval == nil {
+		var slen C.size_t
+		sval := C.svdb_batch_get_text(&r.batch, colIdx, rowIdx, &slen)
+		if sval == nil {
 			return ""
 		}
-		return C.GoString(v.sval)
+		return C.GoStringN(sval, C.int(slen))
 	case C.SVDB_TYPE_BLOB:
-		if v.sval == nil {
+		var slen C.size_t
+		sval := C.svdb_batch_get_blob(&r.batch, colIdx, rowIdx, &slen)
+		if sval == nil {
 			return []byte(nil)
 		}
-		return C.GoBytes(unsafe.Pointer(v.sval), C.int(v.slen))
+		return C.GoBytes(unsafe.Pointer(sval), C.int(slen))
 	default:
 		return nil
 	}
@@ -66,6 +127,10 @@ func (r *Rows) Get(col int) interface{} {
 
 // Close frees the result set resources.
 func (r *Rows) Close() {
+	if r.hasBatch {
+		C.svdb_row_batch_free(&r.batch)
+		r.hasBatch = false
+	}
 	if r.h != nil {
 		C.svdb_rows_close(r.h)
 		r.h = nil

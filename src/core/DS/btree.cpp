@@ -630,26 +630,58 @@ static int insert_into_leaf(uint8_t* page_data, size_t page_size,
     }
 
     // Find insertion point using binary search (maintain sorted order)
+    // For table B-Trees, use rowid cache for O(log n) search.
+    // For index B-Trees, use binary search with byte-key comparison.
     int ins_pos = num_cells; // default: append at end
-    for (int i = 0; i < num_cells; i++) {
-        int ptr_off = 8 + i * 2;
-        uint16_t cell_off = (page_data[ptr_off] << 8) | page_data[ptr_off + 1];
-        int cmp = 0;
+
+    if (num_cells > 0) {
         if (is_table) {
-            int64_t cell_rowid; int n;
-            int64_t ps; int pn;
-            svdb_get_varint(page_data + cell_off, page_size - cell_off, &ps, &pn);
-            svdb_get_varint(page_data + cell_off + pn, page_size - cell_off - pn, &cell_rowid, &n);
-            cmp = (rowid < cell_rowid) ? -1 : (rowid > cell_rowid) ? 1 : 0;
+            // Use rowid cache for binary search
+            BTreeRowidCache cache;
+            int filled = btree_fill_rowid_cache(page_data, page_size, PAGE_TYPE_TABLE_LEAF, &cache);
+            if (filled > 0) {
+                // Binary search for insertion point (first position where rowid >= target)
+                int lo = 0, hi = filled - 1;
+                ins_pos = filled; // default to end
+                while (lo <= hi) {
+                    int mid = lo + ((hi - lo) >> 1);
+                    if (cache.rowids[mid] >= rowid) {
+                        ins_pos = mid;
+                        hi = mid - 1;
+                    } else {
+                        lo = mid + 1;
+                    }
+                }
+            }
         } else {
-            int64_t total_len, key_size; int tn, kn;
-            svdb_get_varint(page_data + cell_off, page_size - cell_off, &total_len, &tn);
-            svdb_get_varint(page_data + cell_off + tn, page_size - cell_off - tn, &key_size, &kn);
-            int cmp_len = (key_len < (size_t)key_size) ? (int)key_len : (int)key_size;
-            cmp = std::memcmp(key, page_data + cell_off + tn + kn, cmp_len);
-            if (cmp == 0) cmp = (key_len < (size_t)key_size) ? -1 : (key_len > (size_t)key_size) ? 1 : 0;
+            // Index B-Tree: binary search with byte-key comparison
+            int lo = 0, hi = num_cells - 1;
+            ins_pos = num_cells; // default to end
+            while (lo <= hi) {
+                int mid = lo + ((hi - lo) >> 1);
+                int ptr_off = 8 + mid * 2;
+                uint16_t cell_off = (page_data[ptr_off] << 8) | page_data[ptr_off + 1];
+
+                // Decode key from cell
+                int64_t total_len, key_size;
+                int tn, kn;
+                svdb_get_varint(page_data + cell_off, page_size - cell_off, &total_len, &tn);
+                svdb_get_varint(page_data + cell_off + tn, page_size - cell_off - tn, &key_size, &kn);
+
+                size_t cmp_len = (key_len < (size_t)key_size) ? key_len : (size_t)key_size;
+                int cmp = std::memcmp(key, page_data + cell_off + tn + kn, cmp_len);
+                if (cmp == 0 && key_len != (size_t)key_size) {
+                    cmp = (key_len < (size_t)key_size) ? -1 : 1;
+                }
+
+                if (cmp <= 0) {
+                    ins_pos = mid;
+                    hi = mid - 1;
+                } else {
+                    lo = mid + 1;
+                }
+            }
         }
-        if (cmp <= 0) { ins_pos = i; break; }
     }
 
     // Write cell data at new_content_start

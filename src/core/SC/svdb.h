@@ -50,6 +50,26 @@ typedef struct {
     size_t      slen;
 } svdb_val_t;
 
+/* ── Batch result fetching (reduces CGO calls) ────────────────── */
+#define SVDB_BATCH_MAX_ROWS 256
+
+/* Batch column data - columnar layout for efficient transfer */
+typedef struct {
+    svdb_type_t  type;              /* column type */
+    int64_t     *ival_arr;          /* int64 values (NULL marked in null_mask) */
+    double      *rval_arr;          /* double values (NULL marked in null_mask) */
+    char       **sval_arr;          /* text/blob pointers */
+    size_t      *slen_arr;          /* text/blob lengths */
+    uint8_t     *null_mask;         /* 1 = NULL, 0 = non-NULL */
+} svdb_batch_col_t;
+
+/* Batch row data - returned from svdb_rows_fetch_batch */
+typedef struct {
+    int               row_count;       /* actual rows in this batch (0 = exhausted) */
+    int               col_count;       /* number of columns */
+    svdb_batch_col_t *cols;            /* columnar data array[col_count] */
+} svdb_row_batch_t;
+
 /* ── Database lifecycle ──────────────────────────────────────── */
 svdb_code_t   svdb_open(const char *path, svdb_db_t **db);
 svdb_code_t   svdb_close(svdb_db_t *db);
@@ -65,6 +85,23 @@ const char   *svdb_rows_column_name(svdb_rows_t *rows, int col);
 int           svdb_rows_next(svdb_rows_t *rows);   /* 1=row, 0=done */
 svdb_val_t    svdb_rows_get(svdb_rows_t *rows, int col);
 void          svdb_rows_close(svdb_rows_t *rows);
+
+/* ── Batch result fetching ───────────────────────────────────── */
+/* Fetch up to max_rows rows into batch (columnar format).
+ * Returns row_count in batch (0 = exhausted).
+ * Call svdb_row_batch_free() to release resources. */
+int           svdb_rows_fetch_batch(svdb_rows_t *rows, svdb_row_batch_t *batch, int max_rows);
+void          svdb_row_batch_free(svdb_row_batch_t *batch);
+
+/* Batch data accessors (for CGO compatibility) */
+int           svdb_batch_row_count(const svdb_row_batch_t *batch);
+int           svdb_batch_col_count(const svdb_row_batch_t *batch);
+svdb_type_t   svdb_batch_col_type(const svdb_row_batch_t *batch, int col);
+int           svdb_batch_is_null(const svdb_row_batch_t *batch, int col, int row);
+int64_t       svdb_batch_get_int(const svdb_row_batch_t *batch, int col, int row);
+double        svdb_batch_get_real(const svdb_row_batch_t *batch, int col, int row);
+const char*   svdb_batch_get_text(const svdb_row_batch_t *batch, int col, int row, size_t *out_len);
+const uint8_t* svdb_batch_get_blob(const svdb_row_batch_t *batch, int col, int row, size_t *out_len);
 
 /* ── Prepared statements ─────────────────────────────────────── */
 svdb_code_t   svdb_prepare(svdb_db_t *db, const char *sql, svdb_stmt_t **stmt);
