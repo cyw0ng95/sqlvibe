@@ -2903,21 +2903,21 @@ static bool qry_eval_where(const Row &row,
                         svdb_rows_t *sub_rows = nullptr;
                         svdb_code_t rc = svdb_query_internal(g_query_db, sub_sql, &sub_rows);
                         if (rc == SVDB_OK && sub_rows) {
-                            std::unordered_set<std::string> cached_results;
+                            std::unordered_set<std::string> local_results;
                             for (auto &srow : sub_rows->rows) {
                                 if (srow.empty()) continue;
                                 if (srow[0].type == SVDB_TYPE_NULL) { has_null = true; continue; }
-                                cached_results.insert(val_to_str(srow[0]));
+                                local_results.insert(val_to_str(srow[0]));
                             }
                             delete sub_rows;
 
-                            /* Store in cache for future rows */
-                            if (g_subquery_cache_active) {
-                                g_in_subquery_cache[sub_sql] = std::move(cached_results);
-                            }
+                            /* Check if lhs is in the result set using local variable */
+                            found = local_results.count(val_to_str(lhs)) > 0;
 
-                            /* Check if lhs is in the result set */
-                            found = g_in_subquery_cache[sub_sql].count(val_to_str(lhs)) > 0;
+                            /* Store in cache for future rows (only when cache is active) */
+                            if (g_subquery_cache_active) {
+                                g_in_subquery_cache[sub_sql] = std::move(local_results);
+                            }
                         }
                     }
 
@@ -6142,11 +6142,14 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
 
                     if (a_is_right && !b_is_right) {
                         right_key_col = col_a;
-                        left_key_col = col_b;
+                        /* Use qualified name for left lookup so merged rows with ambiguous
+                         * bare column names (e.g. "id" exists in multiple tables) are
+                         * resolved correctly via the alias prefix (e.g. "d.id"). */
+                        left_key_col = prefix_b.empty() ? col_b : expr_b;
                         use_hash_join = true;
                     } else if (b_is_right && !a_is_right) {
                         right_key_col = col_b;
-                        left_key_col = col_a;
+                        left_key_col = prefix_a.empty() ? col_a : expr_a;
                         use_hash_join = true;
                     } else if (prefix_a.empty() && prefix_b.empty()) {
                         /* No prefix: first is left, second is right (conventional) */
@@ -6230,24 +6233,35 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
 
             if (hash_table_built) {
                 /* Probe hash table with left rows */
+                /* Helper: find value for left_key_col in lrow (exact match first,
+                 * then case-insensitive fallback for qualified aliases like "d.id") */
+                const std::string left_key_col_upper = qry_upper(left_key_col);
+                auto find_left_val = [&](const Row &lrow) -> Row::const_iterator {
+                    auto it = lrow.find(left_key_col);
+                    if (it != lrow.end()) return it;
+                    /* Case-insensitive fallback (left_key_col_upper pre-computed) */
+                    for (auto jt = lrow.begin(); jt != lrow.end(); ++jt)
+                        if (qry_upper(jt->first) == left_key_col_upper) return jt;
+                    return lrow.end();
+                };
                 for (const auto &lrow : all_rows) {
                     std::vector<size_t>* matches = nullptr;
 
                     if (use_int_hash) {
-                        auto it = lrow.find(left_key_col);
+                        auto it = find_left_val(lrow);
                         if (it != lrow.end() && it->second.type == SVDB_TYPE_INT) {
                             auto hit = right_hash_int.find(it->second.ival);
                             if (hit != right_hash_int.end()) matches = &hit->second;
                         }
                     } else if (use_real_hash) {
-                        auto it = lrow.find(left_key_col);
+                        auto it = find_left_val(lrow);
                         if (it != lrow.end() && it->second.type == SVDB_TYPE_REAL) {
                             auto hit = right_hash_real.find(it->second.rval);
                             if (hit != right_hash_real.end()) matches = &hit->second;
                         }
                     } else {
                         std::string key;
-                        auto it = lrow.find(left_key_col);
+                        auto it = find_left_val(lrow);
                         if (it != lrow.end()) {
                             if (it->second.type == SVDB_TYPE_TEXT) key = it->second.sval;
                             else if (it->second.type == SVDB_TYPE_INT) key = std::to_string(it->second.ival);
