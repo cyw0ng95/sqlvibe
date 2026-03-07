@@ -66,6 +66,62 @@ size_t svdb_arena_v2_chunk_count(svdb_arena_v2_t* arena) {
     return arena ? arena->ptr->ChunkCount() : 0;
 }
 
+// WS6: SafeArena C API implementation
+struct svdb_safe_arena_t {
+    SafeArena* ptr;
+};
+
+svdb_safe_arena_t* svdb_safe_arena_create(size_t max_bytes, size_t chunk_size) {
+    try {
+        // max_bytes=0 → use a generous 64 MB default suitable for most queries.
+        // Callers that know their memory budget should always pass an explicit value.
+        if (max_bytes == 0) max_bytes = 64 * 1024 * 1024;
+        if (chunk_size == 0) chunk_size = 64 * 1024;        // 64KB chunks
+        auto* arena = new SafeArena(max_bytes, chunk_size);
+        auto* handle = new svdb_safe_arena_t{arena};
+        return handle;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void svdb_safe_arena_destroy(svdb_safe_arena_t* arena) {
+    if (arena) {
+        delete arena->ptr;
+        delete arena;
+    }
+}
+
+void* svdb_safe_arena_alloc(svdb_safe_arena_t* arena, size_t size) {
+    if (!arena || size == 0) return nullptr;
+    try {
+        return arena->ptr->Alloc(size);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void* svdb_safe_arena_calloc(svdb_safe_arena_t* arena, size_t count, size_t size) {
+    if (!arena || count == 0 || size == 0) return nullptr;
+    try {
+        return arena->ptr->Calloc(count, size);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void svdb_safe_arena_reset(svdb_safe_arena_t* arena) {
+    if (arena) arena->ptr->Reset();
+}
+
+size_t svdb_safe_arena_bytes_used(svdb_safe_arena_t* arena) {
+    return arena ? arena->ptr->BytesUsed() : 0;
+}
+
+size_t svdb_safe_arena_bytes_remaining(svdb_safe_arena_t* arena) {
+    return arena ? arena->ptr->BytesRemaining() : 0;
+}
+
 }  // extern "C"
 
 // ============================================================================

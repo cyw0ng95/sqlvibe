@@ -6,6 +6,76 @@
 #include <cstring>
 #include <cstdlib>
 
+// WS5: B-Tree key pre-extraction cache for SIMD/fast binary search
+// Pre-extracts cell rowids into a contiguous int64 array to avoid
+// per-step varint decoding in the binary search hot path.
+struct BTreeRowidCache {
+    static constexpr int MAX_CELLS = 512;
+    int64_t  rowids[MAX_CELLS];        // extracted rowids
+    uint16_t cell_offsets[MAX_CELLS];  // corresponding cell data offsets
+    int count;
+};
+
+// Fill rowid cache from a table leaf or interior page.
+// Returns actual cell count (may be less than num_cells if page is malformed).
+static int btree_fill_rowid_cache(const uint8_t* page_data, size_t page_size,
+                                   uint8_t page_type, BTreeRowidCache* cache) {
+    int num_cells = (page_data[3] << 8) | page_data[4];
+    if (num_cells <= 0) { cache->count = 0; return 0; }
+    if (num_cells > BTreeRowidCache::MAX_CELLS) num_cells = BTreeRowidCache::MAX_CELLS;
+
+    bool is_interior = (page_type == 0x05 /* TABLE_INTERIOR */);
+
+    int filled = 0;
+    for (int i = 0; i < num_cells; i++) {
+        int cell_ptr_offset = 8 + i * 2;
+        if (cell_ptr_offset + 2 > (int)page_size) break;
+
+        uint16_t cell_offset = (uint16_t)((page_data[cell_ptr_offset] << 8) |
+                                           page_data[cell_ptr_offset + 1]);
+        cache->cell_offsets[i] = cell_offset;
+
+        if ((size_t)cell_offset >= page_size) { cache->rowids[i] = 0; filled++; continue; }
+
+        int64_t rowid = 0;
+        int n = 0;
+        if (is_interior) {
+            // Table interior cell: 4-byte left-child + rowid varint
+            if ((size_t)cell_offset + 5 <= page_size) {
+                svdb_get_varint(page_data + cell_offset + 4,
+                                page_size - cell_offset - 4, &rowid, &n);
+            }
+        } else {
+            // Table leaf cell: payload_len varint + rowid varint
+            int64_t payload_len = 0;
+            int n1 = 0;
+            svdb_get_varint(page_data + cell_offset, page_size - cell_offset, &payload_len, &n1);
+            if (n1 > 0 && (size_t)(cell_offset + n1) < page_size) {
+                svdb_get_varint(page_data + cell_offset + n1,
+                                page_size - cell_offset - n1, &rowid, &n);
+            }
+        }
+        cache->rowids[i] = rowid;
+        filled++;
+    }
+
+    cache->count = filled;
+    return filled;
+}
+
+// Fast binary search on pre-extracted rowid array.
+// Returns cell index if found, -1 if not found.
+static int btree_rowid_cache_search(const BTreeRowidCache* cache, int64_t target) {
+    int lo = 0, hi = cache->count - 1;
+    while (lo <= hi) {
+        int mid = lo + ((hi - lo) >> 1);
+        if (cache->rowids[mid] == target) return mid;
+        if (cache->rowids[mid] < target) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return -1;
+}
+
 // Internal B-Tree structure
 struct svdb_btree {
     svdb_btree_config_t config;
@@ -119,95 +189,65 @@ extern "C" int svdb_btree_binary_search(const uint8_t* page_data, size_t page_si
         return -1;
     }
 
-    // Binary search
+    svdb_assert_msg(num_cells < 100000, "excessive cell count: %d", num_cells);
+
+    // WS5 optimization: for table B-Trees, pre-extract all rowids into a contiguous
+    // int64 array and binary-search on that array. This eliminates per-step varint
+    // decoding (2 varint parses per mid-point → 0) at the cost of a single O(n)
+    // extraction pass. For pages with ≥ 4 cells the net comparison work is less.
+    if (is_table) {
+        int64_t search_rowid;
+        int key_bytes;
+        svdb_get_varint(key, key_len, &search_rowid, &key_bytes);
+
+        BTreeRowidCache cache;
+        int filled = btree_fill_rowid_cache(page_data, page_size, page_type, &cache);
+        if (filled == 0) return -1;
+
+        return btree_rowid_cache_search(&cache, search_rowid);
+    }
+
+    // Index B-Tree: standard binary search with byte-key comparison
     int lo = 0, hi = num_cells - 1;
     int result = -1;
-    
-    svdb_assert_msg(hi < 100000, "excessive cell count: %d", hi);
 
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
         svdb_assert_msg(mid >= 0 && mid < num_cells, "cell index out of bounds: %d", mid);
 
-        // Get cell pointer offset
         int cell_ptr_offset = 8 + mid * 2;
-        svdb_assert_msg(cell_ptr_offset >= 8, "invalid cell pointer offset: %d", cell_ptr_offset);
-        
-        if (cell_ptr_offset + 2 > static_cast<int>(page_size)) {
-            break;
-        }
+        if (cell_ptr_offset + 2 > static_cast<int>(page_size)) break;
 
         uint16_t cell_offset = (page_data[cell_ptr_offset] << 8) | page_data[cell_ptr_offset + 1];
-        svdb_assert_msg(cell_offset >= 8, "invalid cell offset: %u", cell_offset);
-        
-        if (cell_offset >= page_size) {
-            break;
+        if (cell_offset >= page_size) break;
+
+        // Skip payload size and key size varints
+        int pos = 0;
+        int64_t payload_size, key_size;
+        int bytes_read;
+
+        if (!svdb_get_varint(page_data + cell_offset, page_size - cell_offset, &payload_size, &bytes_read)) break;
+        pos += bytes_read;
+
+        if (!svdb_get_varint(page_data + cell_offset + pos, page_size - cell_offset - pos, &key_size, &bytes_read)) break;
+        pos += bytes_read;
+
+        size_t cmp_len = (key_len < static_cast<size_t>(key_size)) ? key_len : static_cast<size_t>(key_size);
+        int cmp = std::memcmp(key, page_data + cell_offset + pos, cmp_len);
+        if (cmp == 0 && key_len != static_cast<size_t>(key_size)) {
+            cmp = (key_len < static_cast<size_t>(key_size)) ? -1 : 1;
         }
-        
-        // Compare key based on page type
-        int cmp = 0;
-        if (is_table) {
-            // Table: compare rowid from cell
-            int64_t cell_rowid;
-            int bytes_read;
-            
-            // Skip payload size varint
-            int64_t payload_size;
-            if (!svdb_get_varint(page_data + cell_offset, page_size - cell_offset, &payload_size, &bytes_read)) {
-                break;
-            }
-            
-            // Read rowid
-            if (!svdb_get_varint(page_data + cell_offset + bytes_read, 
-                                 page_size - cell_offset - bytes_read, &cell_rowid, &bytes_read)) {
-                break;
-            }
-            
-            // Compare with key (which contains rowid as varint)
-            int64_t search_rowid;
-            int key_bytes;
-            svdb_get_varint(key, key_len, &search_rowid, &key_bytes);
-            
-            if (cell_rowid < search_rowid) {
-                cmp = -1;
-            } else if (cell_rowid > search_rowid) {
-                cmp = 1;
-            }
-        } else {
-            // Index: compare key bytes
-            // Skip payload size and key size varints
-            int pos = 0;
-            int64_t payload_size, key_size;
-            int bytes_read;
-            
-            if (!svdb_get_varint(page_data + cell_offset, page_size - cell_offset, &payload_size, &bytes_read)) {
-                break;
-            }
-            pos += bytes_read;
-            
-            if (!svdb_get_varint(page_data + cell_offset + pos, page_size - cell_offset - pos, &key_size, &bytes_read)) {
-                break;
-            }
-            pos += bytes_read;
-            
-            // Compare keys
-            size_t cmp_len = (key_len < static_cast<size_t>(key_size)) ? key_len : static_cast<size_t>(key_size);
-            cmp = std::memcmp(key, page_data + cell_offset + pos, cmp_len);
-            if (cmp == 0 && key_len != static_cast<size_t>(key_size)) {
-                cmp = (key_len < static_cast<size_t>(key_size)) ? -1 : 1;
-            }
-        }
-        
+
         if (cmp == 0) {
             return mid;
         } else if (cmp < 0) {
-            result = mid;  // Potential insertion point
+            result = mid;
             lo = mid + 1;
         } else {
             hi = mid - 1;
         }
     }
-    
+
     return result;
 }
 
@@ -295,7 +335,52 @@ static int search_interior_page(const uint8_t* page_data, size_t page_size,
     int num_cells = (page_data[3] << 8) | page_data[4];
     svdb_assert_msg(num_cells >= 0 && num_cells < 100000, "invalid cell count: %d", num_cells);
 
-    // Find the right child
+    // WS5: for table interior pages use rowid cache + binary search
+    // instead of the linear scan used previously.
+    if (is_table && num_cells > 0) {
+        BTreeRowidCache cache;
+        int filled = btree_fill_rowid_cache(page_data, page_size,
+                                            PAGE_TYPE_TABLE_INTERIOR, &cache);
+
+        int64_t search_rowid;
+        int key_bytes;
+        svdb_get_varint(key, key_len, &search_rowid, &key_bytes);
+
+        // Binary search over the extracted rowid array.
+        // Each interior cell stores: left_child(4) | rowid(varint).
+        // We need the LEFT child of the first cell whose rowid >= search_rowid.
+        int lo = 0, hi = filled - 1;
+        int found_idx = filled;  // sentinel: will take rightmost child
+        while (lo <= hi) {
+            int mid = lo + ((hi - lo) >> 1);
+            if (cache.rowids[mid] >= search_rowid) {
+                found_idx = mid;
+                hi = mid - 1;
+            } else {
+                lo = mid + 1;
+            }
+        }
+
+        if (found_idx < filled) {
+            uint16_t cell_offset = cache.cell_offsets[found_idx];
+            if ((size_t)cell_offset + 4 <= page_size) {
+                uint32_t left_child = (uint32_t)((page_data[cell_offset] << 24) |
+                                                  (page_data[cell_offset + 1] << 16) |
+                                                  (page_data[cell_offset + 2] << 8) |
+                                                   page_data[cell_offset + 3]);
+                *child_page = left_child;
+                return 1;
+            }
+        }
+
+        // Use rightmost child (stored in page header bytes 8-11)
+        uint32_t right_child = (uint32_t)((page_data[8] << 24) | (page_data[9] << 16) |
+                                           (page_data[10] << 8) | page_data[11]);
+        *child_page = right_child;
+        return 1;
+    }
+
+    // Index interior: existing linear scan
     for (int i = 0; i < num_cells; i++) {
         int cell_ptr_offset = 8 + i * 2;
         svdb_assert_msg(cell_ptr_offset + 2 <= static_cast<int>(page_size),
@@ -303,52 +388,26 @@ static int search_interior_page(const uint8_t* page_data, size_t page_size,
         
         uint16_t cell_offset = (page_data[cell_ptr_offset] << 8) | page_data[cell_ptr_offset + 1];
 
-        uint32_t left_child;
-        int64_t rowid;
-        int n;
+        uint32_t left_child = (uint32_t)((page_data[cell_offset] << 24) |
+                                          (page_data[cell_offset + 1] << 16) |
+                                          (page_data[cell_offset + 2] << 8) |
+                                           page_data[cell_offset + 3]);
 
-        if (is_table) {
-            // Table interior: left_child (4 bytes) + rowid (varint)
-            left_child = (page_data[cell_offset] << 24) |
-                         (page_data[cell_offset + 1] << 16) |
-                         (page_data[cell_offset + 2] << 8) |
-                         page_data[cell_offset + 3];
+        size_t key_len_cell = page_size - cell_offset - 4;
+        const uint8_t* cell_key = page_data + cell_offset + 4;
 
-            svdb_get_varint(page_data + cell_offset + 4, page_size - cell_offset - 4, &rowid, &n);
+        size_t cmp_len = (key_len < key_len_cell) ? key_len : key_len_cell;
+        int cmp = std::memcmp(key, cell_key, cmp_len);
 
-            // Compare rowid
-            int64_t search_rowid;
-            int key_bytes;
-            svdb_get_varint(key, key_len, &search_rowid, &key_bytes);
-
-            if (search_rowid <= rowid) {
-                *child_page = left_child;
-                return 1;
-            }
-        } else {
-            // Index interior: left_child (4 bytes) + key
-            left_child = (page_data[cell_offset] << 24) |
-                         (page_data[cell_offset + 1] << 16) |
-                         (page_data[cell_offset + 2] << 8) |
-                         page_data[cell_offset + 3];
-
-            size_t key_len_cell = page_size - cell_offset - 4;
-            const uint8_t* cell_key = page_data + cell_offset + 4;
-
-            // Compare keys
-            size_t cmp_len = (key_len < key_len_cell) ? key_len : key_len_cell;
-            int cmp = std::memcmp(key, cell_key, cmp_len);
-
-            if (cmp <= 0) {
-                *child_page = left_child;
-                return 1;
-            }
+        if (cmp <= 0) {
+            *child_page = left_child;
+            return 1;
         }
     }
 
     // Use rightmost child
-    uint32_t right_child = (page_data[8] << 24) | (page_data[9] << 16) |
-                           (page_data[10] << 8) | page_data[11];
+    uint32_t right_child = (uint32_t)((page_data[8] << 24) | (page_data[9] << 16) |
+                                       (page_data[10] << 8) | page_data[11]);
     *child_page = right_child;
     return 1;
 }
