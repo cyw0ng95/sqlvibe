@@ -81,14 +81,15 @@ int svdb_rows_fetch_batch(svdb_rows_t *rows, svdb_row_batch_t *batch, int max_ro
         svdb_batch_col_t *col = &batch->cols[c];
 
         /* Allocate arrays for this column */
-        col->ival_arr = (int64_t *)std::calloc(fetch_count, sizeof(int64_t));
-        col->rval_arr = (double *)std::calloc(fetch_count, sizeof(double));
-        col->sval_arr = (char **)std::calloc(fetch_count, sizeof(char *));
-        col->slen_arr = (size_t *)std::calloc(fetch_count, sizeof(size_t));
+        col->type_arr  = (svdb_type_t *)std::calloc(fetch_count, sizeof(svdb_type_t));
+        col->ival_arr  = (int64_t *)std::calloc(fetch_count, sizeof(int64_t));
+        col->rval_arr  = (double *)std::calloc(fetch_count, sizeof(double));
+        col->sval_arr  = (char **)std::calloc(fetch_count, sizeof(char *));
+        col->slen_arr  = (size_t *)std::calloc(fetch_count, sizeof(size_t));
         col->null_mask = (uint8_t *)std::calloc(fetch_count, sizeof(uint8_t));
 
-        if (!col->ival_arr || !col->rval_arr || !col->sval_arr ||
-            !col->slen_arr || !col->null_mask) {
+        if (!col->type_arr || !col->ival_arr || !col->rval_arr ||
+            !col->sval_arr || !col->slen_arr || !col->null_mask) {
             /* Allocation failed - clean up and return 0 */
             svdb_row_batch_free(batch);
             batch->row_count = 0;
@@ -96,11 +97,15 @@ int svdb_rows_fetch_batch(svdb_rows_t *rows, svdb_row_batch_t *batch, int max_ro
         }
 
         /* Fill column data from rows */
+        col->type = SVDB_TYPE_NULL;
         for (int r = 0; r < fetch_count; r++) {
             int row_idx = rows->cursor + 1 + r;
             const SvdbVal &sv = rows->rows[row_idx][c];
 
-            col->type = sv.type;
+            col->type_arr[r] = sv.type;
+            /* dominant type = first non-NULL type seen */
+            if (col->type == SVDB_TYPE_NULL && sv.type != SVDB_TYPE_NULL)
+                col->type = sv.type;
             switch (sv.type) {
                 case SVDB_TYPE_NULL:
                     col->null_mask[r] = 1;
@@ -132,6 +137,7 @@ void svdb_row_batch_free(svdb_row_batch_t *batch) {
     if (batch->cols) {
         for (int c = 0; c < batch->col_count; c++) {
             svdb_batch_col_t *col = &batch->cols[c];
+            if (col->type_arr) std::free(col->type_arr);
             if (col->ival_arr) std::free(col->ival_arr);
             if (col->rval_arr) std::free(col->rval_arr);
             if (col->sval_arr) std::free(col->sval_arr);  /* pointers are into rows memory */
@@ -159,6 +165,15 @@ svdb_type_t svdb_batch_col_type(const svdb_row_batch_t *batch, int col) {
     if (!batch || col < 0 || col >= batch->col_count || !batch->cols)
         return SVDB_TYPE_NULL;
     return batch->cols[col].type;
+}
+
+svdb_type_t svdb_batch_get_row_type(const svdb_row_batch_t *batch, int col, int row) {
+    if (!batch || col < 0 || col >= batch->col_count ||
+        row < 0 || row >= batch->row_count || !batch->cols)
+        return SVDB_TYPE_NULL;
+    const svdb_batch_col_t *c = &batch->cols[col];
+    if (c->type_arr) return c->type_arr[row];
+    return c->type;
 }
 
 int svdb_batch_is_null(const svdb_row_batch_t *batch, int col, int row) {
