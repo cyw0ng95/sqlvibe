@@ -5708,27 +5708,68 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
         }
         
         /* Build hash table for right table if using hash join */
-        std::unordered_map<std::string, std::vector<size_t>> right_hash; /* key → row indices */
+        /* Use separate hash maps for different types to avoid string conversion for INT keys */
+        std::unordered_map<int64_t, std::vector<size_t>> right_hash_int;
+        std::unordered_map<double, std::vector<size_t>> right_hash_real;
+        std::unordered_map<std::string, std::vector<size_t>> right_hash_str;
+        bool use_int_hash = false, use_real_hash = false, use_str_hash = false;
+        
         if (use_hash_join && !right_key_col.empty()) {
-            right_hash.reserve(right_rows_list.size() * 2);
-            for (size_t ri = 0; ri < right_rows_list.size(); ++ri) {
-                const Row &rrow = right_rows_list[ri];
-                /* Build key from right_key_col */
-                std::string key;
-                auto it = rrow.find(right_key_col);
-                if (it != rrow.end()) {
-                    if (it->second.type == SVDB_TYPE_INT) key = std::to_string(it->second.ival);
-                    else if (it->second.type == SVDB_TYPE_REAL) key = std::to_string(it->second.rval);
-                    else if (it->second.type == SVDB_TYPE_TEXT) key = it->second.sval;
-                    else key = "";
+            /* Pre-check the key column type from first row */
+            if (!right_rows_list.empty()) {
+                const Row& sample = right_rows_list[0];
+                auto it = sample.find(right_key_col);
+                if (it != sample.end()) {
+                    if (it->second.type == SVDB_TYPE_INT) use_int_hash = true;
+                    else if (it->second.type == SVDB_TYPE_REAL) use_real_hash = true;
+                    else use_str_hash = true;
                 } else {
-                    key = "";
+                    use_str_hash = true;
                 }
-                right_hash[key].push_back(ri);
+            } else {
+                use_str_hash = true;
+            }
+            
+            if (use_int_hash) {
+                right_hash_int.reserve(right_rows_list.size() * 2);
+                for (size_t ri = 0; ri < right_rows_list.size(); ++ri) {
+                    const Row &rrow = right_rows_list[ri];
+                    auto it = rrow.find(right_key_col);
+                    if (it != rrow.end() && it->second.type == SVDB_TYPE_INT) {
+                        right_hash_int[it->second.ival].push_back(ri);
+                    }
+                }
+            } else if (use_real_hash) {
+                right_hash_real.reserve(right_rows_list.size() * 2);
+                for (size_t ri = 0; ri < right_rows_list.size(); ++ri) {
+                    const Row &rrow = right_rows_list[ri];
+                    auto it = rrow.find(right_key_col);
+                    if (it != rrow.end() && it->second.type == SVDB_TYPE_REAL) {
+                        right_hash_real[it->second.rval].push_back(ri);
+                    }
+                }
+            } else {
+                right_hash_str.reserve(right_rows_list.size() * 2);
+                for (size_t ri = 0; ri < right_rows_list.size(); ++ri) {
+                    const Row &rrow = right_rows_list[ri];
+                    std::string key;
+                    auto it = rrow.find(right_key_col);
+                    if (it != rrow.end()) {
+                        if (it->second.type == SVDB_TYPE_TEXT) key = it->second.sval;
+                        else key = "";
+                    } else {
+                        key = "";
+                    }
+                    right_hash_str[key].push_back(ri);
+                }
             }
         }
         
-        if (use_hash_join && !right_key_col.empty() && !right_hash.empty()) {
+        bool hash_table_built = (use_int_hash && !right_hash_int.empty()) || 
+                                (use_real_hash && !right_hash_real.empty()) ||
+                                (use_str_hash && !right_hash_str.empty());
+        
+        if (use_hash_join && !right_key_col.empty() && hash_table_built) {
             /* HASH JOIN: O(n+m) instead of O(n*m) */
             for (const auto &lrow : left_rows) {
                 Row lrow_prefixed;
@@ -5738,29 +5779,40 @@ svdb_code_t svdb_query_internal(svdb_db_t *db, const std::string &sql,
                     if (!left_alias.empty()) lrow_prefixed[left_alias + "." + kv.first] = kv.second;
                 }
                 
-                /* Build key from left_key_col */
-                std::string key;
-                auto it = lrow.find(left_key_col);
-                if (it != lrow.end()) {
-                    if (it->second.type == SVDB_TYPE_INT) key = std::to_string(it->second.ival);
-                    else if (it->second.type == SVDB_TYPE_REAL) key = std::to_string(it->second.rval);
-                    else if (it->second.type == SVDB_TYPE_TEXT) key = it->second.sval;
-                    else key = "";
+                /* Lookup in appropriate hash map */
+                std::vector<size_t> *matches = nullptr;
+                
+                if (use_int_hash) {
+                    auto it = lrow.find(left_key_col);
+                    if (it != lrow.end() && it->second.type == SVDB_TYPE_INT) {
+                        auto hit = right_hash_int.find(it->second.ival);
+                        if (hit != right_hash_int.end()) matches = &hit->second;
+                    }
+                } else if (use_real_hash) {
+                    auto it = lrow.find(left_key_col);
+                    if (it != lrow.end() && it->second.type == SVDB_TYPE_REAL) {
+                        auto hit = right_hash_real.find(it->second.rval);
+                        if (hit != right_hash_real.end()) matches = &hit->second;
+                    }
                 } else {
-                    key = "";
+                    std::string key;
+                    auto it = lrow.find(left_key_col);
+                    if (it != lrow.end()) {
+                        if (it->second.type == SVDB_TYPE_TEXT) key = it->second.sval;
+                        else key = "";
+                    } else {
+                        key = "";
+                    }
+                    auto hit = right_hash_str.find(key);
+                    if (hit != right_hash_str.end()) matches = &hit->second;
                 }
                 
-                auto hit = right_hash.find(key);
-                if (hit != right_hash.end()) {
-                    for (size_t ri : hit->second) {
+                if (matches != nullptr) {
+                    for (size_t ri : *matches) {
                         all_rows.push_back(make_merged_row(lrow, &right_rows_list[ri]));
                         right_matched[ri] = true;
                     }
-                    if (is_left_jn && hit->second.empty()) {
-                        all_rows.push_back(make_merged_row(lrow, nullptr));
-                    }
                 } else if (is_left_jn) {
-                    /* No match - add NULL row for LEFT JOIN */
                     all_rows.push_back(make_merged_row(lrow, nullptr));
                 }
             }
