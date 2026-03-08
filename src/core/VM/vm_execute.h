@@ -104,6 +104,16 @@ int32_t svdb_vm_execute(
     const svdb_vm_context_t* ctx,
     svdb_vm_result_t* result);
 
+/* Optimized VM execution using computed goto dispatch */
+int32_t svdb_vm_execute_optimized(
+    svdb_vm_t* vm,
+    const svdb_vm_program_t* program,
+    const svdb_vm_context_t* ctx,
+    svdb_vm_result_t* result);
+
+/* Initialize dispatch tables (call once at startup) */
+void vm_init_dispatch_tables(void);
+
 /* ── VM state access ────────────────────────────────────────── */
 int32_t  svdb_vm_get_pc(const svdb_vm_t* vm);
 void     svdb_vm_set_pc(svdb_vm_t* vm, int32_t pc);

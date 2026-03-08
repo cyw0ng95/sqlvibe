@@ -147,6 +147,85 @@ static void peepholeOptimize(std::vector<Instr>& v)
     }
 }
 
+/* ── pass 2.5: constant propagation ─────────────────────────────────────── */
+/*
+ * Replace uses of a register that was loaded by OP_LOAD_CONST with the
+ * destination register of the original load, so subsequent dead-code
+ * elimination can remove the now-redundant intermediate moves.
+ *
+ * Specifically, collapse OP_MOVE r_src r_dst immediately preceded by an
+ * instruction that wrote r_src, where r_src is used only by this one move.
+ */
+static void constantPropagation(std::vector<Instr>& v)
+{
+    /* Map: register → instruction index that last wrote it */
+    std::unordered_map<int32_t, size_t> last_write;
+    std::unordered_map<int32_t, int>    use_count;
+
+    /* First pass: count uses of each register */
+    for (auto& ins : v) {
+        switch (ins.op) {
+        case OP_ADD: case OP_SUBTRACT: case OP_MULTIPLY:
+        case OP_DIVIDE: case OP_REMAINDER:
+            use_count[ins.p1]++;
+            use_count[ins.p2]++;
+            break;
+        case OP_MOVE: case OP_COPY: case OP_SCOPY:
+            use_count[ins.p1]++;
+            break;
+        case OP_RESULT_ROW:
+            for (int32_t r = ins.p1; r < ins.p1 + ins.p3; ++r)
+                use_count[r]++;
+            break;
+        default:
+            if (ins.p1 >= 0) use_count[ins.p1]++;
+            if (ins.p2 >= 0) use_count[ins.p2]++;
+            break;
+        }
+    }
+
+    /* Second pass: fold OP_MOVE where src is used exactly once */
+    for (size_t i = 0; i < v.size(); ++i) {
+        Instr& ins = v[i];
+        if ((ins.op == OP_MOVE || ins.op == OP_COPY || ins.op == OP_SCOPY) &&
+            use_count.count(ins.p1) && use_count[ins.p1] == 1) {
+            auto it = last_write.find(ins.p1);
+            if (it != last_write.end()) {
+                /* Redirect the prior instruction's output directly to ins.p2 */
+                Instr& producer = v[it->second];
+                switch (producer.op) {
+                case OP_LOAD_CONST:
+                    producer.p1 = ins.p2;  /* dest of LOAD_CONST is p1 */
+                    ins.op = OP_NULL;       /* NOP: mark for removal */
+                    ins.p1 = -1; ins.p2 = -1; ins.p3 = -1;
+                    break;
+                case OP_ADD: case OP_SUBTRACT: case OP_MULTIPLY:
+                case OP_DIVIDE: case OP_REMAINDER:
+                    producer.p3 = ins.p2;  /* dest of arithmetic is p3 */
+                    ins.op = OP_NULL;
+                    ins.p1 = -1; ins.p2 = -1; ins.p3 = -1;
+                    break;
+                default:
+                    break;
+                }
+            }
+        }
+        /* Record what this instruction writes */
+        switch (ins.op) {
+        case OP_LOAD_CONST:                             last_write[ins.p1] = i; break;
+        case OP_ADD: case OP_SUBTRACT: case OP_MULTIPLY:
+        case OP_DIVIDE: case OP_REMAINDER:              last_write[ins.p3] = i; break;
+        case OP_MOVE: case OP_COPY: case OP_SCOPY:      last_write[ins.p2] = i; break;
+        default: break;
+        }
+    }
+
+    /* Remove NOP instructions (OP_NULL with p1=p2=p3=-1 used as marker) */
+    v.erase(std::remove_if(v.begin(), v.end(), [](const Instr& ins) {
+        return ins.op == OP_NULL && ins.p1 == -1 && ins.p2 == -1 && ins.p3 == -1;
+    }), v.end());
+}
+
 /* ── pass 3: bytecode VM instruction dead-code elimination ──────────────── */
 /*
  * Instruction layout for the bytecode VM (mirrors VM.Instr):
@@ -309,6 +388,9 @@ size_t svdb_cg_optimize_bc_instrs_impl(
 
     eliminateBcDeadCode(v);
 
+    if (level >= 2)
+        eliminateBcDeadCode(v);  /* second pass after first removal */
+
     size_t n = (v.size() < out_cap) ? v.size() : out_cap;
     std::memcpy(out_buf, v.data(), n * sizeof(BcInstr));
     return n;
@@ -331,8 +413,11 @@ size_t svdb_cg_optimize_raw_impl(
 
     eliminateDeadCode(v);
 
-    if (level >= 2)
+    if (level >= 2) {
+        constantPropagation(v);
+        eliminateDeadCode(v);  /* re-run after folding */
         peepholeOptimize(v);
+    }
 
     return pack(v, out_buf, out_cap);
 }

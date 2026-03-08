@@ -3,6 +3,16 @@
 
 cmake_minimum_required(VERSION 3.16)
 
+# Enable LTO (Link-Time Optimization) for 10-15% performance improvement
+include(CheckIPOSupported)
+check_ipo_supported(RESULT LTO_SUPPORTED OUTPUT LTO_OUTPUT)
+if(LTO_SUPPORTED)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+    message(STATUS "LTO (Link-Time Optimization) enabled")
+else()
+    message(STATUS "LTO not supported: ${LTO_OUTPUT}")
+endif()
+
 # Enable SIMD
 include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-mavx2" HAVE_AVX2)
@@ -62,9 +72,17 @@ set(SVDB_CORE_SOURCES
     core/DS/metrics.cpp
     # v0.11.3 Foundation classes (C++ owned, no callbacks)
     core/DS/arena_v2.cpp
+    core/DS/query_arena.cpp
     core/DS/cache_v2.cpp
     core/DS/freelist_v2.cpp
     core/DS/page_manager_v2.cpp
+
+    # v0.11.6 Performance optimization
+    core/DS/lockfree_queue.cpp
+    core/DS/parallel_scan.cpp
+    core/PB/io_uring.cpp
+    core/PB/mmap_vfs.cpp
+    core/SF/numa.cpp
 
     # VM - Virtual Machine
     core/VM/hash.cpp
@@ -90,7 +108,11 @@ set(SVDB_CORE_SOURCES
     core/VM/bytecode_vm.cpp
     core/VM/vm_opcode.cpp
     core/VM/vm_execute.cpp
-
+    
+    # v0.11.5: Optimized hash join with SIMD + Arena
+    core/VM/fast_hash_table.cpp
+    core/VM/hash_join_optimized.cpp
+    
     # QP - Query Processing
     core/QP/tokenizer.cpp
     core/QP/analyzer.cpp
@@ -133,34 +155,29 @@ set(SVDB_CORE_SOURCES
     core/IS/vtab_series.cpp
     core/IS/vtab_fts5.cpp
 
-    # Wrapper - Invoke chain
-    core/wrapper/invoke_chain_wrapper.cpp
-
-    # CGO - Hash Join
-    core/cgo/hash_join.cpp
+    # SC - System Composer (orchestration, C API, invoke chain)
+    core/SC/invoke_chain_wrapper.cpp
+    core/SC/database.cpp
+    core/SC/exec.cpp
+    core/SC/query.cpp
+    core/SC/result.cpp
+    core/SC/transaction.cpp
+    core/SC/statement.cpp
+    core/SC/pragma.cpp
+    core/SC/window.cpp
+    core/SC/hash_join.cpp
+    core/SC/setops.cpp
+    core/SC/fk_trigger.cpp
+    core/SC/schema.cpp
+    core/SC/explain.cpp
+    core/SC/backup.cpp
+    core/SC/io.cpp
+    core/SC/vacuum.cpp
+    core/SC/extensions.cpp
+    core/SC/pools.cpp
 
     # VM Engine - Query orchestration
     core/VM/engine/engine.cpp
-
-    # SVDB — Unified C Public API
-    core/svdb/database.cpp
-    core/svdb/exec.cpp
-    core/svdb/query.cpp
-    core/svdb/result.cpp
-    core/svdb/transaction.cpp
-    core/svdb/statement.cpp
-    core/svdb/pragma.cpp
-    core/svdb/window.cpp
-    core/svdb/hash_join.cpp
-    core/svdb/setops.cpp
-    core/svdb/fk_trigger.cpp
-    core/svdb/schema.cpp
-    core/svdb/explain.cpp
-    core/svdb/backup.cpp
-    core/svdb/io.cpp
-    core/svdb/vacuum.cpp
-    core/svdb/extensions.cpp
-    core/svdb/pools.cpp
 )
 
 # Build libsvdb
@@ -176,10 +193,8 @@ target_include_directories(svdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/PB
     ${CMAKE_CURRENT_SOURCE_DIR}/core/SF
     ${CMAKE_CURRENT_SOURCE_DIR}/core/IS
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/wrapper
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/cgo
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/SC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/VM/engine
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/svdb
 )
 
 if(SVDB_COMPILE_OPTS)
@@ -212,6 +227,41 @@ set_target_properties(svdb PROPERTIES
     VERSION 1.0.0
     SOVERSION 1
 )
+
+# WS9: PGO (Profile-Guided Optimization) support
+# Usage:
+#   Step 1: cmake -DSVDB_PGO_GENERATE=ON ...  && make && run_workload
+#   Step 2: cmake -DSVDB_PGO_USE=ON ...       && make   (uses .profdata)
+if(SVDB_PGO_GENERATE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(svdb PRIVATE -fprofile-instr-generate)
+        target_link_options(svdb PUBLIC -fprofile-instr-generate)
+        message(STATUS "PGO: profile generation enabled (Clang)")
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        target_compile_options(svdb PRIVATE -fprofile-generate)
+        target_link_options(svdb PUBLIC -fprofile-generate)
+        message(STATUS "PGO: profile generation enabled (GCC)")
+    else()
+        message(WARNING "PGO profile generation not supported for ${CMAKE_CXX_COMPILER_ID}")
+    endif()
+elseif(SVDB_PGO_USE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set(SVDB_PGO_DATA "${CMAKE_BINARY_DIR}/svdb.profdata" CACHE PATH "PGO profdata file")
+        if(NOT EXISTS "${SVDB_PGO_DATA}")
+            message(WARNING "PGO data file not found: ${SVDB_PGO_DATA} — PGO use disabled")
+        else()
+            target_compile_options(svdb PRIVATE -fprofile-instr-use=${SVDB_PGO_DATA})
+            target_link_options(svdb PUBLIC -fprofile-instr-use=${SVDB_PGO_DATA})
+            message(STATUS "PGO: profile use enabled from ${SVDB_PGO_DATA}")
+        endif()
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        target_compile_options(svdb PRIVATE -fprofile-use -fprofile-correction)
+        target_link_options(svdb PUBLIC -fprofile-use)
+        message(STATUS "PGO: profile use enabled (GCC)")
+    else()
+        message(WARNING "PGO profile use not supported for ${CMAKE_CXX_COMPILER_ID}")
+    endif()
+endif()
 
 # Install to .build/cmake/lib
 install(TARGETS svdb

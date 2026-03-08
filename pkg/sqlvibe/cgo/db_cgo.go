@@ -2,7 +2,7 @@ package cgo
 
 /*
 #cgo LDFLAGS: -L${SRCDIR}/../../../.build/cmake/lib -lsvdb -lstdc++
-#cgo CFLAGS: -I${SRCDIR}/../../../src/core/svdb
+#cgo CFLAGS: -I${SRCDIR}/../../../src/core/SC
 #include "svdb.h"
 #include <stdlib.h>
 */

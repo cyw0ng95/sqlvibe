@@ -1,0 +1,187 @@
+#pragma once
+#include <string>
+#include <vector>
+#include <map>
+#include <unordered_map>
+#include <mutex>
+#include "svdb.h"
+#include "../IS/is_registry.h"
+
+/* Column type string e.g. "INTEGER", "TEXT", "REAL", "BLOB" */
+using ColType = std::string;
+
+/* Per-column definition: type + default + not-null flag */
+struct ColDef {
+    ColType     type;
+    std::string default_val;
+    bool        not_null   = false;
+    bool        primary_key = false;
+    bool        auto_increment = false; /* INTEGER PRIMARY KEY AUTOINCREMENT */
+};
+
+/* Table-level check constraint expression */
+using CheckList = std::vector<std::string>;
+
+/* Foreign key definition: child col -> (parent table, parent col) */
+struct FKDef {
+    std::string child_col;
+    std::string parent_table;
+    std::string parent_col;
+    std::string on_delete; /* "CASCADE", "SET NULL", "RESTRICT", "NO ACTION", or "" */
+    std::string on_update; /* "CASCADE", "SET NULL", "RESTRICT", "NO ACTION", or "" */
+};
+
+/* Trigger timing */
+enum TriggerTiming { TRIGGER_BEFORE, TRIGGER_AFTER, TRIGGER_INSTEAD_OF };
+/* Trigger event */
+enum TriggerEvent { TRIGGER_INSERT, TRIGGER_UPDATE, TRIGGER_DELETE };
+
+/* Trigger definition */
+struct TriggerDef {
+    std::string name;
+    TriggerTiming timing = TRIGGER_AFTER;
+    TriggerEvent  event  = TRIGGER_INSERT;
+    std::string   table;         /* target table */
+    std::string   when_expr;     /* optional WHEN condition */
+    std::string   body;          /* raw SQL of BEGIN ... END body */
+};
+
+/* Table schema: column name -> ColDef */
+using TableDef = std::unordered_map<std::string, ColDef>;
+
+/* A single cell value stored in memory */
+struct SvdbVal {
+    svdb_type_t type   = SVDB_TYPE_NULL;
+    int64_t     ival   = 0;
+    double      rval   = 0.0;
+    std::string sval;   /* TEXT or BLOB */
+};
+
+/* A row: column name -> value */
+using Row = std::unordered_map<std::string, SvdbVal>;
+
+/* Index definition */
+struct IndexDef {
+    std::string table;
+    std::vector<std::string> columns;
+    bool unique = false;
+};
+
+/* In-memory index data: maps column value to row indices */
+/* Key: int64 for INTEGER, string for TEXT, double for REAL */
+struct IndexEntry {
+    std::vector<size_t> row_indices;  /* indices into table's row vector */
+};
+
+/* Per-column index data structure */
+struct ColumnIndex {
+    std::unordered_map<int64_t, IndexEntry> int_index;
+    std::unordered_map<double, IndexEntry> real_index;
+    std::unordered_map<std::string, IndexEntry> text_index;
+    bool valid = false;  /* true if index is built and up-to-date */
+};
+
+/* Database state */
+struct svdb_db_s {
+    std::string path;
+
+    /* Schema metadata */
+    std::unordered_map<std::string, TableDef>                          schema;
+    std::unordered_map<std::string, std::vector<std::string>>          primary_keys;
+    std::unordered_map<std::string, std::vector<std::string>>          col_order;
+    /* Unique column sets per table (each entry = set of column names) */
+    std::unordered_map<std::string, std::vector<std::vector<std::string>>> unique_constraints;
+    /* CHECK constraints per table */
+    std::unordered_map<std::string, CheckList>                         check_constraints;
+    /* Foreign key constraints per table */
+    std::unordered_map<std::string, std::vector<FKDef>>                fk_constraints;
+    /* Trigger definitions: name -> TriggerDef */
+    std::unordered_map<std::string, TriggerDef>                        triggers;
+    /* CREATE TABLE original SQL for each table/view */
+    std::unordered_map<std::string, std::string>                       create_sql;
+
+    /* Information schema registry (for metadata cache) */
+    svdb_is_registry_t                                                *is_registry;
+
+    /* In-memory row storage: table_name -> rows */
+    std::unordered_map<std::string, std::vector<Row>>                  data;
+
+    /* Index metadata: index_name -> IndexDef */
+    std::map<std::string, IndexDef>                                    indexes;
+
+    /* In-memory index data: (table_name, column_name) -> ColumnIndex */
+    std::map<std::pair<std::string, std::string>, ColumnIndex>         index_data;
+
+    /* Auto-increment counters: table_name -> last rowid */
+    std::unordered_map<std::string, int64_t>                           rowid_counter;
+
+    /* Last DML stats */
+    int64_t  rows_affected      = 0;
+    int64_t  last_insert_rowid  = 0;
+
+    /* Last error */
+    std::string last_error;
+
+    /* PRAGMA settings */
+    std::string wal_mode         = "OFF";
+    std::string isolation_level  = "READ COMMITTED";
+    int64_t     busy_timeout_ms  = 0;
+    std::string compression      = "NONE";
+    bool        foreign_keys_enabled = false;
+    int64_t     max_rows         = 0;       /* 0 = unlimited */
+    int64_t     cache_memory     = 2097152; /* 2 MB default */
+    std::string synchronous      = "FULL";  /* default=2 (FULL) */
+    int64_t     query_timeout_ms = 0;       /* 0 = no timeout */
+    int64_t     max_memory       = 0;       /* 0 = unlimited */
+    int64_t     page_size_val    = 4096;    /* default page size */
+    int64_t     mmap_size_val    = 0;       /* mmap_size */
+    int64_t     auto_vacuum_val  = 0;       /* auto_vacuum */
+    int64_t     temp_store_val   = 0;       /* temp_store */
+    bool        query_only_val   = false;   /* query_only */
+    std::string locking_mode_val = "normal";/* locking_mode */
+    bool        read_uncommitted_val = false; /* read_uncommitted */
+    int64_t     cache_spill_val  = 1;       /* cache_spill, default=1 */
+    int64_t     journal_size_limit_val = -1; /* journal_size_limit, -1 = unlimited */
+    int64_t     wal_autocheckpoint_val = 1000; /* wal_autocheckpoint, default=1000 */
+
+    /* sqlite_stat1: table_name -> {idx_name, stat} */
+    std::vector<std::tuple<std::string,std::string,std::string>> stat1;
+
+    /* Transaction state */
+    bool         in_transaction = false;
+    svdb_tx_t   *sql_tx         = nullptr;  /* active SQL-level transaction */
+
+    /* Thread safety */
+    std::mutex mu;
+};
+
+/* Result set */
+struct svdb_rows_s {
+    std::vector<std::string>  col_names;
+    std::vector<std::vector<SvdbVal>> rows;
+    int cursor = -1;   /* points at current row; -1 = before first */
+
+    /* String storage for svdb_rows_get() sval pointers */
+    std::vector<std::string> str_store;
+};
+
+/* Prepared statement */
+struct svdb_stmt_s {
+    svdb_db_t  *db = nullptr;
+    std::string sql;
+    std::map<int, SvdbVal> bindings;  /* idx (1-based) -> value */
+};
+
+/* Transaction */
+struct svdb_tx_s {
+    svdb_db_t               *db          = nullptr;
+    bool                     committed   = false;
+    std::vector<std::string> savepoints;
+
+    /* Snapshot for rollback: table data at BEGIN time */
+    std::unordered_map<std::string, std::vector<Row>> data_snapshot;
+    std::unordered_map<std::string, int64_t>          rowid_snapshot;
+    /* Savepoint stacks */
+    std::vector<std::unordered_map<std::string, std::vector<Row>>> sp_data;
+    std::vector<std::unordered_map<std::string, int64_t>>          sp_rowid;
+};

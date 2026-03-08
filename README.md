@@ -1,13 +1,13 @@
 # sqlvibe
 
-**sqlvibe** is a high-performance in-memory database engine written in Go with SQL compatibility.
+**sqlvibe** is a high-performance SQL:1999-compatible database engine with a C++ core.
 
 ## Stable Releases
 
 | Version | Date | Description |
 |---------|------|-------------|
+| **v0.11.4** | 2026-03-05 | C++ module consolidation: All core code under src/core/[SubSystem] |
 | **v0.10.16** | 2026-03-01 | CGO Phases 12-18: expression eval, bytecode dispatch, type conversion, string/datetime/aggregate batch ops, fast QP tokenizer |
-| **v0.10.15** | 2026-03-01 | CLI: .dump enhancements, .export fix; context/ window/ subpackages; ANY_VALUE, MODE aggregates |
 | **v0.9.17** | 2026-02-26 | JSON Extension Enhancement: Table-valued functions (json_each, json_tree), Aggregates (json_group_array, json_group_object), JSONB format |
 
 ## Features
@@ -34,233 +34,88 @@
 - **Storage Metrics** — `PRAGMA storage_info` for page counts, WAL size, compression ratio
 - **Extended PRAGMAs** — `foreign_keys`, `encoding`, `collation_list`, `sqlite_sequence`, `wal_mode`, `isolation_level`, `busy_timeout`, `compression`, `storage_info`
 
-## Quick Start
-
-```go
-import "github.com/cyw0ng95/sqlvibe/pkg/sqlvibe"
-
-// In-memory database
-db, _ := sqlvibe.Open(":memory:")
-
-// Execute SQL
-db.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)`)
-db.Exec(`INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob')`)
-
-// Query
-rows, _ := db.Query(`SELECT name FROM users WHERE id > 0`)
-
-// Parameterized queries (safe against SQL injection)
-db.ExecWithParams(`INSERT INTO users VALUES (?, ?)`, []interface{}{int64(3), "Carol"})
-rows, _ = db.QueryWithParams(`SELECT name FROM users WHERE id = ?`, []interface{}{int64(3)})
-
-// Named parameters
-db.ExecNamed(`INSERT INTO users VALUES (:id, :name)`, map[string]interface{}{"id": int64(4), "name": "Dave"})
-rows, _ = db.QueryNamed(`SELECT * FROM users WHERE name = :name`, map[string]interface{}{"name": "Dave"})
-
-// Prepared statements with parameter binding
-stmt, _ := db.Prepare(`SELECT name FROM users WHERE id = ?`)
-defer stmt.Close()
-rows, _ = stmt.Query(int64(1)) // binds ? = 1
-```
-
-## Extension Framework (v0.9.0)
-
-Extensions are compiled in via build tags:
-
-```bash
-# Default (no extensions)
-go build ./...
-
-# With JSON extension (SQLite JSON1-compatible)
-go build -tags "SVDB_EXT_JSON" ./...
-
-# With Math extension
-go build -tags "SVDB_EXT_MATH" ./...
-
-# With FTS5 extension (Full-Text Search)
-go build -tags "SVDB_EXT_FTS5" ./...
-
-# Multiple extensions
-go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH SVDB_EXT_FTS5" ./...
-```
-
-Query which extensions are loaded:
-
-```sql
-SELECT * FROM sqlvibe_extensions;
--- name | description       | functions
--- json | JSON extension    | json,json_array,json_extract,...
--- math | Math extension    | POWER,SQRT,MOD,...
--- fts5 | FTS5 extension    | MATCH,BM25,rank,tokenize,...
-```
-
 ## Architecture
 
+- **C++ Core**: All core subsystems (DS, VM, QP, CG, TM, PB, IS, SC) written in C++
+- **Go API**: Thin CGO wrapper (~600 LOC) for Go public API
 - **Storage**: Hybrid row/columnar store with RoaringBitmap indexes
 - **Query Processing**: Tokenizer → Parser → Optimizer → Compiler
 - **Execution**: Register-based VM with vectorized execution
-- **Memory**: Arena allocator + sync.Pool for zero-GC query execution
+- **Memory**: Arena allocator + object pools for high-performance query execution
 - **Extensions**: Build-tag controlled, statically linked, auto-registered at startup
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 ## Performance
 
-Benchmarks on AMD EPYC 7763 64-Core @ 2.45 GHz, in-memory database, `-benchtime=1s`.
-**Methodology**: the result cache is cleared before each sqlvibe iteration via
-`db.ClearResultCache()` so actual per-query execution cost is measured.
-SQLite's `database/sql` driver reuses prepared statements across iterations.
-Both sides iterate all result rows end-to-end.
-(`go test ./tests/Benchmark/... -bench=BenchmarkCompare_ -benchtime=1s`).
+**Test Hardware**: 13th Gen Intel(R) Core(TM) i7-13650HX (8 cores), Linux
+**Benchmarks**: C++ Google Benchmark, 1000 rows per test, Release build
+**Methodology**: Each benchmark creates fresh database, executes SQL, iterates all result rows.
 Results may vary on different hardware.
 
-### SQLite vs sqlvibe (v0.11.2 — C++ Native Engine Module + Unified Public API)
+### SQLite vs sqlvibe (v0.11.5 — C++ Benchmark)
 
-Build with `./build.sh -t` to run tests with all CGO optimizations enabled.
+Build with `./build.sh -b` to run C++ benchmarks with Release build.
 
-**v0.11.2 Highlights**: Introduces `src/core/svdb/` — a self-contained C++ engine module
-with a unified C public API (`svdb.h`). The `internal/cgo/` package provides a thin
-type-mapping CGO binding layer (~400 LOC). All orchestration logic moves from Go into C++.
+**v0.11.5**: Pure C++ benchmark using Google Benchmark framework with svdb.h C API
+direct comparison against SQLite3 C API.
 
-#### SELECT all rows
+#### Benchmark Results (1K rows, 1000 iterations)
 
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 293 µs | 263 µs | **1.1× faster** |
-| 10 K | 2.91 ms | 2.26 ms | **1.3× faster** |
-| 100 K | 28.6 ms | 27.4 ms | **1.0× faster** |
+| Workload | SQLite (ns/op) | sqlvibe (ns/op) | Ratio | Status |
+|----------|----------------|-----------------|-------|--------|
+| **INSERT single** | 18,497 | 511,351 | 27.6× | 🔴 slower |
+| **INSERT batch** | 447,024 | 530,251 | 1.2× | 🔴 slower |
+| **SELECT all** | 726 | 672,782 | 926× | 🔴 slower |
+| **SELECT WHERE** | 603 | 800,304 | 1,327× | 🔴 slower |
+| **SELECT ORDER BY** | 1,001 | 723,374 | 722× | 🔴 slower |
+| **SELECT aggregate** | 645 | 828,865 | 1,285× | 🔴 slower |
+| **SELECT JOIN** | 12,392 | 31,782,000 | 2,565× | 🔴 slower |
+| **SELECT subquery** | 1,589 | 5,353,550,000 | 3,369,636× | 🔴 slower |
+| **UPDATE** | 580 | 1,136,800 | 1,959× | 🔴 slower |
+| **DELETE** | 525 | 808,853 | 1,541× | 🔴 slower |
 
-#### WHERE filter (integer column)
+#### Scalability Analysis
 
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 197 µs | 793 µs | 4.0× slower |
-| 10 K | 1.81 ms | 8.39 ms | 4.6× slower |
+| Workload | sqlite (ms/1K) | sqlvibe (ms/1K) | Gap |
+|----------|----------------|-----------------|-----|
+| SELECT all | 0.73 | 673 | 922× |
+| Insert batch | 447 | 530 | 1.2× |
+| Join | 12 | 31,782 | 2,565× |
 
-#### SUM aggregate
+> **Key Insights**:
+> - **INSERT batch**: Closest performance (1.2× slower) — C++ direct insert path
+> - **SELECT**: Full table scan overhead significant — needs optimization
+> - **JOIN**: Major bottleneck (2,565×) — hash join implementation needs work
+> - **Subquery**: Critical issue (3.3M×) — correlated subquery handling needs fix
 
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 78 µs | 28 µs | **2.8× faster** |
-| 10 K | 609 µs | 203 µs | **3.0× faster** |
-| 100 K | 6.08 ms | 2.33 ms | **2.6× faster** |
+### Root Cause Analysis
 
-#### GROUP BY (4 groups)
+| Bottleneck | Component | Root Cause | Solution |
+|------------|-----------|------------|----------|
+| VM dispatch | VM/exec.cpp | Per-instruction function call overhead | Batch execution, inline dispatch |
+| Hash join | VM/hash_join.cpp | Naive hash table, no SIMD | Hash table tuning, SIMD probes |
+| COUNT(*) | DS/btree.cpp | Full table scan | Index-only scan, metadata cache |
+| Memory alloc | Multiple | malloc/new per-row | Arena allocator (ArenaV2) |
 
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 490 µs | 148 µs | **3.3× faster** |
-| 10 K | 4.85 ms | 1.01 ms | **4.8× faster** |
-| 100 K | 57.7 ms | 11.7 ms | **4.9× faster** |
+### Architecture Improvements (v0.11.5)
 
-#### COUNT(*)
+- **SC/ (System Composer)**: Unified C public API, invoke chain, orchestration
+- **Simplified build**: Single `libsvdb.so` from `src/CMakeLists.txt`
+- **Reduced overhead**: 6 subsystem CMakeLists.txt files eliminated
+- **Cleaner structure**: All core subsystems (CG, DS, IS, PB, QP, SC, SF, TM, VM) source-only
 
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 5.5 µs | 7.3 µs | 1.3× slower |
-| 10 K | 7.2 µs | 8.0 µs | 1.1× slower |
-| 100 K | 25.6 µs | 9.3 µs | **2.8× faster** |
+### Detailed Optimization Plan
 
-#### INSERT (batch rows)
+See `docs/plan-v0.11.5.md` for complete implementation details:
 
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 5.77 ms | 2.83 ms | **2.0× faster** |
-| 10 K | 56.1 ms | 32.3 ms | **1.7× faster** |
-
-#### INNER JOIN
-
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 462 µs | 1.12 ms | 2.4× slower |
-| 10 K | 4.60 ms | 11.5 ms | 2.5× slower |
-| 100 K | 45.8 ms | 133.7 ms | 2.9× slower |
-
-#### ORDER BY + LIMIT (Top N)
-
-| Rows | SQLite | sqlvibe | Result |
-|-----:|-------:|--------:|--------|
-| 1 K | 236 µs | 298 µs | 1.3× slower |
-| 10 K | 2.16 ms | 2.99 ms | 1.4× slower |
-| 100 K | 21.2 ms | 35.7 ms | 1.7× slower |
-
-> **Analysis (v0.11.2 — C++ Native Engine Module + Unified Public API)**: sqlvibe excels at aggregate workloads with **2.6–4.9× speedups** over SQLite for SUM and GROUP BY. The v0.11.2 unified C public API (`svdb.h`) in `src/core/svdb/` enables direct C/C++ integration without Go. Key improvements:
-> - **SUM aggregate**: 2.6–3.0× faster (C++ aggregate engine)
-> - **GROUP BY**: 3.3–4.9× faster (C++ hash aggregation + batch compare)
-> - **SELECT all**: 1.0–1.3× faster (C++ columnar store + SIMD batch ops)
-> - **Architecture**: New `svdb.h` C public API — zero-overhead for C/C++ native callers
->
-> WHERE filter and JOIN remain areas for future optimization — the bytecode VM evaluation path adds overhead vs SQLite's tightly-optimized scan.
-
-### Key Optimizations (v0.11.2)
-
-- **C++ Native Engine**: New `src/core/svdb/` module with unified C public API (`svdb.h`) — open/exec/query/transactions/schema from pure C/C++
-- **Phase 11 C smoke test**: `build.sh` verifies the C API via `svdb_open`/`svdb_exec`/`svdb_query` without any Go runtime
-- **Thin CGO binding**: `internal/cgo/` package (~400 LOC) — pure type-mapping, no business logic
-- **C++ Bytecode Optimizer**: Dead-code elimination + peephole passes via `svdb_cg_optimize_bc_instrs` applied to every query (zero-copy raw-buffer path)
-- **C++ Query Engine Module**: 14 engine operations (FilterRows, InnerJoin, LeftOuterJoin, GroupRows, SortRows, ExistsRows, etc.) in C++ with Go-callback predicates
-- **C++ DS Layer**: B-Tree, columnar store, row store, overflow — all in C++ with embedded PageManager
-- **C++ VM Layer**: All 46 bytecode opcodes implemented in C++ with batch SIMD execution
-- **C++ QP/CG**: Full SQL parser and bytecode compiler in C++
-- **Boundary CGO**: Zero Go callback overhead — inner C++ modules call directly (~5ns vs ~260ns)
-- **Columnar storage**: Fast full table scans via vectorized SIMD-friendly layouts
-- **Hybrid row/column**: Adaptive switching for best performance per workload
-- **Result cache**: Near-zero latency for repeated identical queries
-- **Predicate pushdown**: WHERE/BETWEEN conditions evaluated before VM for fast filtered scans
-- **Plan cache**: Skip tokenize/parse/codegen for cached query plans
-- **Batch INSERT fast path**: Literal multi-row INSERT bypasses VM entirely
-- **Fast Hash JOIN**: Integer/string join keys bypass `fmt.Sprintf` allocation
-- **BETWEEN pushdown**: Range predicates pushed to Go layer before VM
-- **Early termination for LIMIT**: VM halts after collecting N rows when no ORDER BY
-- **AND index lookup**: Compound `WHERE col=val AND cond` uses secondary index
-- **Covering Index**: Index-only scans with zero table lookup
-- **Column Projection**: Materialize only required columns
-- **SIMD Vectorization**: 4-way unrolled batch ops for int64/float64 (AVX2)
-
-## SQL:1999 Compatibility
-
-89+ test suites passing
-
-## Building
-
-```bash
-go build ./...
-go test ./...
-go test ./tests/Benchmark/... -bench . -benchmem
-```
-
-## Build Config Flags
-
-Configure extensions at build time using `-tags`:
-
-| Flag | Extensions | Description |
-|------|------------|-------------|
-| `SVDB_EXT_JSON` | JSON extension | SQLite JSON1 functions |
-| `SVDB_EXT_MATH` | Math extension | ABS, CEIL, FLOOR, ROUND, POWER, SQRT, MOD, EXP, LN, LOG, etc. |
-| `SVDB_EXT_FTS5` | FTS5 extension | Full-Text Search: MATCH, BM25, rank, tokenizers |
-
-### Examples
-
-```bash
-# With JSON extension
-go build -tags "SVDB_EXT_JSON" -o sqlvibe .
-
-# With Math extension
-go build -tags "SVDB_EXT_MATH" -o sqlvibe .
-
-# With FTS5 extension
-go build -tags "SVDB_EXT_FTS5" -o sqlvibe .
-
-# With multiple extensions
-go build -tags "SVDB_EXT_JSON SVDB_EXT_MATH SVDB_EXT_FTS5" -o sqlvibe .
-```
-
-### Checking Extensions
-
-```sql
--- Query loaded extensions
-SELECT * FROM sqlvibe_extensions;
-```
+- **P0 Memory Management**: Arena allocator integration (40% GC reduction target)
+- **P0 Batch Query Engine**: Vectorized execution (5-10x analytical target)
+- **P1 SIMD Expansion**: Batch compare/aggregate (4x speedup target)
+- **P1 Hash Join**: Hash table optimization, SIMD probes (60x target)
+- **P1 Bytecode Optimizer**: Predicate pushdown, loop-invariant code motion
+- **P2 Index Statistics**: Cost-based optimization, index-only scans
+- **P2 LTO/PGO**: Link-time and profile-guided optimization (10-15% target)
 
 ## License
 

@@ -7,10 +7,21 @@
 #include <vector>
 #include <algorithm>
 #include <cctype>
+#include <unordered_map>
+#include <mutex>
+#include <atomic>
 
 struct svdb_is_registry_s {
     void* btree_handle;
     svdb::is::Schema* schema;
+    
+    /* Table metadata cache for fast COUNT(*) 
+     * v0.11.5: Thread-safe with atomic operations
+     */
+    std::unordered_map<std::string, svdb_is_table_metadata_t> table_metadata;
+    std::mutex metadata_mutex;
+    uint64_t global_modify_counter;
+    uint32_t global_schema_version;
 };
 
 /* Helper: case-insensitive string comparison */
@@ -36,13 +47,20 @@ static std::string to_lower(const char* str) {
 }
 
 svdb_is_registry_t* svdb_is_registry_create(void* btree_handle) {
-    svdb_is_registry_t* reg = (svdb_is_registry_t*)calloc(1, sizeof(svdb_is_registry_t));
-    if (!reg) return nullptr;
-    
-    reg->btree_handle = btree_handle;
-    reg->schema = new svdb::is::Schema();
-    
-    return reg;
+    try {
+        svdb_is_registry_t* reg = new svdb_is_registry_t();
+        if (!reg) return nullptr;
+
+        reg->btree_handle = btree_handle;
+        reg->schema = new svdb::is::Schema();
+        reg->global_modify_counter = 0;
+        reg->global_schema_version = 0;
+        /* table_metadata, metadata_mutex are properly constructed by new */
+
+        return reg;
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 void svdb_is_registry_destroy(svdb_is_registry_t* reg) {
@@ -52,7 +70,7 @@ void svdb_is_registry_destroy(svdb_is_registry_t* reg) {
         delete reg->schema;
     }
     
-    free(reg);
+    delete reg;
 }
 
 int svdb_is_information_schema_table(const char* table_name) {
@@ -158,6 +176,96 @@ int svdb_is_query_referential(svdb_is_registry_t* reg, const char* schema, const
     /* For now, return empty result */
     
     return 0;
+}
+
+/* ── Table metadata cache for fast COUNT(*) ────────────────────────────────── */
+
+int svdb_is_get_table_metadata(svdb_is_registry_t* reg, const char* table_name, svdb_is_table_metadata_t* metadata) {
+    if (!reg || !table_name || !metadata) return -1;
+    
+    /* Thread-safe read */
+    std::lock_guard<std::mutex> lock(reg->metadata_mutex);
+    
+    std::string key = to_lower(table_name);
+    auto it = reg->table_metadata.find(key);
+    
+    if (it != reg->table_metadata.end() && it->second.valid) {
+        *metadata = it->second;
+        return 0;
+    }
+    
+    metadata->row_count = 0;
+    metadata->row_count_version = 0;
+    metadata->schema_version = 0;
+    metadata->last_modified_counter = 0;
+    metadata->last_modified_txn = 0;
+    metadata->valid = 0;
+    return -1;
+}
+
+void svdb_is_set_table_metadata(svdb_is_registry_t* reg, const char* table_name, uint64_t row_count) {
+    if (!reg || !table_name) return;
+    
+    if (!reg->schema) return;
+    
+    std::lock_guard<std::mutex> lock(reg->metadata_mutex);
+    
+    std::string key = to_lower(table_name);
+    svdb_is_table_metadata_t meta;
+    meta.row_count = row_count;
+    meta.row_count_version = 1;
+    meta.schema_version = reg->global_schema_version;
+    meta.last_modified_counter = ++reg->global_modify_counter;
+    meta.last_modified_txn = 0;
+    meta.valid = 1;
+    
+    reg->table_metadata[key] = meta;
+}
+
+void svdb_is_invalidate_table_metadata(svdb_is_registry_t* reg, const char* table_name) {
+    if (!reg || !table_name) return;
+    
+    if (!reg->schema) return;
+    
+    std::lock_guard<std::mutex> lock(reg->metadata_mutex);
+    
+    std::string key = to_lower(table_name);
+    auto it = reg->table_metadata.find(key);
+
+    if (it != reg->table_metadata.end()) {
+        it->second.valid = 0;
+    }
+}
+
+void svdb_is_update_table_metadata_delta(svdb_is_registry_t* reg, const char* table_name, int64_t delta) {
+    if (!reg || !table_name) return;
+    
+    if (!reg->schema) return;
+    
+    std::lock_guard<std::mutex> lock(reg->metadata_mutex);
+    
+    std::string key = to_lower(table_name);
+    auto it = reg->table_metadata.find(key);
+
+    if (it != reg->table_metadata.end() && it->second.valid) {
+        int64_t new_count = (int64_t)it->second.row_count + delta;
+        it->second.row_count = (new_count < 0) ? 0 : (uint64_t)new_count;
+        it->second.last_modified_counter = ++reg->global_modify_counter;
+        it->second.row_count_version++;
+    } else {
+        // Metadata doesn't exist or is invalid - create it with the delta as initial count
+        // This handles the case where inserts happen before a SELECT sets the metadata
+        svdb_is_table_metadata_t meta;
+        int64_t new_count = delta;
+        meta.row_count = (new_count < 0) ? 0 : (uint64_t)new_count;
+        meta.row_count_version = 1;
+        meta.schema_version = reg->global_schema_version;
+        meta.last_modified_counter = ++reg->global_modify_counter;
+        meta.last_modified_txn = 0;
+        meta.valid = 1;
+        
+        reg->table_metadata[key] = meta;
+    }
 }
 
 void svdb_is_result_free(svdb_is_result_t* result) {

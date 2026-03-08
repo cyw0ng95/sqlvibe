@@ -414,4 +414,217 @@ void svdb_column_store_destroy_embedded(svdb_column_store_t* store) {
     delete reinterpret_cast<svdb_column_store_embedded_t*>(store);
 }
 
+/* ==========================================================================
+ * SIMD-Optimized Column Scan Operations
+ * ========================================================================== */
+
+#include "simd.h"
+
+size_t svdb_column_store_scan_int64(svdb_column_store_t* store,
+                                     int col_idx,
+                                     int op,
+                                     int64_t val,
+                                     uint64_t* result_bitmap) {
+    if (!store || !result_bitmap || col_idx < 0 || col_idx >= store->num_cols) {
+        return 0;
+    }
+
+    ColumnData& col = store->cols[col_idx];
+    if (col.col_type != SVDB_TYPE_INT) {
+        return 0;  /* Column is not INT64 */
+    }
+
+    size_t row_count = col.values.size();
+    if (row_count == 0) return 0;
+
+    /* Extract INT64 values into contiguous array for SIMD */
+    std::vector<int64_t> int_values(row_count);
+    for (size_t i = 0; i < row_count; i++) {
+        int_values[i] = col.values[i].int_val;
+    }
+
+    /* Use SIMD scan from simd.cpp */
+    size_t matches = svdb_simd_scan_int64(int_values.data(), row_count, op, val, result_bitmap);
+
+    /* Clear bits for deleted rows */
+    for (size_t i = 0; i < row_count; i++) {
+        if (store->deleted[i]) {
+            result_bitmap[i / 64] &= ~(1ULL << (i % 64));
+            if ((result_bitmap[i / 64] >> (i % 64)) & 1) {
+                /* Was set before clearing - adjust match count */
+                /* Actually we need to re-count after clearing */
+            }
+        }
+    }
+
+    /* Recount matches after applying deleted mask */
+    return svdb_bitmap_popcount(result_bitmap, (row_count + 63) / 64);
+}
+
+size_t svdb_column_store_scan_double(svdb_column_store_t* store,
+                                      int col_idx,
+                                      int op,
+                                      double val,
+                                      uint64_t* result_bitmap) {
+    if (!store || !result_bitmap || col_idx < 0 || col_idx >= store->num_cols) {
+        return 0;
+    }
+
+    ColumnData& col = store->cols[col_idx];
+    if (col.col_type != SVDB_TYPE_REAL) {
+        return 0;  /* Column is not DOUBLE */
+    }
+
+    size_t row_count = col.values.size();
+    if (row_count == 0) return 0;
+
+    /* Extract DOUBLE values into contiguous array for SIMD */
+    std::vector<double> dbl_values(row_count);
+    for (size_t i = 0; i < row_count; i++) {
+        dbl_values[i] = col.values[i].float_val;
+    }
+
+    /* Use SIMD scan from simd.cpp */
+    size_t matches = svdb_simd_scan_double(dbl_values.data(), row_count, op, val, result_bitmap);
+
+    /* Clear bits for deleted rows */
+    for (size_t i = 0; i < row_count; i++) {
+        if (store->deleted[i]) {
+            result_bitmap[i / 64] &= ~(1ULL << (i % 64));
+        }
+    }
+
+    return svdb_bitmap_popcount(result_bitmap, (row_count + 63) / 64);
+}
+
+size_t svdb_column_store_bitmap_and(uint64_t* result,
+                                     const uint64_t* a,
+                                     const uint64_t* b,
+                                     size_t bitmap_size) {
+    if (!result || !a || !b) return 0;
+
+    for (size_t i = 0; i < bitmap_size; i++) {
+        result[i] = a[i] & b[i];
+    }
+
+    return svdb_bitmap_popcount(result, bitmap_size);
+}
+
+size_t svdb_column_store_bitmap_or(uint64_t* result,
+                                    const uint64_t* a,
+                                    const uint64_t* b,
+                                    size_t bitmap_size) {
+    if (!result || !a || !b) return 0;
+
+    for (size_t i = 0; i < bitmap_size; i++) {
+        result[i] = a[i] | b[i];
+    }
+
+    return svdb_bitmap_popcount(result, bitmap_size);
+}
+
+size_t svdb_column_store_bitmap_to_indices(const uint64_t* bitmap,
+                                            size_t bitmap_size,
+                                            int* out_indices) {
+    if (!bitmap || !out_indices) return 0;
+
+    size_t count = 0;
+    size_t total_bits = bitmap_size * 64;
+
+    for (size_t i = 0; i < total_bits; i++) {
+        if (bitmap[i / 64] & (1ULL << (i % 64))) {
+            out_indices[count++] = static_cast<int>(i);
+        }
+    }
+
+    return count;
+}
+
+int64_t svdb_column_store_sum_int64(svdb_column_store_t* store,
+                                     int col_idx,
+                                     const uint64_t* bitmap) {
+    if (!store || !bitmap || col_idx < 0 || col_idx >= store->num_cols) {
+        return 0;
+    }
+
+    ColumnData& col = store->cols[col_idx];
+    if (col.col_type != SVDB_TYPE_INT) return 0;
+
+    size_t row_count = col.values.size();
+
+    /* Extract INT64 values */
+    std::vector<int64_t> int_values(row_count);
+    for (size_t i = 0; i < row_count; i++) {
+        int_values[i] = col.values[i].int_val;
+    }
+
+    return svdb_simd_sum_int64_filtered(int_values.data(), row_count, bitmap);
+}
+
+double svdb_column_store_sum_double(svdb_column_store_t* store,
+                                     int col_idx,
+                                     const uint64_t* bitmap) {
+    if (!store || !bitmap || col_idx < 0 || col_idx >= store->num_cols) {
+        return 0.0;
+    }
+
+    ColumnData& col = store->cols[col_idx];
+    if (col.col_type != SVDB_TYPE_REAL) return 0.0;
+
+    size_t row_count = col.values.size();
+
+    /* Extract DOUBLE values */
+    std::vector<double> dbl_values(row_count);
+    for (size_t i = 0; i < row_count; i++) {
+        dbl_values[i] = col.values[i].float_val;
+    }
+
+    return svdb_simd_sum_double_filtered(dbl_values.data(), row_count, bitmap);
+}
+
+int64_t svdb_column_store_min_int64(svdb_column_store_t* store,
+                                     int col_idx,
+                                     const uint64_t* bitmap) {
+    if (!store || !bitmap || col_idx < 0 || col_idx >= store->num_cols) {
+        return 0;
+    }
+
+    ColumnData& col = store->cols[col_idx];
+    if (col.col_type != SVDB_TYPE_INT) return 0;
+
+    size_t row_count = col.values.size();
+
+    std::vector<int64_t> int_values(row_count);
+    for (size_t i = 0; i < row_count; i++) {
+        int_values[i] = col.values[i].int_val;
+    }
+
+    return svdb_simd_min_int64_filtered(int_values.data(), row_count, bitmap);
+}
+
+int64_t svdb_column_store_max_int64(svdb_column_store_t* store,
+                                     int col_idx,
+                                     const uint64_t* bitmap) {
+    if (!store || !bitmap || col_idx < 0 || col_idx >= store->num_cols) {
+        return 0;
+    }
+
+    ColumnData& col = store->cols[col_idx];
+    if (col.col_type != SVDB_TYPE_INT) return 0;
+
+    size_t row_count = col.values.size();
+
+    std::vector<int64_t> int_values(row_count);
+    for (size_t i = 0; i < row_count; i++) {
+        int_values[i] = col.values[i].int_val;
+    }
+
+    return svdb_simd_max_int64_filtered(int_values.data(), row_count, bitmap);
+}
+
+size_t svdb_column_store_count(const uint64_t* bitmap, size_t bitmap_size) {
+    if (!bitmap) return 0;
+    return svdb_bitmap_popcount(bitmap, bitmap_size);
+}
+
 } /* extern "C" */

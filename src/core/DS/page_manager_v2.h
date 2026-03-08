@@ -75,15 +75,38 @@ public:
     // Cache management
     void ClearCache();
     size_t GetCacheSize() const;
-    
+
     // Database lifecycle
     void Close();
     bool IsOpen() const { return is_open_.load(); }
-    
+
     // Header access
     DBHeader GetHeader() const;
     void UpdateHeader(const DBHeader& header);
-    
+
+    // =========================================================================
+    // WS3: Memory-Mapped I/O Support
+    // =========================================================================
+
+    // Enable mmap for read-only access (faster sequential scans)
+    void EnableMMap(bool enable = true, bool use_huge_pages = false);
+
+    // Check if mmap is enabled
+    bool IsMMapEnabled() const { return mmap_enabled_; }
+
+    // Get direct pointer to mmap'd page (only valid if mmap enabled)
+    // Returns nullptr if page is not mmap'd or mmap is disabled
+    const uint8_t* GetMMapPage(uint32_t page_num);
+
+    // Prefetch pages for sequential scan
+    void PrefetchPages(uint32_t start_page, uint32_t count);
+
+    // Advise access pattern for kernel
+    void AdviseSequential();
+    void AdviseRandom();
+    void AdviseWillNeed(uint32_t start_page, uint32_t count);
+    void AdviseDontNeed(uint32_t start_page, uint32_t count);
+
 private:
     // Internal methods
     void InitializeDatabase();
@@ -103,14 +126,23 @@ private:
     uint32_t page_size_;
     std::atomic<uint32_t> page_count_;
     std::atomic<bool> is_open_;
-    
+
     // C++ owned components (no callbacks)
     std::unique_ptr<LRUCacheV2> cache_;
     std::unique_ptr<FreeListV2> freelist_;
     std::mutex mutex_;
-    
+
     // Header cache
     DBHeader header_;
+
+    // =========================================================================
+    // WS3: Memory-Mapped I/O members
+    // =========================================================================
+    bool mmap_enabled_;
+    bool mmap_huge_pages_;
+    void* mmap_data_;
+    size_t mmap_size_;
+    int mmap_fd_;  // Separate fd for mmap
 };
 
 // C API for Go bindings (type-safe, no callbacks)

@@ -91,7 +91,7 @@ echo "      - Data Storage: B-Tree, SIMD, Roaring bitmap"
 echo "      - VM: Hash functions, batch execution, expression eval, dispatch, type conv, strings, datetime, aggregates"
 echo "      - QP: Fast tokenizer"
 echo "      - CG: Bytecode optimizer, plan cache, expression compiler"
-echo "      - Wrapper: Phase 4 invoke chain (hash+filter, batch compare, scan+aggregate)"
+echo "      - SC: System Composer (C API, invoke chain, orchestration)"
 
 # Build C++ extensions
 if [[ -f "CMakeLists.txt" ]]; then
@@ -111,7 +111,7 @@ echo "====> LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 
 # ----- Phase 11: C smoke test (svdb.h public API) ----------------------------
 # Verifies that the unified C public API compiles and works from a pure C caller.
-SVDB_H="$SCRIPT_DIR/src/core/svdb/svdb.h"
+SVDB_H="$SCRIPT_DIR/src/core/SC/svdb.h"
 if [[ -f "$SVDB_H" && -f "$BUILD_DIR/cmake/lib/libsvdb.so" ]]; then
     SMOKE_SRC="$BUILD_DIR/tmp_smoke.c"
     SMOKE_BIN="$BUILD_DIR/tmp_smoke"
@@ -269,26 +269,23 @@ fi
 
 if [[ $RUN_BENCH -eq 1 ]]; then
     echo ""
-    echo "====> Running benchmarks..."
-    BENCH_COVER_ARGS=()
-    if [[ $COVERAGE -eq 1 ]]; then
-        COVER_PROF_BENCH="$BUILD_DIR/coverage_bench.out"
-        COVERPKG=$(go list -tags "$EXT_TAGS" -f '{{.ImportPath}}' ./... 2>/dev/null \
-            | grep -vE "tests|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata" \
-            | tr '\n' ',' | sed 's/,$//')
-        BENCH_COVER_ARGS+=(-coverprofile="$COVER_PROF_BENCH" -covermode=atomic -coverpkg="$COVERPKG")
-        COVER_PROFILES+=("$COVER_PROF_BENCH")
-    fi
-    if ! go test -tags "$EXT_TAGS" \
-        -run '^$' \
-        -bench '.' \
-        -benchmem \
-        "${BENCH_COVER_ARGS[@]}" \
-        ${VERBOSE_FLAG} \
-        ./tests/Benchmark/... 2>&1 | tee "$BUILD_DIR/bench.log"; then
+    echo "====> Running C++ benchmarks..."
+    # Export LD_LIBRARY_PATH for C++ binaries to find shared libraries
+    export LD_LIBRARY_PATH="${BUILD_DIR}/cmake/lib:${LD_LIBRARY_PATH:-}"
+
+    # Build and run BenchmarkCpp
+    cd "$BUILD_DIR/cmake"
+    cmake --build . --target BenchmarkCpp -j$(nproc)
+
+    # Run with CSV output
+    if [[ -f "./bin/BenchmarkCpp" ]]; then
+        ./bin/BenchmarkCpp --benchmark_format=csv --benchmark_out="$BUILD_DIR/bench.csv" --benchmark_out_format=csv 2>&1 | tee "$BUILD_DIR/bench.log"
+        echo "====> Benchmarks complete. CSV: $BUILD_DIR/bench.csv"
+    else
+        echo "====> WARNING: BenchmarkCpp not found"
         TEST_FAILURES=1
     fi
-    echo "====> Benchmarks complete. Log: $BUILD_DIR/bench.log"
+    cd "$SCRIPT_DIR"
 fi
 
 # ----- fuzz testing -----------------------------------------------------------

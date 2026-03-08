@@ -10,7 +10,6 @@ import (
 )
 
 func TestSQL1999_F301_E02111_L1(t *testing.T) {
-	t.Skip("Known pre-existing failure: POSITION not supported by SQLite - documented in v0.4.5")
 	sqlvibePath := ":memory:"
 	sqlitePath := ":memory:"
 

@@ -10,7 +10,6 @@ import (
 )
 
 func TestSQL1999_F301_F03302_L1(t *testing.T) {
-	t.Skip("Known limitation: ALTER TABLE DROP COLUMN not fully supported in sqlvibe")
 	sqlvibePath := ":memory:"
 	sqlitePath := ":memory:"
 
