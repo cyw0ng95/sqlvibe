@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <cmath>
+#include <cerrno>
 #include <vector>
 #include <unordered_map>
 #include <string>
@@ -156,7 +157,18 @@ static int64_t to_int64(const svdb_value_t* v) {
     switch (v->val_type) {
         case SVDB_VAL_INT: return v->int_val;
         case SVDB_VAL_FLOAT: return (int64_t)v->float_val;
-        case SVDB_VAL_TEXT: return v->str_data ? atoll(v->str_data) : 0;
+        case SVDB_VAL_TEXT: {
+            if (!v->str_data) return 0;
+            /* Use strtoll for faster parsing with error checking */
+            char* end;
+            errno = 0;
+            long long val = strtoll(v->str_data, &end, 10);
+            /* Only accept if entire string was valid */
+            if (errno != 0 || end == v->str_data || *end != '\0') {
+                return 0;
+            }
+            return (int64_t)val;
+        }
         default: return 0;
     }
 }
@@ -166,7 +178,18 @@ static double to_float64(const svdb_value_t* v) {
     switch (v->val_type) {
         case SVDB_VAL_INT: return (double)v->int_val;
         case SVDB_VAL_FLOAT: return v->float_val;
-        case SVDB_VAL_TEXT: return v->str_data ? atof(v->str_data) : 0.0;
+        case SVDB_VAL_TEXT: {
+            if (!v->str_data) return 0.0;
+            /* Use strtod for faster parsing with error checking */
+            char* end;
+            errno = 0;
+            double val = strtod(v->str_data, &end);
+            /* Only accept if entire string was valid */
+            if (errno != 0 || end == v->str_data || *end != '\0') {
+                return 0.0;
+            }
+            return val;
+        }
         default: return 0.0;
     }
 }
