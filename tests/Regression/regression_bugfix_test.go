@@ -118,3 +118,47 @@ func TestRegression_SubqueryGroupByColumn_L1(t *testing.T) {
 		t.Fatalf("expected 3 rows, got %d: %v", len(r.Data), r.Data)
 	}
 }
+
+// TestRegression_ExistsWhereTableNameKeyword_L1 tests EXISTS subquery where the
+// FROM table name starts with a SQL keyword (e.g. "order_line" starts with "order").
+// Bug: parser's read_where_clause treated "order" from "order_line" as the ORDER BY
+// keyword, truncating the WHERE clause. Fixed by checking word boundaries.
+func TestRegression_ExistsWhereTableNameKeyword_L1(t *testing.T) {
+db, _ := sql.Open("sqlvibe", ":memory:")
+defer db.Close()
+db.Exec("CREATE TABLE stock (s_i_id INT, s_w_id INT)")
+db.Exec("INSERT INTO stock VALUES (1, 1), (2, 1), (3, 1)")
+db.Exec("CREATE TABLE order_line (ol_o_id INT, ol_d_id INT)")
+db.Exec("INSERT INTO order_line VALUES (1, 1), (2, 1)")
+
+// WHERE clause contains "order_line": parser should NOT stop at "order"
+r := qDB(t, db, "SELECT s_i_id FROM stock WHERE EXISTS (SELECT 1 FROM order_line WHERE s_i_id = order_line.ol_o_id) ORDER BY s_i_id")
+if len(r.Data) != 2 {
+t.Fatalf("expected 2 rows (s_i_id=1,2), got %d: %v", len(r.Data), r.Data)
+}
+if r.Data[0][0] != int64(1) || r.Data[1][0] != int64(2) {
+t.Fatalf("expected rows [1,2], got %v", r.Data)
+}
+}
+
+// TestRegression_ExistsSelfJoin_L1 tests EXISTS subquery where the inner and outer
+// queries use the same table. In SQL, qualified references like table.col in the
+// subquery refer to the inner table when the inner FROM uses that same table name.
+// Bug: subst_outer incorrectly substituted qualified outer row values for inner
+// table references when outer and inner tables shared the same name.
+func TestRegression_ExistsSelfJoin_L1(t *testing.T) {
+db, _ := sql.Open("sqlvibe", ":memory:")
+defer db.Close()
+db.Exec("CREATE TABLE orders (o_id INT, o_d_id INT, o_c_id INT)")
+db.Exec("INSERT INTO orders VALUES (1, 1, 1), (2, 1, 1), (3, 2, 2), (4, 3, 1)")
+
+// Self-join EXISTS: find all orders where there exists some order with o_d_id = o_id
+// "orders.o_id" in subquery refers to inner "orders" table (non-correlated)
+r := qDB(t, db, "SELECT o_id FROM orders WHERE EXISTS (SELECT 1 FROM orders WHERE o_d_id = orders.o_id) ORDER BY o_id")
+// o_d_id values are {1,1,2,3}; o_id values in inner = {1,2,3,4}
+// exists any row where o_d_id=o_id: yes (row 1: o_d_id=1=o_id=1, row 3: o_d_id=2=o_id=2)
+// So EXISTS is true for ALL outer rows (since there exists inner rows with o_d_id=1 and o_d_id=2)
+if len(r.Data) != 4 {
+t.Fatalf("expected 4 rows (exists non-correlated), got %d: %v", len(r.Data), r.Data)
+}
+}

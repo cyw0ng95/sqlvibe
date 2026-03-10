@@ -2656,10 +2656,37 @@ static bool qry_eval_where(const Row &row,
          * Uses longest-match first to avoid partial substitutions.
          * Does NOT substitute if the column is qualified with a different table. */
         auto subst_outer = [&](std::string sub_sql) -> std::string {
+            /* Extract the inner subquery's FROM table name so we can avoid
+             * incorrectly substituting qualified references that belong to the
+             * inner table (e.g., customer.c_id in "FROM customer WHERE ..." should
+             * NOT be replaced by the outer row's customer.c_id value when both outer
+             * and inner queries scan the same table). */
+            std::string inner_tname_upper;
+            {
+                std::string su_inner = qry_upper(sub_sql);
+                size_t from_pos = su_inner.find(" FROM ");
+                if (from_pos != std::string::npos) {
+                    size_t ts = from_pos + 6;
+                    while (ts < su_inner.size() && su_inner[ts] == ' ') ++ts;
+                    size_t te = ts;
+                    while (te < su_inner.size() && (isalnum((unsigned char)su_inner[te]) || su_inner[te] == '_')) ++te;
+                    inner_tname_upper = su_inner.substr(ts, te - ts);
+                }
+            }
+
             /* Build list of (key, value) pairs sorted by key length (longest first) */
             std::vector<std::pair<std::string, std::string>> subs;
             for (auto &kv : row) {
                 if (kv.first.empty()) continue;
+                /* Skip qualified keys whose table prefix matches the inner subquery's
+                 * table: those refer to the inner table, not the outer row. */
+                if (!inner_tname_upper.empty()) {
+                    size_t dot = kv.first.find('.');
+                    if (dot != std::string::npos) {
+                        std::string key_tname = qry_upper(kv.first.substr(0, dot));
+                        if (key_tname == inner_tname_upper) continue;
+                    }
+                }
                 std::string repl;
                 if (kv.second.type == SVDB_TYPE_NULL) repl = "NULL";
                 else if (kv.second.type == SVDB_TYPE_INT) repl = std::to_string(kv.second.ival);

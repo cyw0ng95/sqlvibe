@@ -233,8 +233,13 @@ static std::string read_where_clause(const std::string& sql, size_t pos) {
         if (depth == 0 && isalpha((unsigned char)sql[end])) {
             size_t t2 = end;
             std::string k2 = read_keyword(sql, t2);
-            if (k2 == "ORDER" || k2 == "GROUP" || k2 == "LIMIT" || k2 == "HAVING" ||
-                k2 == "UNION" || k2 == "INTERSECT" || k2 == "EXCEPT") {
+            /* Only treat as a clause terminator if the word is a standalone keyword,
+             * not part of a longer identifier like 'order_line' or 'group_id'.
+             * A standalone keyword is one not immediately followed by '_' or alphanumeric. */
+            bool standalone = (t2 >= sql.size() ||
+                               (!isalnum((unsigned char)sql[t2]) && sql[t2] != '_'));
+            if (standalone && (k2 == "ORDER" || k2 == "GROUP" || k2 == "LIMIT" || k2 == "HAVING" ||
+                k2 == "UNION" || k2 == "INTERSECT" || k2 == "EXCEPT")) {
                 /* 'end' intentionally stops at the keyword start so the
                  * keyword is excluded from the WHERE clause text. */
                 break;
