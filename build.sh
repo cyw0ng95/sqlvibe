@@ -140,7 +140,7 @@ int main(void) {
     return 0;
 }
 EOF
-    gcc -I"$SCRIPT_DIR/src/core/svdb" \
+    gcc -I"$SCRIPT_DIR/src/core/SC" \
         -L"$BUILD_DIR/cmake/lib" \
         -Wl,-rpath,"$BUILD_DIR/cmake/lib" \
         "$SMOKE_SRC" -o "$SMOKE_BIN" -lsvdb -lstdc++ 2>/dev/null && \
@@ -196,11 +196,14 @@ if [[ $RUN_TESTS -eq 1 ]]; then
     # Build list of packages to test (exclude tests/, pkg/sqlvibe, and benchdata)
     # Note: tests/ contains integration/SQL compliance tests; pkg/sqlvibe contains
     # SQLite compatibility tests - both are too slow for routine unit test runs
-    mapfile -t TEST_PKGS_ARRAY < <(go list -tags "$EXT_TAGS" ./... 2>/dev/null | grep -vE "^github.com/cyw0ng95/sqlvibe/tests/|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata\$|^github.com/cyw0ng95/sqlvibe/pkg/sqlvibe(\$|/)")
+    mapfile -t ALL_PKGS_ARRAY < <(go list -tags "$EXT_TAGS" ./... 2>/dev/null | grep -vE "^github.com/cyw0ng95/sqlvibe/tests/|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata\$|^github.com/cyw0ng95/sqlvibe/pkg/sqlvibe(\$|/)")
+    # Only run tests on packages that have test files (avoids 'covdata' errors on empty packages)
+    mapfile -t TEST_PKGS_ARRAY < <(go list -tags "$EXT_TAGS" -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... 2>/dev/null | grep -vE "^github.com/cyw0ng95/sqlvibe/tests/|^github.com/cyw0ng95/sqlvibe/internal/VM/benchdata\$|^github.com/cyw0ng95/sqlvibe/pkg/sqlvibe(\$|/)")
     TEST_COVER_ARGS=()
     if [[ $COVERAGE -eq 1 ]]; then
         COVER_PROF_TESTS="$BUILD_DIR/coverage_tests.out"
-        COVERPKG=$(printf '%s\n' "${TEST_PKGS_ARRAY[@]}" | tr '\n' ',' | sed 's/,$//')
+        # Use all packages for coverage instrumentation, but only run packages with tests
+        COVERPKG=$(printf '%s\n' "${ALL_PKGS_ARRAY[@]}" | tr '\n' ',' | sed 's/,$//')
         TEST_COVER_ARGS+=(-coverprofile="$COVER_PROF_TESTS" -covermode=atomic -coverpkg="$COVERPKG")
         COVER_PROFILES+=("$COVER_PROF_TESTS")
         # Export LD_LIBRARY_PATH for test binaries to find shared libraries
@@ -243,16 +246,14 @@ if [[ $RUN_TESTS -eq 1 ]]; then
     echo "====> SQL Logic tests complete."
 
     # ----- SQL Validator Tests ------------------------------------------------
-    # TEMPORARILY DISABLED: SQL Validator hangs in debug mode due to EXISTS subquery bug
-    # See: GitHub issue #XXX - EXISTS subquery correlated column reference bug
     echo ""
-    echo "====> SQL Validator tests SKIPPED (temporary - EXISTS subquery bug in debug mode)"
-    # if ! env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
-    #     ${VERBOSE_FLAG} \
-    #     ./tests/SQLValidator/... 2>&1 | tee -a "$BUILD_DIR/test.log"; then
-    #     TEST_FAILURES=1
-    # fi
-    # echo "====> SQL Validator tests complete."
+    echo "====> Running SQL Validator tests..."
+    if ! env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" go test -tags "$EXT_TAGS" \
+        ${VERBOSE_FLAG} \
+        ./tests/SQLValidator/... 2>&1 | tee -a "$BUILD_DIR/test.log"; then
+        TEST_FAILURES=1
+    fi
+    echo "====> SQL Validator tests complete."
 
     # ----- Regression Tests ---------------------------------------------------
     echo ""
